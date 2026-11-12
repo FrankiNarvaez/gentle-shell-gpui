@@ -8,10 +8,14 @@ use gpui_kit::component::{Icon, Selectable as _, Sizable as _, Size, h_flex, v_f
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use pi_rpc::desktop_rpc::{DesktopAgent, DesktopJob, JobExitCode};
+
 use super::SessionView;
+use super::state::desktop;
 use crate::shared::ui;
 use gentle_core::activity::{AgentTask, ThreadItem};
 use gentle_core::gentle_state::{Job, JobOutcome};
+use gentle_core::transcript::format_tokens;
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum AgentsTab {
@@ -44,13 +48,116 @@ impl AgentsFilter {
             Self::Finished => "Filter: finished",
         }
     }
-    fn keeps(self, task: &AgentTask) -> bool {
+    fn keeps(self, helper: &Helper) -> bool {
         match self {
             Self::All => true,
-            Self::Active => task.summary.is_active(),
-            Self::Finished => !task.summary.is_active(),
+            Self::Active => helper.is_active(),
+            Self::Finished => !helper.is_active(),
         }
     }
+}
+
+/// One helper shown in the panel: the structured channel projection when the
+/// peer offers it, or the legacy `gentle-agents` widget entry otherwise. The
+/// panel never shows both, so the two sources cannot fight or double a helper.
+#[derive(Clone, Copy)]
+enum Helper<'a> {
+    Structured(&'a DesktopAgent),
+    Legacy(&'a AgentTask),
+}
+
+impl Helper<'_> {
+    fn id(&self) -> &str {
+        match self {
+            Self::Structured(agent) => &agent.id,
+            Self::Legacy(task) => &task.summary.id,
+        }
+    }
+
+    fn agent(&self) -> &str {
+        match self {
+            Self::Structured(agent) => &agent.agent,
+            Self::Legacy(task) => &task.summary.agent,
+        }
+    }
+
+    fn status(&self) -> &str {
+        match self {
+            Self::Structured(agent) => &agent.status,
+            Self::Legacy(task) => &task.summary.status,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        match self {
+            Self::Structured(agent) => {
+                matches!(agent.status.as_str(), "running" | "queued" | "waiting")
+            }
+            Self::Legacy(task) => task.summary.is_active(),
+        }
+    }
+
+    fn label(&self) -> Option<&str> {
+        match self {
+            Self::Structured(_) => None,
+            Self::Legacy(task) => task.summary.label.as_deref(),
+        }
+    }
+
+    fn last_step(&self) -> Option<String> {
+        match self {
+            Self::Structured(agent) => Some(agent.last_step.to_string()),
+            Self::Legacy(task) => task.summary.last_step.clone(),
+        }
+    }
+
+    fn elapsed_ms(&self, now: u64) -> Option<u64> {
+        match self {
+            Self::Structured(_) => None,
+            Self::Legacy(task) => task.summary.elapsed_ms(now),
+        }
+    }
+
+    fn turns(&self) -> Option<u64> {
+        match self {
+            Self::Structured(_) => None,
+            Self::Legacy(task) => Some(task.summary.turns),
+        }
+    }
+
+    fn tool_calls(&self) -> Option<u64> {
+        match self {
+            Self::Structured(_) => None,
+            Self::Legacy(task) => Some(task.summary.tool_calls),
+        }
+    }
+}
+
+/// Token breakdown lines for one typed subagent, with an honest "unavailable"
+/// marker where a breakdown field is not recorded (an in-flight task, or a
+/// restored run that never recorded one). Pure so it can be tested without GPUI.
+/// Model and cost are shown separately by the detail pane.
+pub fn agent_usage_lines(agent: &DesktopAgent) -> Vec<(&'static str, String)> {
+    let usage = &agent.usage;
+    let token = |value: Option<u64>| value.map_or_else(|| "unavailable".to_string(), format_tokens);
+    vec![
+        ("Tokens", format_tokens(usage.total)),
+        ("Input", token(usage.input)),
+        ("Output", token(usage.output)),
+        ("Cache read", token(usage.cache)),
+        ("Reasoning", token(usage.reasoning)),
+    ]
+}
+
+/// A billed cost as money; the protocol carries a fractional, non-negative
+/// number.
+fn format_cost(cost: f64) -> String {
+    format!("${cost:.4}")
+}
+
+/// A legacy count (turns, tools) that the structured projection does not carry.
+fn count(value: Option<u64>) -> String {
+    value.map_or_else(|| "–".into(), |value| value.to_string())
 }
 
 /// Panel state kept on the session.
@@ -77,12 +184,73 @@ fn duration(ms: Option<u64>) -> String {
     ms.map(ui::format_duration).unwrap_or_else(|| "–".into())
 }
 
-/// One background job: status marker, label and exit code. The Jobs chip's
-/// card and the Jobs tab both list jobs with it.
-pub(super) fn job_row(job: &Job) -> AnyElement {
+/// One background job as the Jobs chip's card and the Jobs tab list it, from
+/// the structured channel (`list_jobs` / `jobs_update`) or, on a Shell
+/// without it, the legacy `details.gentleJobs` records.
+pub(super) struct JobRow {
+    id: String,
+    label: String,
+    state: String,
+    outcome: JobOutcome,
+}
+
+impl JobRow {
+    pub(super) fn is_running(&self) -> bool {
+        self.outcome == JobOutcome::Running
+    }
+
+    fn from_legacy(job: &Job) -> Self {
+        Self {
+            id: job.id.clone(),
+            label: job.display_label(),
+            state: job.state_text(),
+            outcome: job.outcome(),
+        }
+    }
+
+    fn from_desktop(job: &DesktopJob) -> Self {
+        let outcome = if matches!(job.status.as_str(), "running" | "started" | "") {
+            JobOutcome::Running
+        } else if matches!(job.exit_code, Some(JobExitCode::Code(0))) && job.status != "failed" {
+            JobOutcome::Succeeded
+        } else {
+            JobOutcome::Failed
+        };
+        Self {
+            id: job.id.clone(),
+            label: if job.label.is_empty() {
+                format!("job {}", job.id)
+            } else {
+                job.label.clone()
+            },
+            state: match &job.exit_code {
+                Some(JobExitCode::Code(code)) => format!("exit {code}"),
+                Some(JobExitCode::Null) => "no exit code".to_string(),
+                None => job.status.clone(),
+            },
+            outcome,
+        }
+    }
+}
+
+impl SessionView {
+    /// Every background job, newest data source first: the structured list
+    /// once the channel seeded it, the legacy records otherwise.
+    pub(super) fn job_rows(&self) -> Vec<JobRow> {
+        if self.desktop.jobs_ready() {
+            self.desktop.jobs().iter().map(JobRow::from_desktop).collect()
+        } else {
+            self.activity.jobs.iter().map(JobRow::from_legacy).collect()
+        }
+    }
+}
+
+/// One background job: status marker, label, exit code and, while it runs
+/// and the peer offers `cancel_job`, a cancel button.
+pub(super) fn job_row(row: &JobRow, cancel: bool, view: &WeakEntity<SessionView>) -> AnyElement {
     // The running marker is an icon, not a text glyph: `⧗` is missing from
     // the fonts of minimal Linux installs (WSLg) and drew as an empty box.
-    let marker = match job.outcome() {
+    let marker = match row.outcome {
         JobOutcome::Running => ui::spinner(Size::XSmall, ui::accent()).into_any_element(),
         JobOutcome::Succeeded => div()
             .text_color(ui::success())
@@ -101,14 +269,27 @@ pub(super) fn job_row(job: &Job) -> AnyElement {
                 .truncate()
                 .font_family(ui::MONO)
                 .text_color(ui::fg())
-                .child(job.display_label()),
+                .child(row.label.clone()),
         )
         .child(
             div()
                 .flex_none()
                 .text_color(ui::faint())
-                .child(job.state_text()),
+                .child(row.state.clone()),
         )
+        .when(cancel && row.is_running(), |d| {
+            let (id, view) = (row.id.clone(), view.clone());
+            d.child(
+                Button::new(SharedString::from(format!("job-cancel-{id}")))
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::OctagonX))
+                    .tooltip("Cancel this job")
+                    .on_click(move |_, _, cx| {
+                        let _ = view.update(cx, |this, cx| this.cancel_running_job(id.clone(), cx));
+                    }),
+            )
+        })
         .into_any_element()
 }
 
@@ -177,71 +358,112 @@ impl SessionView {
         cx.notify();
     }
 
-    /// Gentle Shell has no host-side stop for helpers; ask the agent to cancel it.
-    fn ask_to_stop_agent(
-        &mut self,
-        task: &gentle_core::activity::TaskSummary,
-        cx: &mut Context<Self>,
-    ) {
-        let text = format!(
-            "Stop the subagent task {} ({}: {}) now with subagent_cancel, then tell me what it had done.",
-            task.id,
-            task.agent,
-            task.label.as_deref().unwrap_or("no label")
-        );
-        self.send_prompt(text, cx);
+    /// The helpers to show: structured first once the channel seeded them, the
+    /// legacy `gentle-agents` widget otherwise.
+    fn helpers(&self) -> Vec<Helper<'_>> {
+        if self.desktop.subagents_ready() {
+            self.desktop
+                .subagents()
+                .iter()
+                .map(Helper::Structured)
+                .collect()
+        } else {
+            self.activity
+                .agents
+                .iter()
+                .flat_map(|activity| activity.tasks.iter())
+                .map(Helper::Legacy)
+                .collect()
+        }
     }
 
-    fn selected_task(&self) -> Option<&AgentTask> {
-        let tasks = &self.activity.agents.as_ref()?.tasks;
-        self.agents_panel
-            .selected
-            .as_ref()
-            .and_then(|id| tasks.iter().find(|t| &t.summary.id == id))
-            .or_else(|| tasks.first())
+    fn selected_helper(&self) -> Option<Helper<'_>> {
+        let helpers = self.helpers();
+        let id = self.agents_panel.selected.as_deref();
+        helpers
+            .iter()
+            .copied()
+            .find(|helper| Some(helper.id()) == id)
+            .or_else(|| helpers.first().copied())
+    }
+
+    /// Stop one helper over `cancel_subagent`; the legacy prompt stays only for
+    /// a peer that genuinely does not offer the method.
+    fn stop_agent(&mut self, id: &str, cx: &mut Context<Self>) {
+        let applied = self.desktop.cancel_subagent(id.to_string());
+        match applied.report.as_ref() {
+            Some(desktop::supervision::Report::Unsupported) => self.ask_to_stop_agent(id, cx),
+            _ => self.apply_supervision(applied, cx),
+        }
+    }
+
+    /// Gentle Shell has no host-side stop for helpers; ask the agent to cancel it.
+    fn ask_to_stop_agent(&mut self, id: &str, cx: &mut Context<Self>) {
+        let agent = self
+            .desktop
+            .subagents()
+            .iter()
+            .find(|agent| agent.id == id)
+            .map(|agent| agent.agent.clone())
+            .or_else(|| {
+                self.activity.agents.as_ref().and_then(|activity| {
+                    activity
+                        .tasks
+                        .iter()
+                        .find(|task| task.summary.id == id)
+                        .map(|task| task.summary.agent.clone())
+                })
+            })
+            .unwrap_or_default();
+        let text = format!(
+            "Stop the subagent task {id} ({agent}) now with subagent_cancel, then tell me what it had done."
+        );
+        self.send_prompt(text, cx);
     }
 
     pub(super) fn render_agents_panel(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.agents_panel.open {
             return None;
         }
-        let empty = Vec::new();
-        let tasks = self.activity.agents.as_ref().map_or(&empty, |a| &a.tasks);
-        let summary = self
-            .activity
-            .agents
-            .as_ref()
-            .map(|a| a.summary)
-            .unwrap_or_default();
+        let structured = self.desktop.subagents_ready();
+        let helpers = self.helpers();
         let now = now_ms();
         let filter = self.agents_panel.filter;
-        let visible: Vec<&AgentTask> = tasks.iter().filter(|t| filter.keeps(t)).collect();
-        let selected = self.selected_task();
-        let selected_id = selected.map(|t| t.summary.id.clone());
-        let total_turns: u64 = tasks.iter().map(|t| t.summary.turns).sum();
-        let total_tools: u64 = tasks.iter().map(|t| t.summary.tool_calls).sum();
+        let visible: Vec<Helper> = helpers
+            .iter()
+            .copied()
+            .filter(|h| filter.keeps(h))
+            .collect();
+        let selected = self.selected_helper();
+        let selected_id = selected.map(|h| h.id().to_string());
         let tab = self.agents_panel.tab;
         let on_jobs = tab == AgentsTab::Jobs;
-        let jobs = &self.activity.jobs;
-        let jobs_running = jobs.iter().filter(|j| j.is_running()).count();
+        let jobs = self.job_rows();
         let (summary_line, running_now, count) = if on_jobs {
+            let running = jobs.iter().filter(|j| j.is_running()).count();
             (
-                format!(
-                    "{jobs_running} running · {} finished",
-                    jobs.len() - jobs_running
-                ),
-                jobs_running > 0,
+                format!("{running} running · {} finished", jobs.len() - running),
+                running > 0,
                 jobs.len(),
             )
         } else {
-            (
-                format!(
-                    "{} running · {} waiting · {} queued · {} finished · {total_turns} turns · {total_tools} tools",
-                    summary.running, summary.waiting, summary.queued, summary.finished
-                ),
-                summary.running > 0,
-                tasks.len(),
-            )
+            let running = helpers.iter().filter(|h| h.status() == "running").count();
+            let waiting = helpers.iter().filter(|h| h.status() == "waiting").count();
+            let queued = helpers.iter().filter(|h| h.status() == "queued").count();
+            let finished = helpers.iter().filter(|h| !h.is_active()).count();
+            let mut bits = vec![
+                format!("{running} running"),
+                format!("{waiting} waiting"),
+                format!("{queued} queued"),
+                format!("{finished} finished"),
+            ];
+            if !structured {
+                let turns: u64 = helpers.iter().filter_map(|h| h.turns()).sum();
+                let tools: u64 = helpers.iter().filter_map(|h| h.tool_calls()).sum();
+                bits.push(format!("{turns} turns"));
+                bits.push(format!("{tools} tools"));
+            }
+            (bits.join(" · "), running > 0, helpers.len())
         };
 
         let header = ui::screen_header()
@@ -326,25 +548,35 @@ impl SessionView {
             )
         };
         let left_body = match tab {
-            AgentsTab::Agents if tasks.is_empty() => no_subagents(),
+            AgentsTab::Agents if helpers.is_empty() => no_subagents(),
             AgentsTab::Agents => {
                 self.render_agents_table(&visible, selected_id.as_deref(), now, cx)
             }
             AgentsTab::Activity => match selected {
-                Some(task) => self.render_thread(task, cx),
+                Some(Helper::Legacy(task)) => self.render_thread(task, cx),
+                Some(Helper::Structured(_)) => div()
+                    .pt_6()
+                    .text_sm()
+                    .text_center()
+                    .text_color(ui::muted())
+                    .child("The transcript is not available for helpers from this Gentle Shell.")
+                    .into_any_element(),
                 None => no_subagents(),
             },
             AgentsTab::Jobs if jobs.is_empty() => empty_state(
                 IconName::Activity,
                 "No background jobs yet. Commands the agent runs in the background show up here.",
             ),
-            AgentsTab::Jobs => v_flex()
-                .gap_0p5()
-                .children(
-                    jobs.iter()
-                        .map(|job| div().px_3().py_1p5().child(job_row(job))),
-                )
-                .into_any_element(),
+            AgentsTab::Jobs => {
+                let (cancel, view) = (self.desktop.cancel_job_supported(), cx.entity().downgrade());
+                v_flex()
+                    .gap_0p5()
+                    .children(
+                        jobs.iter()
+                            .map(|job| div().px_3().py_1p5().child(job_row(job, cancel, &view))),
+                    )
+                    .into_any_element()
+            }
         };
 
         let left = v_flex()
@@ -375,7 +607,7 @@ impl SessionView {
             .border_l_1()
             .border_color(ui::border())
             .overflow_y_scroll()
-            .children(selected.map(|task| self.render_agent_detail(task, now)));
+            .children(selected.map(|helper| self.render_agent_detail(&helper, now)));
 
         let footer = h_flex()
             .px_4()
@@ -383,18 +615,40 @@ impl SessionView {
             .gap_2()
             .border_t_1()
             .border_color(ui::border())
-            .when_some(selected.filter(|t| !on_jobs && t.summary.is_active()).map(|t| t.summary.clone()), |d, task| {
-                d.child(
-                    Button::new("agents-stop")
-                        .danger()
-                        .outline()
-                        .small()
-                        .icon(Icon::new(IconName::OctagonX))
-                        .label("Ask to stop")
-                        .tooltip("Gentle Shell stops helpers from its agent: this asks it to run subagent_cancel")
-                        .on_click(cx.listener(move |this, _, _, cx| this.ask_to_stop_agent(&task, cx))),
-                )
-            })
+            .when_some(
+                selected
+                    .filter(|h| !on_jobs && h.is_active())
+                    .map(|h| h.id().to_string()),
+                |d, id| {
+                    let rpc = selected.is_some_and(|h| {
+                        matches!(h, Helper::Structured(_))
+                            && self.desktop.cancel_subagent_supported()
+                    });
+                    if rpc {
+                        d.child(
+                            Button::new("agents-stop")
+                                .danger()
+                                .outline()
+                                .small()
+                                .icon(Icon::new(IconName::OctagonX))
+                                .label("Stop")
+                                .tooltip("Ask Gentle Shell to cancel this helper over the Desktop channel")
+                                .on_click(cx.listener(move |this, _, _, cx| this.stop_agent(&id, cx))),
+                        )
+                    } else {
+                        d.child(
+                            Button::new("agents-stop")
+                                .danger()
+                                .outline()
+                                .small()
+                                .icon(Icon::new(IconName::OctagonX))
+                                .label("Ask to stop")
+                                .tooltip("Gentle Shell stops helpers from its agent: this asks it to run subagent_cancel")
+                                .on_click(cx.listener(move |this, _, _, cx| this.ask_to_stop_agent(&id, cx))),
+                        )
+                    }
+                },
+            )
             .when(!on_jobs, |d| {
                 d.child(
                     Button::new("agents-filter")
@@ -463,7 +717,7 @@ impl SessionView {
 
     fn render_agents_table(
         &self,
-        tasks: &[&AgentTask],
+        helpers: &[Helper],
         selected: Option<&str>,
         now: u64,
         cx: &mut Context<Self>,
@@ -481,17 +735,19 @@ impl SessionView {
             .child(column(56., "Time".into()))
             .child(column(40., "Turns".into()))
             .child(column(40., "Tools".into()));
-        let rows = tasks.iter().enumerate().map(|(ix, task)| {
-            let s = &task.summary;
-            let id = s.id.clone();
-            let is_selected = selected == Some(s.id.as_str());
-            let color = status_color(&s.status);
-            let (name, kind) = match &s.label {
-                Some(label) if !label.is_empty() => (label.clone(), Some(s.agent.clone())),
-                _ => (s.agent.clone(), None),
+        let rows = helpers.iter().enumerate().map(|(ix, helper)| {
+            let id = helper.id().to_string();
+            let is_selected = selected == Some(helper.id());
+            let color = status_color(helper.status());
+            let (name, kind) = match helper.label() {
+                Some(label) if !label.is_empty() => {
+                    (label.to_string(), Some(helper.agent().to_string()))
+                }
+                _ => (helper.agent().to_string(), None),
             };
+            let running = helper.status() == "running";
             let row = h_flex()
-                .id(SharedString::from(format!("agent-row-{}", s.id)))
+                .id(SharedString::from(format!("agent-row-{}", helper.id())))
                 .px_3()
                 .py_2()
                 .gap_3()
@@ -512,7 +768,7 @@ impl SessionView {
                         .flex_shrink_0()
                         .flex()
                         .justify_center()
-                        .child(if s.status == "running" {
+                        .child(if running {
                             ui::pulse(div().size(px(7.)).rounded_full().bg(color))
                                 .into_any_element()
                         } else {
@@ -546,29 +802,29 @@ impl SessionView {
                                 .truncate()
                                 .text_xs()
                                 .text_color(ui::muted())
-                                .child(s.last_step.clone().unwrap_or_default()),
+                                .child(helper.last_step().unwrap_or_default()),
                         ),
                 )
                 .child(
-                    column(72., s.status.clone())
+                    column(72., helper.status().to_string())
                         .truncate()
                         .text_xs()
                         .text_color(color),
                 )
                 .child(
-                    column(56., duration(s.elapsed_ms(now)))
+                    column(56., duration(helper.elapsed_ms(now)))
                         .text_xs()
                         .font_family(ui::MONO)
                         .text_color(ui::muted()),
                 )
                 .child(
-                    column(40., s.turns.to_string())
+                    column(40., count(helper.turns()))
                         .text_xs()
                         .font_family(ui::MONO)
                         .text_color(ui::muted()),
                 )
                 .child(
-                    column(40., s.tool_calls.to_string())
+                    column(40., count(helper.tool_calls()))
                         .text_xs()
                         .font_family(ui::MONO)
                         .text_color(ui::muted()),
@@ -582,8 +838,7 @@ impl SessionView {
             .into_any_element()
     }
 
-    fn render_agent_detail(&self, task: &AgentTask, now: u64) -> impl IntoElement {
-        let s = &task.summary;
+    fn render_agent_detail(&self, helper: &Helper, now: u64) -> AnyElement {
         let field = |label: &'static str, value: String, mono: bool| {
             v_flex().gap_1().child(ui::section_label(label)).child(
                 div()
@@ -610,80 +865,129 @@ impl SessionView {
                         .child(value),
                 )
         };
-        let color = status_color(&s.status);
-        v_flex()
-            .gap_4()
-            .child(
+        match helper {
+            Helper::Structured(agent) => {
+                let color = status_color(&agent.status);
                 v_flex()
-                    .gap_1()
+                    .gap_4()
+                    .child(
+                        v_flex().gap_1().child(
+                            h_flex()
+                                .gap_2()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_lg()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(ui::fg())
+                                        .child(agent.agent.clone()),
+                                )
+                                .child(ui::chip(agent.status.clone(), color).flex_shrink_0()),
+                        ),
+                    )
                     .child(
                         h_flex()
                             .gap_2()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_lg()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(ui::fg())
-                                    .child(s.agent.clone()),
-                            )
-                            .child(ui::chip(s.status.clone(), color).flex_shrink_0()),
+                            .child(stat(
+                                "Model",
+                                agent.model.clone().unwrap_or_else(|| "unavailable".into()),
+                            ))
+                            .child(stat("Cost", format_cost(agent.usage.cost))),
                     )
-                    .when_some(s.label.clone(), |d, label| {
-                        d.child(div().text_xs().text_color(ui::muted()).child(label))
-                    }),
-            )
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(stat("Time", duration(s.elapsed_ms(now))))
-                    .child(stat("Turns", s.turns.to_string()))
-                    .child(stat("Tools", s.tool_calls.to_string())),
-            )
-            .when_some(s.error.clone(), |d, error| {
-                d.child(
-                    v_flex()
-                        .gap_1()
-                        .px_3()
-                        .py_2()
-                        .rounded_lg()
-                        .bg(ui::danger().opacity(0.08))
-                        .border_1()
-                        .border_color(ui::danger().opacity(0.22))
-                        .child(
-                            div()
-                                .text_size(px(10.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(ui::danger())
-                                .child("ERROR"),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_family(ui::MONO)
-                                .text_color(ui::danger())
-                                .child(error),
+                    .child(
+                        v_flex().gap_1().child(ui::section_label("Usage")).children(
+                            agent_usage_lines(agent)
+                                .into_iter()
+                                .map(|(label, value)| field(label, value, true)),
                         ),
-                )
-            })
-            .when_some(s.last_step.clone(), |d, step| {
-                d.child(field("Last step", step, true))
-            })
-            .when_some(s.prompt.clone(), |d, prompt| {
-                d.child(
-                    v_flex().gap_1().child(ui::section_label("Task")).child(
-                        ui::well_box()
-                            .px_3()
-                            .py_2()
-                            .text_color(ui::fg())
-                            .whitespace_normal()
-                            .child(prompt),
-                    ),
-                )
-            })
-            .child(field("Id", s.id.clone(), true))
+                    )
+                    .when_some(agent.thinking.clone(), |d, thinking| {
+                        d.child(field("Thinking", thinking, false))
+                    })
+                    .child(field("Last step", agent.last_step.to_string(), true))
+                    .child(field("Id", agent.id.clone(), true))
+            }
+            Helper::Legacy(task) => {
+                let s = &task.summary;
+                let color = status_color(&s.status);
+                v_flex()
+                    .gap_4()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_lg()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(ui::fg())
+                                            .child(s.agent.clone()),
+                                    )
+                                    .child(ui::chip(s.status.clone(), color).flex_shrink_0()),
+                            )
+                            .when_some(s.label.clone(), |d, label| {
+                                d.child(div().text_xs().text_color(ui::muted()).child(label))
+                            }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(stat("Time", duration(s.elapsed_ms(now))))
+                            .child(stat("Turns", s.turns.to_string()))
+                            .child(stat("Tools", s.tool_calls.to_string())),
+                    )
+                    .when_some(s.error.clone(), |d, error| {
+                        d.child(
+                            v_flex()
+                                .gap_1()
+                                .px_3()
+                                .py_2()
+                                .rounded_lg()
+                                .bg(ui::danger().opacity(0.08))
+                                .border_1()
+                                .border_color(ui::danger().opacity(0.22))
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(ui::danger())
+                                        .child("ERROR"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_family(ui::MONO)
+                                        .text_color(ui::danger())
+                                        .child(error),
+                                ),
+                        )
+                    })
+                    .when_some(s.last_step.clone(), |d, step| {
+                        d.child(field("Last step", step, true))
+                    })
+                    .when_some(s.prompt.clone(), |d, prompt| {
+                        d.child(
+                            v_flex().gap_1().child(ui::section_label("Task")).child(
+                                ui::well_box()
+                                    .px_3()
+                                    .py_2()
+                                    .text_color(ui::fg())
+                                    .whitespace_normal()
+                                    .child(prompt),
+                            ),
+                        )
+                    })
+                    .child(field("Id", s.id.clone(), true))
+            }
+        }
+        .into_any_element()
     }
 
     fn render_thread(&self, task: &AgentTask, cx: &mut Context<Self>) -> AnyElement {
@@ -842,4 +1146,72 @@ fn kind_chip(text: String) -> Div {
                 .bg(ui::faint()),
         )
         .child(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use pi_rpc::desktop_rpc::{DesktopAgent, DesktopAgentStep, DesktopAgentUsage};
+
+    use super::{agent_usage_lines, format_cost};
+
+    fn agent(model: Option<&str>, usage: DesktopAgentUsage) -> DesktopAgent {
+        DesktopAgent {
+            id: "a1".into(),
+            agent: "worker".into(),
+            status: "running".into(),
+            model: model.map(str::to_string),
+            model_source: None,
+            fallback_from: None,
+            thinking: None,
+            last_step: DesktopAgentStep::Writing,
+            usage,
+        }
+    }
+
+    #[test]
+    fn usage_lines_report_tokens_and_honest_unavailable_breakdown() {
+        let full = agent(
+            Some("anthropic/claude-sonnet-4"),
+            DesktopAgentUsage {
+                total: 15234,
+                cost: 0.0421,
+                input: Some(12000),
+                output: Some(3234),
+                cache: Some(5000),
+                reasoning: Some(4000),
+            },
+        );
+        let lines = agent_usage_lines(&full);
+        assert_eq!(lines[0], ("Tokens", "15.2k".to_string()));
+        assert_eq!(lines[1], ("Input", "12k".to_string()));
+        assert_eq!(lines[2], ("Output", "3.2k".to_string()));
+        assert_eq!(lines[3], ("Cache read", "5k".to_string()));
+        assert_eq!(lines[4], ("Reasoning", "4k".to_string()));
+
+        // Breakdown absent: honest "unavailable", never invented zeroes.
+        let partial = agent(
+            None,
+            DesktopAgentUsage {
+                total: 0,
+                cost: 0.0,
+                input: None,
+                output: None,
+                cache: None,
+                reasoning: None,
+            },
+        );
+        let lines = agent_usage_lines(&partial);
+        assert_eq!(lines[0], ("Tokens", "0".to_string()));
+        assert_eq!(lines[1].1, "unavailable");
+        assert_eq!(lines[2].1, "unavailable");
+        assert_eq!(lines[3].1, "unavailable");
+        assert_eq!(lines[4].1, "unavailable");
+    }
+
+    #[test]
+    fn cost_is_money() {
+        assert_eq!(format_cost(0.0421), "$0.0421");
+        assert_eq!(format_cost(0.0), "$0.0000");
+        assert_eq!(format_cost(1.5), "$1.5000");
+    }
 }
