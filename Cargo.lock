@@ -2184,11 +2184,9 @@ dependencies = [
 name = "gentle-core"
 version = "0.1.17"
 dependencies = [
- "hmac",
  "regex",
  "serde",
  "serde_json",
- "sha2 0.10.9",
 ]
 
 [[package]]
