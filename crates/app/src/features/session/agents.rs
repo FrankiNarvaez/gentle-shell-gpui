@@ -59,77 +59,81 @@ impl AgentsFilter {
 
 /// One helper shown in the panel: the structured channel projection when the
 /// peer offers it, or the legacy `gentle-agents` widget entry otherwise. The
-/// panel never shows both, so the two sources cannot fight or double a helper.
+/// structured entry is the truth for identity, status, model, usage and
+/// cancel; Shell only projects coarse steps (`starting` until the run ends),
+/// so the widget's entry for the same task, when it has one, adds the live
+/// step, time, turns, tools, label and thread.
 #[derive(Clone, Copy)]
 enum Helper<'a> {
-    Structured(&'a DesktopAgent),
+    Structured(&'a DesktopAgent, Option<&'a AgentTask>),
     Legacy(&'a AgentTask),
 }
 
-impl Helper<'_> {
+impl<'a> Helper<'a> {
     fn id(&self) -> &str {
         match self {
-            Self::Structured(agent) => &agent.id,
+            Self::Structured(agent, _) => &agent.id,
             Self::Legacy(task) => &task.summary.id,
         }
     }
 
     fn agent(&self) -> &str {
         match self {
-            Self::Structured(agent) => &agent.agent,
+            Self::Structured(agent, _) => &agent.agent,
             Self::Legacy(task) => &task.summary.agent,
         }
     }
 
     fn status(&self) -> &str {
         match self {
-            Self::Structured(agent) => &agent.status,
+            Self::Structured(agent, _) => &agent.status,
             Self::Legacy(task) => &task.summary.status,
         }
     }
 
     fn is_active(&self) -> bool {
         match self {
-            Self::Structured(agent) => {
+            Self::Structured(agent, _) => {
                 matches!(agent.status.as_str(), "running" | "queued" | "waiting")
             }
             Self::Legacy(task) => task.summary.is_active(),
         }
     }
 
-    fn label(&self) -> Option<&str> {
-        match self {
-            Self::Structured(_) => None,
-            Self::Legacy(task) => task.summary.label.as_deref(),
+    /// The widget's entry for this helper, whichever source leads.
+    fn live(&self) -> Option<&'a AgentTask> {
+        match *self {
+            Self::Structured(_, live) => live,
+            Self::Legacy(task) => Some(task),
         }
+    }
+
+    fn label(&self) -> Option<&str> {
+        self.live()?.summary.label.as_deref()
     }
 
     fn last_step(&self) -> Option<String> {
         match self {
-            Self::Structured(agent) => Some(agent.last_step.to_string()),
+            // While it runs, the widget's step says what it is doing; once it
+            // ends, Shell's terminal reason is the final word.
+            Self::Structured(agent, live) => live
+                .filter(|_| self.is_active())
+                .and_then(|task| task.summary.last_step.clone())
+                .or_else(|| Some(agent.last_step.to_string())),
             Self::Legacy(task) => task.summary.last_step.clone(),
         }
     }
 
     fn elapsed_ms(&self, now: u64) -> Option<u64> {
-        match self {
-            Self::Structured(_) => None,
-            Self::Legacy(task) => task.summary.elapsed_ms(now),
-        }
+        self.live()?.summary.elapsed_ms(now)
     }
 
     fn turns(&self) -> Option<u64> {
-        match self {
-            Self::Structured(_) => None,
-            Self::Legacy(task) => Some(task.summary.turns),
-        }
+        Some(self.live()?.summary.turns)
     }
 
     fn tool_calls(&self) -> Option<u64> {
-        match self {
-            Self::Structured(_) => None,
-            Self::Legacy(task) => Some(task.summary.tool_calls),
-        }
+        Some(self.live()?.summary.tool_calls)
     }
 }
 
@@ -366,10 +370,17 @@ impl SessionView {
     /// legacy `gentle-agents` widget otherwise.
     fn helpers(&self) -> Vec<Helper<'_>> {
         if self.desktop.subagents_ready() {
+            let live = |id: &str| {
+                self.activity
+                    .agents
+                    .iter()
+                    .flat_map(|activity| activity.tasks.iter())
+                    .find(|task| task.summary.id == id)
+            };
             self.desktop
                 .subagents()
                 .iter()
-                .map(Helper::Structured)
+                .map(|agent| Helper::Structured(agent, live(&agent.id)))
                 .collect()
         } else {
             self.activity
@@ -557,8 +568,10 @@ impl SessionView {
                 self.render_agents_table(&visible, selected_id.as_deref(), now, cx)
             }
             AgentsTab::Activity => match selected {
-                Some(Helper::Legacy(task)) => self.render_thread(task, cx),
-                Some(Helper::Structured(_)) => div()
+                Some(Helper::Legacy(task) | Helper::Structured(_, Some(task))) => {
+                    self.render_thread(task, cx)
+                }
+                Some(Helper::Structured(_, None)) => div()
                     .pt_6()
                     .text_sm()
                     .text_center()
@@ -625,7 +638,7 @@ impl SessionView {
                     .map(|h| h.id().to_string()),
                 |d, id| {
                     let rpc = selected.is_some_and(|h| {
-                        matches!(h, Helper::Structured(_))
+                        matches!(h, Helper::Structured(..))
                             && self.desktop.cancel_subagent_supported()
                     });
                     if rpc {
@@ -734,7 +747,7 @@ impl SessionView {
             .text_xs()
             .text_color(ui::faint())
             .child(div().w(px(10.)).flex_shrink_0())
-            .child(div().flex_1().min_w_0().child("Agent"))
+            .child(div().flex_1().min_w_0().truncate().child("Agent"))
             .child(column(72., "Status".into()))
             .child(column(56., "Time".into()))
             .child(column(40., "Turns".into()))
@@ -870,7 +883,7 @@ impl SessionView {
                 )
         };
         match helper {
-            Helper::Structured(agent) => {
+            Helper::Structured(agent, _) => {
                 let color = status_color(&agent.status);
                 v_flex()
                     .gap_4()
@@ -900,6 +913,16 @@ impl SessionView {
                             ))
                             .child(stat("Cost", format_cost(agent.usage.cost))),
                     )
+                    .when_some(helper.live(), |d, task| {
+                        let s = &task.summary;
+                        d.child(
+                            h_flex()
+                                .gap_2()
+                                .child(stat("Time", duration(s.elapsed_ms(now))))
+                                .child(stat("Turns", s.turns.to_string()))
+                                .child(stat("Tools", s.tool_calls.to_string())),
+                        )
+                    })
                     .child(
                         v_flex().gap_1().child(ui::section_label("Usage")).children(
                             agent_usage_lines(agent)
@@ -910,7 +933,11 @@ impl SessionView {
                     .when_some(agent.thinking.clone(), |d, thinking| {
                         d.child(field("Thinking", thinking, false))
                     })
-                    .child(field("Last step", agent.last_step.to_string(), true))
+                    .child(field(
+                        "Last step",
+                        helper.last_step().unwrap_or_default(),
+                        true,
+                    ))
                     .child(field("Id", agent.id.clone(), true))
             }
             Helper::Legacy(task) => {
