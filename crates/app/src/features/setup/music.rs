@@ -11,9 +11,10 @@ use std::process::Command;
 use super::probe::run_logged;
 use super::{Log, fetch, refresh_paths, toolchain_dir, user_home};
 
-/// The gentle-stream commit Gentle Shell's `/gentle:music` offer installs,
-/// as a GitHub archive (no git needed).
-const ARCHIVE: &str = "https://github.com/Gentleman-Programming/gentle-stream/archive/7538e09257999c01c60da35d2acbb8fd699d5148.tar.gz";
+/// The gentle-stream commit the app installs, as a GitHub archive (no git
+/// needed): the merge of `ctl --json` (gentle-stream#29), which the app needs
+/// and Gentle Shell's own `/gentle:music` pin (as of 4.8.0) predates.
+const ARCHIVE: &str = "https://github.com/Gentleman-Programming/gentle-stream/archive/af48631627ee20a0f9baa4d52e764bec6bb7290b.tar.gz";
 const PYTHON: &str = "3.13";
 
 /// gentle-stream needs POSIX (Unix sockets, `fcntl` locks).
@@ -58,10 +59,15 @@ fn pick_player(app: Option<PathBuf>, path: Option<PathBuf>, bundled: PathBuf) ->
     }
     bundled.is_file().then_some(bundled)
 }
+
 /// What Settings and the title bar need to know.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MusicStatus {
     pub player: Option<PathBuf>,
+    /// The player answers `ctl … --json`, the only interface the app drives.
+    /// Players installed before it (Gentle Shell's `/gentle:music` up to at
+    /// least 4.8.0) have a plain-text `ctl` without it.
+    pub json_ctl: bool,
     /// The player is the app's own, so Remove can delete it.
     pub app_owned: bool,
     /// `gentle-stream setup-samples` has put the soundfont in place.
@@ -71,7 +77,7 @@ pub struct MusicStatus {
 impl MusicStatus {
     /// The player can be started and steered.
     pub fn usable(&self) -> bool {
-        SUPPORTED && self.player.is_some()
+        SUPPORTED && self.player.is_some() && self.json_ctl
     }
 }
 
@@ -81,10 +87,50 @@ fn samples_installed() -> bool {
     cache.join("FluidR3_GM.sf2").is_file()
 }
 
-/// Blocking: looks for the player and its soundfont.
+/// Whether `player` answers `ctl status --json` with a machine envelope (an
+/// idle player answers `nothing_playing`, which counts). An older player
+/// rejects `--json` on stderr and prints nothing parseable.
+fn speaks_json_ctl(player: &Path) -> bool {
+    use std::io::Read as _;
+    use std::time::{Duration, Instant};
+    let Ok(mut child) = pi_rpc::command(player)
+        .args(["ctl", "status", "--json"])
+        .env("PATH", pi_rpc::child_path())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+    let mut stdout = String::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    !matches!(
+        gentle_core::music::parse_ctl(&stdout),
+        Err(gentle_core::music::CtlError::Malformed)
+    )
+}
+
+/// Blocking: looks for the player, whether it speaks `ctl --json`, and its
+/// soundfont.
 pub fn status() -> MusicStatus {
     let player = if SUPPORTED { player() } else { None };
     MusicStatus {
+        json_ctl: player.as_deref().is_some_and(speaks_json_ctl),
         app_owned: player.is_some() && player == app_player(),
         samples: samples_installed(),
         player,
