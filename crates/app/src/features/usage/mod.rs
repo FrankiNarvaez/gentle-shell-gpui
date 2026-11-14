@@ -98,14 +98,14 @@ enum UsageMode {
 }
 
 /// The provider ids the subscription RPC wire speaks, mapped to the same
-/// titles the legacy cards use.
-fn rpc_provider_title(id: &str) -> &'static str {
+/// titles the legacy cards use; any other provider shows its own id.
+fn rpc_provider_title(id: &str) -> SharedString {
     match id {
-        "codex" | "openai-codex" => "ChatGPT · Codex",
-        "openai" => "OpenAI · ChatGPT",
-        "claude" | "anthropic" => "Anthropic · Claude",
-        "nan" => "NaN Cloud",
-        _ => "Provider",
+        "codex" | "openai-codex" => "ChatGPT · Codex".into(),
+        "openai" => "OpenAI · ChatGPT".into(),
+        "claude" | "anthropic" => "Anthropic · Claude".into(),
+        "nan" => "NaN Cloud".into(),
+        _ => id.to_string().into(),
     }
 }
 
@@ -558,7 +558,9 @@ mod tests {
         assert_eq!(rpc_provider_title("claude"), "Anthropic · Claude");
         assert_eq!(rpc_provider_title("anthropic"), "Anthropic · Claude");
         assert_eq!(rpc_provider_title("nan"), "NaN Cloud");
-        assert_eq!(rpc_provider_title("unknown"), "Provider");
+        // A provider the app has no title for shows its own id, not a blank
+        // "Provider" (DeepSeek, Copilot, …).
+        assert_eq!(rpc_provider_title("deepseek"), "deepseek");
     }
 
     #[test]

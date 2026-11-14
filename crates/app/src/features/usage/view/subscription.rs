@@ -177,7 +177,7 @@ impl UsageView {
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::champagne())
-                            .child(card.title),
+                            .child(card.title.clone()),
                     )
                     .when_some(plan, |d, plan| {
                         d.child(ui::chip(plan, ui::accent()).flex_shrink_0())
