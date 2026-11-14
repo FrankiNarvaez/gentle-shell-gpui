@@ -418,7 +418,7 @@ gentle-stream's background player (one per user, `gentle-stream daemon`) owns th
 - **Polling.** Every 4 s while nothing plays (a player started from a terminal shows up), every 1.5 s while one plays, every 1 s while the popover is open. Each poll is one `ctl status --json` process, so a poll never spawns a second player.
 - **Quitting.** The app stops a player it started (`ctl stop`); one started elsewhere keeps playing.
 
-The snapshot guarantees no key, mode, bpm or spectrum, so those displays degrade to empty (the popover's spectrum stays flat); the app never invents them.
+The snapshot guarantees no key, mode, bpm or spectrum, so those displays degrade to empty. The player's equalizer is decorative: bars moving on the app's live clock while the snapshot says `playing` (still with reduced motion, low when paused), not levels read from the audio.
 
 ### Git (`features/git/`)
 

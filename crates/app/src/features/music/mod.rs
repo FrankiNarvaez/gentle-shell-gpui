@@ -29,9 +29,6 @@ use gpui_kit::*;
 
 use crate::features::setup::music::{self as setup, MusicStatus};
 
-/// Spectrum bars drawn in the player (the ctl snapshot carries none, so they
-/// stay flat; kept so the popover's layout is unchanged).
-const BANDS: usize = 40;
 /// How often a window in the background checks whether it came back.
 const INACTIVE_POLL: Duration = Duration::from_secs(2);
 /// A status or control request answers in well under this.
@@ -90,8 +87,6 @@ pub struct Music {
     status: Option<MusicStatus>,
     /// `None`: nothing is playing.
     state: Option<MusicState>,
-    /// The spectrum as drawn; the snapshot carries none, so it stays flat.
-    shown: Vec<f32>,
     job: Option<Job>,
     /// The last mood's result or the last error: text and whether it went well.
     note: Option<(String, bool)>,
@@ -146,7 +141,6 @@ impl Music {
         let mut this = Self {
             status: None,
             state: None,
-            shown: Vec::new(),
             job: None,
             note: None,
             watching: false,
@@ -220,9 +214,6 @@ impl Music {
     /// The player popover opened or closed.
     pub fn set_watching(&mut self, watching: bool, cx: &mut Context<Self>) {
         self.watching = watching;
-        if !watching {
-            self.shown.clear();
-        }
         cx.notify();
     }
 
@@ -261,9 +252,8 @@ impl Music {
                 self.state = Some(state);
             }
             Ok(None) => {
-                changed = self.state.is_some() || !self.shown.is_empty();
+                changed = self.state.is_some();
                 self.state = None;
-                self.shown.clear();
                 // The player this app started is gone (nothing is still
                 // starting it): one that shows up later isn't ours to stop.
                 if self.job.is_none() {
