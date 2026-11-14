@@ -259,11 +259,7 @@ impl SessionView {
             label,
             "Background jobs",
             format!("{running}/{total}"),
-            move || {
-                rows.iter()
-                    .map(|row| job_row(row, cancel, &weak))
-                    .collect()
-            },
+            move || rows.iter().map(|row| job_row(row, cancel, &weak)).collect(),
         )
     }
 

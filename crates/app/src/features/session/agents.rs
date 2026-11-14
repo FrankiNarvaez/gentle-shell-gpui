@@ -238,7 +238,11 @@ impl SessionView {
     /// once the channel seeded it, the legacy records otherwise.
     pub(super) fn job_rows(&self) -> Vec<JobRow> {
         if self.desktop.jobs_ready() {
-            self.desktop.jobs().iter().map(JobRow::from_desktop).collect()
+            self.desktop
+                .jobs()
+                .iter()
+                .map(JobRow::from_desktop)
+                .collect()
         } else {
             self.activity.jobs.iter().map(JobRow::from_legacy).collect()
         }
