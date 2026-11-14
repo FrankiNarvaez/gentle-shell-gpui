@@ -2626,6 +2626,34 @@ fn design_canvas_events_decode_open_refresh_and_stop_transitions() {
 }
 
 #[test]
+fn design_canvas_events_without_a_design_list_decode() {
+    // Gentle Shell 4.8.0 sends events with no `designs` (only the request
+    // carries the list); decoding them must not fail.
+    let open = design_canvas_event(
+        1,
+        "open",
+        json!({ "running": true, "slug": "login", "connectedClients": 0 }),
+        Some("http://127.0.0.1:4100/tok/d/login/"),
+    );
+    let decoded = open.design_canvas().unwrap();
+    assert_eq!(decoded.transition, DesignTransition::Open);
+    assert_eq!(decoded.state.slug.as_deref(), Some("login"));
+    assert!(decoded.state.designs.is_empty());
+    assert_eq!(
+        decoded.state.url.as_deref(),
+        Some("http://127.0.0.1:4100/tok/d/login/")
+    );
+    // A `designs` that is there is still validated.
+    let bad = design_canvas_event(
+        2,
+        "refresh",
+        json!({ "running": true, "slug": null, "connectedClients": 0, "designs": 7 }),
+        None,
+    );
+    assert!(bad.design_canvas().is_err());
+}
+
+#[test]
 fn design_canvas_url_is_optional_and_never_a_separate_token() {
     // No `url` field -> None, matching the default and stopped states.
     let without = record_response(

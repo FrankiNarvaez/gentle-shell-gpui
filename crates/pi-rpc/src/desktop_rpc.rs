@@ -1852,19 +1852,26 @@ pub struct DesignCanvas {
 
 impl DesignCanvas {
     fn from_data(data: &Value) -> Result<Self, DesktopRpcError> {
+        Self::with_designs(data, design_entries(data)?)
+    }
+
+    fn with_designs(data: &Value, designs: Vec<DesignEntry>) -> Result<Self, DesktopRpcError> {
         Ok(Self {
             running: bool_field(data, "running")?,
             slug: text_field(data, "slug")?,
             connected_clients: u64_field(data, "connectedClients")?,
-            designs: design_entries(data)?,
+            designs,
             url: text_field(data, "url")?,
         })
     }
 }
 
 /// The decoded `design_canvas` event: the transition that happened plus the
-/// same canvas state as `get_design_canvas`. A `stop` transition carries no
-/// URL; the projection keeps whatever the wire actually supplied.
+/// same canvas state as `get_design_canvas`, except the design list, which
+/// only the request carries (Gentle Shell 4.8.0's events have `running`,
+/// `slug`, `connectedClients` and the optional `url`), so `state.designs` is
+/// empty unless an event does send one. A `stop` transition carries no URL;
+/// the projection keeps whatever the wire actually supplied.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DesignCanvasEvent {
     pub transition: DesignTransition,
@@ -1873,9 +1880,13 @@ pub struct DesignCanvasEvent {
 
 impl DesignCanvasEvent {
     fn from_data(data: &Value) -> Result<Self, DesktopRpcError> {
+        let designs = match data.get("designs") {
+            None => Vec::new(),
+            Some(_) => design_entries(data)?,
+        };
         Ok(Self {
             transition: design_transition_field(data, "transition")?,
-            state: DesignCanvas::from_data(data)?,
+            state: DesignCanvas::with_designs(data, designs)?,
         })
     }
 }
