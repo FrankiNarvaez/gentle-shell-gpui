@@ -465,7 +465,8 @@ pub(super) fn rpc_load<K>(remote: &Remote<K>) -> Result<RpcLoad, String> {
     Ok(RpcLoad::Ready { file, pin, notices })
 }
 
-/// One line for the stores the screen shows but never writes.
+/// One line for the stores the screen shows but never writes, only when
+/// one of them is invalid or unreadable: healthy stores need no warning.
 fn read_only_summary<K>(remote: &Remote<K>) -> Option<String> {
     let count = |n: usize, one: &str| {
         if n == 1 {
@@ -474,7 +475,8 @@ fn read_only_summary<K>(remote: &Remote<K>) -> Option<String> {
             format!("{n} {one}s")
         }
     };
-    let describe = |store: ConfigStore, ok: &dyn Fn(&Value) -> String| -> Option<String> {
+    let mut trouble = false;
+    let mut describe = |store: ConfigStore, ok: &dyn Fn(&Value) -> String| -> Option<String> {
         if let Some(state) = remote.state(store) {
             let broken: Vec<String> = state
                 .layers
@@ -485,17 +487,22 @@ fn read_only_summary<K>(remote: &Remote<K>) -> Option<String> {
             let base = match (state.status, state.value.as_ref()) {
                 (ConfigStatus::Ok, Some(value)) => ok(value),
                 (ConfigStatus::Missing, _) => "none".to_string(),
-                _ => "invalid".to_string(),
+                _ => {
+                    trouble = true;
+                    "invalid".to_string()
+                }
             };
             Some(if broken.is_empty() {
                 base
             } else {
+                trouble = true;
                 format!("{base} ({})", broken.join(", "))
             })
         } else {
-            remote
-                .failure(store)
-                .map(|failure| format!("unreadable ({})", failure.message()))
+            remote.failure(store).map(|failure| {
+                trouble = true;
+                format!("unreadable ({})", failure.message())
+            })
         }
     };
     let parts: Vec<String> = [
@@ -519,7 +526,7 @@ fn read_only_summary<K>(remote: &Remote<K>) -> Option<String> {
     .into_iter()
     .flatten()
     .collect();
-    (!parts.is_empty()).then(|| {
+    (trouble && !parts.is_empty()).then(|| {
         format!(
             "Shown read-only from Gentle Shell — {}. Make default rewrites the routing.",
             parts.join(" · ")

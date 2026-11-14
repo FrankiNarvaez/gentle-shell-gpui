@@ -619,9 +619,26 @@ fn rpc_screen_reads_every_store_by_name() {
     assert_eq!(pin.repo, PinRead::Missing);
     // Desktop resolves no pin file: the labels are logical, never absolute.
     assert!(pin.local_path.is_relative() && pin.repo_path.is_relative());
-    // The read-only stores are shown, not edited.
+    // Healthy read-only stores need no warning.
+    assert!(
+        !notices.iter().any(|n| n.contains("read-only")),
+        "{notices:?}"
+    );
+
+    // One that is invalid is reported, with the others for context.
+    let mut port = FakePort::default();
+    let mut remote = opened(&mut port);
+    let mut broken = read_only(ConfigStore::Subagents, json!({}));
+    broken.status = ConfigStatus::Invalid;
+    broken.value = None;
+    remote.read(&mut port, &[ConfigStore::Subagents]).unwrap();
+    let ticket = port.ticket_for(ConfigStore::Subagents);
+    remote.land(&mut port, ticket, ConfigOutcome::Read(broken));
+    let RpcLoad::Ready { notices, .. } = rpc_load(&remote).unwrap() else {
+        panic!()
+    };
     let summary = notices.join("\n");
-    assert!(summary.contains("read-only"), "{summary}");
+    assert!(summary.contains("subagent settings: invalid"), "{summary}");
     assert!(summary.contains("1 saved agent route"), "{summary}");
     assert!(summary.contains("1 installer-managed file"), "{summary}");
 }
