@@ -185,6 +185,9 @@ pub struct ProfilesView {
     local_loaded: bool,
     /// A seed for a missing `profiles` store is being written.
     seeding: bool,
+    /// The `profiles` store was read while other reads were in flight; the
+    /// last one to land re-selects ([`Self::adopt_rpc`]).
+    profiles_moved: bool,
     /// Background file jobs still running.
     io_jobs: usize,
     models: Rc<Vec<ModelChoice>>,
@@ -282,6 +285,7 @@ impl ProfilesView {
             backend: Backend::Undecided,
             local_loaded: false,
             seeding: false,
+            profiles_moved: false,
             io_jobs: 0,
             models: Rc::new(models),
             loading: true,
@@ -643,12 +647,19 @@ impl ProfilesView {
 
     /// Show the stores last read over RPC once every read has landed.
     /// `full` re-selects like a reload (the `profiles` store moved); otherwise
-    /// only the pin and the notes follow.
+    /// only the pin and the notes follow. A `profiles` read that lands while
+    /// other stores are still in flight is remembered, so the batch that ends
+    /// last still re-selects (Make default re-reads five stores at once).
     fn adopt_rpc(&mut self, full: bool, cx: &mut Context<Self>) {
-        let Some(remote) = self.remote() else { return };
-        if remote.loading() || !self.local_loaded {
+        self.profiles_moved |= full;
+        let Some(loading) = self.remote().map(|remote| remote.loading()) else {
+            return;
+        };
+        if loading || !self.local_loaded {
             return;
         }
+        let full = std::mem::take(&mut self.profiles_moved);
+        let Some(remote) = self.remote() else { return };
         match rpc_load(remote) {
             Err(error) => {
                 if full || self.loading {
