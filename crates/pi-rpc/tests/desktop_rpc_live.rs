@@ -25,9 +25,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, ensure};
 use pi_rpc::desktop_rpc::{
-    Capabilities, ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget, DesktopMethod,
-    DesktopRecord, DesktopRequest, DesktopResponse, DesktopSession, PROMPT_COMMAND, PermissionMode,
-    ProfilesData, SCHEMA, Snapshot, UsageRefresh, WIDGET_KEY,
+    ApplyProfileOutcome, ApplyProfileResult, Capabilities, ConfigStatus, ConfigStore, ConfigWrite,
+    ConfigWriteTarget, DesktopMethod, DesktopRecord, DesktopRequest, DesktopResponse,
+    DesktopSession, PROMPT_COMMAND, PermissionMode, ProfileApplyMode, ProfilesData, SCHEMA,
+    Snapshot, UsageRefresh, WIDGET_KEY,
 };
 use pi_rpc::{Incoming, LaunchSpec, PiProcess, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -394,6 +395,22 @@ impl Probe {
             .issue_set_config(write, expected_revision)
             .map_err(|e| anyhow!("issue set_config: {e}"))?;
         self.typed_roundtrip(request)
+    }
+
+    /// `apply_profile`, decoded; a domain error comes back as `Err`.
+    fn typed_apply_profile(
+        &mut self,
+        profile: &str,
+        mode: ProfileApplyMode,
+        confirmation: Option<&str>,
+    ) -> Result<ApplyProfileResult> {
+        let request = self
+            .session
+            .issue_apply_profile(profile, mode, confirmation)
+            .map_err(|e| anyhow!("issue apply_profile: {e}"))?;
+        self.typed_roundtrip(request)?
+            .apply_profile()
+            .map_err(|e| anyhow!("apply_profile: {e}"))
     }
 
     /// Issue `refresh_subscription_usage` for one provider and wait for its
@@ -804,6 +821,49 @@ impl Probe {
             .list_jobs()
             .map_err(|e| anyhow!("list_jobs decode: {e}"))?;
         ensure!(jobs.jobs.is_empty(), "no live jobs expected: {jobs:?}");
+
+        // 11. apply_profile: an unknown profile writes nothing; a saved one
+        // decodes to one of the documented outcomes, and a confirmation's
+        // token, resent, is never asked for again with the same text.
+        let unknown = self.typed_apply_profile("nobody", ProfileApplyMode::Session, None);
+        ensure!(
+            unknown.is_err(),
+            "an unsaved profile must be refused: {unknown:?}"
+        );
+        let read = self
+            .typed_get_config(ConfigStore::Profiles)?
+            .config()
+            .map_err(|e| anyhow!("get_config decode: {e}"))?;
+        let revision = read
+            .write_targets
+            .as_deref()
+            .and_then(<[_]>::first)
+            .map(|t| t.write_revision.clone())
+            .ok_or_else(|| anyhow!("profiles has no write target: {read:?}"))?;
+        let team = ProfilesData::new(json!({
+            "kind": "gentle-pi.agent_model_profiles",
+            "version": 1,
+            "profiles": {"team": {}},
+        }))
+        .map_err(|e| anyhow!("profiles data: {e}"))?;
+        self.typed_set_config(ConfigWrite::Profiles(team), &revision)?
+            .set_config()
+            .map_err(|e| anyhow!("set_config decode: {e}"))?;
+        for mode in ProfileApplyMode::ALL {
+            let first = self.typed_apply_profile("team", mode, None)?;
+            ensure!(first.profile == "team" && first.mode == mode, "{first:?}");
+            if let ApplyProfileOutcome::ConfirmationRequired(confirm) = first.outcome {
+                ensure!(
+                    mode == ProfileApplyMode::Default,
+                    "only Make default asks: {confirm:?}"
+                );
+                let again = self.typed_apply_profile("team", mode, Some(&confirm.token))?;
+                ensure!(
+                    !matches!(again.outcome, ApplyProfileOutcome::ConfirmationRequired(_)),
+                    "the approved token must apply: {again:?}"
+                );
+            }
+        }
 
         Ok(())
     }
