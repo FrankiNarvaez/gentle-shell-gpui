@@ -31,7 +31,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use gentle_core::profiles::{
-    ORCHESTRATOR, PinStatus, ProfilesFile, RouteEntry, Routing, assignment_names, evaluate_pin,
+    ORCHESTRATOR, OrchestratorMode, PinStatus, ProfilesFile, RouteEntry, Routing, assignment_names,
+    evaluate_pin,
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
@@ -205,6 +206,9 @@ pub struct ProfilesView {
     selected: Option<String>,
     stored: Routing,
     draft: Routing,
+    /// The shown profile's orchestrator mode as saved, and as edited.
+    stored_mode: OrchestratorMode,
+    draft_mode: OrchestratorMode,
     status: Option<(String, Tone)>,
     busy: bool,
     name_mode: Option<NameMode>,
@@ -305,6 +309,8 @@ impl ProfilesView {
             selected: None,
             stored: Routing::default(),
             draft: Routing::default(),
+            stored_mode: OrchestratorMode::default(),
+            draft_mode: OrchestratorMode::default(),
             status: None,
             busy: false,
             name_mode: None,
@@ -787,8 +793,13 @@ impl ProfilesView {
             .and_then(|n| self.file.get(n))
             .cloned()
             .unwrap_or_default();
+        self.stored_mode = name
+            .as_deref()
+            .map(|n| self.file.orchestrator_mode(n))
+            .unwrap_or_default();
         if !keep_draft {
             self.draft = self.stored.clone();
+            self.draft_mode = self.stored_mode;
         }
         self.selected = name;
         self.custom_target = None;
@@ -828,7 +839,8 @@ impl ProfilesView {
     }
 
     fn change_count(&self) -> usize {
-        self.row_keys()
+        let routes: usize = self
+            .row_keys()
             .iter()
             .map(|key| {
                 let (d, s) = (self.draft.get(key), self.stored.get(key));
@@ -839,7 +851,8 @@ impl ProfilesView {
                     + usize::from(field(|e| &e.thinking))
                     + usize::from(field(|e| &e.tier))
             })
-            .sum()
+            .sum();
+        routes + usize::from(self.draft_mode != self.stored_mode)
     }
 
     fn target_keys(&self, key: &str) -> Vec<String> {
