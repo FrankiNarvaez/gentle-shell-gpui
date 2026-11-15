@@ -682,7 +682,7 @@ impl SessionView {
             })
             .child(div().flex_1())
             .child(
-                Button::new("agents-close")
+                Button::new("agents-footer-close")
                     .ghost()
                     .small()
                     .label("Close")
