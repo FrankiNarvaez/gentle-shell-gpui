@@ -302,7 +302,8 @@ impl SessionView {
     }
 
     /// Helpers (subagents): "1/3" active of total; the card lists each with
-    /// its status, task and last step, and opens the full Agents window.
+    /// its status, task (or, from the structured list, its model) and last
+    /// step, and opens the full Agents window.
     fn render_helpers_chip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let (active, rows) = if self.desktop.subagents_ready() {
             let agents = self.desktop.subagents();
@@ -321,7 +322,10 @@ impl SessionView {
                             agent.agent.clone(),
                             agent.status.clone(),
                             crate::features::session::agents::status_color(&agent.status),
-                            None,
+                            agent.model.as_ref().map(|model| match &agent.thinking {
+                                Some(thinking) => format!("{model} · {thinking}"),
+                                None => model.clone(),
+                            }),
                             Some(agent.last_step.to_string()),
                         )
                     })

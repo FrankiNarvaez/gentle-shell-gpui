@@ -164,7 +164,7 @@ When the backend's `capabilities` advertise `list_subagents` and/or `list_jobs`,
 
 A new/open session (`new_session`/`switch_session`) resets the Desktop channel: it forgets the pending request and the event baseline without rewinding request ids and returns to Idle, so the following `refresh_state` re-probes capabilities and the supervision lists re-seed exactly once behind it. Late answers from the previous session are uncorrelated and benign.
 
-The Agents panel's Stop button uses `cancel_subagent` when the peer offers it; a peer without the method (or a server `unsupported_method` answer) keeps the legacy "ask the agent to run `subagent_cancel`" prompt exactly once. Jobs cancel over `cancel_job` with no legacy prompt. Model, tokens and cost are shown per helper from the typed `usage` window, with an honest "unavailable" marker where the input/output/cache/reasoning breakdown is not recorded; prompt, tool output, paths and error text never cross the wire.
+The Agents panel's Stop button uses `cancel_subagent` when the peer offers it; a peer without the method (or a server `unsupported_method` answer) keeps the legacy "ask the agent to run `subagent_cancel`" prompt exactly once. Jobs cancel over `cancel_job` with no legacy prompt. Model, tokens and cost are shown per helper from the typed `usage` window, with an honest "unavailable" marker where the input/output/cache/reasoning breakdown is not recorded; prompt, tool output, paths and error text never cross the wire. The routed `model` is also shown on each helper's row in the Agents table, and with its `thinking` level in the helpers popover. The legacy `gentle-agents` widget carries no model, so on an older Shell no helper shows one.
 
 ### Subscription usage (`state::desktop::subscription`)
 

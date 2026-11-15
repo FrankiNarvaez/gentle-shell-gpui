@@ -112,6 +112,15 @@ impl<'a> Helper<'a> {
         self.live()?.summary.label.as_deref()
     }
 
+    /// The model Gentle Shell routed this helper to; the legacy widget does
+    /// not carry one.
+    fn model(&self) -> Option<&str> {
+        match self {
+            Self::Structured(agent, _) => agent.model.as_deref(),
+            Self::Legacy(_) => None,
+        }
+    }
+
     fn last_step(&self) -> Option<String> {
         match self {
             // While it runs, the widget's step says what it is doing; once it
@@ -812,6 +821,18 @@ impl SessionView {
                                 .child(name),
                         )
                         .when_some(kind, |d, kind| d.child(kind_chip(kind)))
+                        .when_some(helper.model().map(str::to_string), |d, model| {
+                            d.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .max_w(px(220.))
+                                    .truncate()
+                                    .text_xs()
+                                    .font_family(ui::MONO)
+                                    .text_color(ui::info())
+                                    .child(model),
+                            )
+                        })
                         .child(
                             div()
                                 .flex_1()
