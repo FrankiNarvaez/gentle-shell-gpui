@@ -800,6 +800,19 @@ pub(in crate::features::session) mod desktop {
             self.config.apply_profile(request)
         }
 
+        /// The profile this session is bound to, as far as the channel saw.
+        pub(in crate::features::session) fn session_profile(&self) -> Option<&str> {
+            self.config.session_profile()
+        }
+
+        /// Record a binding made or cleared outside `apply_profile`.
+        pub(in crate::features::session) fn set_session_profile(
+            &mut self,
+            profile: Option<String>,
+        ) {
+            self.config.set_session_profile(profile);
+        }
+
         /// Send the next queued config request once the probe has landed, no
         /// resync is owed and no other request is in flight.
         pub(in crate::features::session) fn config_pump(&mut self) -> config::Applied {
@@ -2839,6 +2852,7 @@ pub(in crate::features::session) mod desktop {
         use pi_rpc::desktop_rpc::{
             ApplyProfileOutcome, Capabilities, ConfigStore, ConfigWrite, DesktopEvent,
             DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError, DesktopSession,
+            ProfileApplyMode,
         };
 
         use super::Send;
@@ -2938,6 +2952,12 @@ pub(in crate::features::session) mod desktop {
             generation: u64,
             outcomes: Vec<(ConfigTicket, ConfigOutcome)>,
             changes: Vec<ConfigChange>,
+            /// The profile Gentle Shell said it bound to this session: an
+            /// `apply_profile` in `session` mode answered `applied`, or its
+            /// `profile_applied` event. The Desktop RPC offers no read of the
+            /// binding, so this is what this channel saw; it goes with the
+            /// session (a new or resumed one, or a replaced backend).
+            session_profile: Option<String>,
         }
 
         impl Config {
@@ -2992,6 +3012,20 @@ pub(in crate::features::session) mod desktop {
             ) -> Result<ConfigTicket, ConfigFailure> {
                 self.check(DesktopMethod::ApplyProfile)?;
                 Ok(self.enqueue(Op::Apply(request)))
+            }
+
+            /// The profile this session is bound to, as far as this channel saw.
+            pub(in crate::features::session) fn session_profile(&self) -> Option<&str> {
+                self.session_profile.as_deref()
+            }
+
+            /// Record a binding made (or cleared) outside `apply_profile`: an
+            /// older Shell's `set_model` switch, or `/gentle:profiles clear`.
+            pub(in crate::features::session) fn set_session_profile(
+                &mut self,
+                profile: Option<String>,
+            ) {
+                self.session_profile = profile;
             }
 
             fn check(&self, method: DesktopMethod) -> Result<(), ConfigFailure> {
@@ -3123,6 +3157,7 @@ pub(in crate::features::session) mod desktop {
                 }
                 self.drop_queued();
                 self.changes.clear();
+                self.session_profile = None;
                 self.generation += 1;
             }
 
@@ -3231,6 +3266,12 @@ pub(in crate::features::session) mod desktop {
                         Some(Report::Failure(error)),
                     ),
                 };
+                if let ConfigOutcome::Applied(result) = &outcome
+                    && let ApplyProfileOutcome::Applied(_) = result.outcome
+                    && result.mode == ProfileApplyMode::Session
+                {
+                    self.session_profile = Some(result.profile.clone());
+                }
                 let profile_applied = matches!(
                     &outcome,
                     ConfigOutcome::Applied(result)
@@ -3268,7 +3309,10 @@ pub(in crate::features::session) mod desktop {
                     // The apply may have written any of these stores, and the
                     // event carries no revision: each is re-read.
                     PROFILE_APPLIED => match event.profile_applied() {
-                        Ok(_) => {
+                        Ok(applied) => {
+                            if applied.mode == ProfileApplyMode::Session {
+                                self.session_profile = Some(applied.profile);
+                            }
                             for store in APPLIED_STORES {
                                 let change = ConfigChange {
                                     store,
@@ -6810,5 +6854,55 @@ mod tests {
         let mut quiet = config_ready();
         let _ = quiet.config_apply(&event(2, "profile_applied"));
         assert!(quiet.take_config_changes().is_empty());
+    }
+
+    #[test]
+    fn a_session_apply_binds_the_profile_until_the_session_goes() {
+        let mut desktop = apply_ready();
+        let apply = |desktop: &mut Desktop, mode: ProfileApplyMode, status: &str| {
+            desktop
+                .config_apply_profile(ProfileApply::new("deep", mode))
+                .unwrap();
+            let wire = if mode == ProfileApplyMode::Session {
+                "session"
+            } else {
+                "default"
+            };
+            let _ = answer_apply(desktop, |id| {
+                config_response_lines(
+                    id,
+                    json!({"profile": "deep", "mode": wire, "status": status, "notes": []}),
+                )
+            });
+        };
+        apply(&mut desktop, ProfileApplyMode::Session, "not_applied");
+        assert_eq!(
+            desktop.session_profile(),
+            None,
+            "a refused apply binds nothing"
+        );
+        apply(&mut desktop, ProfileApplyMode::Default, "applied");
+        assert_eq!(
+            desktop.session_profile(),
+            None,
+            "a default is not a session binding"
+        );
+        apply(&mut desktop, ProfileApplyMode::Session, "applied");
+        assert_eq!(desktop.session_profile(), Some("deep"));
+
+        // A new or resumed session, or a replaced backend, starts unbound.
+        desktop.reset();
+        assert_eq!(desktop.session_profile(), None);
+
+        // Gentle Shell's own event binds too.
+        let mut desktop = apply_ready();
+        let _ = desktop.config_apply(&desktop_widget(record(json!({
+            "schema": SCHEMA,
+            "kind": "event",
+            "seq": 2,
+            "event": "profile_applied",
+            "data": {"profile": "fast", "mode": "session", "source": "desktop"},
+        }))));
+        assert_eq!(desktop.session_profile(), Some("fast"));
     }
 }

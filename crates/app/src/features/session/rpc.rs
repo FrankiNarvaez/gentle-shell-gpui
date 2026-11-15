@@ -265,6 +265,20 @@ impl SessionView {
         Ok(ticket)
     }
 
+    /// The profile this session is bound to: what Gentle Shell's
+    /// `apply_profile` reported, or what the Profiles screen applied on an
+    /// older Shell. Forgotten with the session (new, resumed, or a replaced
+    /// backend).
+    pub(crate) fn session_profile(&self) -> Option<&str> {
+        self.desktop.session_profile()
+    }
+
+    /// Record a session binding made or cleared outside `apply_profile`.
+    pub(crate) fn set_session_profile(&mut self, profile: Option<String>, cx: &mut Context<Self>) {
+        self.desktop.set_session_profile(profile);
+        cx.notify();
+    }
+
     /// The answers to config tickets since the last call (the Profiles
     /// screen's to take).
     pub(crate) fn take_config_outcomes(&mut self) -> Vec<(ConfigTicket, ConfigOutcome)> {

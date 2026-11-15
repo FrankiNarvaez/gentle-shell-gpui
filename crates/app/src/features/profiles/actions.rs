@@ -453,6 +453,9 @@ impl ProfilesView {
     }
 
     pub(super) fn clear_session(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self.session.clone() {
+            session.update(cx, |session, cx| session.set_session_profile(None, cx));
+        }
         self.say("Sent /gentle:profiles clear.", Tone::Info);
         cx.emit(ProfilesEvent::RunCommand("/gentle:profiles clear".into()));
         cx.notify();

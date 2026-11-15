@@ -106,6 +106,9 @@ impl ProfilesView {
     fn render_scope(&self) -> impl IntoElement {
         let name = self.selected.clone().unwrap_or_default();
         let mut parts: Vec<(&str, Hsla)> = Vec::new();
+        if self.in_session.as_deref() == Some(name.as_str()) {
+            parts.push(("Used in this session", ui::success()));
+        }
         if self.file.active.as_deref() == Some(name.as_str()) {
             parts.push(("Default for new sessions", ui::accent()));
         }

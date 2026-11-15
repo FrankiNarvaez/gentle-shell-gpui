@@ -292,10 +292,11 @@ impl Workspace {
                 }
                 ProfilesEvent::UseInSession { profile, model, thinking } => {
                     if let Some(tab) = tab {
-                        let (model, thinking) = (model.clone(), thinking.clone());
+                        let (profile, model, thinking) = (profile.clone(), model.clone(), thinking.clone());
                         let note = format!("Profile \u{201c}{profile}\u{201d} applied to this session's orchestrator; helpers keep the routing this session started with.");
                         tab.update(cx, |s, cx| {
                             s.note(note, cx);
+                            s.set_session_profile(Some(profile), cx);
                             if let Some((provider, id)) = model {
                                 s.send_command(serde_json::json!({"type": "set_model", "provider": provider, "modelId": id}), cx);
                             }

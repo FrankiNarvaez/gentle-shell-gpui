@@ -199,6 +199,9 @@ pub struct ProfilesView {
     notices: Vec<String>,
     /// Pi's current `settings.json` default orchestrator.
     pi_default: Option<RouteEntry>,
+    /// The profile the tab's session is bound to (see
+    /// [`SessionView::session_profile`]).
+    in_session: Option<String>,
     selected: Option<String>,
     stored: Routing,
     draft: Routing,
@@ -278,6 +281,9 @@ impl ProfilesView {
         if let Some(session) = &session {
             subscriptions.push(cx.observe(session, |this, _, cx| this.session_changed(cx)));
         }
+        let in_session = session
+            .as_ref()
+            .and_then(|s| s.read(cx).session_profile().map(str::to_string));
         let mut this = Self {
             env: None,
             cwd,
@@ -295,6 +301,7 @@ impl ProfilesView {
             pin: None,
             notices: Vec::new(),
             pi_default: None,
+            in_session,
             selected: None,
             stored: Routing::default(),
             draft: Routing::default(),
@@ -401,13 +408,18 @@ impl ProfilesView {
         cx.notify();
     }
 
-    /// The tab's session changed: decide the path once its Shell has said,
-    /// and on the RPC path take the answers and store changes meant for the
-    /// screen.
+    /// The tab's session changed: follow its profile binding, decide the
+    /// path once its Shell has said, and on the RPC path take the answers and
+    /// store changes meant for the screen.
     fn session_changed(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.session.clone() else {
             return;
         };
+        let in_session = session.read(cx).session_profile().map(str::to_string);
+        if in_session != self.in_session {
+            self.in_session = in_session;
+            cx.notify();
+        }
         match self.backend {
             Backend::Legacy => {}
             Backend::Undecided => {
