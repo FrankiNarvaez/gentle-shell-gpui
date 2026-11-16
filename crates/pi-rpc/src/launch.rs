@@ -561,7 +561,17 @@ mod tests {
         };
         let run_count = || std::fs::read_to_string(&runs).map_or(0, |s| s.lines().count());
 
-        assert_eq!(backend_version(&spec).as_deref(), Some("1.2.3"));
+        // Linux refuses to run a file another thread's child still holds open
+        // for writing ("Text file busy"): another test spawning while this
+        // one wrote the script leaks the descriptor until that child execs.
+        // A refused run never starts the script and isn't cached, so retry.
+        let first = (0..50).find_map(|_| {
+            backend_version(&spec).or_else(|| {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                None
+            })
+        });
+        assert_eq!(first.as_deref(), Some("1.2.3"));
         assert_eq!(
             version_output(&spec).as_deref(),
             Some("gentle-shell 1.2.3\nhome isolated /h\n")
