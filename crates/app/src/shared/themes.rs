@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 
+use gentle_core::interface_size;
 use gpui_kit::{App, Global};
 use serde_json::Value;
 
@@ -630,6 +631,12 @@ pub fn read_transparency(path: &Path) -> Option<f32> {
     Some((value as f32).clamp(0., 1.))
 }
 
+/// The persisted interface size in percent (`interfaceScale` holds the
+/// factor, `1.25` for 125 %), rounded and kept in range.
+pub fn read_interface_size(path: &Path) -> Option<u16> {
+    interface_size::from_factor(read_key(path, "interfaceScale")?.as_f64()?)
+}
+
 /// Pi's `settings.json` `theme` in the agent dir.
 pub fn read_pi_setting(agent: &Path) -> Option<String> {
     read_theme_key(&agent.join("settings.json"))
@@ -663,6 +670,16 @@ pub fn write_transparency(path: &Path, clear: f32) -> std::io::Result<()> {
     // Two decimals: the slider's step, and no float noise in the file.
     let rounded = (f64::from(clear.clamp(0., 1.)) * 100.).round() / 100.;
     write_key(path, "transparency", Value::from(rounded))
+}
+
+/// Set `interfaceScale` (the factor) in the app's settings file, keeping
+/// every other key.
+pub fn write_interface_size(path: &Path, percent: u16) -> std::io::Result<()> {
+    write_key(
+        path,
+        "interfaceScale",
+        Value::from(interface_size::factor(percent)),
+    )
 }
 
 // ── Active theme ───────────────────────────────────────────────────────────
@@ -732,12 +749,15 @@ fn install(theme: &Theme, clear: f32) {
     *ACTIVE.write().unwrap_or_else(|e| e.into_inner()) = Resolved::new(theme, clear);
 }
 
-/// The catalog, the active theme and the window transparency, for pickers.
+/// The catalog, the active theme, the window transparency and the interface
+/// size, for pickers.
 pub struct Themes {
     pub catalog: Vec<Theme>,
     pub active: usize,
     /// 0 (most solid) to 1 (clearest).
     pub transparency: f32,
+    /// The interface size in percent (`gentle_core::interface_size`).
+    pub interface_size: u16,
 }
 
 impl Global for Themes {}
@@ -759,6 +779,10 @@ pub fn init(cx: &mut App) {
         .as_deref()
         .and_then(read_transparency)
         .unwrap_or(DEFAULT_TRANSPARENCY);
+    let interface_size = store
+        .as_deref()
+        .and_then(read_interface_size)
+        .unwrap_or(interface_size::DEFAULT);
     let pi = read_pi_setting(&agent);
     let catalog = load_catalog(Vec::new(), read_user_themes(&agent));
     let active = pick_default(&catalog, persisted.as_deref(), pi.as_deref());
@@ -767,6 +791,7 @@ pub fn init(cx: &mut App) {
         catalog,
         active,
         transparency,
+        interface_size,
     });
     ui::apply_theme(cx);
     backdrop::init(cx);
@@ -857,7 +882,7 @@ fn watch_user_themes(agent: PathBuf, cx: &mut App) {
 fn replace_user_themes(user: Vec<Theme>, cx: &mut App) {
     let themes = cx.global::<Themes>();
     let before = themes.active_theme().clone();
-    let transparency = themes.transparency;
+    let (transparency, interface_size) = (themes.transparency, themes.interface_size);
     let gentle: Vec<Theme> = themes
         .catalog
         .iter()
@@ -877,6 +902,7 @@ fn replace_user_themes(user: Vec<Theme>, cx: &mut App) {
         catalog,
         active,
         transparency,
+        interface_size,
     });
     if changed {
         ui::apply_theme(cx);
@@ -938,7 +964,7 @@ pub fn share_text(theme: &Theme) -> Option<Result<(String, String), String>> {
 fn merge_gentle(gentle: Vec<Theme>, persisted: Option<String>, pi: Option<String>, cx: &mut App) {
     let themes = cx.global::<Themes>();
     let before = themes.active_theme().clone();
-    let transparency = themes.transparency;
+    let (transparency, interface_size) = (themes.transparency, themes.interface_size);
     let explicit =
         themes.active != pick_default(&themes.catalog, persisted.as_deref(), pi.as_deref());
     let user: Vec<Theme> = themes
@@ -966,6 +992,7 @@ fn merge_gentle(gentle: Vec<Theme>, persisted: Option<String>, pi: Option<String
         catalog,
         active,
         transparency,
+        interface_size,
     });
     if changed {
         ui::apply_theme(cx);
@@ -1008,6 +1035,26 @@ pub fn set_transparency(clear: f32, persist: bool, cx: &mut App) {
         cx.background_executor()
             .spawn(async move {
                 let _ = write_transparency(&path, clear);
+            })
+            .detach();
+    }
+}
+
+/// Resize the interface in every window to `percent` (kept in range) and
+/// persist it: `ui::apply_theme` turns it into the rem size.
+pub fn set_interface_size(percent: u16, cx: &mut App) {
+    let percent = interface_size::clamp(percent);
+    let themes = cx.global_mut::<Themes>();
+    if themes.interface_size == percent {
+        return;
+    }
+    themes.interface_size = percent;
+    ui::apply_theme(cx);
+    cx.refresh_windows();
+    if let Some(path) = store_path() {
+        cx.background_executor()
+            .spawn(async move {
+                let _ = write_interface_size(&path, percent);
             })
             .detach();
     }
@@ -1157,6 +1204,15 @@ mod tests {
         assert_eq!(read_transparency(&path), Some(0.46));
         std::fs::write(&path, r#"{"transparency": 7}"#).unwrap();
         assert_eq!(read_transparency(&path), Some(1.));
+        // The interface size shares it too, stored as a factor.
+        assert_eq!(read_interface_size(&path), None);
+        write_interface_size(&path, 125).unwrap();
+        assert_eq!(read_transparency(&path), Some(1.));
+        assert_eq!(read_interface_size(&path), Some(125));
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["interfaceScale"], 1.25);
+        std::fs::write(&path, r#"{"interfaceScale": "big"}"#).unwrap();
+        assert_eq!(read_interface_size(&path), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 

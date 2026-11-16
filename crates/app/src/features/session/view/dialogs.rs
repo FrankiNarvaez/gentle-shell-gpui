@@ -105,7 +105,7 @@ impl SessionView {
             .gap_2p5()
             .child(
                 div()
-                    .size(px(28.))
+                    .size(rems(28. / 16.))
                     .flex_shrink_0()
                     .flex()
                     .items_center()
@@ -118,7 +118,7 @@ impl SessionView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_size(px(14.))
+                    .text_size(rems(14. / 16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(ui::fg())
                     .child(title.to_string()),
@@ -182,7 +182,7 @@ impl SessionView {
                             .py_2()
                             .rounded_lg()
                             .cursor_pointer()
-                            .text_size(px(13.))
+                            .text_size(rems(13. / 16.))
                             .text_color(ui::fg())
                             .hover(|s| s.bg(ui::surface_hover()))
                             .when(selected, |this| {
@@ -230,7 +230,7 @@ impl SessionView {
                     .when(!message.is_empty(), |this| {
                         this.child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(rems(13. / 16.))
                                 .text_color(ui::muted())
                                 .whitespace_normal()
                                 .child(message.clone()),
@@ -286,7 +286,7 @@ impl SessionView {
                             .bg(ui::well())
                             .border_1()
                             .border_color(ui::border_strong())
-                            .text_size(px(13.))
+                            .text_size(rems(13. / 16.))
                             .child(Textarea::new(&self.dialog_input).appearance(false)),
                     )
                     .child(
@@ -312,7 +312,7 @@ impl SessionView {
             .pt_2()
             .border_t_1()
             .border_color(ui::border())
-            .text_size(px(11.))
+            .text_size(rems(11. / 16.))
             .text_color(ui::faint())
             .children(
                 hints
@@ -389,16 +389,16 @@ fn accent_bar() -> Div {
     div()
         .absolute()
         .left_0()
-        .top(px(6.))
-        .bottom(px(6.))
-        .w(px(3.))
+        .top(rems(6. / 16.))
+        .bottom(rems(6. / 16.))
+        .w(rems(3. / 16.))
         .rounded_full()
         .bg(ui::accent())
 }
 
 pub(super) fn checkbox_box(checked: bool) -> Div {
     div()
-        .size(px(16.))
+        .size(rems(1.))
         .flex_shrink_0()
         .flex()
         .items_center()

@@ -182,7 +182,7 @@ impl ProfilesView {
                     .child(
                         div()
                             .id("confirm-lines")
-                            .max_h(px(160.))
+                            .max_h(rems(160. / 16.))
                             .overflow_y_scroll()
                             .child(
                                 v_flex().gap_0p5().children(

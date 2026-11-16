@@ -5,6 +5,7 @@ pub mod integration;
 
 use std::path::PathBuf;
 
+use gentle_core::interface_size;
 use gpui_kit::component::{Theme, ThemeMode, TitleBar};
 use gpui_kit::*;
 
@@ -16,6 +17,8 @@ use crate::{
     features::app_update, features::files, features::session, features::workspace,
     platform::instance, shared::assets, shared::themes,
 };
+
+actions!(gentle, [ZoomIn, ZoomOut, ActualSize]);
 
 /// Runs the app until its last window closes. `requests` carries later
 /// launches' folders and prompts to this window.
@@ -38,6 +41,11 @@ pub fn run(
 
             bind_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
+            cx.on_action(|_: &ZoomIn, cx| step_interface_size(interface_size::bigger, cx));
+            cx.on_action(|_: &ZoomOut, cx| step_interface_size(interface_size::smaller, cx));
+            cx.on_action(|_: &ActualSize, cx| {
+                themes::set_interface_size(interface_size::DEFAULT, cx)
+            });
             set_menus(cx);
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
@@ -93,6 +101,12 @@ pub fn run(
         });
 }
 
+/// The interface size one step from the current one, in every window.
+fn step_interface_size(step: fn(u16) -> u16, cx: &mut App) {
+    let now = cx.global::<themes::Themes>().interface_size;
+    themes::set_interface_size(step(now), cx);
+}
+
 fn bind_keys(cx: &mut App) {
     // Cmd on macOS, Ctrl elsewhere.
     macro_rules! key {
@@ -143,6 +157,13 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("k"), workspace::OpenPalette, None),
         KeyBinding::new(workspaces, workspace::OpenWorkspaces, None),
         KeyBinding::new(key!("shift-o"), workspace::OpenSessions, None),
+        // Interface size. Bindings run before a terminal sees the keys. ⌘+
+        // is shift-= on most layouts; the platforms report it either way.
+        KeyBinding::new(key!("="), ZoomIn, None),
+        KeyBinding::new(key!("+"), ZoomIn, None),
+        KeyBinding::new(key!("shift-="), ZoomIn, None),
+        KeyBinding::new(key!("-"), ZoomOut, None),
+        KeyBinding::new(key!("0"), ActualSize, None),
     ]);
     files::FileView::bind_keys(cx);
 }
@@ -161,6 +182,10 @@ fn set_menus(cx: &mut App) {
             MenuItem::action("Reopen Closed Pane", ReopenClosed),
             MenuItem::separator(),
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::separator(),
+            MenuItem::action("Zoom In", ZoomIn),
+            MenuItem::action("Zoom Out", ZoomOut),
+            MenuItem::action("Actual Size", ActualSize),
             MenuItem::separator(),
             MenuItem::action("Quit Gentle Shell", Quit),
         ],

@@ -29,10 +29,11 @@ impl SessionView {
                 div()
                     .px_3()
                     .pb_2()
-                    .text_size(px(13.))
+                    .text_size(rems(13. / 16.))
                     .text_color(ui::fg())
                     .when(!open && more > 0, |d| {
-                        d.max_h(px(INPUT_LINES as f32 * 21.)).overflow_hidden()
+                        d.max_h(rems((INPUT_LINES as f32 * 21.) / 16.))
+                            .overflow_hidden()
                     })
                     .child(TextView::new(state).selectable(true))
                     .into_any_element()
@@ -57,18 +58,18 @@ impl SessionView {
                         .when(open && hidden > 0, |this| {
                             this.child(
                                 div()
-                                    .text_size(px(11.))
+                                    .text_size(rems(11. / 16.))
                                     .text_color(ui::faint())
                                     .child(format!("… {hidden} more lines not shown")),
                             )
                         })
                         .child(
                             div()
-                                .text_size(px(13.))
+                                .text_size(rems(13. / 16.))
                                 .text_color(ui::muted())
                                 .whitespace_normal()
                                 .when(look.body == CustomBody::Tail, |d| {
-                                    d.font_family(ui::MONO).text_size(px(12.))
+                                    d.font_family(ui::MONO).text_size(rems(12. / 16.))
                                 })
                                 .child(shown),
                         )
@@ -94,7 +95,7 @@ impl SessionView {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(13.))
+                            .text_size(rems(13. / 16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::champagne())
                             .child(look.title),

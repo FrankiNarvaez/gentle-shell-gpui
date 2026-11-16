@@ -27,9 +27,15 @@ use gpui_kit::*;
 
 use crate::shared::ui;
 
+/// Font size and padding in px at 100 %; they follow the interface size.
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 const PADDING: f32 = 10.;
+
+/// The terminal's font size at the window's rem size (the interface size).
+fn font_size(window: &Window) -> Pixels {
+    rems(FONT_SIZE / 16.).to_pixels(window.rem_size())
+}
 
 /// Events a terminal pane reports to its host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,7 +118,9 @@ pub struct TerminalView {
     osc_title: Option<String>,
     exited: bool,
     geometry: Rc<RefCell<Geometry>>,
-    cell: Option<Size<Pixels>>,
+    /// The cell measured for a font size; measured again when the interface
+    /// size changes the font size.
+    cell: Option<(Pixels, Size<Pixels>)>,
     selecting: bool,
     scroll_accum: f32,
     /// Dead-key / IME composition in progress.
@@ -207,7 +215,8 @@ impl TerminalView {
             &dims,
             listener.clone(),
         )));
-        let cell = Self::measure_cell(window);
+        let font_size = font_size(window);
+        let cell = Self::measure_cell(font_size, window);
         let geometry = Geometry {
             origin: Point::default(),
             cell,
@@ -251,7 +260,7 @@ impl TerminalView {
             osc_title: None,
             exited: false,
             geometry: Rc::new(RefCell::new(geometry)),
-            cell: Some(cell),
+            cell: Some((font_size, cell)),
             selecting: false,
             scroll_accum: 0.,
             marked: None,
@@ -278,18 +287,26 @@ impl TerminalView {
         }
     }
 
-    fn measure_cell(window: &mut Window) -> Size<Pixels> {
+    fn measure_cell(font_size: Pixels, window: &mut Window) -> Size<Pixels> {
         let text_system = window.text_system();
         let font_id = text_system.resolve_font(&mono_font());
         let width = text_system
-            .advance(font_id, px(FONT_SIZE), 'm')
+            .advance(font_id, font_size, 'm')
             .map(|s| s.width)
-            .unwrap_or(px(FONT_SIZE * 0.6));
-        size(width, px((FONT_SIZE * LINE_HEIGHT).round()))
+            .unwrap_or(font_size * 0.6);
+        size(width, px((f32::from(font_size) * LINE_HEIGHT).round()))
     }
 
     fn cell_size(&mut self, window: &mut Window) -> Size<Pixels> {
-        *self.cell.get_or_insert_with(|| Self::measure_cell(window))
+        let font_size = font_size(window);
+        match self.cell {
+            Some((measured, cell)) if measured == font_size => cell,
+            _ => {
+                let cell = Self::measure_cell(font_size, window);
+                self.cell = Some((font_size, cell));
+                cell
+            }
+        }
     }
 
     fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
@@ -895,7 +912,7 @@ fn build_frame(
     frame
 }
 
-fn paint_frame(frame: Frame, window: &mut Window, cx: &mut App) {
+fn paint_frame(frame: Frame, font_size: Pixels, window: &mut Window, cx: &mut App) {
     for (bounds, color) in &frame.backgrounds {
         window.paint_quad(fill(*bounds, *color));
     }
@@ -921,8 +938,7 @@ fn paint_frame(frame: Frame, window: &mut Window, cx: &mut App) {
                 frame.cell.width * batch.col as f32,
                 frame.cell.height * batch.row as f32,
             );
-        let line =
-            text_system.shape_line(batch.text.clone().into(), px(FONT_SIZE), &batch.runs, None);
+        let line = text_system.shape_line(batch.text.clone().into(), font_size, &batch.runs, None);
         let _ = line.paint(origin, frame.cell.height, TextAlign::Left, None, window, cx);
     }
     if let Some(cursor) = frame.cursor {
@@ -952,6 +968,7 @@ fn paint_frame(frame: Frame, window: &mut Window, cx: &mut App) {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let cell = self.cell_size(window);
+        let font_size = font_size(window);
         let focused = self.focus_handle.is_focused(window);
         self.term.lock().is_focused = focused;
         let term = self.term.clone();
@@ -981,7 +998,7 @@ impl Render for TerminalView {
             move |bounds, frame, window, cx| {
                 window.handle_input(&focus_handle, ElementInputHandler::new(bounds, entity), cx);
                 window.with_content_mask(Some(ContentMask { bounds }), |window| {
-                    paint_frame(frame, window, cx)
+                    paint_frame(frame, font_size, window, cx)
                 });
             },
         )
@@ -993,7 +1010,7 @@ impl Render for TerminalView {
             .track_focus(&self.focus_handle)
             .relative()
             .size_full()
-            .p(px(PADDING))
+            .p(rems(PADDING / 16.))
             .font_family(ui::MONO)
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::on_key_down))
@@ -1007,12 +1024,12 @@ impl Render for TerminalView {
                 this.child(
                     div()
                         .absolute()
-                        .top(px(PADDING))
-                        .left(px(PADDING))
-                        .right(px(PADDING))
+                        .top(rems(PADDING / 16.))
+                        .left(rems(PADDING / 16.))
+                        .right(rems(PADDING / 16.))
                         .child(
                             ui::well_box()
-                                .text_size(px(12.))
+                                .text_size(rems(12. / 16.))
                                 .text_color(ui::danger())
                                 .child(error),
                         ),
@@ -1022,8 +1039,8 @@ impl Render for TerminalView {
                 this.child(
                     div()
                         .absolute()
-                        .bottom(px(PADDING))
-                        .right(px(PADDING))
+                        .bottom(rems(PADDING / 16.))
+                        .right(rems(PADDING / 16.))
                         .child(ui::chip("Process exited", ui::faint())),
                 )
             })

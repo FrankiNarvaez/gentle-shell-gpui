@@ -57,7 +57,7 @@ fn avatar(name: &str, coauthored: bool, size: f32) -> Div {
     div()
         .relative()
         .flex_none()
-        .size(px(size))
+        .size(rems(size / 16.))
         .rounded_full()
         .bg(ui::surface())
         .border_1()
@@ -65,7 +65,7 @@ fn avatar(name: &str, coauthored: bool, size: f32) -> Div {
         .flex()
         .items_center()
         .justify_center()
-        .text_size(px((size * 0.4).round()))
+        .text_size(rems((size * 0.4).round() / 16.))
         .font_weight(FontWeight::MEDIUM)
         .text_color(ui::muted())
         .child(initials(name))
@@ -75,7 +75,7 @@ fn avatar(name: &str, coauthored: bool, size: f32) -> Div {
                     .absolute()
                     .right(px(-2.))
                     .bottom(px(-2.))
-                    .size(px((size * 0.4).max(7.)))
+                    .size(rems((size * 0.4).max(7.) / 16.))
                     .rounded_full()
                     .bg(ui::petal())
                     .border_2()
@@ -93,17 +93,18 @@ impl HistoryView {
             .and_then(|h| h.branch.clone())
     }
 
-    fn fit(&self) -> Fit {
+    fn fit(&self, window: &Window) -> Fit {
+        let rem = |n: f32| f32::from(rems(n / 16.).to_pixels(window.rem_size()));
         match self.width.get() {
             // Not measured yet: the first frame lays out wide.
-            w if w == 0. || w >= WIDE => Fit::Wide,
-            w if w >= MEDIUM => Fit::Medium,
+            w if w == 0. || w >= rem(WIDE) => Fit::Wide,
+            w if w >= rem(MEDIUM) => Fit::Medium,
             _ => Fit::Narrow,
         }
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> Div {
-        let fit = self.fit();
+    fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let fit = self.fit(window);
         let history = self.history.as_ref().and_then(|h| h.as_ref());
         let total = history.map(|h| h.total);
         let branches = history.map(|h| h.branches.clone()).unwrap_or_default();
@@ -118,7 +119,7 @@ impl HistoryView {
         // The pane header, as the file viewer's: no line under it.
         h_flex()
             .flex_none()
-            .h(px(38.))
+            .h(rems(38. / 16.))
             .px_4()
             .gap_2()
             .child(
@@ -129,7 +130,7 @@ impl HistoryView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(13.))
+                    .text_size(rems(13. / 16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(ui::fg())
                     .child("Commit History"),
@@ -144,7 +145,7 @@ impl HistoryView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(12.5))
+                    .text_size(rems(12.5 / 16.))
                     .text_color(ui::faint())
                     .when(fit > Fit::Narrow, |d| d.child(folder)),
             )
@@ -201,19 +202,31 @@ impl HistoryView {
             .child(graph.element())
     }
 
-    fn render_line(&self, ix: usize, line: Line, cx: &mut Context<Self>) -> AnyElement {
+    fn render_line(
+        &self,
+        ix: usize,
+        line: Line,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         div()
             .w_full()
             .px_2()
-            .child(self.render_row(ix, line, cx))
+            .child(self.render_row(ix, line, window, cx))
             .into_any_element()
     }
 
-    fn render_row(&self, ix: usize, line: Line, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(
+        &self,
+        ix: usize,
+        line: Line,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let row = h_flex()
             .id(("history-row", ix))
             .w_full()
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .pr_3()
             .gap_2()
             .rounded_lg();
@@ -247,8 +260,8 @@ impl HistoryView {
                             .justify_center()
                             .child(
                                 div()
-                                    .h(px(18.))
-                                    .min_w(px(18.))
+                                    .h(rems(18. / 16.))
+                                    .min_w(rems(18. / 16.))
                                     .px_1()
                                     .rounded_full()
                                     .flex()
@@ -256,7 +269,7 @@ impl HistoryView {
                                     .justify_center()
                                     .bg(ui::info().opacity(0.16))
                                     .font_family(ui::MONO)
-                                    .text_size(px(10.))
+                                    .text_size(rems(10. / 16.))
                                     .text_color(ui::info())
                                     .child(count.to_string()),
                             ),
@@ -275,11 +288,17 @@ impl HistoryView {
                     d.child(Spinner::new().xsmall().color(ui::muted()))
                 })
                 .into_any_element(),
-            Line::Commit(i) => self.render_commit(row, i, cx),
+            Line::Commit(i) => self.render_commit(row, i, window, cx),
         }
     }
 
-    fn render_commit(&self, row: Stateful<Div>, i: usize, cx: &mut Context<Self>) -> AnyElement {
+    fn render_commit(
+        &self,
+        row: Stateful<Div>,
+        i: usize,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let commit = &self.commits[i];
         let Some(graph_row) = self.graph.rows.get(i) else {
             return row.into_any_element();
@@ -288,7 +307,7 @@ impl HistoryView {
         let dirty_above = i == 0 && matches!(self.lines.first(), Some(Line::Uncommitted));
         let selected = self.selected.as_ref() == Some(&commit.hash);
         let lane_color = graph::lane_color(graph_row.color);
-        let fit = self.fit();
+        let fit = self.fit(window);
 
         // Ref chips need room beside the subject: a narrow pane drops them
         // (the hover card still names the branch), others cut long names.
@@ -339,7 +358,7 @@ impl HistoryView {
                         div()
                             // Without chips beside it, the subject takes the row.
                             .when(chips.is_empty(), |d| d.flex_1())
-                            .min_w(px(96.))
+                            .min_w(rems(96. / 16.))
                             .truncate()
                             .text_sm()
                             .text_color(if graph_row.mainline {
@@ -355,7 +374,7 @@ impl HistoryView {
                 d.child(
                     h_flex()
                         .flex_none()
-                        .when(fit == Fit::Wide, |d| d.w(px(AUTHOR_WIDTH)))
+                        .when(fit == Fit::Wide, |d| d.w(rems(AUTHOR_WIDTH / 16.)))
                         .gap_2()
                         .child(avatar(&commit.author, !commit.coauthors.is_empty(), 18.))
                         .when(fit == Fit::Wide, |d| {
@@ -373,7 +392,7 @@ impl HistoryView {
             .child(
                 div()
                     .flex_none()
-                    .w(px(TIME_WIDTH))
+                    .w(rems(TIME_WIDTH / 16.))
                     .whitespace_nowrap()
                     .text_right()
                     .font_family(ui::MONO)
@@ -423,10 +442,10 @@ impl HistoryView {
                     uniform_list(
                         "history-list",
                         self.lines.len(),
-                        cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
+                        cx.processor(|this, range: std::ops::Range<usize>, window, cx| {
                             let lines = this.lines.clone();
                             range
-                                .map(|ix| this.render_line(ix, lines[ix], cx))
+                                .map(|ix| this.render_line(ix, lines[ix], window, cx))
                                 .collect::<Vec<_>>()
                         }),
                     )
@@ -439,7 +458,8 @@ impl HistoryView {
         }
     }
 
-    fn render_footer(&self, cx: &mut Context<Self>) -> Div {
+    fn render_footer(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let fit = self.fit(window);
         let selected = self
             .selected
             .as_ref()
@@ -480,7 +500,7 @@ impl HistoryView {
         // Inside a pane: separated by space, no line (the chrome has none).
         h_flex()
             .flex_none()
-            .h(px(38.))
+            .h(rems(38. / 16.))
             .px_4()
             .gap_2()
             .child(status)
@@ -489,8 +509,8 @@ impl HistoryView {
                     .ghost()
                     .small()
                     .icon(Icon::new(IconName::Copy))
-                    .when(self.fit() == Fit::Narrow, |b| b.tooltip("Copy hash"))
-                    .when(self.fit() > Fit::Narrow, |b| b.label("Copy hash"))
+                    .when(fit == Fit::Narrow, |b| b.tooltip("Copy hash"))
+                    .when(fit > Fit::Narrow, |b| b.label("Copy hash"))
                     .disabled(selected.is_none())
                     .on_click(cx.listener(|this, _, _, cx| this.copy_selected(cx))),
             )
@@ -498,7 +518,7 @@ impl HistoryView {
 }
 
 impl Render for HistoryView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let width = self.width.clone();
         let view = cx.entity_id();
         v_flex()
@@ -521,9 +541,9 @@ impl Render for HistoryView {
                 .absolute()
                 .size_full(),
             )
-            .child(self.render_header(cx))
+            .child(self.render_header(window, cx))
             .child(self.render_body(cx))
-            .child(self.render_footer(cx))
+            .child(self.render_footer(window, cx))
     }
 }
 
@@ -582,7 +602,7 @@ impl Render for CommitCard {
         };
         let coauthors = (!commit.coauthors.is_empty())
             .then(|| format!("Co-authored with {}", commit.coauthors.join(", ")));
-        ui::island(cx).w(px(320.)).child(
+        ui::island(cx).w(rems(320. / 16.)).child(
             v_flex()
                 .p_3()
                 .gap_3()
@@ -614,7 +634,7 @@ impl Render for CommitCard {
                 )
                 .child(
                     div()
-                        .text_size(px(13.))
+                        .text_size(rems(13. / 16.))
                         .text_color(ui::fg())
                         .child(commit.subject.clone()),
                 )

@@ -73,8 +73,8 @@ impl SessionsView {
                     div()
                         .absolute()
                         .left_0()
-                        .top(px(10.))
-                        .bottom(px(10.))
+                        .top(rems(10. / 16.))
+                        .bottom(rems(10. / 16.))
                         .w(px(2.))
                         .rounded_full()
                         .bg(ui::accent()),
@@ -83,7 +83,7 @@ impl SessionsView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .size(px(30.))
+                    .size(rems(30. / 16.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -150,7 +150,7 @@ impl SessionsView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .max_w(px(240.))
+                    .max_w(rems(240. / 16.))
                     .truncate()
                     .text_xs()
                     .text_color(ui::faint())
@@ -297,7 +297,7 @@ impl Render for SessionsView {
             "sessions-screen",
             panel
                 .w_full()
-                .max_w(px(760.))
+                .max_w(rems(760. / 16.))
                 .child(
                     ui::screen_header()
                         .child(

@@ -205,7 +205,7 @@ impl Render for WebSurface {
                         .items_center()
                         .justify_center()
                         .p_4()
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .text_color(ui::muted())
                         .child(note),
                 )

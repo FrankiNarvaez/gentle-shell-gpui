@@ -142,6 +142,9 @@ struct Markdown {
     /// replaced: a re-parse that changes the block count resets the list to
     /// the top, and this puts it back.
     restore: Rc<Cell<Option<(ListOffset, usize)>>>,
+    /// The rem size the preview's blocks were measured at: the list only
+    /// measures them again by itself when its width changes.
+    measured_at: Rc<Cell<Option<Pixels>>>,
     _debounce: Task<()>,
     _scroll: Subscription,
     _focus: Subscription,
@@ -241,6 +244,7 @@ impl FileView {
                             .is_some_and(|e| e.eq_ignore_ascii_case("mdx")),
                         mirrored: None,
                         restore: Rc::default(),
+                        measured_at: Rc::default(),
                         _debounce: Task::ready(()),
                         _scroll: cx.observe(&editor, |this, _, cx| this.mirror_scroll(cx)),
                         _focus: cx.on_focus(&focus, window, |this, window, cx| {
@@ -683,6 +687,7 @@ impl FileView {
     /// view, focused first so the action reaches the workspace through it.
     fn render_preview(md: &Markdown, pane: &(FocusHandle, EntityId), cx: &App) -> Div {
         let restore = md.restore.clone();
+        let measured_at = md.measured_at.clone();
         let list = md.preview.read(cx).list_state().clone();
         let image_dir = md.dir.clone();
         let images = md.images.clone();
@@ -709,13 +714,20 @@ impl FileView {
         div()
             .relative()
             .size_full()
-            .text_size(px(14.))
+            .text_size(rems(14. / 16.))
             .text_color(ui::fg())
             // Ahead of the text in prepaint order: it runs once a re-parse
-            // has reset the list, and before the list lays out again.
+            // has reset the list, or the interface size has changed, and
+            // before the list lays out again.
             .child(
                 canvas(
-                    move |_, _, _| restore_scroll(&restore, &list),
+                    move |_, window, _| {
+                        let rem = window.rem_size();
+                        if measured_at.replace(Some(rem)).is_some_and(|was| was != rem) {
+                            list.remeasure();
+                        }
+                        restore_scroll(&restore, &list)
+                    },
                     |_, _, _, _| {},
                 )
                 .absolute()
@@ -725,7 +737,7 @@ impl FileView {
             .child(view.px_6().py_4())
     }
 
-    fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_header(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (icon, tint) = file_icon(&self.crumbs.1);
         let mut facts = Vec::new();
         if let Some(size) = self.meta.size {
@@ -741,8 +753,10 @@ impl FileView {
 
         // Facts join the header by priority (language, change, size) while
         // they fit beside the path, measured from the last frame's width;
-        // the path prefix keeps a little room before it truncates.
+        // the path prefix keeps a little room before it truncates. Costs are
+        // px at 100 %, so the width is counted in those too.
         let chars = |s: &str| s.chars().count() as f32;
+        let unit = f32::from(rems(1. / 16.).to_pixels(window.rem_size()));
         let edit = self.edit.as_ref();
         let dirty = edit.is_some_and(|e| e.dirty);
         let saving = edit.is_some_and(|e| e.saving);
@@ -769,8 +783,13 @@ impl FileView {
         let path_width = chars(&self.crumbs.1) * 7.6
             + (chars(&self.crumbs.0) * 6.8).min(90.)
             + if dirty { 13. } else { 0. };
-        let mut budget =
-            self.header_width.get() - 32. - 24. - 32. - save_width - toggle_width - path_width;
+        let mut budget = self.header_width.get() / unit
+            - 32.
+            - 24.
+            - 32.
+            - save_width
+            - toggle_width
+            - path_width;
         let mut fits = |cost: f32| {
             let fit = cost + 8. <= budget;
             if fit {
@@ -791,7 +810,7 @@ impl FileView {
         h_flex()
             .relative()
             .flex_none()
-            .h(px(38.))
+            .h(rems(38. / 16.))
             .px_4()
             .gap_2()
             .child(
@@ -818,14 +837,14 @@ impl FileView {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(12.5))
+                            .text_size(rems(12.5 / 16.))
                             .text_color(ui::faint())
                             .child(self.crumbs.0.clone()),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_size(px(13.))
+                            .text_size(rems(13. / 16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::fg())
                             .child(self.crumbs.1.clone()),
@@ -835,7 +854,7 @@ impl FileView {
                             div()
                                 .flex_none()
                                 .ml_1p5()
-                                .size(px(7.))
+                                .size(rems(7. / 16.))
                                 .rounded_full()
                                 .bg(ui::accent()),
                         )
@@ -849,7 +868,7 @@ impl FileView {
                             .flex_none()
                             .gap_1()
                             .font_family(ui::MONO)
-                            .text_size(px(11.5))
+                            .text_size(rems(11.5 / 16.))
                             .when(added > 0, |d| {
                                 d.child(div().text_color(ui::success()).child(format!("+{added}")))
                             })
@@ -864,7 +883,7 @@ impl FileView {
                 d.child(
                     div()
                         .flex_none()
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .text_color(ui::muted())
                         .child(facts),
                 )
@@ -891,7 +910,7 @@ impl FileView {
                     h_flex()
                         .flex_none()
                         .gap_1()
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .text_color(ui::success())
                         .child(Icon::new(IconName::Check).xsmall())
                         .child("Saved"),
@@ -902,7 +921,7 @@ impl FileView {
                     div()
                         .flex_none()
                         .font_family(ui::MONO)
-                        .text_size(px(11.5))
+                        .text_size(rems(11.5 / 16.))
                         .text_color(ui::faint())
                         .child(SAVE_HINT),
                 )
@@ -1005,7 +1024,7 @@ impl FileView {
                         .child(
                             div()
                                 .flex_none()
-                                .text_size(px(12.5))
+                                .text_size(rems(12.5 / 16.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(ui::fg())
                                 .child(title),
@@ -1014,7 +1033,7 @@ impl FileView {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(12.))
+                                .text_size(rems(12. / 16.))
                                 .text_color(ui::muted())
                                 .child(detail),
                         ),
@@ -1037,7 +1056,7 @@ impl Focusable for FileView {
 }
 
 impl Render for FileView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pane = (self.focus.clone(), cx.entity_id());
         let body = match &self.body {
             Body::Loading => v_flex()
@@ -1051,7 +1070,7 @@ impl Render for FileView {
                     Editor::new(editor)
                         .appearance(false)
                         .font_family(ui::MONO)
-                        .text_size(px(12.5))
+                        .text_size(rems(12.5 / 16.))
                         .size_full()
                 };
                 match self.markdown.as_ref() {
@@ -1097,18 +1116,18 @@ impl Render for FileView {
                         .gap_2()
                         .px_6()
                         .py_5()
-                        .max_w(px(420.))
+                        .max_w(rems(420. / 16.))
                         .child(Icon::new(*icon).text_color(ui::faint()))
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(rems(14. / 16.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(ui::fg())
                                 .child(title.clone()),
                         )
                         .child(
                             div()
-                                .text_size(px(12.))
+                                .text_size(rems(12. / 16.))
                                 .text_color(ui::muted())
                                 .text_center()
                                 .child(detail.clone()),
@@ -1123,7 +1142,7 @@ impl Render for FileView {
             .on_action(cx.listener(Self::save))
             .size_full()
             .min_h_0()
-            .child(self.render_header(cx))
+            .child(self.render_header(window, cx))
             .when_some(banner, |d, banner| {
                 d.child(ui::appear("file-view-banner", banner))
             })

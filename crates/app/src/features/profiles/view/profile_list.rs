@@ -22,7 +22,7 @@ impl ProfilesView {
         let has_selection = self.selected.is_some();
         let count = self.file.profiles.len();
         v_flex()
-            .w(px(210.))
+            .w(rems(210. / 16.))
             .flex_none()
             .h_full()
             .border_r_1()

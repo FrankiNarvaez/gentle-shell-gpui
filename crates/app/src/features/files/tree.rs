@@ -1047,7 +1047,7 @@ impl FileTreeView {
                     (IconName::File, ui::muted())
                 };
                 return row_shell("file-tree-draft".into(), row.depth, true)
-                    .child(div().w(px(14.)))
+                    .child(div().w(rems(14. / 16.)))
                     .child(Icon::new(icon.0).small().text_color(icon.1))
                     .children(self.render_name_field(cx));
             }
@@ -1083,7 +1083,7 @@ impl FileTreeView {
         let shell = row_shell(id, row.depth, selected || renaming)
             .child(
                 div()
-                    .w(px(14.))
+                    .w(rems(14. / 16.))
                     .flex()
                     .justify_center()
                     .when(entry.is_dir, |d| {
@@ -1114,7 +1114,7 @@ impl FileTreeView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(13.))
+                    .text_size(rems(13. / 16.))
                     .text_color(name_color)
                     .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
                     .child(entry.name.clone()),
@@ -1122,7 +1122,7 @@ impl FileTreeView {
             .when(dirty, |d| {
                 d.child(
                     div()
-                        .size(px(5.))
+                        .size(rems(5. / 16.))
                         .rounded_full()
                         .bg(ui::warning().opacity(0.8)),
                 )
@@ -1131,7 +1131,7 @@ impl FileTreeView {
                 d.child(
                     div()
                         .font_family(ui::MONO)
-                        .text_size(px(10.5))
+                        .text_size(rems(10.5 / 16.))
                         .text_color(status_color(s))
                         .child(status_letter(s).to_string()),
                 )
@@ -1158,13 +1158,13 @@ impl FileTreeView {
             div()
                 .flex_1()
                 .min_w_0()
-                .h(px(20.))
+                .h(rems(20. / 16.))
                 .px_1()
                 .flex()
                 .items_center()
-                .rounded(px(5.))
+                .rounded(rems(5. / 16.))
                 .bg(ui::well())
-                .text_size(px(13.))
+                .text_size(rems(13. / 16.))
                 .on_action(cx.listener(Self::cancel_edit))
                 .child(Input::new(&editing.input).appearance(false).xsmall()),
         )
@@ -1238,8 +1238,8 @@ impl FileTreeView {
             )
             .child(body)
             .vertical_scrollbar(&self.scroll)
-            .context_menu(move |menu, _, cx| match tree.upgrade() {
-                Some(tree) => tree.read(cx).context_menu(menu),
+            .context_menu(move |menu, window, cx| match tree.upgrade() {
+                Some(tree) => tree.read(cx).context_menu(menu, window.rem_size()),
                 None => menu,
             })
             .into_any_element()
@@ -1248,7 +1248,7 @@ impl FileTreeView {
     /// The right-click menu for the target entry, Tern's layout: open,
     /// paths, reveal, edit, trash. Items dispatch the tree's actions, so the
     /// shortcuts show beside them.
-    fn context_menu(&self, menu: PopupMenu) -> PopupMenu {
+    fn context_menu(&self, menu: PopupMenu, rem_size: Pixels) -> PopupMenu {
         let (_, is_dir) = self.target();
         let entry = self.target_entry().is_some();
         let item = |label: &'static str, icon: IconName, action: Box<dyn Action>| {
@@ -1256,7 +1256,9 @@ impl FileTreeView {
                 .icon(Icon::new(icon))
                 .action(action)
         };
-        let menu = menu.action_context(self.focus.clone()).min_w(px(250.));
+        let menu = menu
+            .action_context(self.focus.clone())
+            .min_w(rems(250. / 16.).to_pixels(rem_size));
         let menu = if is_dir {
             menu.item(item("New File…", IconName::FilePlus, Box::new(NewFile)))
                 .item(item(
@@ -1326,7 +1328,7 @@ impl FileTreeView {
     }
 
     /// The ⋯ menu: view options for the whole tree.
-    fn more_menu(&self, menu: PopupMenu, tree: WeakEntity<Self>) -> PopupMenu {
+    fn more_menu(&self, menu: PopupMenu, tree: WeakEntity<Self>, rem_size: Pixels) -> PopupMenu {
         let act = |f: fn(&mut Self, &mut Context<Self>)| {
             let tree = tree.clone();
             move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
@@ -1335,7 +1337,7 @@ impl FileTreeView {
         };
         let root = self.root.clone();
         let menu = menu
-            .min_w(px(220.))
+            .min_w(rems(220. / 16.).to_pixels(rem_size))
             .item(
                 PopupMenuItem::new("Refresh")
                     .icon(Icon::new(IconName::RefreshCw))
@@ -1402,8 +1404,8 @@ impl FileTreeView {
         let active = self.tab == tab;
         h_flex()
             .id(label)
-            .h(px(26.))
-            .min_w(px(32.))
+            .h(rems(26. / 16.))
+            .min_w(rems(32. / 16.))
             .px_2()
             .gap_1()
             .justify_center()
@@ -1422,7 +1424,7 @@ impl FileTreeView {
                 d.child(
                     div()
                         .font_family(ui::MONO)
-                        .text_size(px(10.5))
+                        .text_size(rems(10.5 / 16.))
                         .text_color(ui::warning())
                         .child(count.to_string()),
                 )
@@ -1437,7 +1439,7 @@ impl Render for FileTreeView {
         let files = self.tab == Tab::Files;
         let tree = cx.entity().downgrade();
         let header = h_flex()
-            .h(px(40.))
+            .h(rems(40. / 16.))
             .pl_3()
             .pr_1p5()
             .gap_0p5()
@@ -1449,7 +1451,7 @@ impl Render for FileTreeView {
                     .min_w_0()
                     .ml_1()
                     .truncate()
-                    .text_size(px(13.5))
+                    .text_size(rems(13.5 / 16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(ui::fg())
                     .child(self.name.clone()),
@@ -1469,8 +1471,11 @@ impl Render for FileTreeView {
                 )
                 .child(
                     Self::header_button("file-tree-more", IconName::Ellipsis, "More")
-                        .dropdown_menu(move |menu, _, cx| match tree.upgrade() {
-                            Some(view) => view.read(cx).more_menu(menu, tree.clone()),
+                        .dropdown_menu(move |menu, window, cx| match tree.upgrade() {
+                            Some(view) => {
+                                view.read(cx)
+                                    .more_menu(menu, tree.clone(), window.rem_size())
+                            }
                             None => menu,
                         }),
                 )
@@ -1524,9 +1529,9 @@ impl Render for FileTreeView {
 fn row_shell(id: SharedString, depth: usize, highlighted: bool) -> Stateful<Div> {
     h_flex()
         .id(id)
-        .h(px(ROW_HEIGHT))
+        .h(rems(ROW_HEIGHT / 16.))
         .w_full()
-        .pl(px(6. + depth as f32 * INDENT))
+        .pl(rems((6. + depth as f32 * INDENT) / 16.))
         .pr_2()
         .gap_1p5()
         .rounded_md()
@@ -1542,7 +1547,12 @@ fn empty_state(icon: IconName, text: &'static str) -> Div {
         .gap_2()
         .p_6()
         .child(Icon::new(icon).text_color(ui::faint()))
-        .child(div().text_size(px(12.)).text_color(ui::muted()).child(text))
+        .child(
+            div()
+                .text_size(rems(12. / 16.))
+                .text_color(ui::muted())
+                .child(text),
+        )
 }
 
 /// Untracked files read as `U`, like editors show them.

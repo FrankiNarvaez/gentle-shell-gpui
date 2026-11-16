@@ -210,16 +210,16 @@ impl ProfilesView {
                 let key = open.then(|| toggle_key.clone());
                 let _ = toggle.update(cx, |this, cx| this.set_model_menu(key, window, cx));
             })
-            .w(px(420.))
+            .w(rems(420. / 16.))
             .appearance(false)
             .content(move |_, _, cx| {
                 let mut list = v_flex()
                     .id("model-menu-list")
-                    .max_h(px(360.))
+                    .max_h(rems(360. / 16.))
                     .overflow_y_scroll()
                     .track_scroll(&scroll)
-                    .px(px(6.))
-                    .pb(px(6.));
+                    .px(rems(6. / 16.))
+                    .pb(rems(6. / 16.));
                 let mut index = 0;
                 let matched = rows.iter().any(|r| matches!(r, Row::Pick(Pick::Model(_))));
                 for row in &rows {
@@ -234,7 +234,7 @@ impl ProfilesView {
                                     .pb_1()
                                     .child(
                                         div()
-                                            .size(px(6.))
+                                            .size(rems(6. / 16.))
                                             .rounded_full()
                                             .bg(ui::provider_color(&provider)),
                                     )
@@ -279,7 +279,7 @@ impl ProfilesView {
                             .px_3()
                             .py_1p5()
                             .when(pick == Pick::Custom, |d| d.mt_1())
-                            .rounded(px(ui::ISLAND_ROW))
+                            .rounded(rems(ui::ISLAND_ROW / 16.))
                             .cursor_pointer()
                             .hover(|s| s.bg(ui::surface_hover()))
                             .when(highlighted, |d| d.bg(ui::surface_hover()))
@@ -293,7 +293,7 @@ impl ProfilesView {
                                     .child(
                                         div()
                                             .truncate()
-                                            .text_size(px(13.))
+                                            .text_size(rems(13. / 16.))
                                             .text_color(match pick {
                                                 _ if chosen => ui::accent(),
                                                 Pick::Model(_) => ui::fg(),
@@ -305,7 +305,7 @@ impl ProfilesView {
                                         div()
                                             .truncate()
                                             .font_family(ui::MONO)
-                                            .text_size(px(11.))
+                                            .text_size(rems(11. / 16.))
                                             .text_color(ui::faint())
                                             .child(id)
                                     })),
@@ -326,13 +326,13 @@ impl ProfilesView {
                     .font_family(cx.theme().font_family.clone())
                     .text_color(ui::fg())
                     .child(
-                        div().p(px(6.)).child(
+                        div().p(rems(6. / 16.)).child(
                             h_flex()
                                 .items_center()
                                 .gap_2()
-                                .h(px(36.))
+                                .h(rems(36. / 16.))
                                 .px_3()
-                                .rounded(px(ui::ISLAND_ROW))
+                                .rounded(rems(ui::ISLAND_ROW / 16.))
                                 .bg(ui::well())
                                 .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
                                 .child(div().flex_1().child(Input::new(&search).appearance(false))),

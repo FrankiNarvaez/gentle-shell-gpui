@@ -19,7 +19,11 @@ use gentle_core::transcript::{Item, ToolStatus, format_tokens};
 impl SessionView {
     /// Elapsed time, phase and current tool over the composer, with the
     /// session's live chips on the right.
-    pub(super) fn render_activity(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_activity(
+        &self,
+        rem_size: Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let busy = self.busy();
         let waiting = self.live.pending.as_ref().filter(|p| !p.started);
         let since = self
@@ -69,42 +73,43 @@ impl SessionView {
             .overflow_hidden()
             .whitespace_nowrap()
             .when(busy, |this| {
-                this.child(ui::pulse(div().size(px(6.)).rounded_full().bg(ui::petal())))
-                    .when_some(since, |this, since| {
-                        this.child(
-                            div()
-                                .font_family(ui::MONO)
-                                .text_color(ui::muted())
-                                .child(clock(since.elapsed())),
-                        )
-                    })
-                    .child(div().h(px(10.)).w(px(1.)).bg(ui::border_strong()))
-                    .map(|this| match (waiting, self.activity.phase) {
-                        (Some(_), _) => this.child(
-                            div()
-                                .text_color(ui::petal())
-                                .child(format!("✿ waiting for {provider}…")),
-                        ),
-                        (None, Some(phase)) => {
-                            this.child(div().text_color(ui::petal()).child(format!("✿ {phase}…")))
-                        }
-                        (None, None) => {
-                            this.child(div().text_color(ui::petal()).child("✿ working…"))
-                        }
-                    })
-                    .when_some(current_tool, |this, tool| {
-                        this.child(
-                            div()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .text_color(ui::muted())
-                                .child(tool),
-                        )
-                    })
+                this.child(ui::pulse(
+                    div().size(rems(6. / 16.)).rounded_full().bg(ui::petal()),
+                ))
+                .when_some(since, |this, since| {
+                    this.child(
+                        div()
+                            .font_family(ui::MONO)
+                            .text_color(ui::muted())
+                            .child(clock(since.elapsed())),
+                    )
+                })
+                .child(div().h(rems(10. / 16.)).w(px(1.)).bg(ui::border_strong()))
+                .map(|this| match (waiting, self.activity.phase) {
+                    (Some(_), _) => this.child(
+                        div()
+                            .text_color(ui::petal())
+                            .child(format!("✿ waiting for {provider}…")),
+                    ),
+                    (None, Some(phase)) => {
+                        this.child(div().text_color(ui::petal()).child(format!("✿ {phase}…")))
+                    }
+                    (None, None) => this.child(div().text_color(ui::petal()).child("✿ working…")),
+                })
+                .when_some(current_tool, |this, tool| {
+                    this.child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .text_color(ui::muted())
+                            .child(tool),
+                    )
+                })
             });
 
         let width = self.pane_width.get();
+        let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
         let statuses: Vec<(String, String)> = self
             .extension
             .statuses
@@ -113,7 +118,7 @@ impl SessionView {
             .map(|(k, s)| (k.clone(), s.clone()))
             .collect();
         // Tiny panes fold every extension status (and limits) into one chip.
-        let collapse = width < TINY;
+        let collapse = width < f32::from(rems(TINY / 16.).to_pixels(rem_size));
         let folded: Vec<String> = if collapse {
             statuses
                 .iter()
@@ -128,7 +133,7 @@ impl SessionView {
             .gap_2()
             .when(!collapse, |this| {
                 this.children(statuses.into_iter().map(|(key, s)| {
-                    if width < NARROW {
+                    if narrow {
                         // Icon-only, the text lives in the tooltip.
                         div()
                             .id(ElementId::Name(format!("status-{key}").into()))
@@ -137,7 +142,7 @@ impl SessionView {
                             .into_any_element()
                     } else {
                         div()
-                            .max_w(px(220.))
+                            .max_w(rems(220. / 16.))
                             .truncate()
                             .text_color(ui::faint())
                             .child(s)
@@ -167,9 +172,7 @@ impl SessionView {
             // here instead of a side panel. The task list floats at the top of
             // the conversation instead (see `render_todo_island`).
             .when(!collapse, |this| this.children(self.render_widget_chips()))
-            .when(width >= NARROW, |this| {
-                this.children(self.render_usage_chip())
-            })
+            .when(!narrow, |this| this.children(self.render_usage_chip()))
             .when(self.helpers_visible(), |this| {
                 this.child(self.render_helpers_chip(cx))
             })
@@ -198,10 +201,10 @@ impl SessionView {
             .w_full()
             .min_w_0()
             .overflow_hidden()
-            .h(px(24.))
+            .h(rems(24. / 16.))
             .px_1()
             .gap_3()
-            .text_size(px(11.))
+            .text_size(rems(11. / 16.))
             .child(left)
             .child(right)
     }
@@ -287,7 +290,7 @@ impl SessionView {
                             .map(|line| {
                                 div()
                                     .min_w_0()
-                                    .text_size(px(12.))
+                                    .text_size(rems(12. / 16.))
                                     .font_family(ui::MONO)
                                     .text_color(ui::muted())
                                     .child(line.clone())
@@ -381,8 +384,14 @@ impl SessionView {
                                 h_flex()
                                     .gap_2()
                                     .min_w_0()
-                                    .text_size(px(12.))
-                                    .child(div().flex_none().size(px(6.)).rounded_full().bg(*color))
+                                    .text_size(rems(12. / 16.))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .size(rems(6. / 16.))
+                                            .rounded_full()
+                                            .bg(*color),
+                                    )
                                     .child(
                                         div()
                                             .min_w_0()
@@ -399,7 +408,7 @@ impl SessionView {
                                     div()
                                         .pl_4()
                                         .min_w_0()
-                                        .text_size(px(11.))
+                                        .text_size(rems(11. / 16.))
                                         .text_color(ui::muted())
                                         .child(label),
                                 )
@@ -410,7 +419,7 @@ impl SessionView {
                                         .pl_4()
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(px(11.))
+                                        .text_size(rems(11. / 16.))
                                         .font_family(ui::MONO)
                                         .text_color(ui::faint())
                                         .child(step),
@@ -459,7 +468,7 @@ impl SessionView {
                 rows.iter()
                     .map(|(name, value)| {
                         h_flex()
-                            .text_size(px(12.))
+                            .text_size(rems(12. / 16.))
                             .child(div().flex_1().text_color(ui::muted()).child(*name))
                             .child(
                                 div()
@@ -498,7 +507,7 @@ pub(super) fn chip_popover(
     Popover::new(SharedString::from(format!("{id}-popover")))
         .anchor(Anchor::BottomRight)
         .trigger(trigger)
-        .w(px(360.))
+        .w(rems(360. / 16.))
         .appearance(false)
         .content(move |_, _, cx| {
             ui::island(cx)
@@ -533,7 +542,7 @@ pub(super) fn chip_popover(
                         .child(
                             v_flex()
                                 .id(SharedString::from(format!("{id}-popover-list")))
-                                .max_h(px(380.))
+                                .max_h(rems(380. / 16.))
                                 .overflow_y_scroll()
                                 .gap_1p5()
                                 .children(body()),

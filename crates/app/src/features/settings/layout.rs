@@ -16,7 +16,7 @@ pub(super) fn row(label: &'static str, value: impl Into<SharedString>) -> impl I
         .child(
             div()
                 .w(relative(0.32))
-                .max_w(px(180.))
+                .max_w(rems(180. / 16.))
                 .flex_shrink_0()
                 .truncate()
                 .text_xs()

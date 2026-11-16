@@ -414,14 +414,14 @@ impl SessionView {
         Some(
             h_flex()
                 .absolute()
-                .bottom(px(12.))
+                .bottom(rems(12. / 16.))
                 .left_0()
                 .right_0()
                 .justify_center()
                 .child(
                     div()
                         .id("jump-down")
-                        .size(px(32.))
+                        .size(rems(32. / 16.))
                         .flex()
                         .items_center()
                         .justify_center()

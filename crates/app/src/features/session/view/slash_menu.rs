@@ -124,7 +124,7 @@ impl SessionView {
                     .child(
                         v_flex()
                             .id("slash-list")
-                            .max_h(px(SLASH_MENU_H))
+                            .max_h(rems(SLASH_MENU_H / 16.))
                             .overflow_y_scroll()
                             .track_scroll(&self.live.slash_scroll)
                             .children(matches.into_iter().enumerate().map(
@@ -143,7 +143,7 @@ impl SessionView {
                                             div()
                                                 .flex_shrink_0()
                                                 .font_family(ui::MONO)
-                                                .text_size(px(12.))
+                                                .text_size(rems(12. / 16.))
                                                 .text_color(ui::accent())
                                                 .child(format!("/{name}")),
                                         )
@@ -154,7 +154,7 @@ impl SessionView {
                                                 .overflow_hidden()
                                                 .text_ellipsis()
                                                 .whitespace_nowrap()
-                                                .text_size(px(12.))
+                                                .text_size(rems(12. / 16.))
                                                 .text_color(ui::muted())
                                                 .child(description),
                                         )

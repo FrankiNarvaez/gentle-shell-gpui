@@ -4,7 +4,7 @@ use super::*;
 use gpui_kit::component::Selectable as _;
 
 /// The title bar's height; overlay screens open below it.
-const TITLE_BAR_HEIGHT: f32 = 36.;
+pub(super) const TITLE_BAR_HEIGHT: f32 = 36.;
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -23,7 +23,7 @@ impl Render for Workspace {
         let sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
         let has_sidebar = self.sidebar.is_some();
         // Below this the screen buttons fold into one overflow menu.
-        let narrow = window.viewport_size().width < px(900.);
+        let narrow = window.viewport_size().width < rems(900. / 16.).to_pixels(window.rem_size());
         // Native web views would cover a screen opened over them; device
         // cards stop capturing while covered.
         self.set_stages_covered(self.overlay.is_some(), cx);
@@ -79,7 +79,7 @@ impl Render for Workspace {
             .children(crate::shared::backdrop::layer(window, cx))
             .child(
                 TitleBar::new()
-                    .h(px(TITLE_BAR_HEIGHT))
+                    .h(rems(TITLE_BAR_HEIGHT / 16.))
                     .bg(gpui_kit::transparent_black())
                     .child(
                         h_flex()
@@ -101,7 +101,13 @@ impl Render for Workspace {
                                     .min_w_0()
                                     .overflow_hidden()
                                     .child(self.render_workspace_chip(cx))
-                                    .child(div().flex_none().w(px(1.)).h(px(14.)).bg(ui::border()))
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .w(px(1.))
+                                            .h(rems(14. / 16.))
+                                            .bg(ui::border()),
+                                    )
                                     .child(self.render_tabs(cx)),
                             )
                             .child(
@@ -184,7 +190,13 @@ impl Render for Workspace {
                                                         )),
                                                 )
                                         })
-                                        .child(div().w(px(1.)).h(px(14.)).mx_1().bg(ui::border()))
+                                        .child(
+                                            div()
+                                                .w(px(1.))
+                                                .h(rems(14. / 16.))
+                                                .mx_1()
+                                                .bg(ui::border()),
+                                        )
                                     })
                                     .when_some(
                                         crate::features::app_update::badge(cx),
@@ -248,7 +260,7 @@ impl Render for Workspace {
                                                         .ghost()
                                                         .xsmall()
                                                         .icon(Icon::new(IconName::Ellipsis))
-                                                        .dropdown_menu(move |menu, _, _| {
+                                                        .dropdown_menu(move |menu, window, _| {
                                                             type Open = fn(
                                                                 &mut Workspace,
                                                                 &mut Window,
@@ -276,55 +288,50 @@ impl Render for Workspace {
                                                                     );
                                                                 })
                                                             };
-                                                            menu.min_w(px(260.))
-                                                                .item(entry(
-                                                                    IconName::Settings,
-                                                                    "Configuration",
-                                                                    "Settings for this folder",
-                                                                    |this, window, cx| {
-                                                                        this.open_settings(
-                                                                            window, cx,
-                                                                        )
-                                                                    },
-                                                                ))
-                                                                .item(entry(
-                                                                    IconName::Route,
-                                                                    "Profiles",
-                                                                    "Model and effort per agent",
-                                                                    |this, window, cx| {
-                                                                        this.open_profiles(
-                                                                            window, cx,
-                                                                        )
-                                                                    },
-                                                                ))
-                                                                .item(entry(
-                                                                    IconName::Brain,
-                                                                    "Memory",
-                                                                    "Engram observations",
-                                                                    |this, window, cx| {
-                                                                        this.open_memory(window, cx)
-                                                                    },
-                                                                ))
-                                                                .item(entry(
-                                                                    IconName::RotateCcwClock,
-                                                                    "Sessions",
-                                                                    "Resume a past session",
-                                                                    |this, window, cx| {
-                                                                        this.open_sessions(
-                                                                            window, cx,
-                                                                        )
-                                                                    },
-                                                                ))
-                                                                .item(entry(
-                                                                    IconName::KeyRound,
-                                                                    "Providers",
-                                                                    "Sign-in and API keys",
-                                                                    |this, window, cx| {
-                                                                        this.open_providers(
-                                                                            window, cx,
-                                                                        )
-                                                                    },
-                                                                ))
+                                                            menu.min_w(
+                                                                rems(260. / 16.)
+                                                                    .to_pixels(window.rem_size()),
+                                                            )
+                                                            .item(entry(
+                                                                IconName::Settings,
+                                                                "Configuration",
+                                                                "Settings for this folder",
+                                                                |this, window, cx| {
+                                                                    this.open_settings(window, cx)
+                                                                },
+                                                            ))
+                                                            .item(entry(
+                                                                IconName::Route,
+                                                                "Profiles",
+                                                                "Model and effort per agent",
+                                                                |this, window, cx| {
+                                                                    this.open_profiles(window, cx)
+                                                                },
+                                                            ))
+                                                            .item(entry(
+                                                                IconName::Brain,
+                                                                "Memory",
+                                                                "Engram observations",
+                                                                |this, window, cx| {
+                                                                    this.open_memory(window, cx)
+                                                                },
+                                                            ))
+                                                            .item(entry(
+                                                                IconName::RotateCcwClock,
+                                                                "Sessions",
+                                                                "Resume a past session",
+                                                                |this, window, cx| {
+                                                                    this.open_sessions(window, cx)
+                                                                },
+                                                            ))
+                                                            .item(entry(
+                                                                IconName::KeyRound,
+                                                                "Providers",
+                                                                "Sign-in and API keys",
+                                                                |this, window, cx| {
+                                                                    this.open_providers(window, cx)
+                                                                },
+                                                            ))
                                                         }),
                                                 ),
                                         )
@@ -427,7 +434,7 @@ impl Render for Workspace {
                         ui::appear(
                             "sidebar-in",
                             div()
-                                .w(px(SIDEBAR_WIDTH))
+                                .w(rems(SIDEBAR_WIDTH / 16.))
                                 .flex_none()
                                 .h_full()
                                 .rounded_xl()
@@ -472,7 +479,7 @@ impl Render for Workspace {
                 // Below the title bar, so its buttons can switch screens.
                 div()
                     .absolute()
-                    .top(px(TITLE_BAR_HEIGHT))
+                    .top(rems(TITLE_BAR_HEIGHT / 16.))
                     .left_0()
                     .right_0()
                     .bottom_0()

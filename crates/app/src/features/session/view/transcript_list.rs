@@ -142,6 +142,8 @@ pub(in crate::features::session) struct TranscriptList {
     /// shared with the frame that paints them.
     rail: Rc<Vec<RailMark>>,
     rail_for: Option<f32>,
+    /// The rem size the rows were measured at.
+    rem_size: Option<Pixels>,
 }
 
 /// Header, tail and footer rows, in the same "lines" as item weights.
@@ -166,6 +168,7 @@ impl TranscriptList {
             marks: Vec::new(),
             rail: Rc::default(),
             rail_for: None,
+            rem_size: None,
         }
     }
 
@@ -177,6 +180,20 @@ impl TranscriptList {
         self.weights.clear();
         self.marks.clear();
         self.stale = true;
+    }
+
+    /// Rows are measured at a rem size; a new interface size measures them
+    /// again (the list itself only does that when its width changes).
+    pub(super) fn follow_rem_size(&mut self, rem_size: Pixels) {
+        if self
+            .rem_size
+            .replace(rem_size)
+            .is_some_and(|was| was != rem_size)
+        {
+            self.heights.clear();
+            self.stale = true;
+            self.state.remeasure();
+        }
     }
 
     /// Note the heights of the rows on screen. Only those: a row laid out in

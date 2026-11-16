@@ -87,7 +87,7 @@ impl Render for UsageView {
             "usage-screen",
             panel
                 .w_full()
-                .max_w(px(760.))
+                .max_w(rems(760. / 16.))
                 .child(
                     ui::screen_header()
                         .child(Icon::new(IconName::Gauge).small().text_color(ui::muted()))
