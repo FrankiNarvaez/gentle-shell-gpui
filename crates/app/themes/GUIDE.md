@@ -231,26 +231,40 @@ const CAT = [
 SCENES['pixel-cat'] = {
   draw(g, t) {
     const S = 6, frame = (t % 4) < 0.25 ? 1 : 0;           // blinks once every 4 s
-    const x = Math.round((g.width * 0.15 + 40 * Math.sin(t * 0.3)) / S) * S;
-    g.pixels(CAT[frame], x, Math.round(g.height * 0.7 / S) * S, S);
+    // The art stays on its grid; where it sits glides a window pixel at a time.
+    g.pixels(CAT[frame], g.width * 0.15 + 40 * Math.sin(t * 0.3), g.height * 0.7, S);
   },
 };
 ```
 
-What makes it read as 8-bit:
+What makes it read as 8-bit, and still move smoothly:
 
-- One pixel size for the whole scene (3–6), and every position snapped to
-  it: `Math.round(x / S) * S`. Smooth sub-pixel motion breaks the look.
-- A small palette: 4–16 colors, chosen once, with no gradients, glows or
-  transparency; shading is a darker color from the palette, and soft
-  transitions are dithered (a checkerboard of two colors) or banded.
+- One pixel size for every sprite (3–6). The drawing never shows half an
+  art pixel, but where a sprite sits moves smoothly: `g.pixels` snaps it to
+  whole window pixels, which is what modern pixel-art games do. Don't round
+  positions to the art pixel (`Math.round(x / S) * S`): slow things then
+  jump `S` pixels at a time and look stuck, then jerky.
+- Slow, continuous drift for things that float (clouds 4–15 px/s, a cat's
+  cloud bobbing 2–4 px on a sine); stepped frames only for the drawing
+  itself.
+- A small palette: 8–16 colors, chosen once, with no gradients; shading is
+  a darker color from the palette, and soft transitions are dithered (a
+  checkerboard of two colors) or banded.
+- Light in pixel art is drawn, not blurred: a moon or lantern gets two or
+  three rings of dithered pixels in lighter sky colors around it, a glint
+  of white on its rim, and the clouds near it lit on the side facing it
+  (their top edge one palette step lighter). A faint `g.glow` under the
+  rings is allowed for warmth; keep it under alpha 0.25.
 - Animation in frames: two to four drawings swapped every 0.15–0.5 s
-  (`Math.floor(t * 4) % 2`), not tweened; the sprite's position may move
-  every frame, snapped.
-- Backgrounds built from the same pixels: banded sky as wide rects, stars as
-  single art pixels that blink on and off, clouds and hills as sprites.
-- Sprites 8–32 art pixels across: big enough to read, small enough to be
-  pixel art. Draw sprites once with `pixels()`, never per frame.
+  (`Math.floor(t * 4) % 2`), not tweened.
+- Depth and detail: three layers at least (far, middle, near), each with
+  its own size, speed and palette step; far clouds and hills small, pale
+  and slow, near ones big and saturated. Fill the edges and the bottom:
+  a skyline of hills or rooftops, plenty of clouds of different shapes (6–12
+  on screen, four or five distinct sprites, some flipped), stars in three
+  sizes. A sky with three sprites on it looks empty.
+- Sprites 8–48 art pixels across, with an outline, a highlight and a shadow
+  color each. Draw sprites once with `pixels()`, never per frame.
 
 ### ASCII: `cell` and `sprites`
 
