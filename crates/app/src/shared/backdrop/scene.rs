@@ -486,4 +486,30 @@ mod tests {
             assert_eq!(&commands[..5], &[1., 0., 0., 1., 1.]);
         }
     }
+
+    #[test]
+    fn pixel_art_draws_one_crisp_rect_per_run_and_mirrors() {
+        let (commands, _) = draw(
+            "const ART = pixels(['aab.', '.a  '], { a: '#ff0000', b: '#00ff00' });
+             SCENES.x = { draw(g) { g.pixels(ART, 10.4, 20.6, 3); g.pixels(ART, 0, 0, 2, 1, true); } }",
+        );
+        let rects: Vec<[f64; 5]> = commands
+            .iter()
+            .map(|c| [c[1], c[2], c[3], c[4], c[6]])
+            .collect();
+        let (red, green) = (f64::from(0xff0000), f64::from(0x00ff00));
+        assert_eq!(
+            rects,
+            [
+                // Snapped to (10, 21); "aa" is one rect, see-through skipped.
+                [10., 21., 6., 3., red],
+                [16., 21., 3., 3., green],
+                [13., 24., 3., 3., red],
+                // Mirrored in its 4-pixel width.
+                [4., 0., 4., 2., red],
+                [2., 0., 2., 2., green],
+                [4., 2., 2., 2., red],
+            ]
+        );
+    }
 }

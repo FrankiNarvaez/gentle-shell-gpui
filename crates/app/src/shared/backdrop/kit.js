@@ -143,6 +143,16 @@ const __g = {
       cx += step;
     }
   },
+  /** Pixel art made with pixels(): its top-left at (x, y), each art pixel
+   *  `size` window pixels, mirrored left to right when `flip`. Snapped to
+   *  whole pixels so its edges stay crisp. */
+  pixels(art, x, y, size = 4, alpha = 1, flip = false) {
+    if (__plain) { x = Math.round(x); y = Math.round(y); size = Math.max(1, Math.round(size)); }
+    for (const [row, col, len, color] of art.runs) {
+      const c = flip ? art.w - col - len : col;
+      this.rect(x + c * size, y + row * size, len * size, size, color, alpha);
+    }
+  },
   /** A soft radial glow fading out at radius r. */
   glow(x, y, r, color, alpha = 1) {
     const [c, a] = __color(color);
@@ -355,6 +365,22 @@ const fbm = (x, y, z = 0, octaves = 4) => {
 };
 /** A path to build once at the top of the file and draw many times. */
 const path = () => new __Path();
+/** Pixel art from rows of characters, one per pixel, each looked up in
+ *  `palette` (a character to a color); '.' and ' ' are see-through. Build it
+ *  once at the top of the file and draw it with g.pixels(art, x, y, size). */
+const pixels = (rows, palette) => {
+  const runs = [];
+  rows.forEach((line, row) => {
+    for (let col = 0; col < line.length;) {
+      const ch = line[col];
+      let len = 1;
+      while (line[col + len] === ch) len++;
+      if (ch !== '.' && ch !== ' ' && palette[ch] !== undefined) runs.push([row, col, len, palette[ch]]);
+      col += len;
+    }
+  });
+  return { w: Math.max(0, ...rows.map(r => r.length)), h: rows.length, runs };
+};
 const glyph = (set, x, y, t) => set[Math.floor(hash(x, y, Math.floor(t * 1.2 + hash(y, x) * 7)) * set.length)];
 const ell = (x, y, cx, cy, rx, ry) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2;
 const drift = (cols, f, t, v, w) => { const span = cols + w * 2; return ((f * span + t * v) % span) - w; };

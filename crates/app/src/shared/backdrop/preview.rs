@@ -300,6 +300,7 @@ fn coordinate_grid(theme: &Theme) -> Option<Vec<u8>> {
         let color = match effect.kind {
             EffectKind::Flow { .. } => "#00e5ff",
             EffectKind::Sway { .. } => "#7dff5a",
+            EffectKind::Light { .. } => "#ffc83d",
         };
         let points: Vec<String> = effect
             .region

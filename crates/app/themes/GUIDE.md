@@ -213,6 +213,45 @@ Helpers for both kinds of scene:
 
 There are no blend modes (no additive light); use `glow` for light.
 
+### Pixel art (8-bit, 16-bit)
+
+`pixels(rows, palette)` (at the top of the file) turns rows of characters
+into pixel art, one character per pixel looked up in `palette`; `.` and
+space are see-through. `g.pixels(art, x, y, size = 4, alpha = 1, flip =
+false)` draws it with its top-left at (x, y), each art pixel `size` window
+pixels, mirrored when `flip`; `art.w` and `art.h` are its size in art
+pixels. A run of one color in a row is one rect, so sprites are cheap.
+
+```js
+const P = { k: '#2b2140', w: '#fff4f8', p: '#ff9ec7' };
+const CAT = [
+  pixels(['.k...k.', 'kpk.kpk', 'kwwwwwk', 'kwkwkwk', 'kwpwpwk', '.kwwwk.'], P),
+  pixels(['.k...k.', 'kpk.kpk', 'kwwwwwk', 'kwwwwwk', 'kwpwpwk', '.kwwwk.'], P), // blink
+];
+SCENES['pixel-cat'] = {
+  draw(g, t) {
+    const S = 6, frame = (t % 4) < 0.25 ? 1 : 0;           // blinks once every 4 s
+    const x = Math.round((g.width * 0.15 + 40 * Math.sin(t * 0.3)) / S) * S;
+    g.pixels(CAT[frame], x, Math.round(g.height * 0.7 / S) * S, S);
+  },
+};
+```
+
+What makes it read as 8-bit:
+
+- One pixel size for the whole scene (3–6), and every position snapped to
+  it: `Math.round(x / S) * S`. Smooth sub-pixel motion breaks the look.
+- A small palette: 4–16 colors, chosen once, with no gradients, glows or
+  transparency; shading is a darker color from the palette, and soft
+  transitions are dithered (a checkerboard of two colors) or banded.
+- Animation in frames: two to four drawings swapped every 0.15–0.5 s
+  (`Math.floor(t * 4) % 2`), not tweened; the sprite's position may move
+  every frame, snapped.
+- Backgrounds built from the same pixels: banded sky as wide rects, stars as
+  single art pixels that blink on and off, clouds and hills as sprites.
+- Sprites 8–32 art pixels across: big enough to read, small enough to be
+  pixel art. Draw sprites once with `pixels()`, never per frame.
+
 ### ASCII: `cell` and `sprites`
 
 The window is a grid of `cols` × `rows` cells. This is the format of
@@ -255,7 +294,8 @@ drawn scenes.
    each waterfall, river, cloud bank, tree crown, window, chimney.
 3. Add `effects` on the picture's own pixels (below): `flow` for anything
    that runs (falling water, rivers, clouds, fog banks), `sway` for anything
-   the wind moves (tree crowns, grass, flags). This is what makes it alive.
+   the wind moves (tree crowns, grass, flags), `light` for every lamp, lit
+   window, torch or fire. This is what makes it alive.
 4. Look at `grid.png` again (each region outlined and numbered) and at
    `previews/<stem>.effects.png` (each region at four moments a quarter
    cycle apart: if the four look the same, the effect is too weak). Fix
@@ -291,6 +331,17 @@ drawn scenes.
   jelly), `speed` sways per second (0.15–0.5), `scale` how many waves cross
   the region (5–30: more for finer foliage), `ratio` how much of it is
   vertical (default 0.3).
+- `light`: the lights inside the region glow onto their surroundings and
+  flicker, like Wallpaper Engine's Shine. Draw one small region around each
+  lamp or group of lit windows (about 0.02–0.04 across, the lamp in the
+  middle with room for its halo): the region's most light-like pixels
+  (bright, brighter than around them and, by default, warm) are taken as
+  the light, so a region with no lamp lights up whatever is brightest.
+  `strength` 0.5–1.5 (default 0.8), `glow` how far the halo reaches as a
+  share of the picture width (default 0.01), `flicker` how far it dips
+  (0 steady, 0.3 a lamp, 0.6 a fire), `speed` how fast (0.3 a lamp, 1.5 a
+  torch), `color` a hex for the halo (default the lights' own color), and
+  `"key": "bright"` for cold lights (moon, neon) that aren't warm.
 - Cost: each region renders up to about 120,000 pixels per frame, no finer
   than the window shows the picture. Big regions cost the most.
 
@@ -300,8 +351,9 @@ Draw only what the picture lacks, pinned to it with
 `const [x, y] = g.fromImage(u, v)` so it stays put while the camera moves,
 sized by `g.image.w` so it scales with the picture:
 
-- a window or lantern that flickers: a `glow` in the picture's light color,
-  alpha breathing with `noise(t * 2)` between about 0.3 and 0.6;
+- a lamp or window that the picture doesn't light: a `glow` in the
+  picture's light color, alpha breathing with `noise(t * 2)` between about
+  0.3 and 0.6 (one the picture already has: a `light` effect);
 - spray where water lands, smoke from a chimney: soft, growing, fading
   `glow`s or ellipses drifting with `fbm` (alpha 0.15–0.35);
 - fireflies, snow, rain, falling petals or leaves: particles whose size,

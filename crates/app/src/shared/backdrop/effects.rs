@@ -88,6 +88,8 @@ struct Prepared {
     /// Per patch pixel: the mask (0–1) and the phase (0–1).
     mask: Vec<f32>,
     phase: Vec<f32>,
+    /// A light's region fully lit, per patch pixel; empty for the others.
+    lit: Vec<[u8; 3]>,
 }
 
 /// The picture's effects, prepared for the scale they're shown at.
@@ -200,9 +202,23 @@ fn prepare(picture: &Picture, effect: &Effect, finest: f32, budget: f32) -> Opti
             phase.push(match effect.kind {
                 EffectKind::Flow { .. } => value_noise(u * 3.1, v * 3.1),
                 EffectKind::Sway { scale, .. } => value_noise(u * scale, v * scale * bh / bw),
+                EffectKind::Light { .. } => value_noise(u * 2.3, v * 2.3 * bh / bw),
             });
         }
     }
+    let lit = match effect.kind {
+        EffectKind::Light { .. } => {
+            let grid = Grid {
+                left: x0,
+                top: y0,
+                step,
+                width,
+                height,
+            };
+            light(picture, &grid, effect)
+        }
+        _ => Vec::new(),
+    };
     Some(Prepared {
         effect: effect.clone(),
         left: x0,
@@ -212,7 +228,157 @@ fn prepare(picture: &Picture, effect: &Effect, finest: f32, budget: f32) -> Opti
         height,
         mask,
         phase,
+        lit,
     })
+}
+
+/// Where a patch samples the picture: its top-left corner and picture
+/// pixels per patch pixel, and its size in patch pixels.
+struct Grid {
+    left: f32,
+    top: f32,
+    step: f32,
+    width: usize,
+    height: usize,
+}
+
+/// A light's region fully lit: each pixel brightened by how far it's past
+/// the threshold, plus those bright parts blurred out as a bloom, in the
+/// light's color or their own.
+fn light(picture: &Picture, grid: &Grid, effect: &Effect) -> Vec<[u8; 3]> {
+    let EffectKind::Light {
+        color,
+        threshold,
+        warm,
+        glow,
+        ..
+    } = effect.kind
+    else {
+        return Vec::new();
+    };
+    let strength = effect.strength;
+    let radius = (glow * picture.width as f32 / grid.step).round() as usize;
+    let mut base = Vec::with_capacity(grid.width * grid.height);
+    let mut luma = Vec::with_capacity(grid.width * grid.height);
+    for py in 0..grid.height {
+        for px in 0..grid.width {
+            let c = picture.sample(
+                grid.left + (px as f32 + 0.5) * grid.step,
+                grid.top + (py as f32 + 0.5) * grid.step,
+            );
+            luma.push((0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255.);
+            base.push([c[0], c[1], c[2], 0.]);
+        }
+    }
+    // A light stands out from what's around it: a flame against its dark
+    // window, not a sunlit wall or a bush of autumn leaves.
+    let mut around = luma.clone();
+    box_blur(&mut around, grid.width, grid.height, (radius / 2).max(2));
+    // How much each pixel looks like a light: bright, brighter than what's
+    // around it, and (for `warm`) redder than blue, as lamplight and fire
+    // are and pale stone and sky aren't.
+    let mut score: Vec<f32> = base
+        .iter()
+        .zip(&luma)
+        .zip(&around)
+        .map(|((b, luma), around)| {
+            let mut k = smoothstep((luma - threshold) / 0.25) * smoothstep((luma - around) / 0.2);
+            if warm {
+                k *= smoothstep(((b[0] - b[2]) / 255. - 0.03) / 0.25);
+            }
+            k
+        })
+        .collect();
+    // The region is drawn around its lights, so its most light-like pixels
+    // are the lights, however dim the painting draws them.
+    let top = score.iter().copied().fold(0f32, f32::max);
+    if top <= 1e-3 {
+        return base
+            .iter()
+            .map(|b| [b[0], b[1], b[2]].map(|v| v as u8))
+            .collect();
+    }
+    for k in &mut score {
+        *k = smoothstep((*k / top - 0.7) / 0.3);
+    }
+    // The sources' own color, weighted by how much each is a source.
+    let (mut own, mut weight) = ([0f32; 3], 0f32);
+    for (b, k) in base.iter_mut().zip(&score) {
+        b[3] = *k;
+        own = std::array::from_fn(|i| own[i] + b[i] * k);
+        weight += k;
+    }
+    let mut halo = score;
+    let tint = color.map_or_else(
+        || own.map(|v| v / weight),
+        |c| [(c >> 16) & 255, (c >> 8) & 255, c & 255].map(|v| v as f32),
+    );
+    // Three box blurs come close to a Gaussian. Each light is measured
+    // against a lamp a third of `glow` across, so a candle flame glows
+    // nearly as far as a lit window and one big source doesn't drown the
+    // small ones.
+    for _ in 0..3 {
+        box_blur(&mut halo, grid.width, grid.height, radius);
+    }
+    let full = reference_peak(radius);
+    base.iter()
+        .zip(&halo)
+        .map(|(b, h)| {
+            // The running sums leave tiny residues, below zero too.
+            let reach = (h / full - 0.01).clamp(0., 1.);
+            let glow = (strength * 0.6 * reach.powf(0.5)).min(1.);
+            let lift = 1. + 0.5 * strength * b[3];
+            // Screen: light adds up toward white without clipping.
+            std::array::from_fn(|c| {
+                let lit = (b[c] * lift).min(255.);
+                (255. - (255. - lit) * (1. - tint[c] / 255. * glow)) as u8
+            })
+        })
+        .collect()
+}
+
+/// The center of a lamp a third of `radius` across, after the three blurs.
+fn reference_peak(radius: usize) -> f32 {
+    let size = 6 * radius + 1;
+    let lamp = (radius / 6).max(1) as f32;
+    let middle = (size / 2) as f32;
+    let mut disc: Vec<f32> = (0..size * size)
+        .map(|i| {
+            let (x, y) = ((i % size) as f32 - middle, (i / size) as f32 - middle);
+            if x.hypot(y) <= lamp { 1. } else { 0. }
+        })
+        .collect();
+    for _ in 0..3 {
+        box_blur(&mut disc, size, size, radius);
+    }
+    disc[size * size / 2].max(1e-6)
+}
+
+/// Blur `values` (`width` × `height`) in place with a box `radius` pixels
+/// out each way, rows then columns, clamped at the edges.
+fn box_blur(values: &mut [f32], width: usize, height: usize, radius: usize) {
+    if radius == 0 {
+        return;
+    }
+    let size = (2 * radius + 1) as f32;
+    let mut line = Vec::new();
+    let mut pass =
+        |values: &mut [f32], count: usize, length: usize, at: &dyn Fn(usize, usize) -> usize| {
+            for n in 0..count {
+                line.clear();
+                line.extend((0..length).map(|k| values[at(n, k)]));
+                let get = |k: isize| line[k.clamp(0, length as isize - 1) as usize];
+                let reach = radius as isize;
+                let mut sum: f32 = (-reach..=reach).map(get).sum();
+                for k in 0..length {
+                    values[at(n, k)] = sum / size;
+                    let k = k as isize;
+                    sum += get(k + reach + 1) - get(k - reach);
+                }
+            }
+        };
+    pass(values, height, width, &|row, k| row * width + k);
+    pass(values, width, height, &|column, k| k * width + column);
 }
 
 fn render(picture: &Picture, p: &Prepared, t: f64) -> Patch {
@@ -255,6 +421,16 @@ fn render(picture: &Picture, p: &Prepared, t: f64) -> Patch {
                     let dx = reach * gust * angle.sin() as f32;
                     let dy = reach * gust * ratio * (angle * 1.3).cos() as f32;
                     picture.sample(x + dx, y + dy)
+                }
+                // The lit region over the picture, its alpha dipping on a
+                // slow wave with a quicker one on top, each spot on its phase.
+                EffectKind::Light { flicker, .. } => {
+                    let phase = p.phase[i];
+                    let time = (cycles + f64::from(phase) * 9.7) as f32;
+                    let wave =
+                        0.7 * value_noise(time, phase * 31.) + 0.3 * value_noise(time * 3.7, 7.);
+                    let [r, g, b] = p.lit[i].map(f32::from);
+                    [r, g, b, 255. * (1. - flicker * wave)]
                 }
             };
             let o = i * 4;
@@ -445,5 +621,75 @@ mod tests {
         .render(1., 0.5)
         .remove(0);
         assert_eq!((small.width, small.height), (200, 150));
+    }
+
+    #[test]
+    fn a_light_glows_onto_its_surroundings_and_flickers() {
+        // A dark wall with one small warm lamp in the middle, and a pale
+        // (not warm) patch that must not light up.
+        let (w, h) = (200, 200);
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let lamp = x.abs_diff(100) <= 2 && y.abs_diff(100) <= 2;
+                let pale = x < 70 && y < 70;
+                rgba.extend(match (lamp, pale) {
+                    (true, _) => [255, 190, 90, 255],
+                    (_, true) => [200, 200, 205, 255],
+                    _ => [40, 35, 30, 255],
+                });
+            }
+        }
+        let light = Effect {
+            region: vec![(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)],
+            ..square(
+                EffectKind::Light {
+                    color: None,
+                    threshold: 0.45,
+                    warm: true,
+                    glow: 0.05,
+                    flicker: 0.6,
+                },
+                1.,
+            )
+        };
+        let mut effects = Effects::new(
+            Picture {
+                width: w,
+                height: h,
+                rgba,
+            },
+            &[light],
+        );
+        let (pw, _, lit) = effects.moment(0, 0.).unwrap();
+        let red = |x: usize, y: usize| {
+            // Patch pixels from the region's corner at (40, 40).
+            lit[((y - 40) * pw as usize + (x - 40)) * 4]
+        };
+        assert!(
+            red(108, 100) > 70,
+            "beside the lamp is lit: {}",
+            red(108, 100)
+        );
+        assert!(
+            red(150, 150) < 50,
+            "far from it stays dark: {}",
+            red(150, 150)
+        );
+        assert!(
+            red(50, 50) < 215,
+            "the pale wall isn't a light: {}",
+            red(50, 50)
+        );
+        let alphas: Vec<u8> = (0..20)
+            .map(|k| {
+                effects.render(f64::from(k) * 0.37, 1.).remove(0).bgra
+                    [(60 * pw as usize + 60) * 4 + 3]
+            })
+            .collect();
+        assert!(
+            alphas.iter().max().unwrap() - alphas.iter().min().unwrap() > 20,
+            "it flickers: {alphas:?}"
+        );
     }
 }

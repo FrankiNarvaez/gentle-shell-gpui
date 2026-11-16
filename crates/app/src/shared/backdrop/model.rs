@@ -72,10 +72,11 @@ pub struct Effect {
     pub region: Vec<(f32, f32)>,
     /// How soft the region's edge is, as a share of the image width.
     pub feather: f32,
-    /// Cycles (flow) or sways (sway) per second of scene time.
+    /// Cycles (flow), sways (sway) or flickers (light) per second of scene
+    /// time.
     pub speed: f32,
-    /// How far it moves: flow's travel per cycle as a share of the image
-    /// height, sway's reach as a share of the image width.
+    /// How strong it is: flow's travel per cycle as a share of the image
+    /// height, sway's reach as a share of the image width, light's glow.
     pub strength: f32,
 }
 
@@ -88,6 +89,18 @@ pub enum EffectKind {
     /// `scale` is how many waves cross the region; `ratio` how much of the
     /// movement is vertical.
     Sway { scale: f32, ratio: f32 },
+    /// The region's lights glow and flicker: its pixels brighter than
+    /// `threshold` (0–1), and only warm ones (lamps, fire) when `warm`,
+    /// brighten and bloom out `glow` (a share of the picture width), in
+    /// `color` (`0xrrggbb`) or their own; `flicker` (0–1) is how far the
+    /// light dips.
+    Light {
+        color: Option<u32>,
+        threshold: f32,
+        warm: bool,
+        glow: f32,
+        flicker: f32,
+    },
 }
 
 /// At most this many effects, and points per region.
@@ -133,6 +146,20 @@ fn effect(value: &Value) -> Option<Effect> {
             },
             get("speed").unwrap_or(0.35).clamp(0.02, 3.),
             get("strength").unwrap_or(0.003).clamp(0.0002, 0.03),
+        ),
+        "light" => (
+            EffectKind::Light {
+                color: value
+                    .get("color")
+                    .and_then(Value::as_str)
+                    .and_then(|s| hex_colors(s).first().copied()),
+                threshold: get("threshold").unwrap_or(0.45).clamp(0., 0.95),
+                warm: value.get("key").and_then(Value::as_str) != Some("bright"),
+                glow: get("glow").unwrap_or(0.01).clamp(0., 0.04),
+                flicker: get("flicker").unwrap_or(0.3).clamp(0., 1.),
+            },
+            get("speed").unwrap_or(0.5).clamp(0.02, 6.),
+            get("strength").unwrap_or(0.8).clamp(0.05, 3.),
         ),
         _ => return None,
     };
