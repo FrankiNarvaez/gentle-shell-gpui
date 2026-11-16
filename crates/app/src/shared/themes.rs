@@ -52,6 +52,10 @@ pub struct Theme {
     /// True black that stays opaque at any transparency, so an OLED panel
     /// turns those pixels off (`ui::Palette::new` keeps every large surface black).
     pub oled: bool,
+    /// Opaque surfaces at any transparency, in the theme's own colors:
+    /// the theme file sets `"solid": true` (`ui::Palette::new` keeps every
+    /// glass role alpha 1.0, like OLED's layers but not black).
+    pub solid: bool,
     pub bg: u32,
     pub fg: u32,
     pub muted: u32,
@@ -240,6 +244,7 @@ pub fn parse_pi_theme(text: &str, source: Source, file: Option<&Path>) -> Option
         source,
         light,
         oled: false,
+        solid: value.get("solid").and_then(Value::as_bool).unwrap_or(false),
         bg,
         fg,
         muted,
@@ -429,6 +434,7 @@ fn from_scheme(s: &Scheme) -> Theme {
         source: Source::Builtin,
         light: s.light,
         oled: false,
+        solid: false,
         bg: s.bg,
         fg: s.fg,
         muted: mix(s.fg, s.bg, 0.35),
@@ -466,6 +472,7 @@ fn oled_black() -> Theme {
         source: Source::Builtin,
         light: false,
         oled: true,
+        solid: false,
         bg: 0x000000,
         fg: 0xdcd4d9,
         muted: 0x958590,
@@ -1085,6 +1092,7 @@ mod tests {
         let cute = parse_pi_theme(EMBEDDED[0], Source::Gentle, None).unwrap();
         assert_eq!(cute.name, "Gentleman-Cute");
         assert!(!cute.light);
+        assert!(!cute.solid);
         assert_eq!(cute.bg, 0x060407);
         assert_eq!(cute.fg, 0xf6eff3);
         assert_eq!(cute.muted, 0xa78e9b);
