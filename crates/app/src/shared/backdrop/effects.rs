@@ -16,6 +16,11 @@ use super::model::{Effect, EffectKind};
 /// rendered at a lower resolution (and drawn scaled up).
 const PATCH_BUDGET: f32 = 120_000.;
 
+/// The most pixels all effects render per frame together, so a theme with
+/// many regions costs about what one with four does (every patch is also
+/// uploaded to the GPU each frame).
+const TOTAL_BUDGET: f32 = 480_000.;
+
 /// The theme's picture, decoded once.
 pub struct Picture {
     width: usize,
@@ -109,6 +114,39 @@ impl Effects {
     /// pixels per picture pixel (the camera's scale). Changing the scale
     /// noticeably (a resized window) prepares the effects again.
     pub fn render(&mut self, t: f64, shown: f32) -> Vec<Patch> {
+        self.prepare(shown);
+        self.prepared
+            .iter()
+            .map(|p| render(&self.picture, p, t))
+            .collect()
+    }
+
+    /// The `index`th rendered effect at scene time `t`, at full resolution,
+    /// over the picture under its region: opaque RGBA, with its width and
+    /// height. For previews.
+    pub fn moment(&mut self, index: usize, t: f64) -> Option<(u32, u32, Vec<u8>)> {
+        self.prepare(1.);
+        let prepared = self.prepared.get(index)?;
+        let patch = render(&self.picture, prepared, t);
+        let mut rgba = Vec::with_capacity(patch.bgra.len());
+        for (i, over) in patch.bgra.as_chunks::<4>().0.iter().enumerate() {
+            let (x, y) = ((i % prepared.width) as f32, (i / prepared.width) as f32);
+            let under = self.picture.sample(
+                prepared.left + (x + 0.5) * prepared.step - 0.5,
+                prepared.top + (y + 0.5) * prepared.step - 0.5,
+            );
+            let alpha = f32::from(over[3]) / 255.;
+            for (channel, under) in [over[2], over[1], over[0]].into_iter().zip(under) {
+                rgba.push((f32::from(channel) * alpha + under * (1. - alpha)).round() as u8);
+            }
+            rgba.push(255);
+        }
+        Some((patch.width, patch.height, rgba))
+    }
+
+    /// Prepare every effect for a picture shown at `shown` window pixels per
+    /// picture pixel, unless it already is.
+    fn prepare(&mut self, shown: f32) {
         // Quarter steps of a power of two: a camera's slow zoom doesn't
         // re-prepare, a resized window does.
         let shown = 2f32
@@ -116,22 +154,19 @@ impl Effects {
             .min(1.);
         if shown != self.shown {
             self.shown = shown;
+            let budget = PATCH_BUDGET.min(TOTAL_BUDGET / self.effects.len().max(1) as f32);
             self.prepared = self
                 .effects
                 .iter()
-                .filter_map(|effect| prepare(&self.picture, effect, 1. / shown))
+                .filter_map(|effect| prepare(&self.picture, effect, 1. / shown, budget))
                 .collect();
         }
-        self.prepared
-            .iter()
-            .map(|p| render(&self.picture, p, t))
-            .collect()
     }
 }
 
-/// `effect` ready to render, never finer than `finest` picture pixels per
-/// patch pixel.
-fn prepare(picture: &Picture, effect: &Effect, finest: f32) -> Option<Prepared> {
+/// `effect` ready to render in at most `budget` pixels, never finer than
+/// `finest` picture pixels per patch pixel.
+fn prepare(picture: &Picture, effect: &Effect, finest: f32, budget: f32) -> Option<Prepared> {
     let (w, h) = (picture.width as f32, picture.height as f32);
     let points: Vec<(f32, f32)> = effect.region.iter().map(|(u, v)| (u * w, v * h)).collect();
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0f32, 0f32);
@@ -145,7 +180,7 @@ fn prepare(picture: &Picture, effect: &Effect, finest: f32) -> Option<Prepared> 
     if bw < 2. || bh < 2. {
         return None;
     }
-    let step = (bw * bh / PATCH_BUDGET).sqrt().max(finest).max(1.);
+    let step = (bw * bh / budget).sqrt().max(finest).max(1.);
     let (width, height) = ((bw / step).ceil() as usize, (bh / step).ceil() as usize);
     let feather = (effect.feather * w).max(0.5);
     let mut mask = Vec::with_capacity(width * height);

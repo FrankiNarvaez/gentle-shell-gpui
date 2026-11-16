@@ -18,6 +18,7 @@ use std::time::Duration;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::platform::power::{self, Power};
 use crate::shared::themes::Themes;
 use crate::shared::ui;
 pub use model::{Backdrop, SHARE_EXTENSION};
@@ -172,7 +173,15 @@ struct MotionChoice(Motion);
 
 impl Global for MotionChoice {}
 
-/// Read the saved motion choice.
+/// The machine's power state, polled every [`POWER_POLL`].
+struct PowerNow(Power);
+
+impl Global for PowerNow {}
+
+/// How often the power state is read again.
+const POWER_POLL: Duration = Duration::from_secs(20);
+
+/// Read the saved motion choice, and keep following the power state.
 pub fn init(cx: &mut App) {
     let saved = crate::shared::themes::store_path()
         .and_then(|path| crate::shared::themes::read_key(&path, Motion::KEY))
@@ -184,11 +193,58 @@ pub fn init(cx: &mut App) {
         })
         .unwrap_or_default();
     cx.set_global(MotionChoice(saved));
+    cx.set_global(PowerNow(power::current()));
+    cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor().timer(POWER_POLL).await;
+            let now = cx
+                .background_executor()
+                .spawn(async { power::current() })
+                .await;
+            cx.update(|cx| {
+                if cx.global::<PowerNow>().0 != now {
+                    cx.set_global(PowerNow(now));
+                    cx.refresh_windows();
+                }
+            });
+        }
+    })
+    .detach();
 }
 
+/// How much scenes move by the person's choice.
 pub fn motion(cx: &App) -> Motion {
     cx.try_global::<MotionChoice>()
         .map_or_else(Motion::default, |m| m.0)
+}
+
+/// How much scenes move now: the person's choice, eased by the power state.
+/// On battery Smooth slows to Calm; saving power (Low Power Mode, battery
+/// saver) holds every scene still.
+pub fn motion_now(cx: &App) -> Motion {
+    let power = cx
+        .try_global::<PowerNow>()
+        .map_or_else(Power::default, |p| p.0);
+    eased(motion(cx), power)
+}
+
+fn eased(motion: Motion, power: Power) -> Motion {
+    match (motion, power) {
+        (_, Power::Saving) => Motion::Still,
+        (Motion::Smooth, Power::Battery) => Motion::Calm,
+        (motion, _) => motion,
+    }
+}
+
+/// Why scenes move less than chosen right now, if they do.
+pub fn power_note(cx: &App) -> Option<&'static str> {
+    let power = cx
+        .try_global::<PowerNow>()
+        .map_or_else(Power::default, |p| p.0);
+    (motion_now(cx) != motion(cx)).then_some(match power {
+        Power::Saving => "Saving power: scenes hold still.",
+        _ => "On battery: scenes move at Calm.",
+    })
 }
 
 /// Choose and save how much scenes move.
@@ -209,7 +265,7 @@ pub fn set_motion(motion: Motion, cx: &mut App) {
 pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     let theme = cx.global::<Themes>().active_theme().clone();
     let backdrop = theme.background.clone()?;
-    let motion = motion(cx);
+    let motion = motion_now(cx);
     let moving = motion != Motion::Still
         && backdrop.speed > 0.
         && window.is_window_active()
@@ -220,12 +276,11 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     // A camera or effects move the image on the scene's clock, so they run
     // a scene that draws nothing when the theme has none.
     let natural = backdrop.image.as_ref().and(backdrop.image_size);
-    let picture_moves = backdrop.camera.is_some() || !backdrop.effects.is_empty();
     let code = backdrop
         .scene
         .as_ref()
         .map(|s| s.code.clone())
-        .or_else(|| (picture_moves && natural.is_some()).then(|| STILL.clone()));
+        .or_else(|| backdrop.moves().then(|| STILL.clone()));
     let scene = code.as_ref().map(|code| {
         let key = format!(
             "{}|{}|{}|{:?}|{:?}|{:?}",

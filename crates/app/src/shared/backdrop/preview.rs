@@ -333,9 +333,7 @@ fn effects_strip(theme: &Theme) -> Option<Vec<u8>> {
         return None;
     }
     let image = backdrop.image.as_ref()?;
-    let (iw, ih) = backdrop.image_size?;
     let mut effects = Effects::new(Picture::decode(&image.bytes)?, &backdrop.effects);
-    let picture = data_image(image, 0., 0., iw, ih)?;
     let mut rows = String::new();
     let mut width = 0f32;
     for (n, effect) in backdrop.effects.iter().enumerate() {
@@ -350,20 +348,11 @@ fn effects_strip(theme: &Theme) -> Option<Vec<u8>> {
         );
         for k in 0..4 {
             let t = 20. + quarter * f64::from(k);
-            let Some(patch) = effects.render(t, 1.).into_iter().nth(n) else {
+            let Some((pw, ph, rgba)) = effects.moment(n, t) else {
                 break;
             };
-            let [u0, v0, u1, v1] = patch.rect;
-            let (pw, ph) = ((u1 - u0) * iw, (v1 - v0) * ih);
-            let dw = pw * ROW / ph;
-            // The region over the untouched picture, as the window shows it.
-            let _ = write!(
-                rows,
-                r#"<svg x="{x}" y="{y}" width="{dw}" height="{ROW}" viewBox="{} {} {pw} {ph}" preserveAspectRatio="none">{picture}{}</svg>"#,
-                u0 * iw,
-                v0 * ih,
-                patch_image(&patch, u0 * iw, v0 * ih, pw, ph)?
-            );
+            let dw = pw as f32 * ROW / ph as f32;
+            rows.push_str(&png_image(pw, ph, rgba, x, y, dw, ROW)?);
             x += dw + 10.;
         }
         width = width.max(x);
@@ -393,8 +382,21 @@ fn patch_image(patch: &Patch, x: f32, y: f32, w: f32, h: f32) -> Option<String> 
     for pixel in rgba.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
+    png_image(patch.width, patch.height, rgba, x, y, w, h)
+}
+
+/// RGBA pixels as an SVG `<image>` at (x, y, w, h).
+fn png_image(
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> Option<String> {
     let mut png = Vec::new();
-    image::RgbaImage::from_raw(patch.width, patch.height, rgba)?
+    image::RgbaImage::from_raw(width, height, rgba)?
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .ok()?;
     let data = base64::engine::general_purpose::STANDARD.encode(png);

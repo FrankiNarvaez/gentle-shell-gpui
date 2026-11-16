@@ -52,6 +52,17 @@ pub struct Backdrop {
     pub veil: f32,
 }
 
+impl Backdrop {
+    /// Whether it animates: a scene, or a picture that a camera or effects
+    /// move (those run on an empty scene's clock).
+    pub fn moves(&self) -> bool {
+        self.scene.is_some()
+            || (self.image.is_some()
+                && self.image_size.is_some()
+                && (self.camera.is_some() || !self.effects.is_empty()))
+    }
+}
+
 /// An effect on a region of the picture itself, the way Wallpaper Engine's
 /// Water Flow and Foliage Sway move a painting's own water and leaves.
 #[derive(Debug, Clone, PartialEq)]
