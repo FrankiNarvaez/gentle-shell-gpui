@@ -63,12 +63,12 @@ impl Music {
             .gap_2p5()
             .child(
                 div()
-                    .size(px(36.))
+                    .size(rems(36. / 16.))
                     .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(ui::ISLAND_ROW))
+                    .rounded(rems(ui::ISLAND_ROW / 16.))
                     .bg(ui::petal().opacity(0.14))
                     .text_color(ui::petal())
                     .child(Icon::new(IconName::Music).small()),
@@ -114,7 +114,7 @@ impl Music {
         div()
             .px_3()
             .py_2p5()
-            .rounded(px(ui::ISLAND_ROW))
+            .rounded(rems(ui::ISLAND_ROW / 16.))
             .bg(ui::well())
             .child(
                 h_flex()
@@ -181,7 +181,7 @@ impl Music {
                         // The main control: a round petal button.
                         div()
                             .id("music-toggle")
-                            .size(px(32.))
+                            .size(rems(32. / 16.))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -213,7 +213,7 @@ impl Music {
                             .tooltip("Next piece, same mood")
                             .on_click(cx.listener(|this, _, _, cx| this.next(cx))),
                     )
-                    .child(div().w(px(1.)).h(px(16.)).mx_1().bg(ui::border()))
+                    .child(div().w(px(1.)).h(rems(1.)).mx_1().bg(ui::border()))
                     .child(Icon::new(IconName::Volume2).small().text_color(ui::faint()))
                     .child(
                         div().flex_1().child(
@@ -224,7 +224,7 @@ impl Music {
                     )
                     .child(
                         div()
-                            .w(px(30.))
+                            .w(rems(30. / 16.))
                             .text_right()
                             .text_xs()
                             .font_family(ui::MONO)
@@ -315,7 +315,7 @@ pub fn title_button(music: &Entity<Music>, cx: &App) -> Option<AnyElement> {
                         let open = *open;
                         watch.update(cx, |music, cx| music.set_watching(open, cx));
                     })
-                    .w(px(340.))
+                    .w(rems(340. / 16.))
                     // The island, as the composer's menus and chip cards.
                     .appearance(false)
                     .content(move |_, _, cx| {
@@ -351,7 +351,7 @@ impl RenderOnce for MusicTrigger {
         const BARS: [f32; 3] = [6., 11., 8.];
         div()
             .id("music-button")
-            .size(px(28.))
+            .size(rems(28. / 16.))
             .flex()
             .items_center()
             .justify_center()

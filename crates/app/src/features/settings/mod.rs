@@ -314,7 +314,7 @@ impl Render for SettingsView {
             "settings-screen",
             panel
                 .w_full()
-                .max_w(px(820.))
+                .max_w(rems(820. / 16.))
                 .child(
                     ui::screen_header()
                         .child(

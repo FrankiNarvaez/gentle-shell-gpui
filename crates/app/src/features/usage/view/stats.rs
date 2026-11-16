@@ -93,7 +93,7 @@ impl UsageView {
                 ("usage-tile", i),
                 ui::card()
                     .flex_1()
-                    .min_w(px(104.))
+                    .min_w(rems(104. / 16.))
                     .gap_1()
                     .px_3()
                     .py_2p5()
@@ -273,7 +273,7 @@ impl UsageView {
             .child(div().flex_1().min_w_0().truncate().child(columns[0].0))
             .children(columns[1..].iter().map(|(label, width)| {
                 div()
-                    .w(px(*width))
+                    .w(rems(*width / 16.))
                     .flex_shrink_0()
                     .text_right()
                     .child(*label)
@@ -282,7 +282,7 @@ impl UsageView {
 
     fn numeric(width: f32, text: String) -> Div {
         div()
-            .w(px(width))
+            .w(rems(width / 16.))
             .flex_shrink_0()
             .text_right()
             .text_xs()

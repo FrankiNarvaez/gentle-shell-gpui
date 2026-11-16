@@ -73,15 +73,15 @@ impl Workspace {
         };
         h_flex()
             .id("workspace-chip")
-            .h(px(TITLE_ITEM))
-            .pl(px(5.))
-            .pr(px(6.))
-            .gap(px(7.))
+            .h(rems(TITLE_ITEM / 16.))
+            .pl(rems(5. / 16.))
+            .pr(rems(6. / 16.))
+            .gap(rems(7. / 16.))
             .flex_none()
             // Same shape and hover as a tab, but no resting fill: it labels the
             // workspace (as in Tern) instead of competing with the active tab.
-            .rounded(px(8.))
-            .text_size(px(12.5))
+            .rounded(rems(8. / 16.))
+            .text_size(rems(12.5 / 16.))
             .cursor_pointer()
             .hover(|s| s.bg(ui::surface_hover().opacity(0.6)))
             .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
@@ -95,22 +95,22 @@ impl Workspace {
             }))
             .child(
                 div()
-                    .size(px(18.))
+                    .size(rems(18. / 16.))
                     .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(5.))
+                    .rounded(rems(5. / 16.))
                     .bg(color.opacity(0.18))
                     .text_color(color)
-                    .text_size(px(10.5))
+                    .text_size(rems(10.5 / 16.))
                     .font_weight(FontWeight::BOLD)
                     .line_height(relative(1.))
                     .child(initial),
             )
             .child(
                 div()
-                    .max_w(px(160.))
+                    .max_w(rems(160. / 16.))
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
@@ -119,7 +119,13 @@ impl Workspace {
                     .child(name),
             )
             .when_some(dot, |d, color| {
-                d.child(div().size(px(6.)).flex_none().rounded_full().bg(color))
+                d.child(
+                    div()
+                        .size(rems(6. / 16.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(color),
+                )
             })
             .child(
                 Icon::new(IconName::ChevronDown)
@@ -149,12 +155,12 @@ impl Workspace {
                     .overflow_hidden()
                     .id(("tab", tab.id))
                     .group("tab")
-                    .h(px(TITLE_ITEM))
-                    .pl(px(10.))
-                    .pr(px(4.))
-                    .gap(px(7.))
-                    .rounded(px(8.))
-                    .text_size(px(12.5))
+                    .h(rems(TITLE_ITEM / 16.))
+                    .pl(rems(10. / 16.))
+                    .pr(rems(4. / 16.))
+                    .gap(rems(7. / 16.))
+                    .rounded(rems(8. / 16.))
+                    .text_size(rems(12.5 / 16.))
                     .cursor_pointer()
                     .relative()
                     // The fill alone marks the active tab, like Tern; the petal
@@ -181,17 +187,19 @@ impl Workspace {
                     }))
                     .child(
                         div()
-                            .size(px(14.))
+                            .size(rems(14. / 16.))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(if running {
-                                ui::pulse(div().size(px(7.)).rounded_full().bg(ui::accent()))
-                                    .into_any_element()
+                                ui::pulse(
+                                    div().size(rems(7. / 16.)).rounded_full().bg(ui::accent()),
+                                )
+                                .into_any_element()
                             } else if kind == PaneKind::Agent {
                                 div()
-                                    .text_size(px(13.))
+                                    .text_size(rems(13. / 16.))
                                     .line_height(relative(1.))
                                     .text_color(icon_color)
                                     .child("❀")
@@ -206,12 +214,12 @@ impl Workspace {
                     .child(
                         match self.renaming.as_ref().filter(|r| r.pane == tab.focused) {
                             Some(rename) => div()
-                                .w(px(160.))
-                                .h(px(20.))
+                                .w(rems(160. / 16.))
+                                .h(rems(20. / 16.))
                                 .px_1()
                                 .flex()
                                 .items_center()
-                                .rounded(px(5.))
+                                .rounded(rems(5. / 16.))
                                 .bg(ui::well())
                                 // Clicks in the field edit it rather than the tab.
                                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -220,7 +228,7 @@ impl Workspace {
                                 .into_any_element(),
                             None => div()
                                 .min_w_0()
-                                .max_w(px(180.))
+                                .max_w(rems(180. / 16.))
                                 .overflow_hidden()
                                 .text_ellipsis()
                                 .whitespace_nowrap()
@@ -232,15 +240,15 @@ impl Workspace {
                     .when(count > 1, |d| {
                         d.child(
                             div()
-                                .h(px(16.))
-                                .min_w(px(16.))
-                                .px(px(4.))
+                                .h(rems(1.))
+                                .min_w(rems(1.))
+                                .px(rems(4. / 16.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(5.))
+                                .rounded(rems(5. / 16.))
                                 .bg(ui::surface_hover().opacity(0.7))
-                                .text_size(px(10.))
+                                .text_size(rems(10. / 16.))
                                 .line_height(relative(1.))
                                 .text_color(ui::muted())
                                 .child(count.to_string()),
@@ -249,11 +257,11 @@ impl Workspace {
                     .child(
                         div()
                             .id(("close-tab", tab.id))
-                            .size(px(18.))
+                            .size(rems(18. / 16.))
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(5.))
+                            .rounded(rems(5. / 16.))
                             .text_color(ui::faint())
                             .invisible()
                             .group_hover("tab", |s| s.visible())
@@ -275,7 +283,7 @@ impl Workspace {
                     .occlude()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .child(title_button("new-tab", IconName::Plus).dropdown_menu(
-                        move |menu, _, _| {
+                        move |menu, window, _| {
                             let item = |icon: IconName,
                                         label: &'static str,
                                         detail: &'static str,
@@ -285,7 +293,7 @@ impl Workspace {
                                 })
                             };
                             let (agent, terminal) = (weak.clone(), weak.clone());
-                            menu.min_w(px(260.))
+                            menu.min_w(rems(260. / 16.).to_pixels(window.rem_size()))
                                 .item(
                                     item(
                                         IconName::Bot,
@@ -557,15 +565,15 @@ impl Workspace {
         let grip = h_flex()
             .absolute()
             // Inside the ~4 px gap under the title bar, not over the tabs.
-            .top(px(-4.))
+            .top(rems(-4. / 16.))
             .left_0()
             .right_0()
             .justify_center()
             .child(
                 div()
                     .id(("pane-grip", id))
-                    .w(px(34.))
-                    .h(px(14.))
+                    .w(rems(34. / 16.))
+                    .h(rems(14. / 16.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -666,7 +674,7 @@ pub(super) fn menu_row(
         .w_full()
         .child(
             div()
-                .size(px(26.))
+                .size(rems(26. / 16.))
                 .flex_none()
                 .flex()
                 .items_center()

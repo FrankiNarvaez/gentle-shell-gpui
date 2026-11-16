@@ -13,7 +13,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationElement, AnimationExt as _, App, BoxShadow, Div, ElementId, EntityId,
     FontWeight, Hsla, IntoElement, ParentElement as _, SharedString, Stateful, Styled, Window,
-    canvas, div, ease_out_quint, point, px, rgb,
+    canvas, div, ease_out_quint, point, px, rems, rgb,
 };
 
 use crate::shared::themes::{self, Theme, mix};
@@ -225,9 +225,12 @@ pub const MONO: &str = if cfg!(target_os = "macos") {
 
 /// Map the gpui-component theme onto the active palette so stock components
 /// match. Switches gpui-component's light/dark mode with the theme first.
+/// The interface size sets the font size, which gpui-component's root makes
+/// every window's rem size: everything sized in rems follows it.
 pub fn apply_theme(cx: &mut App) {
     use gpui_kit::component::{Theme as KitTheme, ThemeMode};
     let p = themes::palette(|p| *p);
+    let scale = f32::from(cx.global::<themes::Themes>().interface_size) / 100.;
     let mode = if p.light {
         ThemeMode::Light
     } else {
@@ -314,8 +317,11 @@ pub fn apply_theme(cx: &mut App) {
         c.sidebar_accent_foreground = p.fg;
         c.sidebar_primary = p.accent;
         c.sidebar_primary_foreground = p.on_accent;
-        theme.radius = px(8.);
-        theme.radius_lg = px(12.);
+        // 16 px at 100 %: the rem every `rems(px_at_100 / 16.)` is written for.
+        theme.font_size = px(16. * scale);
+        theme.mono_font_size = px(13. * scale);
+        theme.radius = px(8. * scale);
+        theme.radius_lg = px(12. * scale);
     });
 }
 
@@ -351,7 +357,7 @@ pub fn chip(text: impl Into<SharedString>, color: Hsla) -> Div {
         .px_1p5()
         .py(px(1.))
         .rounded_md()
-        .text_size(px(10.5))
+        .text_size(rems(10.5 / 16.))
         .text_color(color)
         .bg(color.opacity(0.12))
         .border_1()
@@ -373,8 +379,8 @@ pub fn provider_color(provider: &str) -> Hsla {
 /// hint stands for one action the user could click.
 pub fn kbd(text: impl Into<SharedString>) -> Div {
     div()
-        .min_w(px(20.))
-        .h(px(20.))
+        .min_w(rems(20. / 16.))
+        .h(rems(20. / 16.))
         .px_1p5()
         .flex()
         .items_center()
@@ -384,7 +390,7 @@ pub fn kbd(text: impl Into<SharedString>) -> Div {
         .border_color(border_strong())
         .bg(surface())
         .font_family(MONO)
-        .text_size(px(10.5))
+        .text_size(rems(10.5 / 16.))
         .text_color(muted())
         .child(text.into())
 }
@@ -402,7 +408,7 @@ pub fn key_button(id: impl Into<ElementId>, text: impl Into<SharedString>) -> St
 /// Uppercase micro heading for sections.
 pub fn section_label(text: impl Into<SharedString>) -> Div {
     div()
-        .text_size(px(10.))
+        .text_size(rems(10. / 16.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(faint())
         .child(text.into().to_uppercase())
@@ -410,6 +416,7 @@ pub fn section_label(text: impl Into<SharedString>) -> Div {
 
 /// The full-window screen chrome every overlay shares: dimmed backdrop,
 /// centered glass panel with a header (icon, title, subtitle, trailing).
+/// `width` is in px at 100 % and grows with the interface size.
 pub fn screen(width: Option<f32>) -> (Div, Div) {
     let backdrop = div()
         .absolute()
@@ -417,14 +424,14 @@ pub fn screen(width: Option<f32>) -> (Div, Div) {
         .flex()
         .items_center()
         .justify_center()
-        .p(px(32.))
+        .p(rems(32. / 16.))
         .child(scrim("screen-scrim"));
     let panel = div()
         .flex()
         .flex_col()
         .max_h_full()
-        .when_some(width, |d, w| d.w(px(w)))
-        .when(width.is_none(), |d| d.size_full().max_w(px(1280.)))
+        .when_some(width, |d, w| d.w(rems(w / 16.)))
+        .when(width.is_none(), |d| d.size_full().max_w(rems(1280. / 16.)))
         .rounded_2xl()
         .border_1()
         .border_color(border_strong())
@@ -455,7 +462,7 @@ pub fn field() -> Div {
         .flex_row()
         .items_center()
         .gap_2()
-        .h(px(34.))
+        .h(rems(34. / 16.))
         .px_3()
         .rounded_lg()
         .bg(well())
@@ -474,7 +481,7 @@ pub fn island(cx: &App) -> Div {
         .font_family(cx.theme().font_family.clone())
         .text_color(fg())
         .bg(popover_bg())
-        .rounded(px(18.))
+        .rounded(rems(18. / 16.))
         .border_1()
         .border_color(border_strong().opacity(0.8))
         .overflow_hidden()
@@ -487,8 +494,9 @@ pub fn island(cx: &App) -> Div {
         }])
 }
 
-/// Corner radius of a row inside an [`island`] with 6 px padding, so the
-/// row's corners follow the card's.
+/// Corner radius (px at 100 %) of a row inside an [`island`] with 6 px
+/// padding, so the row's corners follow the card's:
+/// `.rounded(rems(ISLAND_ROW / 16.))`.
 pub const ISLAND_ROW: f32 = 12.;
 
 /// Segmented toggle (tabs inside a well): one shared look for every
@@ -810,6 +818,22 @@ mod tests {
         assert_eq!(clear.screen.a, 1.);
         // Out-of-range values clamp instead of going negative.
         assert_eq!(Palette::new(cute, 3.), clear);
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_default_keeps_glass_readable_without_desktop_blur() {
+        // Linux compositors rarely blur behind a window (X11 never does), so
+        // until the user moves the slider the desktop must not read through.
+        let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
+        let cute = catalog.iter().find(|t| t.name == "Gentleman-Cute").unwrap();
+        let p = Palette::new(cute, crate::shared::themes::DEFAULT_TRANSPARENCY);
+        for surface in [p.window_bg, p.panel, p.surface] {
+            assert!(
+                surface.a >= 0.8,
+                "{surface:?} lets the desktop show through"
+            );
+        }
     }
 
     #[test]

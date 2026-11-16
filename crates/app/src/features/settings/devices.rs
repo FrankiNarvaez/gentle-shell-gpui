@@ -152,7 +152,7 @@ impl SettingsView {
                     .gap_2()
                     .child(
                         div()
-                            .w(px(160.))
+                            .w(rems(160. / 16.))
                             .flex_shrink_0()
                             .text_sm()
                             .text_color(ui::fg())

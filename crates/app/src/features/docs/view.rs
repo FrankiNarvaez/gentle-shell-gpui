@@ -25,7 +25,7 @@ fn labelled(label: &'static str, body: impl IntoElement) -> Div {
 
 /// A section label over an island of rows.
 fn group(label: &'static str, rows: impl IntoElement, cx: &App) -> Div {
-    labelled(label, ui::island(cx).p(px(6.)).child(rows))
+    labelled(label, ui::island(cx).p(rems(6. / 16.)).child(rows))
 }
 
 /// One row: a 20 px icon slot, title and line, and what goes on the right.
@@ -34,7 +34,7 @@ fn row(icon: AnyElement, title: &'static str, line: impl Into<SharedString>) -> 
         .gap_3()
         .px_3()
         .py_2p5()
-        .rounded(px(ui::ISLAND_ROW))
+        .rounded(rems(ui::ISLAND_ROW / 16.))
         .child(
             div()
                 .flex_none()
@@ -230,13 +230,13 @@ impl DocsView {
         }
         let typed = !self.name.read(cx).value().trim().is_empty();
         v_flex()
-            .rounded(px(ui::ISLAND_ROW))
+            .rounded(rems(ui::ISLAND_ROW / 16.))
             .bg(ui::surface_hover())
             .pb_2p5()
             .child(line)
             .child(
                 h_flex()
-                    .pl(px(44.))
+                    .pl(rems(44. / 16.))
                     .pr_3()
                     .gap_2()
                     .child(
@@ -369,7 +369,7 @@ impl DocsView {
             .gap_3()
             .px_3()
             .py_2()
-            .rounded(px(ui::ISLAND_ROW))
+            .rounded(rems(ui::ISLAND_ROW / 16.))
             .cursor_pointer()
             .hover(|s| s.bg(ui::surface_hover()))
             .on_click(cx.listener(move |_, _, _, cx| cx.emit(DocsEvent::Open(path.clone()))))
@@ -419,7 +419,7 @@ impl Render for DocsView {
             "docs-screen",
             panel
                 .w_full()
-                .max_w(px(760.))
+                .max_w(rems(760. / 16.))
                 .child(
                     ui::screen_header()
                         .child(

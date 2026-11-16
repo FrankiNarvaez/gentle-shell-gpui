@@ -75,18 +75,18 @@ impl WelcomeView {
             .gap_2()
             .child(
                 div()
-                    .text_size(px(34.))
-                    .line_height(px(42.))
+                    .text_size(rems(34. / 16.))
+                    .line_height(rems(42. / 16.))
                     .font_weight(FontWeight::BOLD)
                     .text_color(ui::fg())
                     .child(title),
             )
             .child(
                 div()
-                    .max_w(px(560.))
+                    .max_w(rems(560. / 16.))
                     .text_base()
                     .text_center()
-                    .line_height(px(24.))
+                    .line_height(rems(24. / 16.))
                     .text_color(ui::muted())
                     .child(line),
             );
@@ -128,7 +128,7 @@ impl WelcomeView {
             .on_click(cx.listener(|this, _, _, cx| this.primary(cx)));
         let footer = h_flex()
             .flex_none()
-            .h(px(88.))
+            .h(rems(88. / 16.))
             .px_10()
             .gap_2()
             .when(!ready, |d| {
@@ -178,7 +178,7 @@ impl Render for WelcomeView {
             .left_0()
             .right_0()
             .bottom_0()
-            .top(px(if macos { 0. } else { TITLE_BAR }))
+            .top(rems(if macos { 0. } else { TITLE_BAR / 16. }))
             .occlude()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
@@ -226,7 +226,7 @@ impl Render for WelcomeView {
                         div()
                             .id("welcome-drag")
                             .flex_none()
-                            .h(px(TITLE_BAR))
+                            .h(rems(TITLE_BAR / 16.))
                             .window_control_area(WindowControlArea::Drag)
                             .on_mouse_down(MouseButton::Left, |_, window, _| {
                                 window.start_window_move()
@@ -249,7 +249,12 @@ impl Render for WelcomeView {
                                 .gap_6()
                                 .child(self.render_banner(ready))
                                 .child(self.render_heading(cx))
-                                .child(div().w_full().max_w(px(680.)).child(self.setup.clone())),
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .max_w(rems(680. / 16.))
+                                        .child(self.setup.clone()),
+                                ),
                         ),
                 )
                 .child(self.render_footer(cx)),

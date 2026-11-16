@@ -162,7 +162,7 @@ impl OnboardingView {
         let color = step_color(check, step);
         let rail = v_flex()
             .flex_none()
-            .w(px(NODE))
+            .w(rems(NODE / 16.))
             .items_center()
             .child(node(index, step))
             .when(!last, |d| {
@@ -171,7 +171,7 @@ impl OnboardingView {
                         .mt_1()
                         .w(px(2.))
                         .flex_1()
-                        .min_h(px(18.))
+                        .min_h(rems(18. / 16.))
                         .rounded_full()
                         .bg(if step == Step::Done {
                             ui::success().opacity(0.55)
@@ -187,8 +187,8 @@ impl OnboardingView {
             .flex_1()
             .min_w_0()
             .gap_1()
-            .pt(px(4.))
-            .pb(px(if last { 0. } else { 22. }))
+            .pt(rems(4. / 16.))
+            .pb(rems(if last { 0. } else { 22. / 16. }))
             .child(
                 h_flex()
                     .gap_2()
@@ -323,7 +323,7 @@ fn step_color(check: &Check, step: Step) -> Hsla {
 fn node(index: usize, step: Step) -> AnyElement {
     let circle = || {
         div()
-            .size(px(NODE))
+            .size(rems(NODE / 16.))
             .rounded_full()
             .flex()
             .items_center()
@@ -341,11 +341,11 @@ fn node(index: usize, step: Step) -> AnyElement {
         .into_any_element(),
         Step::Installing => div()
             .relative()
-            .size(px(NODE))
+            .size(rems(NODE / 16.))
             .child(ui::pulse(
                 div()
                     .absolute()
-                    .inset(px(-6.))
+                    .inset(rems(-6. / 16.))
                     .rounded_full()
                     .bg(ui::petal().opacity(0.22)),
             ))

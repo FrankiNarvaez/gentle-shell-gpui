@@ -242,7 +242,7 @@ impl UsageView {
                     .min_w_0()
                     .child(
                         div()
-                            .w(px(52.))
+                            .w(rems(52. / 16.))
                             .flex_shrink_0()
                             .truncate()
                             .text_xs()
@@ -252,7 +252,7 @@ impl UsageView {
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(60.))
+                            .min_w(rems(60. / 16.))
                             .h(px(6.))
                             .rounded_full()
                             .bg(ui::well())
@@ -269,7 +269,7 @@ impl UsageView {
                     )
                     .child(
                         div()
-                            .w(px(44.))
+                            .w(rems(44. / 16.))
                             .flex_shrink_0()
                             .text_xs()
                             .font_family(ui::MONO)
@@ -279,7 +279,7 @@ impl UsageView {
                     )
                     .child(
                         div()
-                            .w(px(128.))
+                            .w(rems(128. / 16.))
                             .min_w_0()
                             .truncate()
                             .text_xs()

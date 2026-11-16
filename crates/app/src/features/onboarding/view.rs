@@ -71,7 +71,7 @@ impl OnboardingView {
             )
             .child(
                 div()
-                    .max_w(px(520.))
+                    .max_w(rems(520. / 16.))
                     .text_sm()
                     .text_center()
                     .text_color(ui::muted())
@@ -119,12 +119,14 @@ impl OnboardingView {
         };
         let label = status_label(&check.status, mine);
         let action = self.render_action(check, index, cx);
-        let log = self.render_log(check, LOG_LINES).map(|log| log.ml(px(32.)));
+        let log = self
+            .render_log(check, LOG_LINES)
+            .map(|log| log.ml(rems(32. / 16.)));
         let row = v_flex()
             .gap_2()
             .px_3()
             .py_2p5()
-            .rounded(px(ui::ISLAND_ROW))
+            .rounded(rems(ui::ISLAND_ROW / 16.))
             .when(tone == Tone::Good, |d| d.bg(ui::success().opacity(0.08)))
             .when(mine, |d| d.bg(ui::petal().opacity(0.06)))
             .child(
@@ -302,7 +304,7 @@ impl OnboardingView {
                     .child(div().px_1().child(ui::section_label(label)))
                     .child(
                         ui::island(cx)
-                            .p(px(6.))
+                            .p(rems(6. / 16.))
                             .child(v_flex().gap_1().children(rows)),
                     ),
             );
@@ -445,7 +447,7 @@ impl Render for OnboardingView {
                 "onboarding-screen",
                 panel
                     .w_full()
-                    .max_w(px(720.))
+                    .max_w(rems(720. / 16.))
                     .relative()
                     .child(
                         div()

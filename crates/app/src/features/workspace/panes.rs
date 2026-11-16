@@ -78,13 +78,14 @@ impl Workspace {
     /// Approximate on-screen size of each pane in the current tab.
     pub(super) fn pane_sizes(&self, window: &Window) -> Vec<(PaneId, f32, f32)> {
         let viewport = window.viewport_size();
+        let rem = |n: f32| f32::from(rems(n / 16.).to_pixels(window.rem_size()));
         let sidebar = if self.sidebar.is_some() && self.sidebar_visible {
-            SIDEBAR_WIDTH + 6.
+            rem(SIDEBAR_WIDTH) + 6.
         } else {
             0.
         };
         let w = f32::from(viewport.width) - 12. - sidebar;
-        let h = f32::from(viewport.height) - 36. - 6.;
+        let h = f32::from(viewport.height) - rem(super::render::TITLE_BAR_HEIGHT) - 6.;
         let mut out = Vec::new();
         if let Some(tab) = self.tab() {
             leaf_sizes(&tab.tree, w, h, &mut out);

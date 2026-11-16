@@ -25,13 +25,13 @@ impl PaletteView {
                 let active = category == self.category;
                 div()
                     .id(SharedString::from(format!("palette-cat-{label}")))
-                    .h(px(28.))
+                    .h(rems(28. / 16.))
                     .px_3()
                     .flex()
                     .items_center()
                     .rounded_full()
                     .border_1()
-                    .text_size(px(13.))
+                    .text_size(rems(13. / 16.))
                     .cursor_pointer()
                     .when(active, |d| {
                         d.bg(ui::accent().opacity(0.14))
@@ -66,7 +66,7 @@ impl PaletteView {
             .id(("palette-row", i))
             .group("palette-row")
             .relative()
-            .h(px(44.))
+            .h(rems(44. / 16.))
             .flex_none()
             .pl_3()
             .pr_2()
@@ -85,16 +85,16 @@ impl PaletteView {
                     div()
                         .absolute()
                         .left_0()
-                        .top(px(11.))
-                        .h(px(22.))
-                        .w(px(3.))
+                        .top(rems(11. / 16.))
+                        .h(rems(22. / 16.))
+                        .w(rems(3. / 16.))
                         .rounded_full()
                         .bg(ui::accent()),
                 )
             })
             .child(
                 div()
-                    .size(px(28.))
+                    .size(rems(28. / 16.))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -114,8 +114,8 @@ impl PaletteView {
                 Some(state) => {
                     d.child(
                         ui::field()
-                            .h(px(30.))
-                            .w(px(280.))
+                            .h(rems(30. / 16.))
+                            .w(rems(280. / 16.))
                             .child(div().flex_1().child(Input::new(&state).appearance(false)))
                             .child(ui::key_button("palette-rename-enter", "↵").on_click(
                                 cx.listener(|this, _, window, cx| {
@@ -133,11 +133,11 @@ impl PaletteView {
                         .child(
                             div()
                                 .flex_none()
-                                .max_w(px(360.))
+                                .max_w(rems(360. / 16.))
                                 .overflow_hidden()
                                 .text_ellipsis()
                                 .whitespace_nowrap()
-                                .text_size(px(14.))
+                                .text_size(rems(14. / 16.))
                                 .text_color(ui::fg())
                                 .child(row.title.clone()),
                         )
@@ -253,7 +253,7 @@ fn activity_badge(activity: Activity) -> Option<Div> {
             .gap_1()
             .text_xs()
             .text_color(color)
-            .child(div().size(px(6.)).rounded_full().bg(color))
+            .child(div().size(rems(6. / 16.)).rounded_full().bg(color))
             .child(label),
     )
 }
@@ -287,7 +287,7 @@ impl Render for PaletteView {
                         .px_3()
                         .pt_3()
                         .pb_1p5()
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(ui::muted())
                         .child(*group),
@@ -306,8 +306,8 @@ impl Render for PaletteView {
 
         let panel = v_flex()
             .id("palette")
-            .w(px(680.))
-            .h(px(560.))
+            .w(rems(680. / 16.))
+            .h(rems(560. / 16.))
             .max_h_full()
             .rounded_2xl()
             .border_1()
@@ -318,7 +318,7 @@ impl Render for PaletteView {
             .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 h_flex()
-                    .h(px(56.))
+                    .h(rems(56. / 16.))
                     .flex_none()
                     .px_4()
                     .gap_3()
@@ -328,7 +328,7 @@ impl Render for PaletteView {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(16.))
+                            .text_size(rems(1.))
                             .child(Input::new(&self.query).appearance(false)),
                     )
                     .child(
@@ -345,7 +345,7 @@ impl Render for PaletteView {
             .child(list)
             .child(
                 h_flex()
-                    .h(px(44.))
+                    .h(rems(44. / 16.))
                     .flex_none()
                     .px_4()
                     .gap_4()
@@ -381,7 +381,7 @@ impl Render for PaletteView {
             // height keeps it from jumping as results change.
             .items_center()
             .justify_center()
-            .p(px(32.))
+            .p(rems(32. / 16.))
             .occlude()
             .capture_key_down(cx.listener(Self::on_key_down))
             .on_click(cx.listener(|_, _, _, cx| cx.emit(PaletteEvent::Close)))

@@ -17,7 +17,7 @@ fn control(label: &'static str, dim: bool, control: impl IntoElement) -> Div {
         .gap_2()
         .child(
             div()
-                .w(px(120.))
+                .w(rems(120. / 16.))
                 .flex_shrink_0()
                 .text_xs()
                 .text_color(if dim { ui::faint() } else { ui::muted() })

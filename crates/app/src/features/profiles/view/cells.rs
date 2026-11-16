@@ -102,7 +102,7 @@ impl ProfilesView {
         };
         if key == ORCHESTRATOR && model.is_none() {
             return div()
-                .w(px(EFFORT_W))
+                .w(rems(EFFORT_W / 16.))
                 .flex_shrink_0()
                 .px_2()
                 .text_xs()
@@ -184,7 +184,7 @@ impl ProfilesView {
                     cx.notify();
                 });
             })
-            .w(px(240.))
+            .w(rems(240. / 16.))
             .appearance(false)
             .content(move |_, _, cx| {
                 let row = |i: usize, label: SharedString, level: Option<String>| {
@@ -197,7 +197,7 @@ impl ProfilesView {
                         .gap_2()
                         .px_3()
                         .py_1p5()
-                        .rounded(px(ui::ISLAND_ROW))
+                        .rounded(rems(ui::ISLAND_ROW / 16.))
                         .cursor_pointer()
                         .hover(|s| s.bg(ui::surface_hover()))
                         .child(
@@ -205,7 +205,7 @@ impl ProfilesView {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(13.))
+                                .text_size(rems(13. / 16.))
                                 .when(level.is_some(), |d| d.font_family(ui::MONO))
                                 .text_color(if chosen {
                                     ui::accent()
@@ -238,14 +238,14 @@ impl ProfilesView {
                         ElementId::Name("effort-menu-in".into()),
                         v_flex()
                             .w_full()
-                            .p(px(6.))
+                            .p(rems(6. / 16.))
                             .font_family(cx.theme().font_family.clone())
                             .children(rows),
                     ))
                     .into_any_element()
             });
         v_flex()
-            .w(px(EFFORT_W))
+            .w(rems(EFFORT_W / 16.))
             .flex_shrink_0()
             .overflow_hidden()
             .child(menu)
@@ -257,7 +257,7 @@ impl ProfilesView {
         let model = entry.and_then(|e| e.model.as_deref());
         let tier = entry.and_then(|e| e.tier.as_deref());
         let edited = self.is_edited(key, |e| &e.tier);
-        let cell = div().w(px(TIER_W)).flex_shrink_0();
+        let cell = div().w(rems(TIER_W / 16.)).flex_shrink_0();
         if key == ALL_ROW {
             return cell.into_any_element();
         }

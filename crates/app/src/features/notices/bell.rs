@@ -24,7 +24,7 @@ pub fn bell(store: &Entity<Notices>, on_select: OnSelect, cx: &App) -> impl Into
             unread,
             open: false,
         })
-        .w(px(380.))
+        .w(rems(380. / 16.))
         .p_0()
         .content(move |_, _, cx| {
             ui::popover_in(
@@ -59,11 +59,11 @@ impl RenderOnce for BellTrigger {
         div()
             .id("notices-bell")
             .relative()
-            .size(px(28.))
+            .size(rems(28. / 16.))
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(8.))
+            .rounded(rems(8. / 16.))
             .cursor_pointer()
             .text_color(if unread > 0 { ui::fg() } else { ui::muted() })
             .hover(|s| s.bg(ui::surface_hover()).text_color(ui::fg()))
@@ -81,16 +81,16 @@ impl RenderOnce for BellTrigger {
                         .absolute()
                         .top(px(2.))
                         .right(px(1.))
-                        .h(px(13.))
-                        .min_w(px(13.))
-                        .px(px(3.))
+                        .h(rems(13. / 16.))
+                        .min_w(rems(13. / 16.))
+                        .px(rems(3. / 16.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .rounded_full()
                         .bg(ui::petal())
                         .text_color(ui::well().opacity(1.))
-                        .text_size(px(9.))
+                        .text_size(rems(9. / 16.))
                         .font_weight(FontWeight::BOLD)
                         .line_height(relative(1.))
                         .child(if unread > 99 {

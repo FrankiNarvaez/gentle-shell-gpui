@@ -412,7 +412,7 @@ impl SessionView {
             .overflow_hidden()
             .items_center()
             .gap_1()
-            .pt(px(96.))
+            .pt(rems(96. / 16.))
             .child(crate::shared::banner::banner(self.banner, scale, self.banner_reveal))
             .child(
                 div()
@@ -427,13 +427,13 @@ impl SessionView {
                     ui::card()
                         .mt_8()
                         .w_full()
-                        .max_w(px(420.))
+                        .max_w(rems(420. / 16.))
                         .p_5()
                         .gap_3()
                         .items_center()
                         .child(
                             div()
-                                .size(px(36.))
+                                .size(rems(36. / 16.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -442,15 +442,13 @@ impl SessionView {
                                 .child(Icon::new(IconName::KeyRound).small().text_color(ui::accent())),
                         )
                         .child(
-                            div()
-                                .text_size(px(14.))
+                            div().text_size(rems(14. / 16.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(ui::fg())
                                 .child("Sign in to start cooking"),
                         )
                         .child(
-                            div()
-                                .text_size(px(12.))
+                            div().text_size(rems(12. / 16.))
                                 .text_center()
                                 .text_color(ui::muted())
                                 .child("No models are available yet. Sign in with a subscription or add an API key."),
@@ -473,9 +471,9 @@ impl SessionView {
                 return Some(
                     h_flex()
                         .gap_2()
-                        .pt(px(24.))
+                        .pt(rems(24. / 16.))
                         .justify_center()
-                        .text_size(px(13.))
+                        .text_size(rems(13. / 16.))
                         .text_color(ui::muted())
                         .child(ui::spinner(Size::Small, ui::accent()))
                         .child(ui::shimmer("Starting gentle-shell…", ui::muted(), ui::fg()))
@@ -505,7 +503,7 @@ impl SessionView {
             ui::card()
                 .mt_6()
                 .mx_auto()
-                .w(px(560.))
+                .w(rems(560. / 16.))
                 .p_4()
                 .gap_3()
                 .border_color(ui::danger().opacity(0.4))
@@ -519,7 +517,7 @@ impl SessionView {
                         )
                         .child(
                             div()
-                                .text_size(px(14.))
+                                .text_size(rems(14. / 16.))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(ui::danger())
                                 .child(title),
@@ -538,7 +536,13 @@ impl SessionView {
 
     // ── Transcript ─────────────────────────────────────────────────────────
 
-    fn render_item(&self, ix: usize, item: &Item, cx: &mut Context<Self>) -> AnyElement {
+    fn render_item(
+        &self,
+        ix: usize,
+        item: &Item,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         match item {
             Item::User { text, images } => {
                 let images = images.iter().map(|i| self.image_cache.get(i)).collect();
@@ -580,7 +584,7 @@ impl SessionView {
                             if let Some((state, _)) = self.markdown.get(&(ix, block_ix)) {
                                 column = column.child(
                                     div()
-                                        .text_size(px(14.))
+                                        .text_size(rems(14. / 16.))
                                         .text_color(ui::fg())
                                         .child(TextView::new(state).selectable(true)),
                                 );
@@ -608,13 +612,14 @@ impl SessionView {
                 if has_text {
                     match settle {
                         Some(_) if *streaming => {
-                            column = column
-                                .child(ui::pulse(div().size(px(7.)).rounded_full().bg(ui::petal())))
+                            column = column.child(ui::pulse(
+                                div().size(rems(7. / 16.)).rounded_full().bg(ui::petal()),
+                            ))
                         }
                         Some(k) if k < 1. => {
                             column = column.child(
                                 div()
-                                    .size(px(7.))
+                                    .size(rems(7. / 16.))
                                     .rounded_full()
                                     .bg(ui::petal().opacity(1. - ease_out_quint()(k))),
                             )
@@ -627,7 +632,7 @@ impl SessionView {
                         .group("assistant")
                         .child(self.render_answer_actions(ix, cx));
                 }
-                match self.petal_line(settle) {
+                match self.petal_line(settle, narrow) {
                     Some(line) => div()
                         .relative()
                         .w_full()
@@ -695,16 +700,15 @@ impl SessionView {
     /// text doesn't move). It spans the answer, so it grows down with the
     /// text while the agent writes; once the answer is done it draws back
     /// up and fades out, and finished answers have none.
-    fn petal_line(&self, settle: Option<f32>) -> Option<Div> {
+    fn petal_line(&self, settle: Option<f32>, narrow: bool) -> Option<Div> {
         let settle = settle.filter(|k| *k < 1.)?;
         let k = ease_out_quint()(settle);
-        let narrow = self.pane_width.get() < NARROW;
         Some(
             div()
                 .absolute()
                 .top(px(2.))
                 .h(relative(1. - k))
-                .left(px(if narrow { -8. } else { -14. }))
+                .left(rems((if narrow { -8. } else { -14. }) / 16.))
                 .w(px(2.))
                 .rounded_full()
                 .bg(ui::petal().opacity(0.75 * (1. - k))),
@@ -757,7 +761,7 @@ impl SessionView {
                     .id(("thinking", key))
                     .gap_1p5()
                     .cursor_pointer()
-                    .text_size(px(13.))
+                    .text_size(rems(13. / 16.))
                     .italic()
                     .text_color(ui::muted())
                     .hover(|s| s.text_color(ui::fg()))
@@ -772,7 +776,7 @@ impl SessionView {
                         this.child(
                             div()
                                 .font_family(ui::MONO)
-                                .text_size(px(11.))
+                                .text_size(rems(11. / 16.))
                                 .text_color(ui::faint())
                                 .child(ui::format_duration(d.as_millis() as u64)),
                         )
@@ -797,11 +801,11 @@ impl SessionView {
                 .unwrap_or_else(|| text.trim().to_string().into());
                 this.child(
                     div()
-                        .ml(px(5.))
+                        .ml(rems(5. / 16.))
                         .pl_3()
                         .border_l_2()
                         .border_color(ui::border_strong())
-                        .text_size(px(13.))
+                        .text_size(rems(13. / 16.))
                         .italic()
                         .text_color(ui::muted())
                         .child(shown),
@@ -859,7 +863,7 @@ impl SessionView {
                         .flex_1()
                         .min_w_0()
                         .font_family(ui::MONO)
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .text_color(color)
                         .whitespace_normal()
                         .child(text.trim_end().to_string()),
@@ -885,7 +889,7 @@ impl SessionView {
                             .min_w_0()
                             .truncate()
                             .font_family(ui::MONO)
-                            .text_size(px(13.))
+                            .text_size(rems(13. / 16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::champagne())
                             .child(command.to_string()),
@@ -897,7 +901,8 @@ impl SessionView {
                         .p_3()
                         .gap_1p5()
                         .when(foldable && !open, |d| {
-                            d.max_h(px(SHOWN_LINES as f32 * 18.)).overflow_hidden()
+                            d.max_h(rems((SHOWN_LINES as f32 * 18.) / 16.))
+                                .overflow_hidden()
                         })
                         .children(rows),
                 ),
@@ -920,8 +925,8 @@ impl SessionView {
     /// Under a finished answer, shown on hover: copy it.
     fn render_answer_actions(&self, ix: usize, cx: &mut Context<Self>) -> Div {
         h_flex()
-            .h(px(20.))
-            .mt(px(-4.))
+            .h(rems(20. / 16.))
+            .mt(rems(-4. / 16.))
             .invisible()
             .group_hover("assistant", |s| s.visible())
             .child(
@@ -954,7 +959,7 @@ impl SessionView {
         h_flex()
             .w_full()
             .justify_end()
-            .h(px(20.))
+            .h(rems(20. / 16.))
             .mt(px(2.))
             .invisible()
             .group_hover("user", |s| s.visible())
@@ -1007,11 +1012,11 @@ impl SessionView {
                         div()
                             .min_w_0()
                             .flex_shrink(1.)
-                            .max_w(px(420.))
+                            .max_w(rems(420. / 16.))
                             .overflow_hidden()
                             .text_ellipsis()
                             .whitespace_nowrap()
-                            .text_size(px(13.))
+                            .text_size(rems(13. / 16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::champagne())
                             .child(spec.title.clone()),
@@ -1027,7 +1032,7 @@ impl SessionView {
                             .text_ellipsis()
                             .whitespace_nowrap()
                             .font_family(ui::MONO)
-                            .text_size(px(12.))
+                            .text_size(rems(12. / 16.))
                             .text_color(ui::muted())
                             .child(spec.subject.clone()),
                     )
@@ -1035,7 +1040,7 @@ impl SessionView {
                         this.child(
                             div()
                                 .font_family(ui::MONO)
-                                .text_size(px(12.))
+                                .text_size(rems(12. / 16.))
                                 .text_color(ui::success())
                                 .child(format!("+{n}")),
                         )
@@ -1044,7 +1049,7 @@ impl SessionView {
                         this.child(
                             div()
                                 .font_family(ui::MONO)
-                                .text_size(px(12.))
+                                .text_size(rems(12. / 16.))
                                 .text_color(ui::danger())
                                 .child(format!("−{n}")),
                         )
@@ -1138,7 +1143,7 @@ impl SessionView {
                         .left_0()
                         .right_0()
                         .bottom_0()
-                        .h(px(28.))
+                        .h(rems(28. / 16.))
                         .bg(linear_gradient(
                             180.,
                             linear_color_stop(ui::well().opacity(0.), 0.),
@@ -1260,7 +1265,7 @@ impl SessionView {
             .px_3()
             .py_0p5()
             .font_family(cx.theme().font_family.clone())
-            .text_size(px(11.))
+            .text_size(rems(11. / 16.))
             .text_color(ui::muted())
             .cursor_pointer()
             .hover(|s| s.text_color(ui::fg()))
@@ -1286,10 +1291,12 @@ impl Focusable for SessionView {
 impl SessionView {
     /// One row of the transcript list; `cx.processor` calls it for the
     /// rows on screen (and in the overdraw) only.
-    fn render_row(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(row) = self.list.row(ix) else {
             return div().into_any_element();
         };
+        let narrow =
+            self.pane_width.get() < f32::from(rems(NARROW / 16.).to_pixels(window.rem_size()));
         let hero = self.hero_shown();
         // `render_backend_state` shows something unless the backend is ready.
         let header = hero || !self.backend.is_ready();
@@ -1311,7 +1318,7 @@ impl SessionView {
                 let Some(item) = self.transcript.items.get(i) else {
                     return div().into_any_element();
                 };
-                let element = self.render_item(i, item, cx);
+                let element = self.render_item(i, item, narrow, cx);
                 // Keyed by index: items animate in once, never again.
                 self.list
                     .appear(("item", i), now, div().w_full().child(element))
@@ -1347,11 +1354,10 @@ impl SessionView {
                     .appear(("between", count), now, div().w_full().child(indicator))
             }
             // The column's bottom padding.
-            Row::Footer => return div().h(px(24.)).into_any_element(),
+            Row::Footer => return div().h(rems(24. / 16.)).into_any_element(),
         };
         // The column's top padding before the first row, its gap after.
         let first = matches!(row, Row::Header) || (ix == 1 && !header);
-        let narrow = self.pane_width.get() < NARROW;
         h_flex()
             .w_full()
             .justify_center()
@@ -1359,9 +1365,9 @@ impl SessionView {
                 v_flex()
                     .w_full()
                     .min_w_0()
-                    .max_w(px(760.))
+                    .max_w(rems(760. / 16.))
                     .map(|d| if narrow { d.px_3() } else { d.px_6() })
-                    .pt(px(if first { 24. } else { 16. }))
+                    .pt(rems((if first { 24. } else { 16. }) / 16.))
                     .child(content),
             )
             .into_any_element()
@@ -1380,10 +1386,12 @@ impl Render for SessionView {
         if self.fade_answers() || composing {
             window.request_animation_frame();
         }
+        let rem_size = window.rem_size();
+        self.list.follow_rem_size(rem_size);
         let scroll = self.scroll_estimate();
         let width = self.pane_width.clone();
         let view = cx.entity_id();
-        let narrow = self.pane_width.get() < NARROW;
+        let narrow = self.pane_width.get() < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
         let main = v_flex()
             .relative()
             .flex_1()
@@ -1432,9 +1440,9 @@ impl Render for SessionView {
                     .justify_center()
                     .map(|d| if narrow { d.px_3() } else { d.px_6() })
                     .pb_2()
-                    .child(self.render_composer(cx)),
+                    .child(self.render_composer(rem_size, cx)),
             )
-            .when_some(self.render_todo_island(cx), |this, island| {
+            .when_some(self.render_todo_island(rem_size, cx), |this, island| {
                 this.child(island)
             });
 
@@ -1790,7 +1798,7 @@ fn diff_row(line: &CodeLine) -> Div {
         .when_some(bg, |this, bg| this.bg(bg))
         .child(
             div()
-                .w(px(32.))
+                .w(rems(32. / 16.))
                 .flex_shrink_0()
                 .text_right()
                 .text_color(ui::faint())
@@ -1798,7 +1806,7 @@ fn diff_row(line: &CodeLine) -> Div {
         )
         .child(
             div()
-                .w(px(10.))
+                .w(rems(10. / 16.))
                 .flex_shrink_0()
                 .text_color(color)
                 .child(glyph),
@@ -1878,7 +1886,7 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         .gap_1p5()
         .border_t_1()
         .border_color(ui::border())
-        .text_size(px(12.))
+        .text_size(rems(12. / 16.))
         .text_color(color)
         .map(|this| match icon {
             Some(icon) => this.child(Icon::new(icon).xsmall()),
@@ -1889,7 +1897,7 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
             this.child(
                 div()
                     .font_family(ui::MONO)
-                    .text_size(px(11.))
+                    .text_size(rems(11. / 16.))
                     .text_color(ui::faint())
                     .child(ui::format_duration(d.as_millis() as u64)),
             )
@@ -1917,7 +1925,7 @@ fn user_bubble(
     h_flex().w_full().min_w_0().justify_end().child(
         v_flex()
             .min_w_0()
-            .max_w(px(560.))
+            .max_w(rems(560. / 16.))
             .gap_2()
             .px_4()
             .py_2p5()
@@ -1925,12 +1933,13 @@ fn user_bubble(
             .bg(ui::raised())
             .border_1()
             .border_color(ui::border())
-            .text_size(px(14.))
+            .text_size(rems(14. / 16.))
             .text_color(ui::fg())
             .when(!images.is_empty(), |this| {
                 this.child(h_flex().flex_wrap().gap_2().children(
                     images.into_iter().enumerate().map(|(ix, image)| {
-                        image_tile(image, px(160.), px(120.)).child(number_badge(ix + 1))
+                        image_tile(image, rems(160. / 16.), rems(120. / 16.))
+                            .child(number_badge(ix + 1))
                     }),
                 ))
             })
@@ -1938,12 +1947,14 @@ fn user_bubble(
                 this.child(StyledText::new(text).with_highlights(chips.map(|r| (r, chip))))
             })
             // The toggle's own padding, undone so its label lines up with the text.
-            .children(toggle.map(|toggle| div().ml(px(-12.)).mt(px(-4.)).child(toggle))),
+            .children(
+                toggle.map(|toggle| div().ml(rems(-12. / 16.)).mt(rems(-4. / 16.)).child(toggle)),
+            ),
     )
 }
 
 /// A rounded, cropped image (or a placeholder) for attachment strips.
-fn image_tile(image: Option<Arc<Image>>, width: Pixels, height: Pixels) -> Div {
+fn image_tile(image: Option<Arc<Image>>, width: Rems, height: Rems) -> Div {
     div()
         .relative()
         .flex_shrink_0()
@@ -1973,13 +1984,13 @@ fn image_tile(image: Option<Arc<Image>>, width: Pixels, height: Pixels) -> Div {
 fn number_badge(n: usize) -> Div {
     div()
         .absolute()
-        .left(px(3.))
-        .bottom(px(3.))
+        .left(rems(3. / 16.))
+        .bottom(rems(3. / 16.))
         .px_1()
         .rounded_sm()
         .bg(ui::well())
         .font_family(ui::MONO)
-        .text_size(px(10.))
+        .text_size(rems(10. / 16.))
         .text_color(ui::info())
         .child(format!("#{n}"))
 }
@@ -2009,7 +2020,7 @@ fn notice_card(level: NoticeLevel, text: &str) -> Div {
             div()
                 .flex_1()
                 .min_w_0()
-                .text_size(px(12.))
+                .text_size(rems(12. / 16.))
                 .text_color(if level == NoticeLevel::Info {
                     ui::muted()
                 } else {
@@ -2026,18 +2037,21 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
         .gap_2()
         .items_center()
         .child(ui::pulse(
-            div().text_size(px(15.)).text_color(ui::petal()).child("✿"),
+            div()
+                .text_size(rems(15. / 16.))
+                .text_color(ui::petal())
+                .child("✿"),
         ))
         .child(
             ui::shimmer(label, ui::muted(), ui::fg())
-                .text_size(px(13.))
+                .text_size(rems(13. / 16.))
                 .italic(),
         )
         .when_some(elapsed, |this, d| {
             this.child(
                 div()
                     .font_family(ui::MONO)
-                    .text_size(px(11.))
+                    .text_size(rems(11. / 16.))
                     .text_color(ui::faint())
                     .child(clock(d)),
             )

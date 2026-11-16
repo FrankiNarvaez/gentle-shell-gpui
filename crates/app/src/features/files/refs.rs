@@ -430,7 +430,7 @@ impl RefsView {
     ) -> AnyElement {
         h_flex()
             .id(SharedString::from(format!("refs-section-{section:?}")))
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .mx_1p5()
             .px_1p5()
             .gap_1p5()
@@ -449,7 +449,7 @@ impl RefsView {
             .child(
                 div()
                     .flex_1()
-                    .text_size(px(12.5))
+                    .text_size(rems(12.5 / 16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(ui::muted())
                     .child(section.label()),
@@ -457,7 +457,7 @@ impl RefsView {
             .child(
                 div()
                     .font_family(ui::MONO)
-                    .text_size(px(10.5))
+                    .text_size(rems(10.5 / 16.))
                     .text_color(ui::faint())
                     .child(count.to_string()),
             )
@@ -523,7 +523,7 @@ impl RefsView {
                 }
             })
         });
-        rendered.unwrap_or_else(|| div().h(px(ROW_HEIGHT)).into_any_element())
+        rendered.unwrap_or_else(|| div().h(rems(ROW_HEIGHT / 16.)).into_any_element())
     }
 
     fn render_remote(&self, remote: &str, cx: &mut Context<Self>) -> AnyElement {
@@ -566,7 +566,7 @@ impl RefsView {
                 div()
                     .flex_none()
                     .font_family(ui::MONO)
-                    .text_size(px(10.5))
+                    .text_size(rems(10.5 / 16.))
                     .text_color(ui::faint())
                     .child(stash.trim_start_matches("stash").to_string())
                     .into_any_element(),
@@ -858,7 +858,7 @@ impl RefsView {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(13.5))
+                                .text_size(rems(13.5 / 16.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(ui::fg())
                                 .child(title),
@@ -877,9 +877,9 @@ impl RefsView {
                 )
                 .child(
                     div()
-                        .pl(px(22.))
+                        .pl(rems(22. / 16.))
                         .truncate()
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .text_color(ui::muted())
                         .child(format!("{upstream} \u{b7} {commits}")),
                 ),
@@ -895,7 +895,7 @@ impl Render for RefsView {
             .child(
                 div().flex_none().mx_2().mt_1().mb_1().child(
                     ui::field()
-                        .h(px(30.))
+                        .h(rems(30. / 16.))
                         .child(Icon::new(IconName::Funnel).small().text_color(ui::faint()))
                         .child(Input::new(&self.filter).appearance(false).small())
                         .when(self.busy, |d| {
@@ -909,11 +909,11 @@ impl Render for RefsView {
                     div()
                         .id("refs-error")
                         .flex_none()
-                        .max_h(px(96.))
+                        .max_h(rems(96. / 16.))
                         .overflow_y_scroll()
                         .mx_3()
                         .mb_1()
-                        .text_size(px(11.5))
+                        .text_size(rems(11.5 / 16.))
                         .text_color(ui::danger())
                         .child(error),
                 )
@@ -933,9 +933,9 @@ fn row(
 ) -> Stateful<Div> {
     h_flex()
         .id(id)
-        .h(px(ROW_HEIGHT))
+        .h(rems(ROW_HEIGHT / 16.))
         .mx_1p5()
-        .pl(px(24.))
+        .pl(rems(24. / 16.))
         .pr_1p5()
         .gap_2()
         .rounded_md()
@@ -946,7 +946,7 @@ fn row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_size(px(13.))
+                .text_size(rems(13. / 16.))
                 .text_color(title_color)
                 .child(title),
         )
@@ -956,9 +956,9 @@ fn row(
 fn detail(text: String) -> AnyElement {
     div()
         .min_w_0()
-        .max_w(px(160.))
+        .max_w(rems(160. / 16.))
         .truncate()
-        .text_size(px(11.5))
+        .text_size(rems(11.5 / 16.))
         .text_color(ui::faint())
         .child(text)
         .into_any_element()
@@ -976,7 +976,7 @@ fn ahead_behind(ahead: u32, behind: u32) -> Div {
         .flex_none()
         .gap_1p5()
         .font_family(ui::MONO)
-        .text_size(px(11.))
+        .text_size(rems(11. / 16.))
         .child(
             div()
                 .text_color(if ahead > 0 { ui::fg() } else { ui::muted() })
@@ -996,7 +996,7 @@ fn note(text: impl Into<SharedString>) -> Div {
         div()
             .px_4()
             .py_2()
-            .text_size(px(12.5))
+            .text_size(rems(12.5 / 16.))
             .text_color(ui::faint())
             .child(text.into()),
     )

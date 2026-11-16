@@ -15,7 +15,11 @@ impl SessionView {
     /// The todo island: a Dynamic-Island-style pill at the top of the
     /// conversation that unfolds downward into the task list. It only exists
     /// while the session has tasks.
-    pub(super) fn render_todo_island(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_todo_island(
+        &self,
+        rem_size: Pixels,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if self.todo.tasks.is_empty() {
             return None;
         }
@@ -44,18 +48,20 @@ impl SessionView {
         // fade melt away as the card settles; once open the list scrolls.
         let fade =
             ((content_h - body_area) / 24.).clamp(0., 1.) * (1. - ((t - 0.8) / 0.2).clamp(0., 1.));
-        let pane = self.pane_width.get();
+        // The island's geometry is in px at 100 % (drawn as rems), so measure
+        // the pane in those units too.
+        let pane = self.pane_width.get() / f32::from(rems(1. / 16.).to_pixels(rem_size));
         let full_w = (pane - 32.).clamp(TODO_PILL_W, TODO_CARD_W);
         let w = TODO_PILL_W + (full_w - TODO_PILL_W) * t;
         let left = todo_left(pane, w);
 
         let badge = div()
-            .size(px(22.))
+            .size(rems(22. / 16.))
             .flex_shrink_0()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(7.))
+            .rounded(rems(7. / 16.))
             .bg(color.opacity(0.14))
             .child(Icon::new(IconName::ListTodo).xsmall().text_color(color));
 
@@ -65,16 +71,16 @@ impl SessionView {
             .left_0()
             .right_0()
             .top_0()
-            .h(px(TODO_PILL))
-            .px(px(12.))
+            .h(rems(TODO_PILL / 16.))
+            .px(rems(12. / 16.))
             .gap_1p5()
             .items_center()
             .cursor_pointer()
             // GPUI clips children to the card's rectangle, not its rounded
             // corners: match the card's inner radius (19 − 1 border) so the
             // hover fill doesn't poke out at the corners.
-            .rounded_t(px(18.))
-            .when(t <= 0.02, |d| d.rounded_b(px(18.)))
+            .rounded_t(rems(18. / 16.))
+            .when(t <= 0.02, |d| d.rounded_b(rems(18. / 16.)))
             .hover(|d| d.bg(ui::surface_hover().opacity(0.45)))
             .when(t > 0.02, |d| d.border_b_1().border_color(ui::border()))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_todo(cx)))
@@ -90,7 +96,7 @@ impl SessionView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_size(px(11.5))
+                    .text_size(rems(11.5 / 16.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(ui::fg())
                     .child("Todos"),
@@ -99,7 +105,7 @@ impl SessionView {
                 div()
                     .flex_shrink_0()
                     .font_family(ui::MONO)
-                    .text_size(px(10.5))
+                    .text_size(rems(10.5 / 16.))
                     .text_color(if all_done { ui::success() } else { ui::muted() })
                     .child(format!("{done}/{total}")),
             )
@@ -117,8 +123,8 @@ impl SessionView {
             .absolute()
             .left_0()
             .right_0()
-            .top(px(TODO_PILL))
-            .h(px(body_area))
+            .top(rems(TODO_PILL / 16.))
+            .h(rems(body_area / 16.))
             .overflow_hidden()
             .opacity(content_opacity)
             .child(
@@ -126,8 +132,8 @@ impl SessionView {
                     .id("todo-island-list")
                     .size_full()
                     .overflow_y_scroll()
-                    .p(px(TODO_LIST_PAD))
-                    .gap(px(TODO_ROW_GAP))
+                    .p(rems(TODO_LIST_PAD / 16.))
+                    .gap(rems(TODO_ROW_GAP / 16.))
                     .children(todo_rows(&self.todo.tasks)),
             )
             .when(fade > 0.01, |d| {
@@ -137,7 +143,7 @@ impl SessionView {
                         .left_0()
                         .right_0()
                         .bottom_0()
-                        .h(px(24.))
+                        .h(rems(24. / 16.))
                         .bg(linear_gradient(
                             180.,
                             linear_color_stop(ui::popover_bg().opacity(0.), 0.),
@@ -149,12 +155,12 @@ impl SessionView {
 
         let card = div()
             .absolute()
-            .top(px(TODO_TOP))
-            .left(px(left))
-            .w(px(w))
-            .h(px(h))
+            .top(rems(TODO_TOP / 16.))
+            .left(rems(left / 16.))
+            .w(rems(w / 16.))
+            .h(rems(h / 16.))
             .overflow_hidden()
-            .rounded(px(19.))
+            .rounded(rems(19. / 16.))
             .bg(ui::popover_bg())
             .border_1()
             .border_color(ui::border_strong().opacity(0.8))
@@ -307,8 +313,8 @@ fn todo_bars(done: usize, total: usize, color: Hsla) -> Div {
         .items_center()
         .children(HEIGHTS[..count].iter().enumerate().map(|(i, height)| {
             div()
-                .w(px(3.))
-                .h(px(*height))
+                .w(rems(3. / 16.))
+                .h(rems(*height / 16.))
                 .rounded_full()
                 .bg(if i < filled { color } else { ui::border() })
         }))
@@ -332,11 +338,13 @@ fn todo_rows(todo: &[gentle_core::tools::TodoTask]) -> Vec<AnyElement> {
             };
             h_flex()
                 .id(("todo-row", index))
-                .h(px(if note.is_some() {
-                    TODO_ROW_NOTE
-                } else {
-                    TODO_ROW
-                }))
+                .h(rems(
+                    (if note.is_some() {
+                        TODO_ROW_NOTE
+                    } else {
+                        TODO_ROW
+                    }) / 16.,
+                ))
                 .w_full()
                 .items_center()
                 .gap_2p5()
@@ -355,7 +363,7 @@ fn todo_rows(todo: &[gentle_core::tools::TodoTask]) -> Vec<AnyElement> {
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_ellipsis()
-                                .text_size(px(12.))
+                                .text_size(rems(12. / 16.))
                                 .text_color(title_color)
                                 .when(done, |d| d.line_through())
                                 .child(task.title.clone()),
@@ -367,7 +375,7 @@ fn todo_rows(todo: &[gentle_core::tools::TodoTask]) -> Vec<AnyElement> {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis()
-                                    .text_size(px(10.5))
+                                    .text_size(rems(10.5 / 16.))
                                     .text_color(note_color)
                                     .child(note.to_string()),
                             )
@@ -381,7 +389,7 @@ fn todo_rows(todo: &[gentle_core::tools::TodoTask]) -> Vec<AnyElement> {
 /// The task's status as a soft little disc: check, live dot, `!`, dash, ring.
 fn todo_badge(status: &str) -> Div {
     let base = div()
-        .size(px(16.))
+        .size(rems(1.))
         .flex_shrink_0()
         .flex()
         .items_center()
@@ -400,20 +408,24 @@ fn todo_badge(status: &str) -> Div {
         "in_progress" => base
             .bg(ui::accent().opacity(0.08))
             .border_color(ui::accent().opacity(0.55))
-            .child(div().size(px(6.)).rounded_full().bg(ui::accent())),
+            .child(div().size(rems(6. / 16.)).rounded_full().bg(ui::accent())),
         "blocked" => base
             .bg(ui::warning().opacity(0.12))
             .border_color(ui::warning().opacity(0.32))
             .child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(rems(10. / 16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(ui::warning())
                     .child("!"),
             ),
-        "dropped" => base
-            .border_color(ui::faint().opacity(0.3))
-            .child(div().w(px(6.)).h(px(1.5)).rounded_full().bg(ui::faint())),
+        "dropped" => base.border_color(ui::faint().opacity(0.3)).child(
+            div()
+                .w(rems(6. / 16.))
+                .h(px(1.5))
+                .rounded_full()
+                .bg(ui::faint()),
+        ),
         _ => base.border_color(ui::border_strong()),
     }
 }

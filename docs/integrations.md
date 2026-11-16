@@ -365,7 +365,7 @@ App paths: `dirs::data_dir()/gentle-shell-gpui/` (on macOS, `~/Library/Applicati
 
 | File | Owner | Read / write | Module |
 | --- | --- | --- | --- |
-| `<data>/gentle-shell-gpui/settings.json` (`theme`, `transparency`, `onboarding`) | App | R/W | `shared/themes.rs` (`store_path`, `write_key`), `features/setup/mod.rs` (`first_run`, `mark_done`) |
+| `<data>/gentle-shell-gpui/settings.json` (`theme`, `transparency`, `interfaceScale`, `onboarding`) | App | R/W | `shared/themes.rs` (`store_path`, `write_key`), `features/setup/mod.rs` (`first_run`, `mark_done`) |
 | `<data>/gentle-shell-gpui/workspaces.json` | App | R/W | `features/workspaces/store.rs` |
 | `<data>/gentle-shell-gpui/app-update.json` | App | R/W | `features/app_update/cache.rs` |
 | `<data>/gentle-shell-gpui/engram-update.json` (`checkedAt`, `latest`, `skipped`) | App | R/W | `features/updates/engram.rs` |
