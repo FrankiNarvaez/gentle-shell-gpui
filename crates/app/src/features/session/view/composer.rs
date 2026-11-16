@@ -48,7 +48,7 @@ impl SessionView {
                 h_flex()
                     .justify_between()
                     .font_family(ui::MONO)
-                    .text_size(px(10.))
+                    .text_size(rems(10. / 16.))
                     .text_color(ui::faint())
                     .child(self.render_context_chip(high, cx))
                     .child(if window_tokens > 0 {
@@ -112,7 +112,7 @@ impl SessionView {
                 let toggle = weak.clone();
                 vec![
                     div()
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .text_color(ui::muted())
                         .whitespace_normal()
                         .child(if high {
@@ -141,7 +141,7 @@ impl SessionView {
                         .gap_2()
                         .pt_1()
                         .cursor_pointer()
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .text_color(ui::fg())
                         .when(auto.is_none() || !ready, |d| d.opacity(0.5))
                         .child(checkbox_box(auto.unwrap_or(false)))
@@ -170,14 +170,16 @@ impl SessionView {
             .iter()
             .enumerate()
             .map(|(ix, attachment)| {
-                image_tile(Some(attachment.image.clone()), px(64.), px(64.))
-                    .child(number_badge(ix + 1))
-                    .child(remove_button(
-                        ("attachment-remove", ix),
-                        cx.listener(move |this, _, window, cx| {
-                            this.remove_attachment(ix, window, cx)
-                        }),
-                    ))
+                image_tile(
+                    Some(attachment.image.clone()),
+                    rems(64. / 16.),
+                    rems(64. / 16.),
+                )
+                .child(number_badge(ix + 1))
+                .child(remove_button(
+                    ("attachment-remove", ix),
+                    cx.listener(move |this, _, window, cx| this.remove_attachment(ix, window, cx)),
+                ))
             })
             .collect();
         let pastes = self.pasted.iter().enumerate().map(|(ix, paste)| {
@@ -201,7 +203,7 @@ impl SessionView {
         let weak = cx.entity().downgrade();
         div()
             .min_w_0()
-            .text_size(px(14.))
+            .text_size(rems(14. / 16.))
             .cursor_text()
             .on_mouse_down(
                 MouseButton::Left,
@@ -365,7 +367,11 @@ impl SessionView {
             .shadow_lg()
     }
 
-    pub(super) fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_composer(
+        &self,
+        rem_size: Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let (prefix, leaf) = ui::split_path(&self.cwd);
         let empty = self.composer.read(cx).value().trim().is_empty() && self.attachments.is_empty();
         let busy = self.busy();
@@ -376,7 +382,7 @@ impl SessionView {
                 .small()
                 .danger()
                 .rounded(px(999.))
-                .child(div().size(px(9.)).rounded_sm().bg(ui::well()))
+                .child(div().size(rems(9. / 16.)).rounded_sm().bg(ui::well()))
                 .tooltip(if cfg!(target_os = "macos") {
                     "Stop (⌘.)"
                 } else {
@@ -404,7 +410,7 @@ impl SessionView {
                 .id("git-chip")
                 .flex_shrink_0()
                 .gap_1()
-                .text_size(px(12.))
+                .text_size(rems(12. / 16.))
                 .child(
                     Icon::new(IconName::GitBranch)
                         .xsmall()
@@ -431,7 +437,7 @@ impl SessionView {
         });
 
         let width = self.pane_width.get();
-        let narrow = width < NARROW;
+        let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
         let bottom = h_flex()
             .w_full()
             .min_w_0()
@@ -452,7 +458,7 @@ impl SessionView {
                     .min_w_0()
                     .flex_shrink(1.)
                     .overflow_hidden()
-                    .child(self.render_model_picker(cx)),
+                    .child(self.render_model_picker(narrow, cx)),
             )
             .when(
                 self.models.current.as_ref().is_some_and(|m| m.reasoning),
@@ -470,7 +476,7 @@ impl SessionView {
                         .rounded_md()
                         .cursor_pointer()
                         .hover(|s| s.bg(ui::surface_hover()))
-                        .text_size(px(12.))
+                        .text_size(rems(12. / 16.))
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .tooltip(|window, cx| Tooltip::new("Open another folder").build(window, cx))
@@ -501,7 +507,7 @@ impl SessionView {
                 this.child(
                     div()
                         .font_family(ui::MONO)
-                        .text_size(px(11.))
+                        .text_size(rems(11. / 16.))
                         .text_color(ui::faint())
                         .child(format!("${:.2}", self.usage.cost)),
                 )
@@ -530,22 +536,21 @@ impl SessionView {
         v_flex()
             .w_full()
             .min_w_0()
-            .max_w(px(720.))
+            .max_w(rems(720. / 16.))
             .gap_1p5()
             .children(self.render_slash_menu(cx))
             .children(self.render_dialog(cx))
-            .child(self.render_activity(cx))
+            .child(self.render_activity(rem_size, cx))
             .child(self.render_context_line(cx))
             .child(composer_box)
             .children(self.render_kisses())
-            .when(width >= TINY, |this| {
+            .when(width >= f32::from(rems(TINY / 16.).to_pixels(rem_size)), |this| {
                 this.child(
                     h_flex()
-                        .h(px(16.))
+                        .h(rems(1.))
                         .min_w_0()
                         .justify_center()
-                        .overflow_hidden()
-                        .text_size(px(10.))
+                        .overflow_hidden().text_size(rems(10. / 16.))
                         .text_color(ui::faint())
                         .child(div().min_w_0().truncate().child(if busy {
                             if cfg!(target_os = "macos") {
@@ -571,9 +576,9 @@ fn remove_button(
     h_flex()
         .id(id)
         .absolute()
-        .top(px(3.))
-        .right(px(3.))
-        .size(px(18.))
+        .top(rems(3. / 16.))
+        .right(rems(3. / 16.))
+        .size(rems(18. / 16.))
         .items_center()
         .justify_center()
         .rounded_full()
@@ -595,9 +600,9 @@ fn pasted_card(n: usize, paste: &PastedText) -> Div {
     h_flex()
         .relative()
         .flex_shrink_0()
-        .h(px(64.))
-        .pl(px(7.))
-        .pr(px(30.))
+        .h(rems(64. / 16.))
+        .pl(rems(7. / 16.))
+        .pr(rems(30. / 16.))
         .gap_2p5()
         .rounded_lg()
         .border_1()
@@ -606,17 +611,17 @@ fn pasted_card(n: usize, paste: &PastedText) -> Div {
         .child(
             div()
                 .flex_shrink_0()
-                .w(px(38.))
-                .h(px(48.))
-                .p(px(4.))
+                .w(rems(38. / 16.))
+                .h(rems(48. / 16.))
+                .p(rems(4. / 16.))
                 .rounded_md()
                 .overflow_hidden()
                 .border_1()
                 .border_color(ui::border())
                 .bg(ui::well())
                 .font_family(ui::MONO)
-                .text_size(px(5.))
-                .line_height(px(6.))
+                .text_size(rems(5. / 16.))
+                .line_height(rems(6. / 16.))
                 .text_color(ui::faint())
                 .whitespace_nowrap()
                 .child(paste.preview.clone()),
@@ -642,7 +647,7 @@ fn pasted_card(n: usize, paste: &PastedText) -> Div {
                 )
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(rems(11. / 16.))
                         .text_color(ui::muted())
                         .child(lines),
                 ),

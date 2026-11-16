@@ -270,14 +270,14 @@ impl ProfilesView {
                                     .child(div().flex_1().min_w_0().px_1().child(ui::section_label("Model")))
                                     .child(
                                         div()
-                                            .w(px(EFFORT_W))
+                                            .w(rems(EFFORT_W / 16.))
                                             .flex_shrink_0()
                                             .px_1()
                                             .child(ui::section_label("Effort")),
                                     )
                                     .child(
                                         div()
-                                            .w(px(TIER_W))
+                                            .w(rems(TIER_W / 16.))
                                             .flex_shrink_0()
                                             .px_1()
                                             .child(ui::section_label("Tier")),

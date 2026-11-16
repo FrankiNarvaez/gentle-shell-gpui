@@ -5,11 +5,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use gentle_core::interface_size;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::slider::Slider;
-use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -178,8 +179,9 @@ impl SettingsView {
     }
 
     /// Tern-style theme grid: a card per theme drawn in its own colors;
-    /// clicking applies it to every window and remembers it. A slider above it
-    /// sets how much of the blurred desktop shows through.
+    /// clicking applies it to every window and remembers it. Above it, a
+    /// slider sets how much of the blurred desktop shows through and a
+    /// stepper sets the interface size.
     pub(super) fn theme_section(&self, cx: &mut Context<Self>) -> Div {
         let state = cx.global::<themes::Themes>();
         let groups = [
@@ -189,6 +191,7 @@ impl SettingsView {
             (themes::Source::Builtin, "Popular"),
         ];
         let percent = (state.transparency * 100.).round();
+        let size = state.interface_size;
         let active = state.active_theme().clone();
         let mut card = section(IconName::Sparkles, "Theme")
             .child(
@@ -198,7 +201,7 @@ impl SettingsView {
                     .gap_3()
                     .child(
                         div()
-                            .w(px(120.))
+                            .w(rems(120. / 16.))
                             .text_sm()
                             .text_color(ui::muted())
                             .child("Transparency"),
@@ -212,7 +215,7 @@ impl SettingsView {
                     )
                     .child(
                         div()
-                            .w(px(44.))
+                            .w(rems(44. / 16.))
                             .text_right()
                             .text_sm()
                             .font_family(ui::MONO)
@@ -220,6 +223,7 @@ impl SettingsView {
                             .child(format!("{percent:.0}%")),
                     ),
             )
+            .child(interface_size_row(size))
             .when(active.background.as_ref().is_some_and(backdrop::Backdrop::moves), |d| {
                 let motion = backdrop::motion(cx);
                 let labels = backdrop::Motion::ALL.map(backdrop::Motion::label);
@@ -233,7 +237,7 @@ impl SettingsView {
                         .gap_3()
                         .child(
                             div()
-                                .w(px(120.))
+                                .w(rems(120. / 16.))
                                 .text_sm()
                                 .text_color(ui::muted())
                                 .child("Scene motion"),
@@ -369,6 +373,81 @@ impl SettingsView {
             self.import_theme_paths(themes, cx);
         }
     }
+}
+
+/// Interface size: smaller and bigger a step at a time (the same steps as
+/// ⌘- and ⌘=), back to 100 %, and the size now. It applies to every window.
+fn interface_size_row(size: u16) -> Div {
+    let keys = if cfg!(target_os = "macos") {
+        "⌘= bigger · ⌘- smaller · ⌘0 resets"
+    } else {
+        "Ctrl+= bigger · Ctrl+- smaller · Ctrl+0 resets"
+    };
+    h_flex()
+        .pb_2()
+        .gap_3()
+        .child(
+            div()
+                .w(rems(120. / 16.))
+                .text_sm()
+                .text_color(ui::muted())
+                .child("Interface size"),
+        )
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .child(
+                    Button::new("interface-smaller")
+                        .small()
+                        .icon(Icon::new(IconName::Minus))
+                        .tooltip("Smaller")
+                        .disabled(size <= interface_size::MIN)
+                        .on_click(move |_, _, cx| {
+                            themes::set_interface_size(interface_size::smaller(size), cx)
+                        }),
+                )
+                .child(
+                    Button::new("interface-bigger")
+                        .small()
+                        .icon(Icon::new(IconName::Plus))
+                        .tooltip("Bigger")
+                        .disabled(size >= interface_size::MAX)
+                        .on_click(move |_, _, cx| {
+                            themes::set_interface_size(interface_size::bigger(size), cx)
+                        }),
+                )
+                .when(size != interface_size::DEFAULT, |d| {
+                    d.child(
+                        Button::new("interface-reset")
+                            .small()
+                            .ghost()
+                            .label("Reset")
+                            .on_click(|_, _, cx| {
+                                themes::set_interface_size(interface_size::DEFAULT, cx)
+                            }),
+                    )
+                })
+                .child(
+                    div()
+                        .pl_2()
+                        .min_w_0()
+                        .truncate()
+                        .text_xs()
+                        .text_color(ui::faint())
+                        .child(keys),
+                ),
+        )
+        .child(
+            div()
+                .w(rems(44. / 16.))
+                .text_right()
+                .text_sm()
+                .font_family(ui::MONO)
+                .text_color(ui::fg())
+                .child(format!("{size}%")),
+        )
 }
 
 fn theme_card(

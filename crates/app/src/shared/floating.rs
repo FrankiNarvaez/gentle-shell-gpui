@@ -17,7 +17,8 @@ pub const MIN_W: f32 = 320.;
 pub const MIN_H: f32 = 220.;
 /// Gap around a maximized card; the title bar stays clear.
 pub const MAX_INSET: f32 = 10.;
-/// Height of the window's title bar, which a maximized card leaves alone.
+/// Height of the window's title bar at 100 % (it scales with the interface
+/// size), which a maximized card leaves alone.
 pub const TITLE_BAR: f32 = 36.;
 /// The header you drag to move the card.
 pub const HEADER: f32 = 38.;
@@ -64,6 +65,8 @@ pub struct CardState {
     drag: Option<Drag>,
     /// The window area the card lives in, as last laid out.
     area: Rc<Cell<(f32, f32)>>,
+    /// The title bar's height in px, as last laid out.
+    title_bar: Rc<Cell<f32>>,
 }
 
 impl CardState {
@@ -73,6 +76,7 @@ impl CardState {
             maximized: false,
             drag: None,
             area: Rc::new(Cell::new((0., 0.))),
+            title_bar: Rc::new(Cell::new(TITLE_BAR)),
         }
     }
 
@@ -96,7 +100,7 @@ impl CardState {
     pub fn fit(&mut self) {
         let (aw, ah) = self.area.get();
         if aw > 0. && !self.maximized {
-            self.frame = fitted(self.frame, (aw, ah));
+            self.frame = fitted(self.frame, (aw, ah), self.title_bar.get());
         }
     }
 
@@ -124,7 +128,14 @@ impl CardState {
         let Some(drag) = &self.drag else { return false };
         let dx = (position.x - drag.start.x).as_f32();
         let dy = (position.y - drag.start.y).as_f32();
-        let next = dragged(drag.frame, drag.kind, dx, dy, self.area.get());
+        let next = dragged(
+            drag.frame,
+            drag.kind,
+            dx,
+            dy,
+            self.area.get(),
+            self.title_bar.get(),
+        );
         let changed = next != self.frame;
         self.frame = next;
         changed
@@ -150,7 +161,7 @@ pub fn position(state: &CardState, card: Div) -> Div {
     if state.maximized {
         card.left(px(MAX_INSET))
             .right(px(MAX_INSET))
-            .top(px(TITLE_BAR + MAX_INSET / 2.))
+            .top(rems((TITLE_BAR + MAX_INSET / 2.) / 16.))
             .bottom(px(MAX_INSET))
     } else {
         card.right(px(state.frame.right))
@@ -160,11 +171,18 @@ pub fn position(state: &CardState, card: Div) -> Div {
     }
 }
 
-/// A canvas that records the window area; pair it with [`CardState::fit`].
+/// A canvas that records the window area and the title bar's height; pair it
+/// with [`CardState::fit`].
 pub fn area_canvas(state: &CardState) -> impl IntoElement {
     let area = state.area.clone();
+    let title_bar = state.title_bar.clone();
     canvas(
-        move |bounds, _, _| area.set((bounds.size.width.as_f32(), bounds.size.height.as_f32())),
+        move |bounds, window, _| {
+            area.set((bounds.size.width.as_f32(), bounds.size.height.as_f32()));
+            title_bar.set(f32::from(
+                rems(TITLE_BAR / 16.).to_pixels(window.rem_size()),
+            ));
+        },
         |_, _, _, _| {},
     )
     .absolute()
@@ -316,10 +334,17 @@ pub fn shadow(lifted: bool) -> Vec<BoxShadow> {
     ]
 }
 
-/// `frame` after dragging by (`dx`, `dy`) in a `w` × `h` area. Edges you
-/// don't drag stay where they were; the card keeps a minimum size and stays
-/// inside the area.
-pub fn dragged(frame: Frame, kind: DragKind, dx: f32, dy: f32, (aw, ah): (f32, f32)) -> Frame {
+/// `frame` after dragging by (`dx`, `dy`) in a `w` × `h` area under a
+/// `title_bar` px tall title bar. Edges you don't drag stay where they were;
+/// the card keeps a minimum size and stays inside the area.
+pub fn dragged(
+    frame: Frame,
+    kind: DragKind,
+    dx: f32,
+    dy: f32,
+    (aw, ah): (f32, f32),
+    title_bar: f32,
+) -> Frame {
     let mut next = frame;
     match kind {
         DragKind::Move => {
@@ -346,21 +371,22 @@ pub fn dragged(frame: Frame, kind: DragKind, dx: f32, dy: f32, (aw, ah): (f32, f
             }
         }
     }
-    fitted(next, (aw, ah))
+    fitted(next, (aw, ah), title_bar)
 }
 
-/// `frame` kept inside a `w` × `h` area (the window may have shrunk).
-pub fn fitted(frame: Frame, (aw, ah): (f32, f32)) -> Frame {
+/// `frame` kept inside a `w` × `h` area (the window may have shrunk), below a
+/// `title_bar` px tall title bar.
+pub fn fitted(frame: Frame, (aw, ah): (f32, f32), title_bar: f32) -> Frame {
     if aw <= 0. || ah <= 0. {
         return frame;
     }
     let w = frame.w.min(aw).max(MIN_W.min(aw));
-    let h = frame.h.min(ah - TITLE_BAR).max(MIN_H.min(ah));
+    let h = frame.h.min(ah - title_bar).max(MIN_H.min(ah));
     Frame {
         w,
         h,
         right: frame.right.clamp(0., (aw - w).max(0.)),
-        bottom: frame.bottom.clamp(0., (ah - TITLE_BAR - h).max(0.)),
+        bottom: frame.bottom.clamp(0., (ah - title_bar - h).max(0.)),
     }
 }
 
@@ -378,8 +404,8 @@ const DOCK_MIN_ROOM: f32 = 720.;
 /// they fit at their natural size or smaller (never below the card minimum);
 /// otherwise they wrap into more rows, the first row at the bottom. They
 /// never take more than [`DOCK_SHARE`] of a wide window, so the conversation
-/// stays usable beside them.
-pub fn docked(sizes: &[(f32, f32)], (aw, ah): (f32, f32)) -> Vec<Frame> {
+/// stays usable beside them. `title_bar` is the title bar's height in px.
+pub fn docked(sizes: &[(f32, f32)], (aw, ah): (f32, f32), title_bar: f32) -> Vec<Frame> {
     let count = sizes.len();
     if count == 0 || aw <= 0. || ah <= 0. {
         return Vec::new();
@@ -387,7 +413,7 @@ pub fn docked(sizes: &[(f32, f32)], (aw, ah): (f32, f32)) -> Vec<Frame> {
     let room_w = (aw * DOCK_SHARE)
         .max(DOCK_MIN_ROOM.min(aw - DOCK_MARGIN * 2.))
         .max(1.);
-    let room_h = (ah - TITLE_BAR - DOCK_MARGIN * 2.).max(1.);
+    let room_h = (ah - title_bar - DOCK_MARGIN * 2.).max(1.);
     let gaps = |n: usize| DOCK_GAP * n.saturating_sub(1) as f32;
     let layout = |rows: usize| -> Option<Vec<Vec<(f32, f32)>>> {
         let row_h = (room_h - gaps(rows)) / rows as f32;
@@ -469,33 +495,61 @@ mod tests {
     fn dragging_moves_and_resizes_from_the_grabbed_edges_only() {
         let f = FRAME;
         // Moving left and up grows the right and bottom margins.
-        let moved = dragged(f, DragKind::Move, -100., -50., AREA);
+        let moved = dragged(f, DragKind::Move, -100., -50., AREA, TITLE_BAR);
         assert_eq!(
             (moved.right, moved.bottom, moved.w, moved.h),
             (116., 66., f.w, f.h)
         );
         // The left edge grows the card leftward; its right side stays.
-        let wider = dragged(f, edges(true, false, false, false), -200., 0., AREA);
+        let wider = dragged(
+            f,
+            edges(true, false, false, false),
+            -200.,
+            0.,
+            AREA,
+            TITLE_BAR,
+        );
         assert_eq!((wider.w, wider.right), (f.w + 200., f.right));
         // The right edge keeps the left side in place.
         let left_side = AREA.0 - f.right - f.w;
-        let narrower = dragged(f, edges(false, false, true, false), -100., 0., AREA);
+        let narrower = dragged(
+            f,
+            edges(false, false, true, false),
+            -100.,
+            0.,
+            AREA,
+            TITLE_BAR,
+        );
         assert_eq!(narrower.w, f.w - 100.);
         assert_eq!(AREA.0 - narrower.right - narrower.w, left_side);
         // The top-left corner grows both ways.
-        let big = dragged(f, edges(true, true, false, false), -300., -200., AREA);
+        let big = dragged(
+            f,
+            edges(true, true, false, false),
+            -300.,
+            -200.,
+            AREA,
+            TITLE_BAR,
+        );
         assert_eq!((big.w, big.h), (f.w + 300., f.h + 200.));
         // Never below the minimum size.
-        let tiny = dragged(f, edges(true, true, false, false), 900., 900., AREA);
+        let tiny = dragged(
+            f,
+            edges(true, true, false, false),
+            900.,
+            900.,
+            AREA,
+            TITLE_BAR,
+        );
         assert_eq!((tiny.w, tiny.h), (MIN_W, MIN_H));
     }
 
     #[test]
     fn the_card_stays_inside_the_window() {
         // Dragged past the window's edges, it stops at them.
-        let away = dragged(FRAME, DragKind::Move, 500., 500., AREA);
+        let away = dragged(FRAME, DragKind::Move, 500., 500., AREA, TITLE_BAR);
         assert_eq!((away.right, away.bottom), (0., 0.));
-        let up = dragged(FRAME, DragKind::Move, -5000., -5000., AREA);
+        let up = dragged(FRAME, DragKind::Move, -5000., -5000., AREA, TITLE_BAR);
         assert_eq!(up.right, AREA.0 - up.w);
         assert_eq!(up.bottom, AREA.1 - TITLE_BAR - up.h);
         // A window that shrank keeps the card whole.
@@ -505,7 +559,7 @@ mod tests {
             w: 900.,
             h: 600.,
         };
-        let fit = fitted(big, (800., 500.));
+        let fit = fitted(big, (800., 500.), TITLE_BAR);
         assert!(fit.w <= 800. && fit.right + fit.w <= 800.);
         assert!(fit.bottom + fit.h <= 500. - TITLE_BAR);
     }
@@ -529,7 +583,7 @@ mod tests {
 
     #[test]
     fn docked_cards_keep_their_size_in_a_big_window_left_to_right() {
-        let frames = docked(&[PHONE, PAGE], (2000., 1200.));
+        let frames = docked(&[PHONE, PAGE], (2000., 1200.), TITLE_BAR);
         assert_eq!((frames[0].w, frames[0].h), PHONE);
         assert_eq!((frames[1].w, frames[1].h), PAGE);
         // Bottom-aligned, the later card on the right.
@@ -541,7 +595,7 @@ mod tests {
     #[test]
     fn docked_cards_leave_the_conversation_room_in_a_laptop_window() {
         let area = (1500., 950.);
-        let frames = docked(&[PHONE, PAGE], area);
+        let frames = docked(&[PHONE, PAGE], area, TITLE_BAR);
         let left = frames
             .iter()
             .map(|f| area.0 - f.right - f.w)
@@ -556,7 +610,7 @@ mod tests {
     #[test]
     fn many_docked_cards_wrap_into_rows_without_overlapping() {
         let area = (1100., 900.);
-        let frames = docked(&[PAGE, PAGE, PAGE, PAGE, PAGE], area);
+        let frames = docked(&[PAGE, PAGE, PAGE, PAGE, PAGE], area, TITLE_BAR);
         assert_eq!(frames.len(), 5);
         assert!(frames.iter().all(|f| inside(f, area)));
         assert!(frames.iter().map(|f| f.bottom).any(|b| b > DOCK_MARGIN));

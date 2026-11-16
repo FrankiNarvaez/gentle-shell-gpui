@@ -163,8 +163,8 @@ fn word() -> impl IntoElement {
             let tail = WORD[..i].matches('y').count() as f32;
             let at = WORD_AT + i as f32 * LETTER_GAP + tail * 0.06;
             div()
-                .text_size(px(72. + tail * 4.))
-                .line_height(px(84.))
+                .text_size(rems((72. + tail * 4.) / 16.))
+                .line_height(rems(84. / 16.))
                 .font_weight(FontWeight::EXTRA_BOLD)
                 .text_color(ui::petal())
                 .child(letter.to_string())

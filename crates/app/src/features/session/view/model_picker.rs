@@ -8,7 +8,6 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, Size, h_flex, v_
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::NARROW;
 use crate::features::session::SessionView;
 use crate::features::session::state::{BackendStatus, ModelInfo};
 use crate::shared::ui;
@@ -116,7 +115,11 @@ impl SessionView {
         }
     }
 
-    pub(super) fn render_model_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_model_picker(
+        &self,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let weak = cx.entity().downgrade();
         let busy = self.busy();
         let label = self
@@ -138,12 +141,16 @@ impl SessionView {
             .child(if busy {
                 ui::spinner(Size::XSmall, ui::info()).into_any_element()
             } else {
-                div().size(px(7.)).rounded_full().bg(dot).into_any_element()
+                div()
+                    .size(rems(7. / 16.))
+                    .rounded_full()
+                    .bg(dot)
+                    .into_any_element()
             })
             .child(
                 div()
                     .min_w_0()
-                    .when(self.pane_width.get() < NARROW, |d| d.max_w(px(120.)))
+                    .when(narrow, |d| d.max_w(rems(120. / 16.)))
                     .truncate()
                     .child(label),
             )
@@ -167,16 +174,16 @@ impl SessionView {
             .on_open_change(move |open, window, cx| {
                 let _ = weak.update(cx, |this, cx| this.set_model_picker(*open, window, cx));
             })
-            .w(px(380.))
+            .w(rems(380. / 16.))
             .appearance(false)
             .content(move |_, _, cx| {
                 let weak = content_weak.clone();
                 let mut list = v_flex()
                     .id("model-list")
-                    .max_h(px(340.))
+                    .max_h(rems(340. / 16.))
                     .overflow_y_scroll()
                     .track_scroll(&scroll)
-                    .px(px(6.));
+                    .px(rems(6. / 16.));
                 let mut provider = "";
                 for (i, model) in models.iter().enumerate() {
                     if model.provider != provider {
@@ -189,7 +196,7 @@ impl SessionView {
                                 .pb_1()
                                 .child(
                                     div()
-                                        .size(px(6.))
+                                        .size(rems(6. / 16.))
                                         .rounded_full()
                                         .bg(ui::provider_color(provider)),
                                 )
@@ -207,7 +214,7 @@ impl SessionView {
                             .gap_2()
                             .px_3()
                             .py_1p5()
-                            .rounded(px(ui::ISLAND_ROW))
+                            .rounded(rems(ui::ISLAND_ROW / 16.))
                             .cursor_pointer()
                             .hover(|s| s.bg(ui::surface_hover()))
                             .when(i == cursor, |this| this.bg(ui::surface_hover()))
@@ -218,7 +225,7 @@ impl SessionView {
                                     .overflow_hidden()
                                     .text_ellipsis()
                                     .whitespace_nowrap()
-                                    .text_size(px(13.))
+                                    .text_size(rems(13. / 16.))
                                     .text_color(if is_current { ui::accent() } else { ui::fg() })
                                     .child(model.name.clone()),
                             )
@@ -251,7 +258,7 @@ impl SessionView {
                         div()
                             .px_3()
                             .py_4()
-                            .text_size(px(12.))
+                            .text_size(rems(12. / 16.))
                             .text_color(ui::faint())
                             .child(empty_message),
                     );
@@ -262,13 +269,13 @@ impl SessionView {
                     .font_family(cx.theme().font_family.clone())
                     .text_color(ui::fg())
                     .child(
-                        div().p(px(6.)).child(
+                        div().p(rems(6. / 16.)).child(
                             h_flex()
                                 .items_center()
                                 .gap_2()
-                                .h(px(36.))
+                                .h(rems(36. / 16.))
                                 .px_3()
-                                .rounded(px(ui::ISLAND_ROW))
+                                .rounded(rems(ui::ISLAND_ROW / 16.))
                                 .bg(ui::well())
                                 .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
                                 .child(div().flex_1().child(Input::new(&search).appearance(false))),
@@ -276,7 +283,7 @@ impl SessionView {
                     )
                     .child(list)
                     .children(show_sign_in.then(|| {
-                        div().p(px(6.)).child(
+                        div().p(rems(6. / 16.)).child(
                             Button::new("picker-sign-in")
                                 .ghost()
                                 .small()

@@ -238,7 +238,12 @@ impl Workspace {
         let frame = crate::features::browser::DEFAULT_FRAME;
         let sizes: Vec<(f32, f32)> = shown.iter().map(|_| (frame.w, frame.h)).collect();
         let size = window.viewport_size();
-        let frames = floating::docked(&sizes, (size.width.as_f32(), size.height.as_f32()));
+        let title_bar = f32::from(rems(floating::TITLE_BAR / 16.).to_pixels(window.rem_size()));
+        let frames = floating::docked(
+            &sizes,
+            (size.width.as_f32(), size.height.as_f32()),
+            title_bar,
+        );
         for (stage, frame) in shown.iter().zip(frames) {
             stage
                 .panel
@@ -288,7 +293,7 @@ impl Workspace {
                     Popover::new("instances")
                         .anchor(Anchor::TopRight)
                         .trigger(TrayTrigger { count, open: false })
-                        .w(px(380.))
+                        .w(rems(380. / 16.))
                         .p_0()
                         .content(move |_, _, cx| {
                             ui::popover_in(
@@ -329,7 +334,7 @@ fn tray_panel(
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(rems(13. / 16.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(ui::fg())
                 .child("Pages"),
@@ -341,11 +346,11 @@ fn tray_panel(
                 div()
                     .id("instances-hide-all")
                     .px_2()
-                    .h(px(24.))
+                    .h(rems(24. / 16.))
                     .flex()
                     .items_center()
-                    .rounded(px(6.))
-                    .text_size(px(11.5))
+                    .rounded(rems(6. / 16.))
+                    .text_size(rems(11.5 / 16.))
                     .text_color(ui::muted())
                     .cursor_pointer()
                     .hover(|s| s.bg(ui::surface_hover()).text_color(ui::fg()))
@@ -378,18 +383,18 @@ fn tray_panel(
             .gap_2p5()
             .px_2()
             .py_2()
-            .rounded(px(8.))
+            .rounded(rems(8. / 16.))
             .hover(|s| s.bg(ui::surface_hover()))
             .child(
                 div()
                     .mt(px(1.))
-                    .size(px(22.))
+                    .size(rems(22. / 16.))
                     .flex_none()
                     .relative()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(6.))
+                    .rounded(rems(6. / 16.))
                     .bg(row.color.opacity(0.12))
                     .child(Icon::new(icon).xsmall().text_color(row.color)),
             )
@@ -408,14 +413,14 @@ fn tray_panel(
                     }))
                     .child(
                         div()
-                            .text_size(px(12.5))
+                            .text_size(rems(12.5 / 16.))
                             .truncate()
                             .text_color(if shown { ui::fg() } else { ui::muted() })
                             .child(row.title),
                     )
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(rems(11. / 16.))
                             .text_color(ui::faint())
                             .truncate()
                             .child(meta),
@@ -462,7 +467,7 @@ fn tray_panel(
         .child(
             v_flex()
                 .id("instances-list")
-                .max_h(px(420.))
+                .max_h(rems(420. / 16.))
                 .overflow_y_scroll()
                 .px_1()
                 .py_1()
@@ -493,7 +498,7 @@ impl RenderOnce for TrayTrigger {
         div()
             .id("instances-tray")
             .relative()
-            .size(px(28.))
+            .size(rems(28. / 16.))
             .flex()
             .items_center()
             .justify_center()
@@ -511,16 +516,16 @@ impl RenderOnce for TrayTrigger {
                     .absolute()
                     .top(px(2.))
                     .right(px(1.))
-                    .h(px(13.))
-                    .min_w(px(13.))
-                    .px(px(3.))
+                    .h(rems(13. / 16.))
+                    .min_w(rems(13. / 16.))
+                    .px(rems(3. / 16.))
                     .flex()
                     .items_center()
                     .justify_center()
                     .rounded_full()
                     .bg(ui::petal())
                     .text_color(ui::well().opacity(1.))
-                    .text_size(px(9.))
+                    .text_size(rems(9. / 16.))
                     .font_weight(FontWeight::BOLD)
                     .line_height(relative(1.))
                     .child(self.count.to_string()),

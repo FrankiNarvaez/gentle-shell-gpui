@@ -46,7 +46,7 @@ impl SessionView {
         Popover::new("mode-popover")
             .anchor(Anchor::BottomRight)
             .trigger(trigger)
-            .w(px(340.))
+            .w(rems(340. / 16.))
             .appearance(false)
             .content(move |_, _, cx| {
                 let rows = PermissionMode::ALL
@@ -63,13 +63,13 @@ impl SessionView {
                             .gap_3()
                             .px_2()
                             .py_2()
-                            .rounded(px(ui::ISLAND_ROW))
+                            .rounded(rems(ui::ISLAND_ROW / 16.))
                             .cursor_pointer()
                             .hover(|s| s.bg(ui::surface_hover()))
                             .when(is_current, |this| this.bg(ui::surface_hover()))
                             .child(
                                 div()
-                                    .size(px(28.))
+                                    .size(rems(28. / 16.))
                                     .flex_shrink_0()
                                     .flex()
                                     .items_center()
@@ -84,14 +84,14 @@ impl SessionView {
                                     .min_w_0()
                                     .child(
                                         div()
-                                            .text_size(px(13.))
+                                            .text_size(rems(13. / 16.))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(ui::fg())
                                             .child(mode.label()),
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(12.))
+                                            .text_size(rems(12. / 16.))
                                             .text_color(ui::muted())
                                             .child(mode.description()),
                                     ),
@@ -111,7 +111,7 @@ impl SessionView {
                     });
                 let content = v_flex()
                     .w_full()
-                    .p(px(6.))
+                    .p(rems(6. / 16.))
                     .font_family(cx.theme().font_family.clone())
                     .child(
                         div()
@@ -126,7 +126,7 @@ impl SessionView {
                             .px_2()
                             .pt_1p5()
                             .pb_1()
-                            .text_size(px(11.))
+                            .text_size(rems(11. / 16.))
                             .text_color(ui::faint())
                             .child(match pending {
                                 Some(next) => format!(

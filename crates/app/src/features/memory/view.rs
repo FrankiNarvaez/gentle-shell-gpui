@@ -112,7 +112,7 @@ impl Render for MemoryView {
                 .child(Icon::new(IconName::Brain).text_color(ui::faint()))
                 .child(
                     div()
-                        .max_w(px(420.))
+                        .max_w(rems(420. / 16.))
                         .text_center()
                         .text_sm()
                         .text_color(ui::muted())
@@ -131,8 +131,8 @@ impl Render for MemoryView {
                     div()
                         .id("memory-list")
                         .w(relative(0.4))
-                        .min_w(px(220.))
-                        .max_w(px(340.))
+                        .min_w(rems(220. / 16.))
+                        .max_w(rems(340. / 16.))
                         .h_full()
                         .flex_shrink_0()
                         .overflow_y_scroll()
@@ -196,7 +196,7 @@ impl Render for MemoryView {
         backdrop.occlude().child(ui::pop_in(
             "memory-screen",
             panel
-                .max_w(px(1100.))
+                .max_w(rems(1100. / 16.))
                 .child(
                     ui::screen_header()
                         .child(Icon::new(IconName::Brain).small().text_color(ui::muted()))

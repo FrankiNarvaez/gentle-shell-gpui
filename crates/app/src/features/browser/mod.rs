@@ -271,7 +271,7 @@ impl BrowserPanel {
         let maximized = self.card.maximized();
         h_flex()
             .id("browser-header")
-            .h(px(floating::HEADER))
+            .h(rems(floating::HEADER / 16.))
             .flex_shrink_0()
             .px_3()
             .gap_2()
@@ -290,7 +290,7 @@ impl BrowserPanel {
             .child(Icon::new(icon).small().text_color(ui::petal()))
             .child(
                 div()
-                    .text_size(px(12.5))
+                    .text_size(rems(12.5 / 16.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(ui::fg())
                     .whitespace_nowrap()
@@ -302,7 +302,7 @@ impl BrowserPanel {
                     .flex_1()
                     .truncate()
                     .font_family(ui::MONO)
-                    .text_size(px(10.5))
+                    .text_size(rems(10.5 / 16.))
                     .text_color(ui::faint())
                     .child(address),
             )

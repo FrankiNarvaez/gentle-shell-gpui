@@ -45,12 +45,12 @@ impl SessionView {
         Popover::new("effort-popover")
             .anchor(Anchor::BottomLeft)
             .trigger(trigger)
-            .w(px(EFFORT_W))
+            .w(rems(EFFORT_W / 16.))
             .appearance(false)
             .content(move |_, _, cx| {
                 let (title, detail) = effort_copy(&current);
                 let card = v_flex()
-                    .p(px(EFFORT_PAD))
+                    .p(rems(EFFORT_PAD / 16.))
                     .gap_3()
                     .child(
                         h_flex()
@@ -65,7 +65,7 @@ impl SessionView {
                             .child(
                                 div()
                                     .font_family(ui::MONO)
-                                    .text_size(px(11.))
+                                    .text_size(rems(11. / 16.))
                                     .text_color(ui::muted())
                                     .child(current.clone()),
                             ),
@@ -76,14 +76,14 @@ impl SessionView {
                             .gap_0p5()
                             .child(
                                 div()
-                                    .text_size(px(17.))
+                                    .text_size(rems(17. / 16.))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(ui::petal())
                                     .child(title),
                             )
                             .child(
                                 div()
-                                    .text_size(px(12.))
+                                    .text_size(rems(12. / 16.))
                                     .text_color(ui::muted())
                                     .child(detail),
                             ),
@@ -236,11 +236,14 @@ fn effort_meter(index: usize, count: usize) -> Div {
         .gap(px(2.))
         .ml_0p5()
         .children((1..count).map(|i| {
-            div().w(px(3.)).h(px(3. + 2. * i as f32)).bg(if i <= index {
-                ui::petal()
-            } else {
-                ui::faint().opacity(0.35)
-            })
+            div()
+                .w(rems(3. / 16.))
+                .h(rems((3. + 2. * i as f32) / 16.))
+                .bg(if i <= index {
+                    ui::petal()
+                } else {
+                    ui::faint().opacity(0.35)
+                })
         }))
 }
 
@@ -292,8 +295,8 @@ fn effort_slider(
                 .map(|(i, &(x, y, size, phase))| {
                     div()
                         .absolute()
-                        .left(px(x * EFFORT_TRACK_W))
-                        .top(px(y))
+                        .left(rems((x * EFFORT_TRACK_W) / 16.))
+                        .top(rems(y / 16.))
                         .size(px(size))
                         .bg(sparkle)
                         .with_animation(
@@ -310,12 +313,12 @@ fn effort_slider(
         .with_animation(
             ElementId::NamedInteger("effort-fill".into(), moves),
             Animation::new(EFFORT_MOTION),
-            move |el, t| el.w(px(effort_fill_w(glide(t)))),
+            move |el, t| el.w(rems(effort_fill_w(glide(t)) / 16.)),
         );
     let knob = div()
         .absolute()
-        .top(px(EFFORT_INSET))
-        .size(px(EFFORT_KNOB))
+        .top(rems(EFFORT_INSET / 16.))
+        .size(rems(EFFORT_KNOB / 16.))
         .flex()
         .items_center()
         .justify_center()
@@ -345,7 +348,7 @@ fn effort_slider(
         .with_animation(
             ElementId::NamedInteger("effort-knob".into(), moves),
             Animation::new(EFFORT_MOTION),
-            move |el, t| el.left(px(EFFORT_INSET + EFFORT_SPAN * glide(t))),
+            move |el, t| el.left(rems((EFFORT_INSET + EFFORT_SPAN * glide(t)) / 16.)),
         );
     let zones = levels.iter().enumerate().map(|(i, level)| {
         let left = if i == 0 {
@@ -364,8 +367,8 @@ fn effort_slider(
             .absolute()
             .top_0()
             .bottom_0()
-            .left(px(left))
-            .w(px(right - left))
+            .left(rems(left / 16.))
+            .w(rems((right - left) / 16.))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 let _ = down.update(cx, |this, cx| this.set_thinking(pick.clone(), cx));
@@ -378,8 +381,8 @@ fn effort_slider(
     });
     div()
         .relative()
-        .w(px(EFFORT_TRACK_W))
-        .h(px(EFFORT_TRACK_H))
+        .w(rems(EFFORT_TRACK_W / 16.))
+        .h(rems(EFFORT_TRACK_H / 16.))
         .rounded_full()
         .bg(ui::well())
         .child(fill)
@@ -392,8 +395,8 @@ fn effort_labels(levels: &[String], index: usize, weak: &WeakEntity<SessionView>
     let count = levels.len();
     div()
         .relative()
-        .w(px(EFFORT_TRACK_W))
-        .h(px(16.))
+        .w(rems(EFFORT_TRACK_W / 16.))
+        .h(rems(1.))
         .children(levels.iter().enumerate().map(|(i, level)| {
             let weak = weak.clone();
             let pick = level.clone();
@@ -401,12 +404,12 @@ fn effort_labels(levels: &[String], index: usize, weak: &WeakEntity<SessionView>
                 .id(("effort-label", i))
                 .absolute()
                 .top_0()
-                .left(px(effort_stop_x(i, count) - 22.))
-                .w(px(44.))
+                .left(rems((effort_stop_x(i, count) - 22.) / 16.))
+                .w(rems(44. / 16.))
                 .flex()
                 .justify_center()
                 .font_family(ui::MONO)
-                .text_size(px(10.5))
+                .text_size(rems(10.5 / 16.))
                 .cursor_pointer()
                 .text_color(if i == index { ui::petal() } else { ui::faint() })
                 .hover(|s| s.text_color(ui::fg()))

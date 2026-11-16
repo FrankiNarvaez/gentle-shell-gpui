@@ -277,7 +277,7 @@ pub(super) fn job_row(row: &JobRow, cancel: bool, view: &WeakEntity<SessionView>
     };
     h_flex()
         .gap_2()
-        .text_size(px(12.))
+        .text_size(rems(12. / 16.))
         .child(div().flex_none().child(marker))
         .child(
             div()
@@ -319,7 +319,7 @@ fn empty_state(icon: IconName, text: &'static str) -> AnyElement {
         .child(Icon::new(icon).text_color(ui::faint()))
         .child(
             div()
-                .max_w(px(360.))
+                .max_w(rems(360. / 16.))
                 .text_sm()
                 .text_center()
                 .text_color(ui::muted())
@@ -513,7 +513,7 @@ impl SessionView {
                 d.child(ui::pulse(
                     div()
                         .flex_shrink_0()
-                        .size(px(6.))
+                        .size(rems(6. / 16.))
                         .rounded_full()
                         .bg(ui::warning()),
                 ))
@@ -624,8 +624,8 @@ impl SessionView {
         let right = v_flex()
             .id("agents-detail")
             .w(relative(0.36))
-            .min_w(px(240.))
-            .max_w(px(420.))
+            .min_w(rems(240. / 16.))
+            .max_w(rems(420. / 16.))
             .flex_shrink_0()
             .h_full()
             .p_5()
@@ -748,14 +748,20 @@ impl SessionView {
         now: u64,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let column = |w: f32, text: String| div().w(px(w)).flex_shrink_0().text_right().child(text);
+        let column = |w: f32, text: String| {
+            div()
+                .w(rems(w / 16.))
+                .flex_shrink_0()
+                .text_right()
+                .child(text)
+        };
         let head = h_flex()
             .px_3()
             .pb_1()
             .gap_3()
             .text_xs()
             .text_color(ui::faint())
-            .child(div().w(px(10.)).flex_shrink_0())
+            .child(div().w(rems(10. / 16.)).flex_shrink_0())
             .child(div().flex_1().min_w_0().truncate().child("Agent"))
             .child(column(72., "Status".into()))
             .child(column(56., "Time".into()))
@@ -790,16 +796,16 @@ impl SessionView {
                 }))
                 .child(
                     div()
-                        .w(px(10.))
+                        .w(rems(10. / 16.))
                         .flex_shrink_0()
                         .flex()
                         .justify_center()
                         .child(if running {
-                            ui::pulse(div().size(px(7.)).rounded_full().bg(color))
+                            ui::pulse(div().size(rems(7. / 16.)).rounded_full().bg(color))
                                 .into_any_element()
                         } else {
                             div()
-                                .size(px(7.))
+                                .size(rems(7. / 16.))
                                 .rounded_full()
                                 .bg(color)
                                 .into_any_element()
@@ -812,8 +818,8 @@ impl SessionView {
                         .gap_2()
                         .child(
                             div()
-                                .min_w(px(48.))
-                                .max_w(px(200.))
+                                .min_w(rems(48. / 16.))
+                                .max_w(rems(200. / 16.))
                                 .truncate()
                                 .text_sm()
                                 .font_family(ui::MONO)
@@ -825,7 +831,7 @@ impl SessionView {
                             d.child(
                                 div()
                                     .flex_shrink_0()
-                                    .max_w(px(220.))
+                                    .max_w(rems(220. / 16.))
                                     .truncate()
                                     .text_xs()
                                     .font_family(ui::MONO)
@@ -1007,7 +1013,7 @@ impl SessionView {
                                 .border_color(ui::danger().opacity(0.22))
                                 .child(
                                     div()
-                                        .text_size(px(10.))
+                                        .text_size(rems(10. / 16.))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(ui::danger())
                                         .child("ERROR"),
@@ -1183,17 +1189,17 @@ fn kind_chip(text: String) -> Div {
         .whitespace_nowrap()
         .gap_1()
         .px_2()
-        .h(px(18.))
+        .h(rems(18. / 16.))
         .rounded_full()
         .border_1()
         .border_color(ui::border_strong())
         .bg(ui::well())
-        .text_size(px(10.5))
+        .text_size(rems(10.5 / 16.))
         .text_color(ui::muted())
         .child(
             div()
                 .flex_shrink_0()
-                .size(px(4.))
+                .size(rems(4. / 16.))
                 .rounded_full()
                 .bg(ui::faint()),
         )

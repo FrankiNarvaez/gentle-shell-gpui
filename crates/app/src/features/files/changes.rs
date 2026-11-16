@@ -576,7 +576,7 @@ impl ChangesView {
             let active = self.tree_mode == tree;
             div()
                 .id(id)
-                .size(px(24.))
+                .size(rems(24. / 16.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -602,7 +602,7 @@ impl ChangesView {
         };
         h_flex()
             .flex_none()
-            .h(px(36.))
+            .h(rems(36. / 16.))
             .pl_3()
             .pr_1p5()
             .gap_2()
@@ -612,7 +612,7 @@ impl ChangesView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(13.5))
+                    .text_size(rems(13.5 / 16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(ui::fg())
                     .child("Working tree"),
@@ -654,7 +654,7 @@ impl ChangesView {
         };
         let weak = cx.entity().downgrade();
         h_flex()
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .px_3()
             .gap_2()
             .child(
@@ -668,7 +668,7 @@ impl ChangesView {
             )
             .child(
                 div()
-                    .text_size(px(13.5))
+                    .text_size(rems(13.5 / 16.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(ui::fg())
                     .child(label),
@@ -679,7 +679,7 @@ impl ChangesView {
                     .rounded_md()
                     .bg(ui::well())
                     .font_family(ui::MONO)
-                    .text_size(px(10.5))
+                    .text_size(rems(10.5 / 16.))
                     .text_color(ui::muted())
                     .child(count.to_string()),
             )
@@ -695,10 +695,10 @@ impl ChangesView {
 
     fn render_untracked(count: usize) -> Div {
         h_flex()
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .px_3()
             .gap_1()
-            .text_size(px(12.))
+            .text_size(rems(12. / 16.))
             .child(
                 div()
                     .font_family(ui::MONO)
@@ -732,7 +732,7 @@ impl ChangesView {
                     let indent = if *nested { 18. } else { 0. };
                     self.render_entry(status, *side, *badge, indent, cx)
                 }
-                None => div().h(px(ROW_HEIGHT)).into_any_element(),
+                None => div().h(rems(ROW_HEIGHT / 16.)).into_any_element(),
             },
         }
     }
@@ -748,7 +748,7 @@ impl ChangesView {
         let key = (side, dir.to_string());
         h_flex()
             .id(SharedString::from(format!("changes-dir-{side:?}-{dir}")))
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .mx_1p5()
             .px_1p5()
             .gap_1p5()
@@ -778,14 +778,14 @@ impl ChangesView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(12.5))
+                    .text_size(rems(12.5 / 16.))
                     .text_color(ui::muted())
                     .child(dir.to_string()),
             )
             .child(
                 div()
                     .font_family(ui::MONO)
-                    .text_size(px(10.5))
+                    .text_size(rems(10.5 / 16.))
                     .text_color(ui::faint())
                     .child(count.to_string()),
             )
@@ -838,9 +838,9 @@ impl ChangesView {
         let menu_entry = entry.clone();
         h_flex()
             .id(SharedString::from(id))
-            .h(px(ROW_HEIGHT))
+            .h(rems(ROW_HEIGHT / 16.))
             .mx_1p5()
-            .pl(px(6. + indent))
+            .pl(rems((6. + indent) / 16.))
             .pr_1p5()
             .gap_2()
             .rounded_md()
@@ -853,7 +853,7 @@ impl ChangesView {
                 h_flex()
                     .flex_1()
                     .min_w_0()
-                    .text_size(px(13.))
+                    .text_size(rems(13. / 16.))
                     .when(!dir.is_empty(), |d| {
                         d.child(
                             div()
@@ -985,13 +985,13 @@ impl ChangesView {
             .capture_key_down(cx.listener(Self::on_commit_key))
             .child(
                 div()
-                    .text_size(px(13.5))
+                    .text_size(rems(13.5 / 16.))
                     .child(Input::new(&self.summary).appearance(false)),
             )
             .child(
                 div()
-                    .min_h(px(48.))
-                    .text_size(px(13.))
+                    .min_h(rems(48. / 16.))
+                    .text_size(rems(13. / 16.))
                     .text_color(ui::muted())
                     .child(Textarea::new(&self.description).appearance(false)),
             )
@@ -1027,7 +1027,7 @@ impl ChangesView {
                         d.child(
                             h_flex()
                                 .gap_1p5()
-                                .text_size(px(11.5))
+                                .text_size(rems(11.5 / 16.))
                                 .text_color(ui::muted())
                                 .child(Spinner::new().xsmall().color(ui::accent()))
                                 .child(busy),
@@ -1036,7 +1036,7 @@ impl ChangesView {
                     .when(self.generating, |d| {
                         d.child(
                             div()
-                                .text_size(px(11.5))
+                                .text_size(rems(11.5 / 16.))
                                 .text_color(ui::muted())
                                 .child("Writing…"),
                         )
@@ -1046,9 +1046,9 @@ impl ChangesView {
                 d.child(
                     div()
                         .id("changes-error")
-                        .max_h(px(96.))
+                        .max_h(rems(96. / 16.))
                         .overflow_y_scroll()
-                        .text_size(px(11.5))
+                        .text_size(rems(11.5 / 16.))
                         .text_color(ui::danger())
                         .child(error),
                 )
@@ -1106,7 +1106,7 @@ impl Render for ChangesView {
                         .px_3()
                         .pb_1p5()
                         .truncate()
-                        .text_size(px(11.))
+                        .text_size(rems(11. / 16.))
                         .text_color(ui::muted())
                         .tooltip(move |window, cx| {
                             gpui_kit::component::tooltip::Tooltip::new(tip.clone())
@@ -1131,16 +1131,16 @@ fn status_badge(badge: char) -> Div {
     };
     div()
         .flex_none()
-        .size(px(16.))
+        .size(rems(1.))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.))
+        .rounded(rems(4. / 16.))
         .border_1()
         .border_color(color.opacity(0.5))
         .bg(color.opacity(0.1))
         .font_family(ui::MONO)
-        .text_size(px(10.))
+        .text_size(rems(10. / 16.))
         .font_weight(FontWeight::BOLD)
         .text_color(color)
         .child(badge.to_string())
@@ -1154,7 +1154,12 @@ fn empty_state(icon: IconName, text: &'static str) -> AnyElement {
         .gap_2()
         .p_6()
         .child(Icon::new(icon).text_color(ui::faint()))
-        .child(div().text_size(px(12.)).text_color(ui::muted()).child(text))
+        .child(
+            div()
+                .text_size(rems(12. / 16.))
+                .text_color(ui::muted())
+                .child(text),
+        )
         .into_any_element()
 }
 

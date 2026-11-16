@@ -76,7 +76,7 @@ impl ProvidersView {
                             .child(ui::section_label(title))
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(rems(10. / 16.))
                                     .text_color(ui::faint())
                                     .child(count.to_string()),
                             ),

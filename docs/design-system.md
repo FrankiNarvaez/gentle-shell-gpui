@@ -29,7 +29,7 @@ themes/*.json (Pi theme format)
 
 - **Catalog** (`themes::load_catalog`): first the Gentle Shell themes embedded with `include_str!` from `crates/app/themes/` (`Gentleman-Cute`, `Gentleman-Sexy`, `Gentle`); themes installed in `<gentle-pi>/themes/` replace them by name. Then the user's themes in `<agent dir>/themes/` (`Source::Pi`) and the app's own in `dirs::data_dir()/gentle-shell-gpui/themes/` (`Source::App`), then the example app themes in `crates/app/themes/examples/`, and finally the popular schemes in `SCHEMES`. Names are unique; the first one wins.
 - **Initial theme** (`themes::pick_default`): the one saved in `dirs::data_dir()/gentle-shell-gpui/settings.json` (key `theme`), otherwise the `theme` from Pi's `settings.json`, otherwise `DEFAULT_THEME` (`"Gentleman-Cute"`).
-- **Live changes**: `themes::select(index, cx)` and `themes::set_transparency(clear, persist, cx)` reinstall the palette, call `ui::apply_theme` and refresh all windows. Because tokens are read on every render, no view stores colors.
+- **Live changes**: `themes::select(index, cx)`, `themes::set_transparency(clear, persist, cx)` and `themes::set_interface_size(percent, cx)` reinstall the palette or the size, call `ui::apply_theme` and refresh all windows. Because tokens are read on every render, no view stores colors.
 - **Hot reload** (`themes::watch_user_themes`): every 2 s a background task compares the file names, sizes and modification times of Pi's and the app's theme folders (files only: the app's `previews/` and `examples/` folders don't count); on a change it re-reads them and `replace_user_themes` swaps them in, keeping the active theme by name (re-applying it if its file changed).
 - **Backdrops** (`Theme::background`, `shared/backdrop/`): only app themes may have a `background` key (`scene`, `sceneCode`, `image`, `sky`, `speed`, `cell`, `dim`, `veil`; see `backdrop/model.rs` and `crates/app/themes/GUIDE.md`), because Pi's theme schema has `additionalProperties: false` and would reject the file. `backdrop::layer` draws it first in the workspace root, so every pane draws over it and the glass shows it at the window's transparency: the sky as stacked two-stop gradients, the image as a covering `img`, then the scene. A scene runs on its own thread in QuickJS (`backdrop/scene.rs`) with the kit in `backdrop/kit.js`; each frame leaves numeric drawing commands, plus the x, y pairs its paths point into, which the painter turns into quads, glyphs (`paint_glyph`, shaped once per character) and paths (`PathBuilder`, filled with a color or a linear gradient, or stroked), all inside one `paint_layer` so thousands of overlapping shapes skip GPUI's bounds tree. The kit's transforms (`save`, `translate`, `rotate`, `scale`) are applied in JavaScript, so the painter only ever sees window coordinates: a turned rect or ellipse arrives as a path, and a curve is flattened as finely as the scale it's drawn at. Glows are stacked faint discs (GPUI has no radial gradient, and no blend modes). The `veil` calms the middle of the window toward the theme's background. Pacing: the scene thread keeps its script under 8% of one core (`CPU_SHARE`: 24 fps when a frame costs ≤ 3 ms, down to 8 fps), and the window redraws at the scene's own interval (`ui::request_frame_in`); only while the window is focused and motion isn't reduced, otherwise one still frame per size. The person's **Scene motion** (`backdrop::Motion`, `backdropMotion` in the app's settings file) caps it: Smooth, Calm (12 fps), Still. Scenes are not design tokens: they are the theme's own art, like pixel art, so their colors are free.
 - **Pixel art in scenes** (`kit.js`: `pixels(rows, palette)` and `g.pixels(art, x, y, size, alpha, flip)`): sprites written as rows of characters, each row's runs of one color precomputed as one rect, drawn snapped to whole pixels so 8-bit scenes stay crisp and cheap (a few hundred rects per frame).
@@ -101,7 +101,8 @@ All are argument-less functions in `crate::shared::ui` that return `Hsla`.
 | `popover` | `popover_bg` |
 | `input`, `window_border`, `scrollbar_thumb` | `border_strong` |
 | `title_bar`, `title_bar_border`, `tab_bar`, `tab`, `list`, `scrollbar` | transparent |
-| `radius` / `radius_lg` | 8 px / 12 px |
+| `radius` / `radius_lg` | 8 px / 12 px at 100 %, times the interface size |
+| `font_size` / `mono_font_size` | 16 px / 13 px at 100 %, times the interface size (see [Interface size](#interface-size)) |
 
 ### Light and dark
 
@@ -111,7 +112,7 @@ Views do not branch by mode: they use tokens. The differences live in `Palette::
 
 - **UI font**: gpui-component's (`cx.theme().font_family`); the app does not change it. `ui::island` sets it explicitly so a menu opened from a monospaced bar does not inherit that font.
 - **Monospaced**: `ui::MONO` is `"Menlo"` on macOS, `"Consolas"` on Windows and `"DejaVu Sans Mono"` elsewhere. It is used for paths, settings values, code, counters, clocks and tokens. `well_box` and `kbd` already apply it.
-- **Scale**: the rem is gpui-component's `font_size` (16 px), so `text_xs` = 12 px, `text_sm` = 14 px and `text_base` = 16 px.
+- **Scale**: the rem is gpui-component's `font_size` (16 px at 100 %), so `text_xs` = 12 px, `text_sm` = 14 px and `text_base` = 16 px. Every other size is written in rems too: `.text_size(rems(13. / 16.))` is 13 px at 100 %. The px values below are at 100 %.
 
 | Size | Weight | Where |
 | --- | --- | --- |
@@ -130,7 +131,20 @@ Views do not branch by mode: they use tokens. The differences live in `Palette::
 
 `SEMIBOLD` is the weight for titles; `MEDIUM` for small titles inside floating cards; `BOLD` and `EXTRA_BOLD` only in the welcome.
 
+### Interface size
+
+Configuration › Theme has an **Interface size** row (80–150 %, default 100 %, 10 % steps; `−`, `+`, Reset), and ⌘= (also ⌘+), ⌘- and ⌘0 (Ctrl elsewhere, and the app menu's Zoom In, Zoom Out, Actual Size) do the same in any window. Key bindings run before a terminal's key handler, so they never reach the shell. The size is a whole percent (`Themes::interface_size`; the steps and limits are `gentle_core::interface_size`), saved as the factor `interfaceScale` in the app's `settings.json` next to `transparency`; a hand-set `1.25` stays 125 % (useful under WSLg, where the desktop is scaled but GPUI sees scale 1) and the next step lands on the 10 % grid.
+
+`ui::apply_theme` sets gpui-component's `font_size` to 16 px × size (and `mono_font_size`, `radius`, `radius_lg` in proportion); gpui-component's root makes that every window's rem size on each frame. So everything in rems follows: Tailwind-style spacing (`p_2`, `gap_3`, `rounded_lg`), `text_*`, the stock components, and the app's own sizes, which are written as `rems(px_at_100 / 16.)` (dividing by 16 is exact, so 100 % is pixel-identical). One convention, no scaling helper:
+
+- **Text, and lengths that hold or sit next to text** (row and bar heights, label and table columns, screen, popover and panel widths, icon boxes, key caps, island radius and padding, the title bar, the sidebar) are `rems(N / 16.)`.
+- **Math against real pixels** (bounds, viewport, a measured pane width for a breakpoint like `NARROW`) converts with `rems(N / 16.).to_pixels(window.rem_size())`.
+- **Stay px**: hairlines and 1–2 px gaps, shadows, entrance offsets in animations, painted art and effects (banner, surge, backdrops, the welcome finale's stage and kisses, the water reminder's drops and glass, the music equalizer, the commit graph's lanes), user-dragged geometry (floating cards, splits, minimum pane sizes, the devices dock) and the window's own size. On macOS the traffic lights keep their place in a taller title bar.
+- **Measured things follow the rem**: the terminal measures its cell again at the new font size (13 px at 100 %) and resizes the PTY; the conversation list and the Markdown preview re-measure their rows (a GPUI `list` only does that by itself when its width changes).
+
 ## Spacing and radii
+
+Values are at 100 % interface size; they are rems, so they grow with it (see [Interface size](#interface-size)).
 
 | Radius | Size | Used in |
 | --- | --- | --- |
@@ -359,3 +373,4 @@ Typical screen footer: `h_flex().px_4().py_3().gap_2().border_t_1().border_color
 7. New icons added to `ExtraIcons`.
 8. Animations only with `appear`/`appear_after`/`pop_in`/`popover_in`/`pulse`, with stable ids.
 9. Reviewed in a light theme, in a dark theme and with different transparencies.
+10. Sizes in rems (`rems(px / 16.)`), and checked at 80 % and 150 % interface size: nothing clips or overlaps.

@@ -26,7 +26,7 @@ pub(super) fn badge(name: &str, signed_in: bool) -> Div {
     };
     div()
         .flex_shrink_0()
-        .size(px(30.))
+        .size(rems(30. / 16.))
         .flex()
         .items_center()
         .justify_center()
@@ -90,7 +90,7 @@ impl Render for ProvidersView {
             "providers-screen",
             panel
                 .w_full()
-                .max_w(px(640.))
+                .max_w(rems(640. / 16.))
                 .child(
                     ui::screen_header()
                         .child(

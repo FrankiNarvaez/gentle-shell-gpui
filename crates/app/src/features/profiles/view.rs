@@ -33,11 +33,15 @@ fn route_columns() -> Div {
 }
 
 fn route_name_column() -> Div {
-    v_flex().w(px(NAME_W)).flex_shrink_0().min_w_0().gap_0p5()
+    v_flex()
+        .w(rems(NAME_W / 16.))
+        .flex_shrink_0()
+        .min_w_0()
+        .gap_0p5()
 }
 
 fn route_cells() -> Div {
-    h_flex().flex_1().min_w(px(CELLS_MIN_W)).gap_2()
+    h_flex().flex_1().min_w(rems(CELLS_MIN_W / 16.)).gap_2()
 }
 
 impl Render for ProfilesView {
@@ -108,8 +112,8 @@ impl Render for ProfilesView {
         backdrop.occlude().child(ui::pop_in(
             "profiles-screen",
             panel
-                .max_w(px(1100.))
-                .max_h(px(760.))
+                .max_w(rems(1100. / 16.))
+                .max_h(rems(760. / 16.))
                 .child(
                     ui::screen_header()
                         .child(

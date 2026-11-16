@@ -46,11 +46,11 @@ pub(super) fn panel(
         div()
             .id(id)
             .px_2()
-            .h(px(24.))
+            .h(rems(24. / 16.))
             .flex()
             .items_center()
-            .rounded(px(6.))
-            .text_size(px(11.5))
+            .rounded(rems(6. / 16.))
+            .text_size(rems(11.5 / 16.))
             .text_color(ui::muted())
             .cursor_pointer()
             .hover(|s| s.bg(ui::surface_hover()).text_color(ui::fg()))
@@ -63,7 +63,7 @@ pub(super) fn panel(
         .gap_2()
         .child(
             div()
-                .text_size(px(13.))
+                .text_size(rems(13. / 16.))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(ui::fg())
                 .child("Notifications"),
@@ -110,7 +110,7 @@ pub(super) fn panel(
             .items_center()
             .text_color(ui::faint())
             .child(Icon::new(IconName::BellOff).small())
-            .child(div().text_size(px(12.)).child("No notifications"))
+            .child(div().text_size(rems(12. / 16.)).child("No notifications"))
             .into_any_element()
     } else {
         let rows = notices.iter().map(|notice| {
@@ -134,7 +134,7 @@ pub(super) fn panel(
                 .gap_2p5()
                 .px_2()
                 .py_2()
-                .rounded(px(8.))
+                .rounded(rems(8. / 16.))
                 .cursor_pointer()
                 .hover(|s| s.bg(ui::surface_hover()))
                 .on_click(cx.listener(move |state: &mut PopoverState, _, window, cx| {
@@ -151,12 +151,12 @@ pub(super) fn panel(
                 .child(
                     div()
                         .mt(px(1.))
-                        .size(px(22.))
+                        .size(rems(22. / 16.))
                         .flex_none()
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(6.))
+                        .rounded(rems(6. / 16.))
                         .bg(color.opacity(0.12))
                         .child(Icon::new(icon).xsmall().text_color(color)),
                 )
@@ -167,14 +167,14 @@ pub(super) fn panel(
                         .gap_0p5()
                         .child(
                             div()
-                                .text_size(px(12.5))
+                                .text_size(rems(12.5 / 16.))
                                 .line_height(relative(1.4))
                                 .text_color(if notice.read { ui::muted() } else { ui::fg() })
                                 .child(notice.message.clone()),
                         )
                         .child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(rems(11. / 16.))
                                 .text_color(ui::faint())
                                 .overflow_hidden()
                                 .text_ellipsis()
@@ -184,8 +184,8 @@ pub(super) fn panel(
                 )
                 .child(
                     div()
-                        .mt(px(7.))
-                        .size(px(6.))
+                        .mt(rems(7. / 16.))
+                        .size(rems(6. / 16.))
                         .flex_none()
                         .rounded_full()
                         .when(!notice.read, |d| d.bg(ui::petal())),
@@ -193,7 +193,7 @@ pub(super) fn panel(
         });
         v_flex()
             .id("notices-list")
-            .max_h(px(420.))
+            .max_h(rems(420. / 16.))
             .overflow_y_scroll()
             .px_1()
             .pb_1()

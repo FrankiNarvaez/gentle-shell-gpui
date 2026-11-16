@@ -108,7 +108,7 @@ impl Workspace {
         let panel = v_flex()
             .id("peek")
             .size_full()
-            .max_w(px(1100.))
+            .max_w(rems(1100. / 16.))
             .rounded_2xl()
             .border_1()
             .border_color(ui::border_strong())
@@ -132,7 +132,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .p(px(24.))
+                .p(rems(24. / 16.))
                 .occlude()
                 .on_click(cx.listener(|this, _, window, cx| this.close_peek(window, cx)))
                 .child(
