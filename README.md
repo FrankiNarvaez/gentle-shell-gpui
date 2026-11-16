@@ -40,8 +40,8 @@ The app does not reimplement Gentle Shell. Each tab starts `gentle-shell --mode 
 
 ## Requirements
 
-- Gentle Shell: `npm install -g gentle-pi --allow-scripts=gentle-pi` (npm 11 blocks its postinstall otherwise), then `gentle-shell setup` once. Setup installs Engram through Homebrew; on macOS that may first need `brew trust gentleman-programming/tap`.
-- Node.js on your PATH. The app merges in your login shell's PATH, so nvm, fnm and mise work even when you launch the app from Finder.
+- Gentle Shell: `npm install -g gentle-pi --allow-scripts=gentle-pi` (npm 11 blocks its postinstall otherwise), then `gentle-shell setup` once. Setup installs Engram through Homebrew; on macOS that may first need `brew trust gentleman-programming/tap`. On Windows, a Gentle Shell installed from the `gentle-ai` TUI (`%LOCALAPPDATA%\gentle-shell\install`) is found and used as it is, with its own Node, homes and config; gentle-ai keeps updating it.
+- Node.js on your PATH (not needed for gentle-ai's managed install on Windows). The app merges in your login shell's PATH, so nvm, fnm and mise work even when you launch the app from Finder; on Windows it reads the PATH saved in the registry, so tools installed after the app started are found too.
 - Rust 1.88 or newer.
 - Linux also needs the GPUI system libraries and WebKitGTK (the in-app browser), for example on Debian or Ubuntu: `libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libx11-xcb-dev libxcb1-dev libfontconfig-dev libfreetype-dev libwebkit2gtk-4.1-dev libgtk-3-dev`.
 

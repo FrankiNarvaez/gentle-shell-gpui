@@ -236,6 +236,9 @@ fn check_order(os: &str) -> Vec<CheckId> {
 pub fn run_checks() -> Vec<Check> {
     apply_toolchain_path();
     let launcher = gentle::launcher();
+    let managed = launcher
+        .as_ref()
+        .is_ok_and(|launcher| launcher.spec.managed_by_gentle_ai());
     let agent = pi_rpc::resolve_homes().agent;
     let claude = pi_rpc::find_program("claude");
     let signed_in = claude.as_deref().and_then(gentle::claude_signed_in);
@@ -255,6 +258,11 @@ pub fn run_checks() -> Vec<Check> {
                 }
                 CheckId::Engram => extras::check_engram(),
             };
+            let (status, fix) = if managed {
+                for_managed_install(id, status, fix)
+            } else {
+                (status, fix)
+            };
             let (title, summary, need) = meta(id);
             Check {
                 id,
@@ -268,21 +276,36 @@ pub fn run_checks() -> Vec<Check> {
         .collect()
 }
 
+/// gentle-ai's managed install brings its own Node.js and Gentle AI, and
+/// gentle-ai is what repairs and updates it (its TUI, in a terminal), never
+/// the launcher's `upgrade` or `setup`: they would change files it verifies.
+fn for_managed_install(id: CheckId, status: Status, fix: Fix) -> (Status, Fix) {
+    let ok = matches!(status, Status::Ok(_));
+    match id {
+        CheckId::Node if !ok => (
+            Status::Ok("Gentle Shell runs the Node.js in gentle-ai's managed install".into()),
+            Fix::None,
+        ),
+        CheckId::Go if !ok => (
+            Status::Ok("Not needed: gentle-ai's managed install includes Gentle AI".into()),
+            Fix::None,
+        ),
+        CheckId::GentleShell | CheckId::Setup if fix == Fix::Auto => {
+            (status, Fix::Terminal("gentle-ai".into()))
+        }
+        _ => (status, fix),
+    }
+}
+
 /// Blocking: run `gentle-shell <args>` (e.g. `install <source>`) for the
 /// folder `cwd`, with the launcher's home options; its output either way.
 pub fn run_gentle_shell(cwd: &Path, args: &[&str]) -> Result<String, String> {
     let spec = pi_rpc::resolve_backend(cwd).map_err(|e| format!("{e:#}"))?;
-    let mut command = pi_rpc::command(&spec.program);
-    // Launcher options (home selectors) precede the subcommand.
-    command
-        .args(spec.args.iter().take_while(|a| *a != "--mode"))
-        .args(args)
-        .current_dir(&spec.cwd)
-        .stdin(std::process::Stdio::null());
-    for (k, v) in &spec.env {
-        command.env(k, v);
-    }
-    let out = command.output().map_err(|e| e.to_string())?;
+    let out = spec
+        .launcher_command(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -406,5 +429,33 @@ mod tests {
         let prefix = Path::new("/data/toolchain/npm-global");
         assert_eq!(prefix_bin(prefix, false), prefix.join("bin"));
         assert_eq!(prefix_bin(prefix, true), prefix.to_path_buf());
+    }
+
+    /// A Windows machine with only gentle-ai's managed install: no Node or
+    /// Go of its own, and gentle-ai, not the launcher, repairs the Shell.
+    #[test]
+    fn managed_install_needs_no_runtime_and_is_fixed_by_gentle_ai() {
+        let missing = || Status::Missing("not here".into());
+        for id in [Node, Go] {
+            let (status, fix) = for_managed_install(id, missing(), Fix::Auto);
+            assert!(matches!(status, Status::Ok(_)), "{id:?}");
+            assert_eq!(fix, Fix::None);
+        }
+        // A system Node still reports its own version.
+        let found = Status::Ok("Node 24.1.0 · npm 11.0.0".into());
+        assert_eq!(
+            for_managed_install(Node, found.clone(), Fix::None),
+            (found, Fix::None)
+        );
+        for id in [GentleShell, Setup] {
+            assert_eq!(
+                for_managed_install(id, missing(), Fix::Auto),
+                (missing(), Fix::Terminal("gentle-ai".into()))
+            );
+        }
+        assert_eq!(
+            for_managed_install(Git, missing(), Fix::Auto),
+            (missing(), Fix::Auto)
+        );
     }
 }

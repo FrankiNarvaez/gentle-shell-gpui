@@ -234,6 +234,8 @@ fn launch_spec(runtime: &Path, node: &Path, root: &TempRoot, extensions: &[PathB
         args,
         cwd: root.dir("workspace"),
         env: isolation_env(root),
+        launcher: node.to_path_buf(),
+        bundled: None,
     }
 }
 

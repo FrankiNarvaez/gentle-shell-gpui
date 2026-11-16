@@ -1,8 +1,10 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
 use std::collections::BTreeMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::file_cache::Stamp;
 
@@ -32,61 +34,141 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: Vec<(String, OsString)>,
+    /// The `gentle-shell` command a person runs for this install: shown in
+    /// the app and named in its messages. `program` itself, except for
+    /// gentle-ai's managed install, whose Node the app starts directly.
+    pub launcher: PathBuf,
+    /// The Node and `gentle-pi` package of a self-contained or managed
+    /// install; `None` for a launcher (npm, pnpm) that finds its own.
+    pub bundled: Option<BundledInstall>,
+}
+
+impl LaunchSpec {
+    /// `gentle-shell <sub…>` as this install runs it: the same program and
+    /// the arguments that precede Pi's (launcher options from
+    /// `GENTLE_SHELL_ARGS`, or a managed install's entry script), in `cwd`
+    /// with `env`.
+    pub fn launcher_command<S: AsRef<OsStr>>(
+        &self,
+        sub: impl IntoIterator<Item = S>,
+    ) -> std::process::Command {
+        let mut command = command(&self.program);
+        command
+            .args(self.args.iter().take_while(|a| *a != "--mode"))
+            .args(sub)
+            .current_dir(&self.cwd);
+        for (key, value) in &self.env {
+            command.env(key, value);
+        }
+        command
+    }
+
+    /// gentle-ai installed this Gentle Shell and is what repairs and updates
+    /// it (its TUI): `gentle-shell upgrade` and `setup` must not, and its
+    /// launcher config is gentle-ai's to write.
+    pub fn managed_by_gentle_ai(&self) -> bool {
+        self.bundled.as_ref().is_some_and(|bundled| bundled.managed)
+    }
 }
 
 /// Resolve `gentle-shell` and build the RPC launch for `cwd`.
 ///
-/// Order: `$GENTLE_SHELL_BIN`, then Gentle Shell's self-contained install
+/// Order: `$GENTLE_SHELL_BIN`, then an install in its own folder
 /// ([`bundled_launcher`]), then `gentle-shell` on the PATH. GUI launches
 /// (Finder, a desktop entry) inherit a minimal PATH without the user's Node
-/// version manager, so on Unix the login shell's PATH is merged in first; the
-/// child gets the same PATH so the launcher's `#!/usr/bin/env node` resolves.
+/// version manager, so the login PATH (`login_path`) is merged in first;
+/// the child gets the same PATH so the launcher's `#!/usr/bin/env node`
+/// resolves. gentle-ai's managed install starts its own Node instead.
 pub fn resolve_backend(cwd: &Path) -> Result<LaunchSpec> {
     let path = search_path();
-    let program = match std::env::var_os("GENTLE_SHELL_BIN") {
-        Some(bin) if !bin.is_empty() => PathBuf::from(bin),
-        _ => match bundled_launcher() {
-            Some(program) => program,
-            None => match which::which_in("gentle-shell", Some(&path), cwd) {
-                Ok(program) => program,
-                Err(_) => bail!(
-                    "gentle-shell was not found on your PATH.\n\
-                     Install it with `npm i -g gentle-pi`, or set GENTLE_SHELL_BIN to the launcher."
-                ),
-            },
-        },
+    let launcher = match chosen_launcher() {
+        Some(launcher) => launcher,
+        None => which::which_in("gentle-shell", Some(&path), cwd).map_err(|_| {
+            anyhow!(
+                "gentle-shell was not found on your PATH.\n\
+                 Install it with `npm i -g gentle-pi`, or set GENTLE_SHELL_BIN to the launcher."
+            )
+        })?,
     };
-    // Launcher options such as `--link` or `--home <dir>` go before the Pi args.
-    let mut args = extra_args();
+    let prompt = SYSTEM_PROMPT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    Ok(launch_spec(launcher, cwd, path, prompt.as_deref()))
+}
+
+/// The RPC launch through `launcher`, with `path` as the child's PATH and
+/// `prompt` as the host's instructions file.
+fn launch_spec(launcher: PathBuf, cwd: &Path, path: OsString, prompt: Option<&Path>) -> LaunchSpec {
+    let managed = managed_install(&launcher);
+    // Launcher options such as `--link` or `--home <dir>` go before the Pi
+    // args. A managed install takes none: its supervisor refuses them too.
+    let mut args = match &managed {
+        Some(managed) => vec![managed.cli().to_string_lossy().into_owned()],
+        None => extra_args(),
+    };
     args.extend(["--mode".to_string(), "rpc".to_string()]);
     // The host's own instructions (how to open pages and devices in the
     // app), as a file: arguments through Windows' `.cmd` launcher mangle
     // quotes, `%` and newlines.
-    if let Some(file) = SYSTEM_PROMPT
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone()
-    {
+    if let Some(file) = prompt {
         args.push("--append-system-prompt".to_string());
         args.push(file.to_string_lossy().into_owned());
     }
-    Ok(LaunchSpec {
-        program,
-        args,
-        cwd: cwd.to_path_buf(),
-        env: vec![
-            // Turns on ask_user_question dialogs and live helper activity for
-            // interactive RPC hosts (gentle-shell docs: "Interactive RPC hosts").
-            ("GENTLE_SHELL_INTERACTIVE_HOST".into(), "1".into()),
-            ("PATH".into(), path),
-        ],
-    })
+    // Turns on ask_user_question dialogs and live helper activity for
+    // interactive RPC hosts (gentle-shell docs: "Interactive RPC hosts").
+    let mut env: Vec<(String, OsString)> =
+        vec![("GENTLE_SHELL_INTERACTIVE_HOST".into(), "1".into())];
+    match managed {
+        Some(managed) => {
+            env.extend(managed.env(&path));
+            LaunchSpec {
+                program: managed.node(),
+                args,
+                cwd: cwd.to_path_buf(),
+                env,
+                launcher: managed.binding(),
+                bundled: Some(BundledInstall {
+                    node: managed.node(),
+                    package: managed.package(),
+                    managed: true,
+                }),
+            }
+        }
+        None => {
+            env.push(("PATH".into(), path));
+            LaunchSpec {
+                program: launcher.clone(),
+                args,
+                cwd: cwd.to_path_buf(),
+                env,
+                bundled: bundled_install(&launcher),
+                launcher,
+            }
+        }
+    }
 }
 
-/// Gentle Shell's self-contained install, when present: what its installer
-/// and `gentle-shell upgrade` (since 4.7) set up, with its own Node and Pi.
-/// It wins over a global npm `gentle-pi` found on the PATH, which upgrading
-/// leaves behind and which may come first there.
+/// The launcher chosen before the PATH is searched: `$GENTLE_SHELL_BIN`, else
+/// an install in its own folder ([`bundled_launcher`]).
+fn chosen_launcher() -> Option<PathBuf> {
+    match std::env::var_os("GENTLE_SHELL_BIN") {
+        Some(bin) if !bin.is_empty() => Some(PathBuf::from(bin)),
+        _ => bundled_launcher(),
+    }
+}
+
+/// gentle-ai's managed install, when it is the launcher chosen without
+/// searching the PATH: the homes and the launcher config follow it.
+pub(crate) fn chosen_managed_install() -> Option<ManagedInstall> {
+    chosen_launcher().as_deref().and_then(managed_install)
+}
+
+/// Gentle Shell installed in its own folder, when present: the self-contained
+/// install its installer and `gentle-shell upgrade` (since 4.7) set up, with
+/// its own Node and Pi, or on Windows gentle-ai's managed install. It wins
+/// over a global npm `gentle-pi` found on the PATH, which upgrading leaves
+/// behind and which may come first there.
 pub fn bundled_launcher() -> Option<PathBuf> {
     let local_app_data = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
     bundled_candidates(
@@ -98,16 +180,20 @@ pub fn bundled_launcher() -> Option<PathBuf> {
     .find(|launcher| launcher.is_file())
 }
 
-/// Where the self-contained install keeps its launcher: `~/.gentle-shell/bin`
-/// on macOS and Linux; on Windows `%LOCALAPPDATA%\gentle-shell\bin`, or
-/// `%USERPROFILE%\.gentle-shell-bundle\bin` when the first folder was refused.
+/// Where those installs keep their launcher: `~/.gentle-shell/bin` on macOS
+/// and Linux; on Windows `%LOCALAPPDATA%\gentle-shell\bin`, or
+/// `%USERPROFILE%\.gentle-shell-bundle\bin` when the first folder was
+/// refused, then gentle-ai's managed install (its command binding in
+/// `%LOCALAPPDATA%\gentle-shell\install\bin`, gentle-ai
+/// `DiscoverUserShellInstalls`).
 fn bundled_candidates(home: &Path, local_app_data: Option<&Path>, windows: bool) -> Vec<PathBuf> {
     if windows {
         let launcher = Path::new("bin").join("gentle-shell.cmd");
-        local_app_data
-            .map(|dir| dir.join("gentle-shell").join(&launcher))
-            .into_iter()
+        let own = local_app_data.map(|dir| dir.join("gentle-shell"));
+        own.iter()
+            .map(|dir| dir.join(&launcher))
             .chain([home.join(".gentle-shell-bundle").join(&launcher)])
+            .chain(own.iter().map(|dir| dir.join("install").join(&launcher)))
             .collect()
     } else {
         vec![home.join(".gentle-shell").join("bin").join("gentle-shell")]
@@ -118,11 +204,14 @@ fn bundled_candidates(home: &Path, local_app_data: Option<&Path>, windows: bool)
 /// generated launcher (`scripts/bundled-install.mjs`, `LAUNCHER_MARK`).
 const BUNDLED_LAUNCHER_MARK: &str = "gentle-shell bundled launcher (generated; do not edit)";
 
-/// What a self-contained install's launcher runs: its own Node and the active
-/// `gentle-pi` package.
+/// What a self-contained or managed install runs: its own Node and the
+/// active `gentle-pi` package.
+#[derive(Debug, Clone)]
 pub struct BundledInstall {
     pub node: PathBuf,
     pub package: PathBuf,
+    /// gentle-ai's managed install ([`LaunchSpec::managed_by_gentle_ai`]).
+    pub managed: bool,
 }
 
 /// `launcher` as Gentle Shell's self-contained install (4.7) lays it out:
@@ -149,7 +238,11 @@ pub fn bundled_install(launcher: &Path) -> Option<BundledInstall> {
         prefix.join("versions").join(name.trim())
     };
     let package = version.join("node_modules").join("gentle-pi");
-    package.is_dir().then_some(BundledInstall { node, package })
+    package.is_dir().then_some(BundledInstall {
+        node,
+        package,
+        managed: false,
+    })
 }
 
 /// `node-<version>` from the launcher's `…runtime/node-<version>/…` path.
@@ -158,6 +251,180 @@ fn node_runtime_name(script: &str) -> Option<&str> {
         let rest = script[at + "runtime".len()..].strip_prefix(['/', '\\'])?;
         let name = &rest[..rest.find(['/', '\\'])?];
         name.starts_with("node-").then_some(name)
+    })
+}
+
+/// gentle-ai's managed Gentle Shell on Windows (its TUI's "Separate"
+/// install, gentle-ai `internal/shellinstaller`): one folder,
+/// `%LOCALAPPDATA%\gentle-shell\install`, with its own Node, `gentle-pi`,
+/// agent home and config. Its `bin\gentle-shell.cmd` runs `supervisor.exe
+/// shell launch <root> gentle-shell`, which checks the folder and starts
+/// `runtime\node\node.exe prefix\node_modules\gentle-pi\bin\gentle-shell.mjs`
+/// in an environment it builds from scratch (`userWindowsLaunchEnvironment`);
+/// the `gentle-shell.cmd` it publishes in WindowsApps, on the PATH, only
+/// `call`s that binding.
+///
+/// The app starts that Node itself, in the same environment: through the
+/// supervisor, `GENTLE_SHELL_INTERACTIVE_HOST` (Gentle Desktop, dialogs) and
+/// the app's PATH would never reach Gentle Shell, and the launcher's own
+/// subcommands (`--version`, `setup`) would go to Pi as arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ManagedInstall {
+    root: PathBuf,
+}
+
+impl ManagedInstall {
+    fn node(&self) -> PathBuf {
+        self.root.join("runtime").join("node").join("node.exe")
+    }
+
+    fn package(&self) -> PathBuf {
+        self.root
+            .join("prefix")
+            .join("node_modules")
+            .join("gentle-pi")
+    }
+
+    /// gentle-ai `userWindowsLaunchCLI`.
+    fn cli(&self) -> PathBuf {
+        self.package().join("bin").join("gentle-shell.mjs")
+    }
+
+    /// gentle-ai `userWindowsBinding`.
+    fn binding(&self) -> PathBuf {
+        self.root.join("bin").join("gentle-shell.cmd")
+    }
+
+    fn agent(&self) -> PathBuf {
+        self.root.join("agent")
+    }
+
+    fn config(&self) -> PathBuf {
+        self.root.join("config")
+    }
+
+    /// Its launcher config, with the setup marker its installer records.
+    pub(crate) fn config_file(&self) -> PathBuf {
+        self.config().join("gentle-shell.json")
+    }
+
+    /// Where its Gentle Shell keeps its state: `GENTLE_SHELL_HOME` (the
+    /// isolated home its config selects) and `GENTLE_PI_CONFIG_HOME`.
+    pub(crate) fn homes(&self) -> crate::Homes {
+        crate::Homes {
+            agent: self.agent(),
+            config: self.config(),
+        }
+    }
+
+    /// gentle-ai `userWindowsEnvironment(root)` for its launch, with `path`
+    /// (the app's PATH) after the install's own runtime folders instead of
+    /// only `System32`. The rest of the app's environment is inherited.
+    fn env(&self, path: &OsStr) -> Vec<(String, OsString)> {
+        let root = &self.root;
+        let (home, agent, config) = (root.join("home"), self.agent(), self.config());
+        let own = [
+            root.join("runtime").join("node"),
+            root.join("runtime").join("go").join("bin"),
+            root.join("runtime").join("codegraph").join("bin"),
+        ];
+        let path = merge_dirs(own.into_iter().chain(std::env::split_paths(path)))
+            .unwrap_or_else(|| path.to_os_string());
+        [
+            ("HOME", home.clone().into_os_string()),
+            ("USERPROFILE", home.clone().into_os_string()),
+            ("APPDATA", config.clone().into_os_string()),
+            ("LOCALAPPDATA", root.join("state").into_os_string()),
+            ("TEMP", root.join("tmp").into_os_string()),
+            ("TMP", root.join("tmp").into_os_string()),
+            ("GENTLE_PI_CONFIG_HOME", config.clone().into_os_string()),
+            ("PI_CODING_AGENT_DIR", agent.clone().into_os_string()),
+            ("GENTLE_PI_AGENT_HOME", agent.clone().into_os_string()),
+            ("GENTLE_PI_NO_SKILL_REGISTRY", "1".into()),
+            ("GENTLE_SHELL_HOME", agent.into_os_string()),
+            ("GENTLE_SHELL_CONFIG", self.config_file().into_os_string()),
+            ("GOPATH", home.join("go").into_os_string()),
+            (
+                "GOMODCACHE",
+                home.join("go").join("pkg").join("mod").into_os_string(),
+            ),
+            (
+                "GOCACHE",
+                root.join("state").join("go-build").into_os_string(),
+            ),
+            ("PATH", path),
+            ("NPM_CONFIG_PREFIX", root.join("prefix").into_os_string()),
+            ("NPM_CONFIG_IGNORE_SCRIPTS", "true".into()),
+            ("NPM_CONFIG_AUDIT", "false".into()),
+            ("NPM_CONFIG_FUND", "false".into()),
+            (
+                "NPM_CONFIG_USERCONFIG",
+                config.join("user.npmrc").into_os_string(),
+            ),
+            (
+                "NPM_CONFIG_GLOBALCONFIG",
+                config.join("global.npmrc").into_os_string(),
+            ),
+            (
+                "NPM_CONFIG_CACHE",
+                root.join("runtime").join("cache").into_os_string(),
+            ),
+            ("NODE_USE_SYSTEM_CA", "1".into()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value))
+        .collect()
+    }
+}
+
+/// `launcher` as gentle-ai's managed install: its command binding, or a
+/// shim (`gentle-shell.cmd` in WindowsApps) that `call`s one, into a folder
+/// with the supervisor, its manifest, its Node and its `gentle-pi`. `None`
+/// for any other launcher.
+pub(crate) fn managed_install(launcher: &Path) -> Option<ManagedInstall> {
+    let script = std::fs::read_to_string(launcher).ok()?;
+    let binding = match shim_target(&script) {
+        Some(target) => std::fs::read_to_string(target).ok()?,
+        None => script,
+    };
+    let install = ManagedInstall {
+        root: supervisor_root(&binding)?,
+    };
+    let laid_out = [
+        install.root.join("supervisor.exe"),
+        install.root.join("manifest.json"),
+        install.node(),
+        install.cli(),
+    ]
+    .iter()
+    .all(|file| file.is_file());
+    laid_out.then_some(install)
+}
+
+/// The binding a WindowsApps shim forwards to: `call "<binding>" %*`
+/// (gentle-ai `userWindowsLauncherShim`).
+fn shim_target(script: &str) -> Option<PathBuf> {
+    script.lines().find_map(|line| {
+        let (target, _) = line.trim().strip_prefix("call \"")?.split_once('"')?;
+        Some(PathBuf::from(target))
+    })
+}
+
+/// `<root>` from a managed install's command binding:
+/// `"<root>\supervisor.exe" shell launch "<root>" gentle-shell %*`
+/// (gentle-ai `userWindowsBinding`).
+fn supervisor_root(script: &str) -> Option<PathBuf> {
+    script.lines().find_map(|line| {
+        let (supervisor, rest) = line.trim().strip_prefix('"')?.split_once('"')?;
+        let name = supervisor.rsplit(['\\', '/']).next()?;
+        if !name.eq_ignore_ascii_case("supervisor.exe") {
+            return None;
+        }
+        let (root, product) = rest
+            .trim_start()
+            .strip_prefix("shell launch \"")?
+            .split_once('"')?;
+        (product.split_whitespace().next() == Some("gentle-shell")).then(|| PathBuf::from(root))
     })
 }
 
@@ -237,7 +504,7 @@ pub fn set_system_prompt(file: Option<PathBuf>) {
 }
 
 /// Forget everything resolved from the environment: cached `--version`
-/// output and the login shell's PATH (both recomputed on next use), after
+/// output and the login PATH (both recomputed on next use), after
 /// something was installed.
 pub fn forget_cached() {
     forget_versions();
@@ -264,9 +531,15 @@ static VERSIONS: Mutex<BTreeMap<PathBuf, (VersionKey, String)>> = Mutex::new(BTr
 static VERSION_RUN: Mutex<()> = Mutex::new(());
 
 /// Everything `<launcher> --version` prints on stdout, cached per launcher
-/// until the launcher file (an upgrade) or the home config changes.
+/// until the launcher file (an upgrade) or the home config changes. For a
+/// self-contained or managed install that file is its `gentle-pi`'s
+/// `package.json`: an update replaces the package, not the launcher or Node.
 pub fn version_output(spec: &LaunchSpec) -> Option<String> {
-    let program = dunce::canonicalize(&spec.program).unwrap_or_else(|_| spec.program.clone());
+    let identity = spec.bundled.as_ref().map_or_else(
+        || spec.program.clone(),
+        |bundled| bundled.package.join("package.json"),
+    );
+    let program = dunce::canonicalize(&identity).unwrap_or(identity);
     let key = || {
         Some(VersionKey {
             program: Stamp::of(&program)?,
@@ -305,18 +578,11 @@ pub fn forget_versions() {
 }
 
 /// How long `--version` may take: a Node start on a slow, busy machine.
-const VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const VERSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn run_version(spec: &LaunchSpec) -> Option<String> {
-    let mut command = crate::command(&spec.program);
-    command
-        .arg("--version")
-        .current_dir(&spec.cwd)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    for (key, value) in &spec.env {
-        command.env(key, value);
-    }
+    let mut command = spec.launcher_command(["--version"]);
+    command.stdin(Stdio::null()).stderr(Stdio::null());
     output_within(&mut command, VERSION_TIMEOUT).map(|(_, stdout)| stdout)
 }
 
@@ -383,32 +649,54 @@ pub fn output_within(
 
 static EXTRA_PATH: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
-/// The login shell's PATH merged ahead of the inherited one, computed on
-/// first use and again after `forget_cached`.
+/// The login PATH merged ahead of the inherited one, computed on first use
+/// and again after `forget_cached`.
 static BASE_PATH: Mutex<Option<OsString>> = Mutex::new(None);
 
 fn base_path() -> OsString {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(login) = login_shell_path() {
-        dirs.extend(std::env::split_paths(&login));
-    }
+    let login = login_path();
     let current = std::env::var_os("PATH").unwrap_or_default();
-    merge_paths(dirs, &current).unwrap_or(current)
+    // Last, filling a gap only: where `go install` puts programs (gentle-ai,
+    // Engram), missing from the PATH when Go's installer didn't add it.
+    let go = go_bin_dir(
+        std::env::var_os("GOBIN"),
+        std::env::var_os("GOPATH"),
+        &crate::home::home_dir(),
+    );
+    let dirs = login
+        .iter()
+        .flat_map(std::env::split_paths)
+        .chain(std::env::split_paths(&current))
+        .chain(go.is_dir().then_some(go));
+    merge_dirs(dirs).unwrap_or(current)
 }
 
-/// `first`, then every dir of `rest` not already in it.
-fn merge_paths(first: Vec<PathBuf>, rest: &OsString) -> Option<OsString> {
-    let mut dirs = first;
-    for dir in std::env::split_paths(rest) {
-        if !dirs.contains(&dir) {
-            dirs.push(dir);
+/// Where `go install` puts programs (`go help environment`): `GOBIN`, else
+/// the first `GOPATH` entry's `bin`, else `~/go/bin` (`%USERPROFILE%\go\bin`).
+fn go_bin_dir(gobin: Option<OsString>, gopath: Option<OsString>, home: &Path) -> PathBuf {
+    if let Some(gobin) = gobin.filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(gobin);
+    }
+    gopath
+        .as_deref()
+        .and_then(|gopath| std::env::split_paths(gopath).find(|dir| !dir.as_os_str().is_empty()))
+        .unwrap_or_else(|| home.join("go"))
+        .join("bin")
+}
+
+/// `dirs` in order, each once, as one PATH value.
+fn merge_dirs(dirs: impl IntoIterator<Item = PathBuf>) -> Option<OsString> {
+    let mut unique: Vec<PathBuf> = Vec::new();
+    for dir in dirs {
+        if !unique.contains(&dir) {
+            unique.push(dir);
         }
     }
-    std::env::join_paths(dirs).ok()
+    std::env::join_paths(unique).ok()
 }
 
 fn search_path() -> OsString {
-    // Held while the login shell runs, so concurrent callers share one run.
+    // Held while the login PATH is read, so concurrent callers share one run.
     let base = BASE_PATH
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -418,14 +706,22 @@ fn search_path() -> OsString {
     if extra.is_empty() {
         return base;
     }
-    merge_paths(extra, &base).unwrap_or(base)
+    merge_dirs(extra.into_iter().chain(std::env::split_paths(&base))).unwrap_or(base)
 }
 
-#[cfg(unix)]
-fn login_shell_path() -> Option<OsString> {
-    use std::process::Stdio;
-    use std::time::Duration;
+/// The PATH a session started now would get, which the inherited one may
+/// lack: on Unix the login shell's (a GUI launch inherits a minimal PATH);
+/// on Windows the one saved in the registry (an install since this app,
+/// or what launched it, started).
+fn login_path() -> Option<OsString> {
+    if cfg!(windows) {
+        registry_path()
+    } else {
+        login_shell_path()
+    }
+}
 
+fn login_shell_path() -> Option<OsString> {
     const START: &str = "__GENTLE_PATH_START__";
     const END: &str = "__GENTLE_PATH_END__";
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
@@ -447,9 +743,78 @@ fn login_shell_path() -> Option<OsString> {
     Some(OsString::from(&out[start..end]))
 }
 
-#[cfg(not(unix))]
-fn login_shell_path() -> Option<OsString> {
-    None
+/// Windows builds a new process's PATH from the machine's `Path`, then the
+/// user's, as saved in the registry with their `%VARIABLES%` expanded. Read
+/// with `reg query` (always in `System32`), each within 5 s.
+fn registry_path() -> Option<OsString> {
+    const KEYS: [&str; 2] = [
+        r"HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        r"HKCU\Environment",
+    ];
+    let reg = std::env::var_os("SystemRoot").map_or_else(
+        || PathBuf::from("reg.exe"),
+        |root| PathBuf::from(root).join("System32").join("reg.exe"),
+    );
+    let entries: Vec<String> = KEYS
+        .iter()
+        .filter_map(|key| {
+            let mut command = crate::command(&reg);
+            command
+                .args(["query", key, "/v", "Path"])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null());
+            let (ok, out) = output_within(&mut command, Duration::from_secs(5))?;
+            if !ok {
+                return None;
+            }
+            let value = reg_value(&out, "Path")?;
+            Some(expand_vars(&value, |name| std::env::var(name).ok()))
+        })
+        .filter(|value| !value.is_empty())
+        .collect();
+    (!entries.is_empty()).then(|| OsString::from(entries.join(";")))
+}
+
+/// `name`'s string data in `reg query` output, whose value lines read
+/// `    <name>    REG_SZ|REG_EXPAND_SZ    <data>`.
+fn reg_value(out: &str, name: &str) -> Option<String> {
+    out.lines().find_map(|line| {
+        let (key, rest) = line.trim_start().split_once("    ")?;
+        if !key.eq_ignore_ascii_case(name) {
+            return None;
+        }
+        let rest = rest.trim_start();
+        let (kind, data) = rest.split_once("    ").unwrap_or((rest.trim_end(), ""));
+        matches!(kind, "REG_SZ" | "REG_EXPAND_SZ").then(|| data.trim_end().to_string())
+    })
+}
+
+/// `%NAME%` replaced by `lookup(NAME)`; an unknown one stays as written,
+/// as Windows' `ExpandEnvironmentStrings` leaves it.
+fn expand_vars(text: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('%') else {
+            out.push('%');
+            rest = after;
+            continue;
+        };
+        let name = &after[..end];
+        match lookup(name).filter(|_| !name.is_empty()) {
+            Some(value) => out.push_str(&value),
+            None => {
+                out.push('%');
+                out.push_str(name);
+                out.push('%');
+            }
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(all(test, unix))]
@@ -504,7 +869,8 @@ mod tests {
             bundled_candidates(home, None, false),
             [PathBuf::from("/home/me/.gentle-shell/bin/gentle-shell")]
         );
-        // Windows: LOCALAPPDATA first, the fallback folder after it.
+        // Windows: LOCALAPPDATA first, the fallback folder after it, then
+        // gentle-ai's managed install.
         let local = Path::new("/home/me/AppData/Local");
         assert_eq!(
             bundled_candidates(home, Some(local), true),
@@ -514,6 +880,11 @@ mod tests {
                     .join("bin")
                     .join("gentle-shell.cmd"),
                 home.join(".gentle-shell-bundle")
+                    .join("bin")
+                    .join("gentle-shell.cmd"),
+                local
+                    .join("gentle-shell")
+                    .join("install")
                     .join("bin")
                     .join("gentle-shell.cmd"),
             ]
@@ -530,11 +901,43 @@ mod tests {
     #[test]
     fn extra_dirs_come_first_without_duplicates() {
         let base = OsString::from("/usr/bin:/opt/x/bin:/bin");
-        let merged = merge_paths(vec!["/opt/x/bin".into(), "/tc/node/bin".into()], &base).unwrap();
+        let extra: Vec<PathBuf> = vec!["/opt/x/bin".into(), "/tc/node/bin".into()];
+        let merged = merge_dirs(extra.into_iter().chain(std::env::split_paths(&base))).unwrap();
         assert_eq!(
             merged,
             OsString::from("/opt/x/bin:/tc/node/bin:/usr/bin:/bin")
         );
+    }
+
+    /// `go install github.com/…/gentle-ai` puts it in `~/go/bin` unless
+    /// `GOBIN` or `GOPATH` say otherwise; that folder ends the search PATH.
+    #[test]
+    fn programs_installed_with_go_are_found() {
+        let home = std::env::temp_dir().join(format!("pi-rpc-go-{}", std::process::id()));
+        let bin = home.join("go").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let gentle_ai = bin.join("gentle-ai");
+        std::fs::write(&gentle_ai, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&gentle_ai, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let go = go_bin_dir(None, None, &home);
+        assert_eq!(go, bin);
+        let inherited = OsString::from("/usr/bin:/bin");
+        let path = merge_dirs(std::env::split_paths(&inherited).chain([go])).unwrap();
+        assert_eq!(
+            which::which_in("gentle-ai", Some(&path), &home).unwrap(),
+            gentle_ai
+        );
+
+        assert_eq!(
+            go_bin_dir(Some("/opt/gobin".into()), Some("/gp".into()), &home),
+            PathBuf::from("/opt/gobin")
+        );
+        assert_eq!(
+            go_bin_dir(Some("".into()), Some("/gp1:/gp2".into()), &home),
+            PathBuf::from("/gp1/bin")
+        );
+        std::fs::remove_dir_all(&home).unwrap();
     }
 
     #[test]
@@ -558,6 +961,8 @@ mod tests {
             args: Vec::new(),
             cwd: dir.clone(),
             env: Vec::new(),
+            launcher: program.clone(),
+            bundled: None,
         };
         let run_count = || std::fs::read_to_string(&runs).map_or(0, |s| s.lines().count());
 
@@ -577,5 +982,168 @@ mod tests {
         assert_eq!(backend_version(&spec).as_deref(), Some("1.2.3"));
         assert_eq!(run_count(), 3);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+/// gentle-ai's managed Windows install, as its installer lays it out
+/// (`internal/shellinstaller`), in a temporary folder on any OS.
+#[cfg(test)]
+mod managed_tests {
+    use super::*;
+
+    struct Layout {
+        dir: PathBuf,
+        root: PathBuf,
+        shim: PathBuf,
+    }
+
+    impl Drop for Layout {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn layout(name: &str) -> Layout {
+        let dir =
+            std::env::temp_dir().join(format!("pi-rpc-managed-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let root = dir.join("gentle-shell").join("install");
+        let write = |path: PathBuf, text: &str| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        };
+        for file in [
+            "supervisor.exe",
+            "manifest.json",
+            "main.json",
+            "selection.json",
+            "runtime/node/node.exe",
+            "prefix/node_modules/gentle-pi/bin/gentle-shell.mjs",
+            "prefix/node_modules/gentle-pi/package.json",
+        ] {
+            write(root.join(file), "");
+        }
+        // gentle-ai `userWindowsBinding` and `userWindowsLauncherShim`.
+        let binding = root.join("bin").join("gentle-shell.cmd");
+        write(
+            binding.clone(),
+            &format!(
+                "@echo off\r\n\"{}\" shell launch \"{}\" gentle-shell %*\r\n",
+                root.join("supervisor.exe").display(),
+                root.display()
+            ),
+        );
+        let shim = dir
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("gentle-shell.cmd");
+        write(
+            shim.clone(),
+            &format!("@echo off\r\ncall \"{}\" %*\r\n", binding.display()),
+        );
+        Layout { dir, root, shim }
+    }
+
+    fn env_of<'a>(spec: &'a LaunchSpec, key: &str) -> Option<&'a OsStr> {
+        spec.env
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, value)| value.as_os_str())
+    }
+
+    #[test]
+    fn the_managed_install_runs_its_own_node_in_its_own_homes() {
+        let layout = layout("launch");
+        let root = &layout.root;
+        let cli = root.join("prefix/node_modules/gentle-pi/bin/gentle-shell.mjs");
+        let inherited = std::env::join_paths([PathBuf::from("/usr/bin")]).unwrap();
+        // Found on the PATH (the WindowsApps shim) or in its own folder (the
+        // command binding): the same launch.
+        for launcher in [
+            layout.shim.clone(),
+            root.join("bin").join("gentle-shell.cmd"),
+        ] {
+            let spec = launch_spec(launcher, root, inherited.clone(), None);
+            assert_eq!(spec.program, root.join("runtime/node/node.exe"));
+            assert_eq!(spec.args, [&*cli.to_string_lossy(), "--mode", "rpc"]);
+            assert_eq!(spec.launcher, root.join("bin").join("gentle-shell.cmd"));
+            assert!(spec.managed_by_gentle_ai());
+            assert_eq!(
+                spec.bundled.as_ref().map(|b| b.package.clone()),
+                Some(root.join("prefix/node_modules/gentle-pi"))
+            );
+            assert_eq!(
+                env_of(&spec, "GENTLE_SHELL_INTERACTIVE_HOST"),
+                Some(OsStr::new("1"))
+            );
+            // Where Pi and Gentle Shell keep their state is where the app
+            // reads it.
+            let homes = managed_install(&spec.launcher).unwrap().homes();
+            assert_eq!(homes.agent, root.join("agent"));
+            assert_eq!(homes.config, root.join("config"));
+            for key in ["GENTLE_SHELL_HOME", "PI_CODING_AGENT_DIR"] {
+                assert_eq!(env_of(&spec, key), Some(homes.agent.as_os_str()));
+            }
+            assert_eq!(
+                env_of(&spec, "GENTLE_PI_CONFIG_HOME"),
+                Some(homes.config.as_os_str())
+            );
+            assert_eq!(
+                env_of(&spec, "GENTLE_SHELL_CONFIG"),
+                Some(root.join("config").join("gentle-shell.json").as_os_str())
+            );
+            assert_eq!(env_of(&spec, "HOME"), Some(root.join("home").as_os_str()));
+            // Its runtime first, then the app's PATH.
+            let path: Vec<PathBuf> =
+                std::env::split_paths(env_of(&spec, "PATH").unwrap()).collect();
+            assert_eq!(path.first(), Some(&root.join("runtime").join("node")));
+            assert_eq!(path.last(), Some(&PathBuf::from("/usr/bin")));
+            // Launcher subcommands reach the launcher, not Pi.
+            let version = spec.launcher_command(["--version"]);
+            assert_eq!(version.get_program(), spec.program.as_os_str());
+            let args: Vec<&OsStr> = version.get_args().collect();
+            assert_eq!(args, [cli.as_os_str(), OsStr::new("--version")]);
+        }
+    }
+
+    #[test]
+    fn only_a_complete_managed_install_is_recognized() {
+        let layout = layout("partial");
+        assert!(managed_install(&layout.shim).is_some());
+        std::fs::remove_file(layout.root.join("supervisor.exe")).unwrap();
+        assert!(managed_install(&layout.shim).is_none());
+        // An npm or self-contained launcher is not one.
+        let npm = layout.dir.join("npm-gentle-shell");
+        std::fs::write(&npm, "#!/usr/bin/env node\n").unwrap();
+        assert!(managed_install(&npm).is_none());
+        let spec = launch_spec(npm.clone(), &layout.dir, OsString::new(), None);
+        assert_eq!(spec.program, npm);
+        assert!(!spec.managed_by_gentle_ai());
+        // Another product of the supervisor is not Gentle Shell.
+        assert_eq!(
+            supervisor_root(r#""C:\i\supervisor.exe" shell launch "C:\i" pi %*"#),
+            None
+        );
+        assert_eq!(
+            supervisor_root(r#""C:\i\supervisor.exe" shell launch "C:\i" gentle-shell %*"#),
+            Some(PathBuf::from(r"C:\i"))
+        );
+    }
+
+    #[test]
+    fn windows_saved_path_is_read_and_expanded() {
+        let out = "\r\nHKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Program Files\\Go\\bin;%USERPROFILE%\\go\\bin;%NOPE%\\x\r\n\r\n";
+        let value = reg_value(out, "Path").unwrap();
+        let lookup = |name: &str| (name == "USERPROFILE").then(|| r"C:\Users\Ana Li".to_string());
+        assert_eq!(
+            expand_vars(&value, lookup),
+            r"C:\Users\Ana Li\AppData\Local\Microsoft\WindowsApps;C:\Program Files\Go\bin;C:\Users\Ana Li\go\bin;%NOPE%\x"
+        );
+        assert_eq!(
+            reg_value("    PATH    REG_SZ    C:\\bin\r\n", "Path").as_deref(),
+            Some(r"C:\bin")
+        );
+        assert_eq!(reg_value("    Path    REG_DWORD    0x1\r\n", "Path"), None);
+        assert_eq!(expand_vars("50% off", lookup), "50% off");
     }
 }

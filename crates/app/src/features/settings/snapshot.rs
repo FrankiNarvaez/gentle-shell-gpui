@@ -177,7 +177,7 @@ pub fn read_snapshot(agent: &Path, config: &Path, cwd: &Path) -> Snapshot {
 
 /// Runs the launcher's own read-only probes: `--version` and the home mode.
 pub(super) fn probe(spec: &pi_rpc::LaunchSpec, snapshot: &mut Snapshot) {
-    snapshot.launcher = Some(spec.program.clone());
+    snapshot.launcher = Some(spec.launcher.clone());
     if let Some(text) = pi_rpc::version_output(spec) {
         for line in text.lines() {
             if let Some(mode) = line.strip_prefix("home ") {
