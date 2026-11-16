@@ -26,6 +26,8 @@ const EMBEDDED: &[&str] = &[
     include_str!("../../themes/Gentleman-Cute.json"),
     include_str!("../../themes/Gentleman-Sexy.json"),
     include_str!("../../themes/Gentle.json"),
+    include_str!("../../themes/Studio.json"),
+    include_str!("../../themes/Studio-Light.json"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -328,6 +330,14 @@ fn gentle_ansi(name: &str) -> Option<[u32; 16]> {
         "Gentle" => [
             0x161d2e, 0xcb7c94, 0xb7cc85, 0xdeba87, 0x7fb4ca, 0xc99ad6, 0xa3b5d6, 0xf3f6f9,
             0x8394a3, 0xe0a3b5, 0xd1e8a9, 0xe0c15a, 0x8fb8dd, 0xb99bf2, 0xc3d1e8, 0xffffff,
+        ],
+        "Studio" => [
+            0x25252a, 0xe07a74, 0x7fb08a, 0xd6b46a, 0x7c9cbf, 0xa58abf, 0x7fb0a8, 0xc8c8cc,
+            0x55555c, 0xeb928c, 0x98c5a2, 0xe2c68b, 0x9db7d5, 0xbda6d4, 0x9cc7bf, 0xececec,
+        ],
+        "Studio Light" => [
+            0x3a3a3f, 0xb3423a, 0x3f7d4f, 0x9a6b12, 0x3f6a9a, 0x8f6a9e, 0x3f7d8a, 0x9a9aa0,
+            0x8e8e93, 0xcc5f57, 0x599a68, 0xb3872f, 0x2f5580, 0x7a5588, 0x2f6572, 0x1f1f1f,
         ],
         _ => return None,
     })
@@ -1114,6 +1124,69 @@ mod tests {
         assert_eq!(gentle.accent, 0x7fb4ca);
         assert_eq!(gentle.info, 0x7fb4ca);
         assert_eq!(gentle.bg, 0x06080f);
+    }
+
+    #[test]
+    fn parses_the_studio_themes() {
+        let studio = parse_pi_theme(EMBEDDED[3], Source::Gentle, None).unwrap();
+        assert_eq!(studio.name, "Studio");
+        assert!(studio.solid);
+        assert!(!studio.light);
+        assert_eq!(studio.bg, 0x1b1b1d);
+        assert_eq!(studio.fg, 0xececec);
+        assert_eq!(studio.muted, 0xa1a1a6);
+        assert_eq!(studio.faint, 0x6e6e73);
+        assert_eq!(studio.accent, 0x7c9cbf);
+        assert_eq!(studio.accent_active, 0x9db7d5);
+        assert_eq!(studio.raised, 0x2a2a2e);
+        assert_eq!(studio.border, 0x3a3a3f);
+        assert_eq!(studio.heading, 0xe6e1d6);
+        assert_eq!(studio.success, 0x7fb08a);
+        assert_eq!(studio.warning, 0xd6b46a);
+        assert_eq!(studio.danger, 0xe07a74);
+        assert_eq!(studio.selection, 0x34404d);
+        assert_eq!(studio.info, 0x9db7d5);
+
+        let light = parse_pi_theme(EMBEDDED[4], Source::Gentle, None).unwrap();
+        assert_eq!(light.name, "Studio Light");
+        assert!(light.solid);
+        assert!(light.light);
+        assert_eq!(light.bg, 0xf7f6f3);
+        assert_eq!(light.fg, 0x1f1f1f);
+        assert_eq!(light.muted, 0x5f5f63);
+        assert_eq!(light.faint, 0x8e8e93);
+        assert_eq!(light.accent, 0x3f6a9a);
+        assert_eq!(light.accent_active, 0x2f5580);
+        assert_eq!(light.raised, 0xebe9e4);
+        assert_eq!(light.border, 0xd6d3cc);
+        assert_eq!(light.heading, 0x2b2b2b);
+        assert_eq!(light.success, 0x3f7d4f);
+        assert_eq!(light.warning, 0x9a6b12);
+        assert_eq!(light.danger, 0xb3423a);
+        assert_eq!(light.selection, 0xcdd9e6);
+        assert_eq!(light.info, 0x3f6a9a);
+
+        // Both show under "Gentle Shell" exactly once, under their own names.
+        let catalog = load_catalog(Vec::new(), Vec::new());
+        for name in ["Studio", "Studio Light"] {
+            assert_eq!(
+                catalog.iter().filter(|t| t.name == name).count(),
+                1,
+                "{name} should appear once"
+            );
+        }
+        assert_eq!(
+            parse_pi_theme(EMBEDDED[3], Source::Gentle, None)
+                .unwrap()
+                .ansi,
+            gentle_ansi("Studio").unwrap()
+        );
+        assert_eq!(
+            parse_pi_theme(EMBEDDED[4], Source::Gentle, None)
+                .unwrap()
+                .ansi,
+            gentle_ansi("Studio Light").unwrap()
+        );
     }
 
     #[test]
