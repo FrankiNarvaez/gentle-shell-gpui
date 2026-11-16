@@ -358,7 +358,7 @@ impl Music {
         requests.push(Request {
             action: "mood",
             value: Some(mood.clone()),
-            shell: Some(spec.program),
+            shell: Some(spec.launcher),
             timeout: SLOW_TIMEOUT,
         });
         self.run_job(Job::Composing(mood), requests, true, cx);

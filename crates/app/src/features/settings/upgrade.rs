@@ -78,15 +78,8 @@ impl SettingsView {
                         Ok(spec) => spec,
                         Err(error) => return (false, format!("{error:#}"), None, None),
                     };
-                    let mut command = pi_rpc::command(&spec.program);
-                    command
-                        .args(spec.args.iter().take_while(|a| *a != "--mode"))
-                        .arg("upgrade")
-                        .current_dir(&spec.cwd)
-                        .stdin(std::process::Stdio::null());
-                    for (k, v) in &spec.env {
-                        command.env(k, v);
-                    }
+                    let mut command = spec.launcher_command(["upgrade"]);
+                    command.stdin(std::process::Stdio::null());
                     let (succeeded, text) = match command.output() {
                         Ok(out) => (
                             out.status.success(),
@@ -103,7 +96,7 @@ impl SettingsView {
                     pi_rpc::forget_cached();
                     let now = pi_rpc::resolve_backend(&cwd).ok();
                     let running = now.as_ref().and_then(pi_rpc::backend_version);
-                    (succeeded, text, running, now.map(|spec| spec.program))
+                    (succeeded, text, running, now.map(|spec| spec.launcher))
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {

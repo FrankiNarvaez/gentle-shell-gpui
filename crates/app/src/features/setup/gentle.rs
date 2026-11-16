@@ -2,7 +2,6 @@
 //! one-time `setup`, and the npm prefix decision that keeps sudo out of it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serde_json::Value;
 
@@ -64,16 +63,6 @@ pub fn launcher() -> Result<Launcher, String> {
     Ok(Launcher { spec, version })
 }
 
-/// Launcher options (home selectors from `GENTLE_SHELL_ARGS`) that precede a subcommand.
-pub(super) fn launcher_command(spec: &pi_rpc::LaunchSpec, sub: &[&str]) -> Command {
-    let mut command = pi_rpc::command(&spec.program);
-    command
-        .args(spec.args.iter().take_while(|a| *a != "--mode"))
-        .args(sub)
-        .current_dir(&spec.cwd);
-    command
-}
-
 pub fn check_gentle_shell(launcher: &Result<Launcher, String>) -> (Status, Fix) {
     let launcher = match launcher {
         Ok(launcher) => launcher,
@@ -88,7 +77,7 @@ pub fn check_gentle_shell(launcher: &Result<Launcher, String>) -> (Status, Fix) 
         return (
             Status::Failed(format!(
                 "{} didn't report its version (Node.js or Pi may be missing)",
-                launcher.spec.program.display()
+                launcher.spec.launcher.display()
             )),
             Fix::Auto,
         );
@@ -225,7 +214,7 @@ pub fn install_gentle_shell(log: &Log) -> Result<(), String> {
     let spec = pi_rpc::resolve_backend(&user_home()).map_err(|_| {
         "gentle-pi was installed, but gentle-shell still isn't on the PATH.".to_string()
     })?;
-    log(format!("gentle-shell is at {}.", spec.program.display()));
+    log(format!("gentle-shell is at {}.", spec.launcher.display()));
     Ok(())
 }
 
@@ -234,10 +223,10 @@ pub fn install_gentle_shell(log: &Log) -> Result<(), String> {
 fn upgrade_gentle_shell(spec: &pi_rpc::LaunchSpec, log: &Log) -> Result<(), String> {
     log(format!(
         "Updating Gentle Shell with {} upgrade…",
-        spec.program.display()
+        spec.launcher.display()
     ));
     run_logged(
-        launcher_command(spec, &["upgrade"]),
+        spec.launcher_command(["upgrade"]),
         "gentle-shell upgrade",
         log,
     )?;
@@ -370,7 +359,7 @@ pub fn check_setup(launcher: &Result<Launcher, String>) -> (Status, Fix) {
         };
     }
     let config = read_json(&pi_rpc::launcher_config_path()).unwrap_or(Value::Null);
-    let root = crate::features::profiles::gentle_pi_root(&launcher.spec.program);
+    let root = crate::features::profiles::gentle_pi_root(&launcher.spec);
     let pin = gentle_ai_pin(root.as_deref());
     match marker_state(
         &config,
@@ -413,11 +402,7 @@ pub fn check_setup(launcher: &Result<Launcher, String>) -> (Status, Fix) {
 pub fn run_setup(log: &Log) -> Result<(), String> {
     let spec = pi_rpc::resolve_backend(&user_home()).map_err(|e| format!("{e:#}"))?;
     log("Running gentle-shell setup; this can take a few minutes…".into());
-    run_logged(
-        launcher_command(&spec, &["setup"]),
-        "gentle-shell setup",
-        log,
-    )?;
+    run_logged(spec.launcher_command(["setup"]), "gentle-shell setup", log)?;
     refresh_paths();
     match check_setup(&launcher()) {
         (Status::Ok(_), _) => Ok(()),
@@ -463,7 +448,7 @@ pub fn install_bridge(log: &Log) -> Result<(), String> {
     let source = format!("npm:{BRIDGE}");
     log(format!("Installing {source}…"));
     run_logged(
-        launcher_command(&spec, &["install", &source]),
+        spec.launcher_command(["install", source.as_str()]),
         "gentle-shell install",
         log,
     )?;

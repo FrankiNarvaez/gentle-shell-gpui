@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use super::gentle::launcher_command;
 use super::probe::{output_of, parse_version, run_logged};
 use super::{Log, fetch, refresh_paths, toolchain_dir, user_home};
 
@@ -161,7 +160,8 @@ fn launcher() -> Result<pi_rpc::LaunchSpec, String> {
 /// Blocking: starts the server the way the agent would and reports what Pi
 /// sees (`maestro: connected, 10 tools …`, or the error).
 pub fn test_connection() -> Result<String, String> {
-    let output = launcher_command(&launcher()?, &["mcp", "list"])
+    let output = launcher()?
+        .launcher_command(["mcp", "list"])
         .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("gentle-shell didn't start: {e}"))?;
@@ -178,7 +178,7 @@ pub fn test_connection() -> Result<String, String> {
 pub fn disconnect(log: &Log) -> Result<(), String> {
     log("Disconnecting Maestro from the agent (gentle-shell mcp remove maestro)…".into());
     run_logged(
-        launcher_command(&launcher()?, &["mcp", "remove", SERVER]),
+        launcher()?.launcher_command(["mcp", "remove", SERVER]),
         "gentle-shell mcp remove",
         log,
     )
@@ -245,7 +245,7 @@ pub fn install(log: &Log) -> Result<(), String> {
     }
     args.extend([maestro.as_ref(), "mcp"]);
     log("Connecting Maestro to the agent (gentle-shell mcp add maestro)…".into());
-    run_logged(launcher_command(&spec, &args), "gentle-shell mcp add", log)?;
+    run_logged(spec.launcher_command(&args), "gentle-shell mcp add", log)?;
     refresh_paths();
     if is_registered(&pi_rpc::resolve_homes().agent) {
         log("Done. New sessions (or /reload in an open one) have the maestro tools.".into());

@@ -16,9 +16,9 @@ pub use home::{Homes, adopt_standalone_config, launcher_config_path, pi_package,
 pub use login::{AuthEvent, AuthPrompt, LoginHelper, LoginMessage, PromptOption, ProviderInfo};
 
 pub use launch::{
-    LaunchSpec, backend_version, child_path, command, find_program, forget_cached, forget_versions,
-    output_within, resolve_backend, resolve_node, set_extra_path, set_system_prompt,
-    version_output,
+    BundledInstall, LaunchSpec, backend_version, child_path, command, find_program, forget_cached,
+    forget_versions, output_within, resolve_backend, resolve_node, set_extra_path,
+    set_system_prompt, version_output,
 };
 pub use record::{Record, Response, UiMethod, UiRequest, parse_record};
 

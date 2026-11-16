@@ -1184,20 +1184,14 @@ fn generate_message(toplevel: &Path) -> Result<(String, String), String> {
         return Err("Stage some changes first; the message is written from the staged diff".into());
     }
     let spec = pi_rpc::resolve_backend(toplevel).map_err(|e| format!("{e:#}"))?;
-    let mut command = pi_rpc::command(&spec.program);
     // Launcher options (home selectors) come before Pi's own arguments.
+    let mut command = spec.launcher_command(["--print", "--no-session", "--no-tools"]);
     command
-        .args(spec.args.iter().take_while(|a| *a != "--mode"))
-        .args(["--print", "--no-session", "--no-tools"])
         .arg(commit_prompt(&diff))
         .current_dir(toplevel)
-        .stdin(Stdio::null());
-    for (key, value) in &spec.env {
+        .stdin(Stdio::null())
         // Interactive-host dialogs make no sense for a one-shot print run.
-        if key != "GENTLE_SHELL_INTERACTIVE_HOST" {
-            command.env(key, value);
-        }
-    }
+        .env_remove("GENTLE_SHELL_INTERACTIVE_HOST");
     let out = command
         .output()
         .map_err(|e| format!("Could not start gentle-shell: {e}"))?;

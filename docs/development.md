@@ -84,28 +84,30 @@ Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`:
 
 | Variable | Where it is read | Effect |
 | --- | --- | --- |
-| `GENTLE_SHELL_BIN` | `pi-rpc/src/launch.rs` (`resolve_backend`), `home.rs` | Launcher to use. Normal order: `GENTLE_SHELL_BIN`, standalone install (`bundled_launcher`: `~/.gentle-shell/bin/gentle-shell`; on Windows `%LOCALAPPDATA%\gentle-shell\bin\gentle-shell.cmd` or `%USERPROFILE%\.gentle-shell-bundle\bin\gentle-shell.cmd`), `gentle-shell` on the combined PATH. If set, the config home is not derived from the standalone launcher. |
+| `GENTLE_SHELL_BIN` | `pi-rpc/src/launch.rs` (`resolve_backend`), `home.rs` | Launcher to use. Normal order: `GENTLE_SHELL_BIN`, standalone install (`bundled_launcher`: `~/.gentle-shell/bin/gentle-shell`; on Windows `%LOCALAPPDATA%\gentle-shell\bin\gentle-shell.cmd`, `%USERPROFILE%\.gentle-shell-bundle\bin\gentle-shell.cmd`, then gentle-ai's managed `%LOCALAPPDATA%\gentle-shell\install\bin\gentle-shell.cmd`), `gentle-shell` on the combined PATH. If set, the config home is not derived from the standalone launcher. Pointing it at the managed install's binding or its WindowsApps shim still starts that install's Node. |
 | `GENTLE_SHELL_ARGS` | `launch.rs` (`extra_args`, `split_args`), `home.rs` | Options before `--mode rpc`, separated by spaces; `"…"` or `'…'` keep a path with spaces in one argument, and backslashes stay literal: `--link`, `--isolated`, `--home "<dir>"`. They also decide which home the app uses for `auth.json` and config. |
 | `GENTLE_SHELL_HOME` | `home.rs` | Isolated home (default `~/.gentle-shell/agent`). |
 | `GENTLE_SHELL_USER_PI_HOME`, `PI_CODING_AGENT_DIR` | `home.rs` | Pi home for `--link` (default `~/.pi/agent`). |
 | `GENTLE_PI_CONFIG_HOME` | `home.rs` (`config_home`) | Wins over any other Gentle Shell config folder. |
-| `GENTLE_SHELL_CONFIG` | `pi-rpc/src/home.rs` (`launcher_config_path`), used by `resolve_homes`, `features/updates/` and `features/setup/gentle.rs` | Path to the launcher's `config.json` when set and non-empty, like the launcher's `resolveConfigPath` (default `~/.gentle-shell/config.json`). |
+| `GENTLE_SHELL_CONFIG` | `pi-rpc/src/home.rs` (`launcher_config_path`), used by `resolve_homes`, `features/updates/` and `features/setup/gentle.rs` | Path to the launcher's `config.json` when set and non-empty, like the launcher's `resolveConfigPath` (default `~/.gentle-shell/config.json`). gentle-ai's managed install replaces it with its `config\gentle-shell.json`. |
 | `GENTLE_PI_BACKGROUND_SUBAGENTS` | `features/settings/snapshot.rs` | Source of the background subagents policy shown in Settings. |
 | `GENTLE_SHELL_GENTLE_AI_PIN` | `features/setup/gentle.rs` | Gentle AI pin used by the setup check. |
 | `ENGRAM_URL`, `ENGRAM_PORT`, `ENGRAM_HTTP_TOKEN` | `features/memory/client.rs` | Engram server (default port `7437`). |
 | `ENGRAM_BIN` | `features/setup/extras.rs` | Engram binary for the check. |
-| `SHELL` | `launch.rs` (`login_shell_path`), `features/terminal/mod.rs` | Login shell whose PATH is combined, and the shell for terminal panels. |
+| `SHELL` | `launch.rs` (`login_shell_path`), `features/terminal/mod.rs` | Login shell whose PATH is combined (Unix), and the shell for terminal panels. |
+| `GOBIN`, `GOPATH` | `launch.rs` (`go_bin_dir`) | Where `go install` puts programs (default `~/go/bin`), added at the end of the combined PATH when it exists. |
 | `HOME` / `USERPROFILE` | `home.rs` (`home_dir`), `dirs` | Base of all homes and, on macOS/Linux, of the data dir. |
 
-The app always passes `GENTLE_SHELL_INTERACTIVE_HOST=1` and the combined `PATH` to the backend (`LaunchSpec.env`). The rest of the environment (provider keys, `GENTLE_SHELL_NO_AUTO_SETUP`, …) is inherited.
+The app always passes `GENTLE_SHELL_INTERACTIVE_HOST=1` and the combined `PATH` to the backend (`LaunchSpec.env`), plus, for gentle-ai's managed install, the environment its supervisor would set (`docs/integrations.md`). The rest of the environment (provider keys, `GENTLE_SHELL_NO_AUTO_SETUP`, …) is inherited.
 
 ### Child process PATH
 
-An app launched from Finder or a `.desktop` file inherits a minimal PATH, without nvm/fnm/mise. That is why `pi-rpc` (`launch.rs`, `search_path`) builds its own PATH:
+An app launched from Finder or a `.desktop` file inherits a minimal PATH, without nvm/fnm/mise; on Windows it inherits the PATH of whatever launched it, which misses what an installer added since. That is why `pi-rpc` (`launch.rs`, `search_path`) builds its own PATH:
 
 1. Extra directories registered by the app (`pi_rpc::set_extra_path`, called by `setup::apply_toolchain_path` at startup and before each check).
-2. The PATH of an interactive login shell: `$SHELL -l -i -c "printf '__GENTLE_PATH_START__%s__GENTLE_PATH_END__' \"$PATH\""`, with a 5 s timeout (Unix only).
-3. The inherited PATH, without duplicates.
+2. The login PATH (`login_path`): on Unix, an interactive login shell's, `$SHELL -l -i -c "printf '__GENTLE_PATH_START__%s__GENTLE_PATH_END__' \"$PATH\""`, with a 5 s timeout; on Windows, the machine's and the user's `Path` saved in the registry (`reg query`, `%VARIABLES%` expanded).
+3. The inherited PATH.
+4. The `go install` folder (`GOBIN`, `GOPATH\bin` or `~/go/bin`) when it exists, without duplicates.
 
 It is cached until `pi_rpc::forget_cached()`. Every child process that needs the user's tools must use `pi_rpc::child_path()` and be created with `pi_rpc::command` (on Windows it adds `CREATE_NO_WINDOW`).
 
@@ -314,7 +316,8 @@ It runs `generate.py` (SVG), `render.swift` (PNG in several sizes), `iconutil` (
 | `gentle-shell was not found on your PATH` | `resolve_backend` found no launcher. Install `gentle-pi`, or set `GENTLE_SHELL_BIN`. |
 | Node is not found when launched from Finder/`.desktop` | The app inherits a minimal PATH. Check that your login shell (`$SHELL -l -i`) exports the nvm/fnm/mise PATH and responds in under 5 s; extra output does not matter (it is trimmed between markers). After installing something, `pi_rpc::forget_cached()` recomputes the PATH. |
 | Profiles, model routes or permissions stopped applying after updating Gentle Shell to 4.7 | The standalone install reads its config from `<prefix>/config/gentle-ai`, not from `~/.gentle-shell/gentle-ai`. `main.rs` calls `pi_rpc::adopt_standalone_config()` at startup: it copies what is missing once (does not overwrite; leaves the `.adopted-standalone-config` marker) and reports on `stderr`. |
-| A global `gentle-pi` on the PATH is not used | The standalone install (`bundled_launcher`) wins unless you set `GENTLE_SHELL_BIN`. |
+| A global `gentle-pi` on the PATH is not used | The standalone install, or on Windows gentle-ai's managed install (`bundled_launcher`), wins unless you set `GENTLE_SHELL_BIN`. |
+| Windows: Setup offers "Open terminal" with `gentle-ai` for Gentle Shell | The app runs gentle-ai's managed install (`%LOCALAPPDATA%\gentle-shell\install`), which gentle-ai updates and repairs: run `gentle-ai` and use its Gentle Shell screens. |
 | The welcome screen appears on every launch | `onboarding.done` is missing from `settings.json` in the data dir (normal with a temporary `HOME`). |
 | The app does not offer or does not install an update | Not offered: development version (`is_dev`), 6 h cache in `app-update.json`, skipped version, or the latest release is a prerelease. Not installed: binary outside a `.app` (macOS) or under `target/` (`install_target`). |
 | Signing in to or out of a provider restarts the tabs | The backend only reads credentials at startup; this is intentional (README, Providers). |

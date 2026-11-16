@@ -32,9 +32,13 @@ fn user_pi_home() -> PathBuf {
 
 /// The launcher's `config.json`, where `gentle-shell home` persists the mode:
 /// `GENTLE_SHELL_CONFIG` when set and non-empty, like the launcher's own
-/// `resolveConfigPath`, else `~/.gentle-shell/config.json`.
+/// `resolveConfigPath`, else `~/.gentle-shell/config.json`. gentle-ai's
+/// managed install sets its own (`<root>\config\gentle-shell.json`).
 pub fn launcher_config_path() -> PathBuf {
-    config_path_in(std::env::var_os("GENTLE_SHELL_CONFIG"), &home_dir())
+    match crate::launch::chosen_managed_install() {
+        Some(managed) => managed.config_file(),
+        None => config_path_in(std::env::var_os("GENTLE_SHELL_CONFIG"), &home_dir()),
+    }
 }
 
 fn config_path_in(over: Option<std::ffi::OsString>, home: &Path) -> PathBuf {
@@ -48,9 +52,10 @@ fn config_path_in(over: Option<std::ffi::OsString>, home: &Path) -> PathBuf {
 /// it depends on is this process's environment.
 static HOMES: Mutex<Option<(Option<Stamp>, Homes)>> = Mutex::new(None);
 
-/// Order: `--link`, `--isolated`, `--home <dir>` (from `GENTLE_SHELL_ARGS`),
-/// then `~/.gentle-shell/config.json`, then the isolated default. Cached
-/// until that config file changes.
+/// Order: gentle-ai's managed install (its own homes, whatever the app
+/// inherited), then `--link`, `--isolated`, `--home <dir>` (from
+/// `GENTLE_SHELL_ARGS`), then `~/.gentle-shell/config.json`, then the
+/// isolated default. Cached until that config file changes.
 pub fn resolve_homes() -> Homes {
     memo_by_stamp(&HOMES, &launcher_config_path(), resolve_homes_uncached)
 }
@@ -74,6 +79,9 @@ fn memo_by_stamp<T: Clone>(
 }
 
 fn resolve_homes_uncached() -> Homes {
+    if let Some(managed) = crate::launch::chosen_managed_install() {
+        return managed.homes();
+    }
     let args = extra_args();
     let isolated = || {
         std::env::var_os("GENTLE_SHELL_HOME")
@@ -219,9 +227,9 @@ fn read_config_mode() -> Option<ConfigMode> {
 pub fn pi_package(spec: &LaunchSpec) -> Option<PathBuf> {
     let launcher = dunce::canonicalize(&spec.program).unwrap_or_else(|_| spec.program.clone());
     let mut roots: Vec<PathBuf> = Vec::new();
-    // Self-contained install (4.7): the launcher is a generated script.
-    if let Some(bundled) = crate::launch::bundled_install(&spec.program) {
-        roots.push(bundled.package);
+    // A self-contained or managed install names its package.
+    if let Some(bundled) = &spec.bundled {
+        roots.push(bundled.package.clone());
     }
     // Unix: the npm bin is a symlink into <gentle-pi>/bin/.
     if let Some(root) = launcher.parent().and_then(Path::parent) {
@@ -393,8 +401,11 @@ mod tests {
             // Windows: `current` is a file naming the active version.
             write("current", "4.7.0-1.5.0\r\n");
         }
+        let program = prefix.join(launcher);
         let spec = LaunchSpec {
-            program: prefix.join(launcher),
+            bundled: crate::launch::bundled_install(&program),
+            launcher: program.clone(),
+            program,
             args: Vec::new(),
             cwd: prefix.clone(),
             env: Vec::new(),
@@ -413,7 +424,7 @@ mod tests {
             ),
         ] {
             let (prefix, spec) = bundled_prefix(windows);
-            let bundled = crate::launch::bundled_install(&spec.program).expect("bundled install");
+            let bundled = spec.bundled.clone().expect("bundled install");
             assert_eq!(bundled.node, prefix.join(node));
             let pi = prefix
                 .join(version)

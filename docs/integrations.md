@@ -33,20 +33,22 @@ Common rule: every child process is created with `pi_rpc::command` (never `std::
 Program lookup order:
 
 1. `GENTLE_SHELL_BIN`, if not empty.
-2. `bundled_launcher()`: the self-contained Gentle Shell install (4.7, the one created by its installer and by `gentle-shell upgrade`). It wins over a global npm `gentle-pi` left on the PATH.
+2. `bundled_launcher()`: Gentle Shell installed in its own folder, the self-contained install (4.7, the one created by its installer and by `gentle-shell upgrade`) or, on Windows, gentle-ai's managed install. It wins over a global npm `gentle-pi` left on the PATH.
 3. `gentle-shell` on the combined PATH (`which::which_in` with `search_path()`).
 
-If nothing is found, the error asks for `npm i -g gentle-pi` or `GENTLE_SHELL_BIN`.
+If nothing is found, the error asks for `npm i -g gentle-pi` or `GENTLE_SHELL_BIN`. Whichever launcher is found, `launch_spec` checks whether it belongs to gentle-ai's managed install (see below) and then starts that install's Node instead.
 
-`LaunchSpec { program, args, cwd, env }`:
+`LaunchSpec { program, args, cwd, env, launcher, bundled }`:
 
 | Field | Value |
 | --- | --- |
-| `args` | `GENTLE_SHELL_ARGS` split by `split_args()` (spaces separate; `"…"`/`'…'` keep spaces; backslashes literal), then `--mode rpc` |
-| `env` | `GENTLE_SHELL_INTERACTIVE_HOST=1` (enables `ask_user_question` dialogs and live helper activity) and `PATH` = combined PATH |
+| `args` | `GENTLE_SHELL_ARGS` split by `split_args()` (spaces separate; `"…"`/`'…'` keep spaces; backslashes literal), then `--mode rpc`. Managed install: its `gentle-shell.mjs` instead of `GENTLE_SHELL_ARGS`. |
+| `env` | `GENTLE_SHELL_INTERACTIVE_HOST=1` (enables `ask_user_question` dialogs and live helper activity) and `PATH` = combined PATH. Managed install: also its own environment (see below). |
 | `cwd` | The tab's folder |
+| `launcher` | The `gentle-shell` command a person runs: what Settings shows and messages name. `program`, except for the managed install (its `bin\gentle-shell.cmd`). |
+| `bundled` | `BundledInstall { node, package, managed }` of a self-contained or managed install; `None` for npm/pnpm. `managed_by_gentle_ai()` reads `managed`. |
 
-Launcher subcommands reuse the same `LaunchSpec`, but take only the arguments before `--mode` (`spec.args.iter().take_while(|a| *a != "--mode")`) and append their own: `upgrade` (`settings/upgrade.rs`), `install`/`remove` (`settings/packages.rs`), `setup` (`setup/gentle.rs`, `launcher_command`).
+Launcher subcommands go through `spec.launcher_command(sub)`: the same program, the arguments before `--mode`, then `sub`, in `cwd` with `env`. Used by `--version` (`run_version`), `upgrade` (`settings/upgrade.rs`, `setup/gentle.rs`), `install`/`remove` (`setup::run_gentle_shell`), `setup` (`setup/gentle.rs`), `mcp` (`setup/maestro.rs`) and the commit message (`files/changes.rs`, `--print`).
 
 ### Self-contained install
 
@@ -55,9 +57,9 @@ Launcher subcommands reuse the same `LaunchSpec`, but take only the arguments be
 | OS | Launcher |
 | --- | --- |
 | macOS and Linux | `~/.gentle-shell/bin/gentle-shell` |
-| Windows | `%LOCALAPPDATA%\gentle-shell\bin\gentle-shell.cmd`, then `%USERPROFILE%\.gentle-shell-bundle\bin\gentle-shell.cmd` |
+| Windows | `%LOCALAPPDATA%\gentle-shell\bin\gentle-shell.cmd`, then `%USERPROFILE%\.gentle-shell-bundle\bin\gentle-shell.cmd`, then gentle-ai's managed install, `%LOCALAPPDATA%\gentle-shell\install\bin\gentle-shell.cmd` |
 
-`bundled_install(launcher) -> Option<BundledInstall { node, package }>` recognizes the generated script by the `BUNDLED_LAUNCHER_MARK` marker (`"gentle-shell bundled launcher (generated; do not edit)"`) and derives the layout:
+`bundled_install(launcher) -> Option<BundledInstall { node, package, managed: false }>` recognizes the generated script by the `BUNDLED_LAUNCHER_MARK` marker (`"gentle-shell bundled launcher (generated; do not edit)"`) and derives the layout:
 
 ```text
 <prefix>/
@@ -68,22 +70,44 @@ Launcher subcommands reuse the same `LaunchSpec`, but take only the arguments be
 └── config/gentle-ai              # config folder (see Homes)
 ```
 
-It is used by `pi_package` (to find `@earendil-works/pi-coding-agent`) and by `LoginHelper::spawn` (to use the install's own Node).
+`resolve_backend` stores it in `spec.bundled`, which `pi_package` (to find `@earendil-works/pi-coding-agent`), `profiles::gentle_pi_root`, `version_output` and `LoginHelper::spawn` (to use the install's own Node) read.
+
+### gentle-ai's managed install (Windows)
+
+The `gentle-ai` TUI installs Gentle Shell on Windows as one folder (its "Separate" install, gentle-ai `internal/shellinstaller`), always `%LOCALAPPDATA%\gentle-shell\install`:
+
+```text
+<root>/
+├── bin/gentle-shell.cmd     # "<root>\supervisor.exe" shell launch "<root>" gentle-shell %*
+├── supervisor.exe           # gentle-ai's launcher: checks the folder, then starts Node
+├── manifest.json, selection.json, main.json (Main channel only)
+├── runtime/node/node.exe    # its Node (runtime/go, runtime/codegraph beside it)
+├── prefix/node_modules/gentle-pi/bin/gentle-shell.mjs
+├── agent/                   # Pi's agent dir (GENTLE_SHELL_HOME, PI_CODING_AGENT_DIR)
+├── config/                  # Gentle AI config (GENTLE_PI_CONFIG_HOME) and gentle-shell.json (GENTLE_SHELL_CONFIG)
+└── home/, state/, tmp/      # HOME/USERPROFILE, LOCALAPPDATA, TEMP of its processes
+```
+
+It also publishes `%LOCALAPPDATA%\Microsoft\WindowsApps\gentle-shell.cmd` (on the PATH), a shim that only does `call "<root>\bin\gentle-shell.cmd" %*`.
+
+`managed_install(launcher)` recognizes the binding or that shim (`shim_target`, `supervisor_root`: pure parsers of the two `.cmd` files) and requires `supervisor.exe`, `manifest.json`, the Node and `gentle-shell.mjs` in the folder. The app does not launch through the supervisor: it builds its environment from scratch (`userWindowsLaunchEnvironment`), so `GENTLE_SHELL_INTERACTIVE_HOST` and the app's PATH would never reach Gentle Shell (no Gentle Desktop), and it forwards everything after `--` to Pi, so `--version`, `setup` or `upgrade` would not reach the launcher. Instead `program` is `runtime\node\node.exe`, `args` start with `gentle-shell.mjs`, and `ManagedInstall::env` mirrors gentle-ai's `userWindowsEnvironment(root)`: `HOME`/`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `TEMP`/`TMP`, `GENTLE_PI_CONFIG_HOME`, `PI_CODING_AGENT_DIR`, `GENTLE_PI_AGENT_HOME`, `GENTLE_SHELL_HOME`, `GENTLE_SHELL_CONFIG`, `GENTLE_PI_NO_SKILL_REGISTRY`, the Go and npm variables, `NODE_USE_SYSTEM_CA`, and `PATH` = its `runtime\node`, `runtime\go\bin`, `runtime\codegraph\bin`, then the combined PATH. The rest of the app's environment is inherited. Not reproduced: the supervisor's integrity check, its Job Object and its shared-Engram decision (Gentle Shell's own Engram handling applies, as with any other install).
+
+gentle-ai is what updates and repairs this install, so for it (`managed_by_gentle_ai`): Setup & requirements turns the Gentle Shell and Companion setup fixes into "Open terminal" with `gentle-ai`, reports Node.js and Go as provided by the install, and Settings offers no `gentle-shell upgrade` (nor writes the update check into its `config\gentle-shell.json`, which gentle-ai verifies). Gentle AI itself is the package-local `gentle-pi\.gentle-ai\v<pin>\gentle-ai.exe`; the Companion setup check reads its pin from that package and the provisioning marker from `config\gentle-shell.json`.
 
 ### Combined PATH
 
 | Function | What it does |
 | --- | --- |
-| `login_shell_path()` (Unix only) | Runs `$SHELL -l -i -c "printf '__GENTLE_PATH_START__%s__GENTLE_PATH_END__' \"$PATH\""` with a 5 s limit; the markers isolate the value from whatever the rc files print (nvm, fnm, mise). On Windows it returns `None`. |
-| `base_path()` | Login shell PATH first, then the inherited one without duplicates. Computed once (`BASE_PATH`). |
+| `login_path()` | The PATH a session started now would get. Unix: `login_shell_path()` runs `$SHELL -l -i -c "printf '__GENTLE_PATH_START__%s__GENTLE_PATH_END__' \"$PATH\""` with a 5 s limit; the markers isolate the value from whatever the rc files print (nvm, fnm, mise). Windows: `registry_path()` reads the machine's and then the user's saved `Path` with `reg query` (5 s each, `reg_value`) and expands their `%VARIABLES%` (`expand_vars`), so a folder an installer added after the app (or what launched it) started is found. |
+| `base_path()` | Login PATH first, then the inherited one, then `go_bin_dir()` (`GOBIN`, else the first `GOPATH` entry's `bin`, else `~/go/bin`; where `go install` puts `gentle-ai` or `engram`) when it exists, without duplicates. Computed once (`BASE_PATH`). |
 | `set_extra_path(dirs)` | Folders that go before everything else. `setup::apply_toolchain_path` puts the toolchains installed by the app here (`<data dir>/gentle-shell-gpui/toolchain/{node,npm-global,bin,maestro/bin,music/bin}` and the Java runtime's `bin`), plus the Android SDK's `emulator` and `platform-tools` when an SDK is installed (`devices::android_tool_dirs`: Android Studio doesn't put them on the PATH, so an agent asked to start an emulator wouldn't find them). |
 | `search_path()` / `child_path()` | Extra + base. This is the PATH every child receives. |
-| `find_program(name)`, `resolve_node(cwd)` | Lookup on that PATH. |
+| `find_program(name)`, `resolve_node(cwd)` | Lookup on that PATH (`which`, with `PATHEXT` on Windows: `.exe`, `.cmd`, …). |
 | `forget_cached()` | Forgets the login PATH and the cached `--version` outputs; call it after installing something. |
 
 ### Backend version
 
-`version_output(spec)` runs `<launcher> --version` and caches it per launcher, invalidating when the `Stamp` of the launcher file or of `~/.gentle-shell/config.json` changes. `backend_version` extracts the `gentle-shell X.Y.Z` line. `forget_versions()` is used after `gentle-shell upgrade`.
+`version_output(spec)` runs `<launcher> --version` (`launcher_command`) and caches it per launcher, invalidating when the `Stamp` of the launcher file (for a self-contained or managed install, its `gentle-pi`'s `package.json`) or of the launcher config (`launcher_config_path`) changes. `backend_version` extracts the `gentle-shell X.Y.Z` line. `forget_versions()` is used after `gentle-shell upgrade`.
 
 ### `pi_rpc::command`
 
@@ -91,9 +115,11 @@ On Windows it adds `CREATE_NO_WINDOW` (`0x0800_0000`): without it, every console
 
 ## Homes: `crates/pi-rpc/src/home.rs`
 
-`resolve_homes() -> Homes { agent, config }` replicates gentle-pi's `resolveHome` (`lib/gentle-shell-launcher.ts`). It is cached until the `Stamp` of `~/.gentle-shell/config.json` changes.
+`resolve_homes() -> Homes { agent, config }` replicates gentle-pi's `resolveHome` (`lib/gentle-shell-launcher.ts`). It is cached until the `Stamp` of the launcher config (`launcher_config_path()`: `GENTLE_SHELL_CONFIG` or `~/.gentle-shell/config.json`) changes.
 
-`agent` (the Pi directory: `auth.json`, `models.json`, `settings.json`, `sessions/`), in order:
+gentle-ai's managed install, when it is the launcher chosen without the PATH (`GENTLE_SHELL_BIN` or its own folder, `chosen_managed_install`), fixes both, whatever the app inherited, as its launch environment does: `agent` = `<root>\agent`, `config` = `<root>\config` (not `config\gentle-ai`: it sets `GENTLE_PI_CONFIG_HOME`), and the launcher config is `<root>\config\gentle-shell.json`. A managed install reached only through the PATH is launched correctly but these homes do not follow it; gentle-ai only installs it in its own folder.
+
+Otherwise, `agent` (the Pi directory: `auth.json`, `models.json`, `settings.json`, `sessions/`), in order:
 
 | Source | Result | Isolated? |
 | --- | --- | --- |
@@ -371,7 +397,7 @@ App paths: `dirs::data_dir()/gentle-shell-gpui/` (on macOS, `~/Library/Applicati
 
 ### Provider sign-in (`crates/pi-rpc/src/login.rs`)
 
-Pi has no RPC login command. `LoginHelper::spawn(spec, homes)` writes `login-helper.mjs` (embedded with `include_str!`) to the temp directory as `gentle-shell-gpui-login-<version>.mjs` and runs it with Node: the one from the self-contained install (`bundled_install`) or `resolve_node`. Arguments: the script and the Pi package (`pi_package`); environment: `PI_CODING_AGENT_DIR=<agent>` and the combined PATH. The helper uses Pi's `ModelRuntime.login` and writes `auth.json` itself.
+Pi has no RPC login command. `LoginHelper::spawn(spec, homes)` writes `login-helper.mjs` (embedded with `include_str!`) to the temp directory as `gentle-shell-gpui-login-<version>.mjs` and runs it with Node: the one from the self-contained or managed install (`spec.bundled`) or `resolve_node`. Arguments: the script and the Pi package (`pi_package`); environment: `PI_CODING_AGENT_DIR=<agent>` and the combined PATH. The helper uses Pi's `ModelRuntime.login` and writes `auth.json` itself.
 
 Its own JSONL protocol: the app sends `list`, `login` (`provider`, `authType: oauth|api_key`), `logout`, `response` (`id`, `value`), `cancel_prompt`, `cancel`; it receives `ready`, `providers`, `prompt` (`text`, `secret`, `select`, `manual_code`), `prompt_dismissed`, `event` (`info`, `auth_url`, `device_code`, `progress`), `done`, `error`. The UI is in `features/providers/`. After a change, the window calls `reload_models` on every tab: a backend only reads credentials at startup.
 

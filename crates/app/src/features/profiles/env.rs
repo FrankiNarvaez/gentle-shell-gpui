@@ -36,7 +36,7 @@ impl Env {
             .unwrap_or_else(|| PathBuf::from("."));
         let package_root = pi_rpc::resolve_backend(&cwd)
             .ok()
-            .and_then(|spec| gentle_pi_root(&spec.program));
+            .and_then(|spec| gentle_pi_root(&spec));
         Self {
             cwd,
             agent_home: homes.agent,
@@ -66,11 +66,13 @@ impl Env {
     }
 }
 
-/// `<gentle-pi>` from the launcher: `<gentle-pi>/bin/gentle-shell.mjs`, or the
-/// Windows shim beside `node_modules/gentle-pi`.
-pub(crate) fn gentle_pi_root(program: &Path) -> Option<PathBuf> {
+/// `<gentle-pi>` for a launch: the package a self-contained or managed
+/// install runs, else from the launcher: `<gentle-pi>/bin/gentle-shell.mjs`,
+/// or the Windows shim beside `node_modules/gentle-pi`.
+pub(crate) fn gentle_pi_root(spec: &pi_rpc::LaunchSpec) -> Option<PathBuf> {
+    let program = spec.program.as_path();
     let launcher = dunce::canonicalize(program).unwrap_or_else(|_| program.to_path_buf());
-    let mut roots = Vec::new();
+    let mut roots: Vec<PathBuf> = spec.bundled.iter().map(|b| b.package.clone()).collect();
     if let Some(root) = launcher.parent().and_then(Path::parent) {
         roots.push(root.to_path_buf());
     }
