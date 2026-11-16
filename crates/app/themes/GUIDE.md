@@ -38,6 +38,10 @@ the `background` key.
 - `previews/<stem>.txt`: the theme, when it was rendered, the frame cost
   (average and worst ms), commands and points per frame, the frame rate it
   will run at, and the error with its line if the scene failed.
+- `previews/<stem>.grid.png` (a theme with a picture): the picture with a
+  labeled 0.1 grid and its effect regions outlined and numbered.
+- `previews/<stem>.effects.png` (a picture with effects): each effect's
+  region at four moments a quarter cycle apart, one row per effect.
 - `scene-error.txt` appears here when the active theme's scene fails, with
   the error and the line; it goes away once the scene draws.
 
@@ -239,36 +243,78 @@ animation frames, glow, reflections, and near and far versions for depth.
 
 Shapes drawn in code look like illustrations, however careful. When the
 user wants something realistic (a photo, a painting, a film still), the
-picture has to come from them, and the scene brings it to life:
+picture has to come from them, and the theme makes its own pixels move, the
+way Wallpaper Engine does. Skip the examples folder for this: those are
+drawn scenes.
 
-1. Ask the user for an image (png, jpg or webp; wide, at least 1920 px; a
-   GIF already moves). Copy it beside the theme and name it in `image`.
-2. Look at it before writing anything: where the light sources are (windows,
-   lamps, sun, moon), what could move (smoke, water, leaves, clouds, fog,
-   fireflies, snow, rain), its palette, and where the calm middle falls.
-   Write that down as image coordinates, 0–1 across and down.
-3. Add a `camera` (subtle) and pick `bg`, `text` and `accent` from the
-   picture's own colors, so the UI belongs to it.
-4. Draw only what the picture lacks, pinned to it with
-   `const [x, y] = g.fromImage(u, v)` so it stays put while the camera
-   moves; size it by `g.image.w` so it scales with the picture:
-   - a window or lantern that flickers: a `glow` in the picture's light
-     color, alpha breathing with `noise(t * 2)`, never a hard blink;
-   - smoke from a chimney: a column of soft, growing, fading `glow`s or
-     ellipses drifting with `fbm`, rising from the chimney's point;
-   - mist over water or a valley: wide, faint ellipses sliding slowly in
-     two or three layers;
-   - fireflies, snow, rain, falling petals or leaves: particles whose size,
-     speed and alpha shrink with distance, colored from the picture.
-5. Match the picture: same light direction and color, nothing brighter than
-   its brightest part, nothing sharper than its own detail. Effects should
-   be discovered, not announced; if an effect is the first thing you see in
-   the preview, it is too strong.
+1. Ask the user for an image (png, jpg or webp; wide, at least 1920 px).
+   Copy it beside the theme and write a first theme with just `image`,
+   `"veil": 0.1` and `"dim": 0`: the picture is the hero, don't bury it.
+2. A few seconds later, open `previews/<stem>.grid.png`: the picture with a
+   labeled 0.1 grid. Read every coordinate off it (0–1 across, 0–1 down):
+   each waterfall, river, cloud bank, tree crown, window, chimney.
+3. Add `effects` on the picture's own pixels (below): `flow` for anything
+   that runs (falling water, rivers, clouds, fog banks), `sway` for anything
+   the wind moves (tree crowns, grass, flags). This is what makes it alive.
+4. Look at `grid.png` again (each region outlined and numbered) and at
+   `previews/<stem>.effects.png` (each region at four moments a quarter
+   cycle apart: if the four look the same, the effect is too weak). Fix
+   regions that spill onto rock, buildings or sky.
+5. Add a subtle `camera`, take `bg`, `text` and `accent` from the picture's
+   own colors, and only then a scene for what the picture lacks (below).
+6. Check `previews/<stem>.txt`: effects cost frame time; keep it at 24 fps.
+
+### Effects on the picture
+
+```json
+"effects": [
+  { "type": "flow", "region": [[0.51, 0.68], [0.57, 0.68], [0.57, 0.88], [0.51, 0.88]],
+    "direction": [0, 1], "speed": 0.8, "strength": 0.025 },
+  { "type": "sway", "region": [[0.0, 0.0], [0.22, 0.0], [0.2, 0.12], [0.0, 0.2]],
+    "strength": 0.002, "speed": 0.25, "scale": 10 }
+]
+```
+
+- `region`: a polygon in picture coordinates, 3 to 64 points. Keep it tight
+  around what moves: everything inside moves with it, so a flow region that
+  takes in rock or a building smears them. Several thin regions (one per
+  stream of water) beat one big box. Up to 16 effects.
+- `feather`: how soft the region's edge is, as a share of the picture width
+  (0–0.06, default 0.008). Wider for clouds and fog, narrow for water.
+- `flow`: the region's content slides along `direction` (`[0, 1]` is down,
+  `[-1, 0]` left; a slanted fall is `[0.4, 1]`) and loops without a seam.
+  `speed` is cycles per second (falling water 0.6–1.2, a river 0.3–0.6,
+  clouds 0.02–0.06); `strength` is how far one cycle travels, as a share of
+  the picture height (water 0.015–0.04, clouds 0.03–0.08).
+- `sway`: the region ripples in place like leaves in wind. `strength` is
+  the reach, as a share of the picture width (0.001–0.004; more looks like
+  jelly), `speed` sways per second (0.15–0.5), `scale` how many waves cross
+  the region (5–30: more for finer foliage), `ratio` how much of it is
+  vertical (default 0.3).
+- Cost: each region renders up to about 120,000 pixels per frame, no finer
+  than the window shows the picture. Big regions cost the most.
+
+### A scene on a picture
+
+Draw only what the picture lacks, pinned to it with
+`const [x, y] = g.fromImage(u, v)` so it stays put while the camera moves,
+sized by `g.image.w` so it scales with the picture:
+
+- a window or lantern that flickers: a `glow` in the picture's light color,
+  alpha breathing with `noise(t * 2)` between about 0.3 and 0.6;
+- spray where water lands, smoke from a chimney: soft, growing, fading
+  `glow`s or ellipses drifting with `fbm` (alpha 0.15–0.35);
+- fireflies, snow, rain, falling petals or leaves: particles whose size,
+  speed and alpha shrink with distance, colored from the picture.
+
+Match the picture: same light direction and color, nothing brighter than
+its brightest part, nothing sharper than its own detail. But make it seen:
+an effect at alpha 0.05 is invisible on a busy painting.
 
 In a scene, `g.image` is `{ x, y, w, h }` (where the picture is this frame,
 camera included) or `null` without an image, and `g.fromImage(u, v)`
-returns the window point of the picture point (u, v). A theme with an image
-and a camera but no scene of its own still moves.
+returns the window point of the picture point (u, v). A theme with a
+picture and a camera or effects, but no scene of its own, still moves.
 
 ## Design
 

@@ -37,6 +37,8 @@ pub struct Backdrop {
     pub image_size: Option<(f32, f32)>,
     /// A slow camera over the image (`camera`); `None` holds it still.
     pub camera: Option<Camera>,
+    /// Effects on the image's own pixels (`effects`), in the order drawn.
+    pub effects: Vec<Effect>,
     /// Top to bottom; empty for none.
     pub sky: Vec<u32>,
     /// Seconds of scene time per second: 0 holds it still, at most 16.
@@ -48,6 +50,88 @@ pub struct Backdrop {
     /// How much the middle of the window, where the conversation is, is
     /// calmed toward the background (the sides stay lively), 0 to 1.
     pub veil: f32,
+}
+
+/// An effect on a region of the picture itself, the way Wallpaper Engine's
+/// Water Flow and Foliage Sway move a painting's own water and leaves.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Effect {
+    pub kind: EffectKind,
+    /// The region, a polygon in image coordinates (0–1 across, 0–1 down).
+    pub region: Vec<(f32, f32)>,
+    /// How soft the region's edge is, as a share of the image width.
+    pub feather: f32,
+    /// Cycles (flow) or sways (sway) per second of scene time.
+    pub speed: f32,
+    /// How far it moves: flow's travel per cycle as a share of the image
+    /// height, sway's reach as a share of the image width.
+    pub strength: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EffectKind {
+    /// The region's content keeps sliding along `direction` (image axes,
+    /// normalized) and loops seamlessly: falling water, a river, clouds.
+    Flow { direction: (f32, f32) },
+    /// The region's content ripples in place: leaves, grass, banners.
+    /// `scale` is how many waves cross the region; `ratio` how much of the
+    /// movement is vertical.
+    Sway { scale: f32, ratio: f32 },
+}
+
+/// At most this many effects, and points per region.
+const MAX_EFFECTS: usize = 16;
+const MAX_POINTS: usize = 64;
+
+fn effect(value: &Value) -> Option<Effect> {
+    let get = |key: &str| value.get(key).and_then(Value::as_f64).map(|n| n as f32);
+    let pair = |value: &Value| -> Option<(f32, f32)> {
+        let a = value.as_array()?;
+        Some((a.first()?.as_f64()? as f32, a.get(1)?.as_f64()? as f32))
+    };
+    let region: Vec<(f32, f32)> = value
+        .get("region")?
+        .as_array()?
+        .iter()
+        .take(MAX_POINTS)
+        .filter_map(pair)
+        .map(|(u, v)| (u.clamp(0., 1.), v.clamp(0., 1.)))
+        .collect();
+    if region.len() < 3 {
+        return None;
+    }
+    let (kind, speed, strength) = match value.get("type").and_then(Value::as_str)? {
+        "flow" => {
+            let (x, y) = value.get("direction").and_then(pair).unwrap_or((0., 1.));
+            let length = x.hypot(y);
+            if length < 1e-3 {
+                return None;
+            }
+            (
+                EffectKind::Flow {
+                    direction: (x / length, y / length),
+                },
+                get("speed").unwrap_or(0.6).clamp(0.02, 4.),
+                get("strength").unwrap_or(0.02).clamp(0.001, 0.15),
+            )
+        }
+        "sway" => (
+            EffectKind::Sway {
+                scale: get("scale").unwrap_or(12.).clamp(1., 80.),
+                ratio: get("ratio").unwrap_or(0.3).clamp(0., 2.),
+            },
+            get("speed").unwrap_or(0.35).clamp(0.02, 3.),
+            get("strength").unwrap_or(0.003).clamp(0.0002, 0.03),
+        ),
+        _ => return None,
+    };
+    Some(Effect {
+        kind,
+        region,
+        feather: get("feather").unwrap_or(0.008).clamp(0., 0.06),
+        speed,
+        strength,
+    })
 }
 
 /// A slow camera over the background image, the "Ken Burns" move that makes
@@ -254,11 +338,18 @@ pub fn parse(
                 focus: (at(0), at(1)),
             }
         });
+    let effects = background
+        .get("effects")
+        .filter(|_| image_size.is_some())
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(effect).take(MAX_EFFECTS).collect())
+        .unwrap_or_default();
     Some(Backdrop {
         scene,
         image: image.map(Arc::new),
         image_size,
         camera,
+        effects,
         sky,
         speed: number("speed").unwrap_or(1.).clamp(0., 16.),
         cell: number("cell").unwrap_or(22.).clamp(10., 40.),

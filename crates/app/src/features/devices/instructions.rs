@@ -46,9 +46,10 @@ similar examples in `{examples}`, then write the theme (and its scene) into `{di
 after each save, look at `{previews}/<stem>.png` (four moments of the scene) and read \
 `{previews}/<stem>.txt` (frame cost, frame rate, errors); fix and repeat until it looks good and runs \
 at full rate. If the active theme's scene fails, `{error}` says why. Shapes drawn in code look like \
-illustrations: when the user wants something realistic, ask them for a picture and animate it (the \
-guide's \"Realistic themes start from a picture\"). Tell the user to pick the theme in Configuration › \
-Theme › Animated backgrounds.
+illustrations: when the user wants something realistic, ask them for a picture and make its own pixels \
+move with `effects` (water flowing, leaves swaying), reading coordinates off `{previews}/<stem>.grid.png` \
+(the guide's \"Realistic themes start from a picture\"). Tell the user to pick the theme in \
+Configuration › Theme › Animated backgrounds.
 ",
         guide = dir.join("GUIDE.md").display(),
         examples = dir.join("examples").display(),

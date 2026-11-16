@@ -6,6 +6,7 @@
 //! The scene moves only while the window is focused, and holds still with
 //! reduced motion or a speed of 0.
 
+mod effects;
 pub mod model;
 pub mod preview;
 mod scene;
@@ -125,10 +126,13 @@ pub fn scene_error(theme: &str) -> Option<String> {
         .map(|(_, e)| e.clone())
 }
 
-/// The scene running for this window, and what it was started from.
+/// The scene running for this window, and what it was started from; and
+/// the latest frame's effect patches as images (dropped from GPUI's atlas
+/// when the next frame replaces them).
 #[derive(Default)]
 struct Slot {
     running: Option<(Arc<str>, String, Scene)>,
+    patches: Option<(usize, Vec<Arc<RenderImage>>)>,
 }
 
 /// How much a theme's scene moves, the person's choice in Configuration ›
@@ -213,22 +217,24 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
 
     // Kept while the layer renders, so the scene stops with the window or the theme.
     let slot = window.use_keyed_state("theme-backdrop", cx, |_, _| Slot::default());
-    // A camera moves the image on the scene's clock, so a camera without a
-    // scene still runs one that draws nothing.
+    // A camera or effects move the image on the scene's clock, so they run
+    // a scene that draws nothing when the theme has none.
     let natural = backdrop.image.as_ref().and(backdrop.image_size);
+    let picture_moves = backdrop.camera.is_some() || !backdrop.effects.is_empty();
     let code = backdrop
         .scene
         .as_ref()
         .map(|s| s.code.clone())
-        .or_else(|| (backdrop.camera.is_some() && natural.is_some()).then(|| STILL.clone()));
+        .or_else(|| (picture_moves && natural.is_some()).then(|| STILL.clone()));
     let scene = code.as_ref().map(|code| {
         let key = format!(
-            "{}|{}|{}|{:?}|{:?}",
+            "{}|{}|{}|{:?}|{:?}|{:?}",
             model::scene_colors(&theme),
             backdrop.cell,
             backdrop.speed,
             natural,
-            backdrop.camera
+            backdrop.camera,
+            backdrop.effects
         );
         slot.update(cx, |slot, _| {
             let same = slot
@@ -243,6 +249,11 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                     speed: backdrop.speed,
                     colors: model::scene_colors(&theme),
                     image: natural.map(|size| (size, backdrop.camera)),
+                    effects: backdrop
+                        .image
+                        .clone()
+                        .filter(|_| !backdrop.effects.is_empty())
+                        .map(|image| (image, backdrop.effects.clone())),
                 });
                 slot.running = Some((code.clone(), key, started));
             }
@@ -261,6 +272,7 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     let veil = backdrop.veil;
     let bg = theme.bg;
     let size_slot = slot.clone();
+    let patch_slot = slot.clone();
     // With a scene running, the image is painted where each frame puts it,
     // so what the scene draws on it stays on it as the camera moves.
     let framed_image = backdrop
@@ -336,6 +348,9 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                         );
                         let _ =
                             window.paint_image(bounds, at, Corners::default(), image, index, false);
+                        if let Some(frame) = frame.as_ref().filter(|f| f.size == size) {
+                            paint_patches(frame, at, bounds, &patch_slot, window, cx);
+                        }
                         if dim > 0. {
                             window.paint_quad(fill(bounds, color(f64::from(bg), f64::from(dim))));
                         }
@@ -362,8 +377,67 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     Some(layer.into_any_element())
 }
 
-/// An empty scene: it runs the camera over an image when there's no scene.
+/// An empty scene: it runs the camera and effects over an image when the
+/// theme has no scene of its own.
 static STILL: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("SCENES.still = {};"));
+
+/// Paint `frame`'s effect patches over the picture drawn at `picture`. Each
+/// frame's patches become images once; the previous frame's are dropped
+/// from GPUI's atlas, so a moving effect doesn't fill it.
+fn paint_patches(
+    frame: &Arc<scene::Frame>,
+    picture: Bounds<Pixels>,
+    clip: Bounds<Pixels>,
+    slot: &Entity<Slot>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if frame.patches.is_empty() {
+        return;
+    }
+    let key = Arc::as_ptr(frame) as usize;
+    let (images, stale) = slot.update(cx, |slot, _| {
+        if let Some((at, images)) = &slot.patches
+            && *at == key
+        {
+            return (images.clone(), Vec::new());
+        }
+        let images: Vec<Arc<RenderImage>> = frame
+            .patches
+            .iter()
+            .filter_map(|patch| {
+                let buffer = image::RgbaImage::from_raw(
+                    patch.width,
+                    patch.height,
+                    patch.bgra.as_ref().clone(),
+                )?;
+                Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
+            })
+            .collect();
+        let stale = slot
+            .patches
+            .replace((key, images.clone()))
+            .map(|(_, old)| old)
+            .unwrap_or_default();
+        (images, stale)
+    });
+    for old in stale {
+        let _ = window.drop_image(old);
+    }
+    let (x, y) = (f32::from(picture.origin.x), f32::from(picture.origin.y));
+    let (w, h) = (
+        f32::from(picture.size.width),
+        f32::from(picture.size.height),
+    );
+    for (patch, image) in frame.patches.iter().zip(images) {
+        let [u0, v0, u1, v1] = patch.rect;
+        let at = Bounds::new(
+            point(px(x + u0 * w), px(y + v0 * h)),
+            gpui_kit::size(px((u1 - u0) * w), px((v1 - v0) * h)),
+        );
+        let _ = window.paint_image(clip, at, Corners::default(), image, 0, false);
+    }
+}
 
 /// The frame of an animated image (a GIF) to show now, by the wall clock,
 /// and how long until the next one; a still image is frame 0, for good.

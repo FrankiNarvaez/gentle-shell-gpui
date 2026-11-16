@@ -16,6 +16,8 @@ use base64::Engine as _;
 use gpui_kit::ImageFormat;
 use resvg::{tiny_skia, usvg};
 
+use super::effects::{Effects, Patch, Picture};
+use super::model::EffectKind;
 use super::model::image_rect;
 use super::scene::{Engine, STRIDE, pace};
 use super::subpaths;
@@ -41,17 +43,26 @@ pub struct Look {
     pub report: String,
 }
 
-/// Draw `theme`'s scene (or its image's camera), or `None` when it has neither.
+/// Draw `theme`'s scene (or its picture's camera and effects), or `None`
+/// when it has neither.
 pub fn render(theme: &Theme) -> Option<Look> {
     let backdrop = theme.background.as_ref()?;
     let natural = backdrop.image.as_ref().and(backdrop.image_size);
+    let picture_moves = backdrop.camera.is_some() || !backdrop.effects.is_empty();
     let (name, code) = match &backdrop.scene {
         Some(scene) => (scene.name.as_str(), scene.code.clone()),
-        None if backdrop.camera.is_some() && natural.is_some() => {
-            ("none (the image's camera only)", super::STILL.clone())
-        }
+        None if picture_moves && natural.is_some() => (
+            "none (the picture's camera and effects only)",
+            super::STILL.clone(),
+        ),
         None => return None,
     };
+    let mut effects = backdrop
+        .image
+        .as_ref()
+        .filter(|_| !backdrop.effects.is_empty())
+        .and_then(|image| Picture::decode(&image.bytes))
+        .map(|picture| Effects::new(picture, &backdrop.effects));
     let mut report = format!(
         "Theme: {}\nScene: {name}\nRendered: {}\n",
         theme.name,
@@ -68,6 +79,13 @@ pub fn render(theme: &Theme) -> Option<Look> {
                 ),
                 None => "no camera".to_string(),
             }
+        );
+    }
+    if !backdrop.effects.is_empty() {
+        let _ = writeln!(
+            report,
+            "Effects: {} on the picture; see <stem>.effects.png for each one at four moments a quarter cycle apart.",
+            backdrop.effects.len()
         );
     }
     let colors = super::model::scene_colors(theme);
@@ -95,7 +113,15 @@ pub fn render(theme: &Theme) -> Option<Look> {
             empty.push(t);
         }
         busiest = busiest.max((shapes, points.len() / 2));
-        let svg = frame_svg(theme, &commands, &points, image);
+        let shown = match (image, natural) {
+            (Some(rect), Some((iw, _))) => rect[2] / iw,
+            _ => 1.,
+        };
+        let patches = effects
+            .as_mut()
+            .map(|e| e.render(t, shown))
+            .unwrap_or_default();
+        let svg = frame_svg(theme, &commands, &points, image, &patches);
         match rasterize(&svg) {
             Ok(tile) => tiles.push(tile),
             Err(error) => {
@@ -104,7 +130,11 @@ pub fn render(theme: &Theme) -> Option<Look> {
             }
         }
     }
-    let costs = timed(&engine);
+    let shown = match natural {
+        Some((iw, ih)) => image_rect(WINDOW, (iw, ih), backdrop.camera.as_ref(), 20.)[2] / iw,
+        None => 1.,
+    };
+    let costs = timed(&engine, effects.as_mut(), shown);
     let average = costs.iter().sum::<Duration>() / costs.len().max(1) as u32;
     let worst = costs.iter().max().copied().unwrap_or_default();
     let interval = pace(average, Duration::ZERO);
@@ -152,11 +182,14 @@ pub fn render(theme: &Theme) -> Option<Look> {
 /// The folder previews are written to, inside the app's themes folder.
 pub const FOLDER: &str = "previews";
 
-/// Keep `<dir>/previews/<stem>.png` and `.txt` current for every app theme
-/// in `themes` that has a scene. A theme is drawn again when it differs from
-/// the one drawn last (`drawn`, kept by the caller across calls) or, for
-/// one not drawn since the app started, when its files are newer than its
-/// preview. Runs on a background thread: a preview takes about a second.
+/// Keep the previews of every app theme in `themes` current, in
+/// `<dir>/previews/`: `<stem>.png` and `.txt` for a theme with a scene (or
+/// a moving picture), `<stem>.grid.png` for a theme with a picture (its
+/// coordinates and effect regions) and `<stem>.effects.png` for its effects
+/// in motion. A theme is drawn again when it differs from the one drawn
+/// last (`drawn`, kept by the caller across calls) or, for one not drawn
+/// since the app started, when its files are newer than its preview. Runs
+/// on a background thread: a preview takes about a second.
 pub fn refresh(themes: &[Theme], dir: &std::path::Path, drawn: &mut HashMap<String, Theme>) {
     let out = dir.join(FOLDER);
     for theme in themes {
@@ -166,19 +199,18 @@ pub fn refresh(themes: &[Theme], dir: &std::path::Path, drawn: &mut HashMap<Stri
         let Some(backdrop) = theme.background.as_ref() else {
             continue;
         };
-        // The camera alone (no scene) is previewed too.
-        let moving_image = backdrop.camera.is_some() && backdrop.image_size.is_some();
-        if backdrop.scene.is_none() && !moving_image {
+        let picture = backdrop
+            .image
+            .as_ref()
+            .filter(|_| backdrop.image_size.is_some());
+        if backdrop.scene.is_none() && picture.is_none() {
             continue;
         }
         if file.parent() != Some(dir) || drawn.get(&theme.name) == Some(theme) {
             continue;
         }
         let stem = super::model::file_stem(&theme.name);
-        let (png, txt) = (
-            out.join(format!("{stem}.png")),
-            out.join(format!("{stem}.txt")),
-        );
+        let path = |suffix: &str| out.join(format!("{stem}{suffix}"));
         let modified =
             |path: &std::path::Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
         let scene_file = backdrop
@@ -189,36 +221,186 @@ pub fn refresh(themes: &[Theme], dir: &std::path::Path, drawn: &mut HashMap<Stri
             .chain(scene_file)
             .filter_map(|p| modified(&p))
             .max();
+        let marker = if picture.is_some() {
+            path(".grid.png")
+        } else {
+            path(".txt")
+        };
         let current = !drawn.contains_key(&theme.name)
-            && modified(&txt).is_some_and(|at| newest_input.is_none_or(|input| at >= input));
-        if !current {
-            let Some(look) = render(theme) else { continue };
-            if std::fs::create_dir_all(&out).is_err() {
-                return;
-            }
-            match &look.png {
-                Some(bytes) => {
-                    let _ = std::fs::write(&png, bytes);
-                }
-                None => {
-                    let _ = std::fs::remove_file(&png);
-                }
-            }
-            let _ = std::fs::write(&txt, &look.report);
-        }
+            && modified(&marker).is_some_and(|at| newest_input.is_none_or(|input| at >= input));
         drawn.insert(theme.name.clone(), theme.clone());
+        if current || std::fs::create_dir_all(&out).is_err() {
+            continue;
+        }
+        let write = |suffix: &str, bytes: Option<Vec<u8>>| match bytes {
+            Some(bytes) => {
+                let _ = std::fs::write(path(suffix), bytes);
+            }
+            None => {
+                let _ = std::fs::remove_file(path(suffix));
+            }
+        };
+        if picture.is_some() {
+            write(".grid.png", coordinate_grid(theme));
+            write(".effects.png", effects_strip(theme));
+        }
+        match render(theme) {
+            Some(look) => {
+                write(".png", look.png);
+                let report = look.report.replace("<stem>", &stem);
+                write(".txt", Some(report.into_bytes()));
+            }
+            None => {
+                write(".png", None);
+                write(".txt", None);
+            }
+        }
     }
 }
 
-/// Time `TIMED` consecutive frames from t = 20 s.
-fn timed(engine: &Engine) -> Vec<Duration> {
+/// Time `TIMED` consecutive frames from t = 20 s, effects included (at the
+/// scale the preview shows the picture).
+fn timed(engine: &Engine, mut effects: Option<&mut Effects>, shown: f32) -> Vec<Duration> {
     (0..TIMED)
         .filter_map(|i| {
             let started = Instant::now();
-            engine.frame(WINDOW, 20. + i as f64 / 24., None).ok()?;
+            let t = 20. + i as f64 / 24.;
+            engine.frame(WINDOW, t, None).ok()?;
+            if let Some(effects) = effects.as_mut() {
+                effects.render(t, shown);
+            }
             Some(started.elapsed())
         })
         .collect()
+}
+
+/// The width the coordinate grid shows the picture at.
+const GRID_WIDTH: f32 = 1600.;
+
+/// The picture with a labeled 0.1 grid and its effect regions outlined and
+/// numbered, so an agent can read coordinates off it and check its regions.
+fn coordinate_grid(theme: &Theme) -> Option<Vec<u8>> {
+    let backdrop = theme.background.as_ref()?;
+    let image = backdrop.image.as_ref()?;
+    let (iw, ih) = backdrop.image_size?;
+    let (w, h) = (GRID_WIDTH, GRID_WIDTH * ih / iw);
+    let mut svg = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}">{}"#,
+        data_image(image, 0., 0., w, h)?
+    );
+    for i in 1..10 {
+        let k = i as f32 / 10.;
+        let (x, y) = (k * w, k * h);
+        let _ = write!(
+            svg,
+            r##"<line x1="{x}" y1="0" x2="{x}" y2="{h}" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1"/><line x1="0" y1="{y}" x2="{w}" y2="{y}" stroke="#ffffff" stroke-opacity="0.45" stroke-width="1"/><text x="{x}" y="16" font-size="14" text-anchor="middle" fill="#ffff00" stroke="#000000" stroke-width="3" paint-order="stroke">{k:.1}</text><text x="6" y="{y}" font-size="14" dominant-baseline="central" fill="#ffff00" stroke="#000000" stroke-width="3" paint-order="stroke">{k:.1}</text>"##
+        );
+    }
+    for (n, effect) in backdrop.effects.iter().enumerate() {
+        let color = match effect.kind {
+            EffectKind::Flow { .. } => "#00e5ff",
+            EffectKind::Sway { .. } => "#7dff5a",
+        };
+        let points: Vec<String> = effect
+            .region
+            .iter()
+            .map(|(u, v)| format!("{},{}", u * w, v * h))
+            .collect();
+        let count = effect.region.len() as f32;
+        let (cx, cy) = effect.region.iter().fold((0., 0.), |(x, y), (u, v)| {
+            (x + u * w / count, y + v * h / count)
+        });
+        let _ = write!(
+            svg,
+            r##"<polygon points="{}" fill="{color}" fill-opacity="0.12" stroke="{color}" stroke-width="2"/><text x="{cx}" y="{cy}" font-size="18" font-weight="bold" text-anchor="middle" dominant-baseline="central" fill="{color}" stroke="#000000" stroke-width="4" paint-order="stroke">{}</text>"##,
+            points.join(" "),
+            n + 1
+        );
+    }
+    svg.push_str("</svg>");
+    rasterize_at(&svg, (w as u32, h as u32), 1.)
+        .ok()?
+        .encode_png()
+        .ok()
+}
+
+/// Each effect's region at four moments a quarter cycle apart, side by
+/// side, one row per effect, so the motion shows in still pictures.
+fn effects_strip(theme: &Theme) -> Option<Vec<u8>> {
+    const ROW: f32 = 220.;
+    let backdrop = theme.background.as_ref()?;
+    if backdrop.effects.is_empty() {
+        return None;
+    }
+    let image = backdrop.image.as_ref()?;
+    let (iw, ih) = backdrop.image_size?;
+    let mut effects = Effects::new(Picture::decode(&image.bytes)?, &backdrop.effects);
+    let picture = data_image(image, 0., 0., iw, ih)?;
+    let mut rows = String::new();
+    let mut width = 0f32;
+    for (n, effect) in backdrop.effects.iter().enumerate() {
+        let quarter = 0.25 / f64::from(effect.speed);
+        let mut x = 40.;
+        let y = n as f32 * (ROW + 10.);
+        let _ = write!(
+            rows,
+            r##"<text x="20" y="{}" font-size="18" font-weight="bold" text-anchor="middle" dominant-baseline="central" fill="#ffff00">{}</text>"##,
+            y + ROW / 2.,
+            n + 1
+        );
+        for k in 0..4 {
+            let t = 20. + quarter * f64::from(k);
+            let Some(patch) = effects.render(t, 1.).into_iter().nth(n) else {
+                break;
+            };
+            let [u0, v0, u1, v1] = patch.rect;
+            let (pw, ph) = ((u1 - u0) * iw, (v1 - v0) * ih);
+            let dw = pw * ROW / ph;
+            // The region over the untouched picture, as the window shows it.
+            let _ = write!(
+                rows,
+                r#"<svg x="{x}" y="{y}" width="{dw}" height="{ROW}" viewBox="{} {} {pw} {ph}" preserveAspectRatio="none">{picture}{}</svg>"#,
+                u0 * iw,
+                v0 * ih,
+                patch_image(&patch, u0 * iw, v0 * ih, pw, ph)?
+            );
+            x += dw + 10.;
+        }
+        width = width.max(x);
+    }
+    let height = backdrop.effects.len() as f32 * (ROW + 10.);
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"><rect width="{width}" height="{height}" fill="#0c0c0e"/>{rows}</svg>"##
+    );
+    rasterize_at(&svg, (width as u32, height as u32), 1.)
+        .ok()?
+        .encode_png()
+        .ok()
+}
+
+/// The theme's picture as an SVG `<image>` at (x, y, w, h).
+fn data_image(image: &gpui_kit::Image, x: f32, y: f32, w: f32, h: f32) -> Option<String> {
+    let mime = mime(image.format)?;
+    let data = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
+    Some(format!(
+        r#"<image x="{x}" y="{y}" width="{w}" height="{h}" preserveAspectRatio="none" href="data:{mime};base64,{data}"/>"#
+    ))
+}
+
+/// An effect patch as an SVG `<image>` at (x, y, w, h).
+fn patch_image(patch: &Patch, x: f32, y: f32, w: f32, h: f32) -> Option<String> {
+    let mut rgba = patch.bgra.as_ref().clone();
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    let mut png = Vec::new();
+    image::RgbaImage::from_raw(patch.width, patch.height, rgba)?
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .ok()?;
+    let data = base64::engine::general_purpose::STANDARD.encode(png);
+    Some(format!(
+        r#"<image x="{x}" y="{y}" width="{w}" height="{h}" preserveAspectRatio="none" href="data:image/png;base64,{data}"/>"#
+    ))
 }
 
 /// The system fonts, loaded once: scenes draw glyphs in the app's monospace font.
@@ -229,20 +411,25 @@ static FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
 });
 
 fn rasterize(svg: &str) -> Result<tiny_skia::Pixmap, String> {
+    let size = (
+        (WINDOW.0 * TILE_SCALE) as u32,
+        (WINDOW.1 * TILE_SCALE) as u32,
+    );
+    rasterize_at(svg, size, TILE_SCALE)
+}
+
+/// `svg` drawn at `scale` into a `size` pixmap.
+fn rasterize_at(svg: &str, size: (u32, u32), scale: f32) -> Result<tiny_skia::Pixmap, String> {
     let options = usvg::Options {
         fontdb: FONTS.clone(),
         font_family: crate::shared::ui::MONO.to_string(),
         ..usvg::Options::default()
     };
     let tree = usvg::Tree::from_str(svg, &options).map_err(|e| e.to_string())?;
-    let (w, h) = (
-        (WINDOW.0 * TILE_SCALE) as u32,
-        (WINDOW.1 * TILE_SCALE) as u32,
-    );
-    let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or("no pixmap")?;
+    let mut pixmap = tiny_skia::Pixmap::new(size.0, size.1).ok_or("no pixmap")?;
     resvg::render(
         &tree,
-        tiny_skia::Transform::from_scale(TILE_SCALE, TILE_SCALE),
+        tiny_skia::Transform::from_scale(scale, scale),
         &mut pixmap.as_mut(),
     );
     Ok(pixmap)
@@ -363,7 +550,13 @@ fn escape(ch: char) -> String {
 
 /// One frame as the window shows it: background, sky, image (at `image`,
 /// `[x, y, w, h]`, when its size is known), the scene's commands, then the veil.
-fn frame_svg(theme: &Theme, commands: &[f64], points: &[f64], image: Option<[f32; 4]>) -> String {
+fn frame_svg(
+    theme: &Theme,
+    commands: &[f64],
+    points: &[f64],
+    image: Option<[f32; 4]>,
+    patches: &[Patch],
+) -> String {
     let (w, h) = WINDOW;
     let mut svg = Svg::default();
     let _ = write!(
@@ -400,6 +593,20 @@ fn frame_svg(theme: &Theme, commands: &[f64], points: &[f64], image: Option<[f32
                 svg.body,
                 r#"<image {place} href="data:{mime};base64,{data}"/>"#
             );
+            if let Some([x, y, iw, ih]) = image {
+                for patch in patches {
+                    let [u0, v0, u1, v1] = patch.rect;
+                    if let Some(tag) = patch_image(
+                        patch,
+                        x + u0 * iw,
+                        y + v0 * ih,
+                        (u1 - u0) * iw,
+                        (v1 - v0) * ih,
+                    ) {
+                        svg.body.push_str(&tag);
+                    }
+                }
+            }
             if backdrop.dim > 0. {
                 let _ = write!(
                     svg.body,

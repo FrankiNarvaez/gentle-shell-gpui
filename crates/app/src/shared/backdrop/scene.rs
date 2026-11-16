@@ -33,12 +33,14 @@ const CPU_SHARE: f64 = 0.08;
 const MAX_FAILURES: u32 = 3;
 
 /// One computed frame: `STRIDE` numbers per command, the x, y pairs its paths
-/// point into (`kit.js` documents both), and where the theme's image sits in
-/// it (`[x, y, w, h]`, moved by its camera), for a window of `size`.
+/// point into (`kit.js` documents both), where the theme's image sits in it
+/// (`[x, y, w, h]`, moved by its camera) and its effects' patches, for a
+/// window of `size`.
 pub struct Frame {
     pub commands: Vec<f64>,
     pub points: Vec<f64>,
     pub image: Option<[f32; 4]>,
+    pub patches: Vec<super::effects::Patch>,
     pub size: (f32, f32),
 }
 
@@ -84,6 +86,9 @@ pub struct Setup {
     /// The theme's image size and camera, so each frame places the image
     /// and the scene can draw on it (`g.image`, `g.fromImage`).
     pub image: Option<((f32, f32), Option<super::model::Camera>)>,
+    /// The image's bytes and its effects, decoded and prepared on the
+    /// scene's thread.
+    pub effects: Option<(Arc<gpui_kit::Image>, Vec<super::model::Effect>)>,
 }
 
 impl Scene {
@@ -259,6 +264,10 @@ impl Engine {
 
 fn run(shared: &Shared, setup: Setup) -> Result<(), String> {
     let engine = Engine::new(&setup.code, &setup.colors, setup.cell)?;
+    let mut effects = setup.effects.as_ref().and_then(|(image, effects)| {
+        let picture = super::effects::Picture::decode(&image.bytes)?;
+        Some(super::effects::Effects::new(picture, effects))
+    });
     let mut time = 0f64;
     let mut last = Instant::now();
     let mut failures = 0;
@@ -295,10 +304,20 @@ fn run(shared: &Shared, setup: Setup) -> Result<(), String> {
                     super::report(&setup.theme, None);
                 }
                 drawn = Some(size);
+                // Effects render no finer than the window shows the picture.
+                let shown = match (image, setup.image) {
+                    (Some(rect), Some(((natural, _), _))) => rect[2] / natural,
+                    _ => 1.,
+                };
+                let patches = effects
+                    .as_mut()
+                    .map(|e| e.render(time, shown))
+                    .unwrap_or_default();
                 *shared.frame.lock().unwrap() = Some(Arc::new(Frame {
                     commands,
                     points,
                     image,
+                    patches,
                     size,
                 }));
             }
