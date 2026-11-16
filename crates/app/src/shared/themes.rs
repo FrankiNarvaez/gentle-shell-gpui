@@ -704,8 +704,11 @@ impl Resolved {
 }
 
 /// Window transparency until the user moves the slider: clear enough for the
-/// desktop blur to show through every pane, as in Tern.
-pub const DEFAULT_TRANSPARENCY: f32 = 0.6;
+/// desktop blur to show through every pane, as in Tern. Linux compositors
+/// rarely blur behind a window (GPUI's X11 backend never does, Wayland only
+/// with a blur protocol), so the desktop would read through sharp: there the
+/// glass starts nearly solid.
+pub const DEFAULT_TRANSPARENCY: f32 = if cfg!(target_os = "linux") { 0.15 } else { 0.6 };
 
 /// The resolved active theme; Gentleman-Cute until [`init`] runs.
 static ACTIVE: LazyLock<RwLock<Resolved>> = LazyLock::new(|| {

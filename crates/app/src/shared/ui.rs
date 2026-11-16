@@ -813,6 +813,22 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
+    fn linux_default_keeps_glass_readable_without_desktop_blur() {
+        // Linux compositors rarely blur behind a window (X11 never does), so
+        // until the user moves the slider the desktop must not read through.
+        let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
+        let cute = catalog.iter().find(|t| t.name == "Gentleman-Cute").unwrap();
+        let p = Palette::new(cute, crate::shared::themes::DEFAULT_TRANSPARENCY);
+        for surface in [p.window_bg, p.panel, p.surface] {
+            assert!(
+                surface.a >= 0.8,
+                "{surface:?} lets the desktop show through"
+            );
+        }
+    }
+
+    #[test]
     fn oled_surfaces_stay_true_black_at_any_transparency() {
         let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
         let oled = catalog
