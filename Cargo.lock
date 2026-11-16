@@ -2215,6 +2215,7 @@ dependencies = [
  "pi-rpc",
  "raw-window-handle",
  "regex",
+ "resvg 0.46.0",
  "rquickjs",
  "serde",
  "serde_json",

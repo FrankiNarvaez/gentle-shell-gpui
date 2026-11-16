@@ -32,9 +32,11 @@ const CPU_SHARE: f64 = 0.08;
 /// Failed frames in a row before the scene is given up.
 const MAX_FAILURES: u32 = 3;
 
-/// One computed frame: `STRIDE` numbers per command, for a window of `size`.
+/// One computed frame: `STRIDE` numbers per command, the x, y pairs its paths
+/// point into (`kit.js` documents both), for a window of `size`.
 pub struct Frame {
     pub commands: Vec<f64>,
+    pub points: Vec<f64>,
     pub size: (f32, f32),
 }
 
@@ -57,7 +59,7 @@ struct Shared {
 
 /// How long to wait between frames of a scene that takes `cost` each, at
 /// least `floor`.
-fn pace(cost: Duration, floor: Duration) -> Duration {
+pub(super) fn pace(cost: Duration, floor: Duration) -> Duration {
     cost.div_f64(CPU_SHARE).clamp(FASTEST, SLOWEST).max(floor)
 }
 
@@ -212,8 +214,8 @@ impl Engine {
         );
     }
 
-    /// The commands for a `size` window at scene time `time`.
-    pub fn frame(&self, size: (f32, f32), time: f64) -> Result<Vec<f64>, String> {
+    /// The commands and path points for a `size` window at scene time `time`.
+    pub fn frame(&self, size: (f32, f32), time: f64) -> Result<(Vec<f64>, Vec<f64>), String> {
         self.arm(FRAME_BUDGET);
         self.context.with(|ctx| {
             let api: Object = ctx.globals().get("__api").map_err(|e| e.to_string())?;
@@ -221,19 +223,24 @@ impl Engine {
             let count = frame
                 .call::<_, f64>((size.0, size.1, time, self.cell))
                 .map_err(|e| js_error(&ctx, e))? as usize;
-            let out: Function = api.get("out").map_err(|e| e.to_string())?;
-            let buffer: TypedArray<f64> = out.call(()).map_err(|e| js_error(&ctx, e))?;
-            let bytes = buffer.arraybuffer().map_err(|e| e.to_string())?;
-            // SAFETY: no JS runs while `bytes` is borrowed, so nothing can
-            // detach or resize the buffer under it; it's copied right away.
-            let bytes = unsafe { bytes.as_bytes() }.ok_or("the frame buffer is gone")?;
-            let used = (count * STRIDE * 8).min(bytes.len());
-            Ok(bytes[..used]
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .map(|b| f64::from_ne_bytes(*b))
-                .collect())
+            let read = |name: &str, len: usize| -> Result<Vec<f64>, String> {
+                let get: Function = api.get(name).map_err(|e| e.to_string())?;
+                let buffer: TypedArray<f64> = get.call(()).map_err(|e| js_error(&ctx, e))?;
+                let bytes = buffer.arraybuffer().map_err(|e| e.to_string())?;
+                // SAFETY: no JS runs while `bytes` is borrowed, so nothing can
+                // detach or resize the buffer under it; it's copied right away.
+                let bytes = unsafe { bytes.as_bytes() }.ok_or("the frame buffer is gone")?;
+                let used = (len * 8).min(bytes.len());
+                Ok(bytes[..used]
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|b| f64::from_ne_bytes(*b))
+                    .collect())
+            };
+            let pairs: Function = api.get("pointCount").map_err(|e| e.to_string())?;
+            let pairs = pairs.call::<_, f64>(()).map_err(|e| js_error(&ctx, e))? as usize;
+            Ok((read("out", count * STRIDE)?, read("points", pairs * 2)?))
         })
     }
 }
@@ -267,13 +274,17 @@ fn run(shared: &Shared, setup: Setup) -> Result<(), String> {
             time = 20.;
         }
         match engine.frame(size, time) {
-            Ok(commands) => {
+            Ok((commands, points)) => {
                 failures = 0;
                 if drawn.is_none() {
                     super::report(&setup.theme, None);
                 }
                 drawn = Some(size);
-                *shared.frame.lock().unwrap() = Some(Arc::new(Frame { commands, size }));
+                *shared.frame.lock().unwrap() = Some(Arc::new(Frame {
+                    commands,
+                    points,
+                    size,
+                }));
             }
             Err(err) => {
                 failures += 1;
@@ -313,7 +324,7 @@ mod tests {
             let engine = Engine::new(code, COLORS, 22.).unwrap_or_else(|e| panic!("{name}: {e}"));
             for t in [0., 7.5, 31.] {
                 let started = Instant::now();
-                let commands = engine
+                let (commands, _) = engine
                     .frame((1440., 900.), t)
                     .unwrap_or_else(|e| panic!("{name} at {t}: {e}"));
                 assert!(commands.len() > STRIDE * 10, "{name} drew almost nothing");
@@ -352,7 +363,7 @@ mod tests {
         let probe = "SCENES.x = { draw(g) { g.text(0, 0, [typeof require, typeof fetch, \
             typeof setTimeout, typeof std, typeof os].join(','), '#fff') } }";
         let engine = Engine::new(probe, COLORS, 22.).unwrap();
-        let commands = engine.frame((100., 100.), 0.).unwrap();
+        let (commands, _) = engine.frame((100., 100.), 0.).unwrap();
         let text: String = commands
             .as_chunks::<STRIDE>()
             .0
@@ -363,5 +374,81 @@ mod tests {
             text,
             "undefined,undefined,undefined,undefined,undefined".replace(' ', "")
         );
+    }
+
+    /// The commands of one frame of `scene`, as (op, args) rows, and its points.
+    fn draw(scene: &str) -> (Vec<[f64; STRIDE]>, Vec<f64>) {
+        let engine = Engine::new(scene, COLORS, 22.).unwrap();
+        let (commands, points) = engine.frame((800., 600.), 1.).unwrap();
+        (commands.as_chunks::<STRIDE>().0.to_vec(), points)
+    }
+
+    #[test]
+    fn a_path_built_once_draws_where_the_transform_puts_it() {
+        // A unit square built at the top of the file, drawn twice: moved and
+        // scaled, then turned a quarter around the same spot.
+        let (commands, points) = draw(
+            "const SQUARE = path().rect(0, 0, 1, 1);
+             SCENES.x = { draw(g) {
+               g.save(); g.translate(100, 50); g.scale(10); SQUARE.fill('#fff'); g.restore();
+               g.translate(100, 50); g.rotate(Math.PI / 2); g.scale(10); SQUARE.stroke('#fff', 1, 2);
+             } }",
+        );
+        assert_eq!(commands.len(), 2);
+        let pairs = |c: &[f64; STRIDE]| {
+            let (start, count) = (c[1] as usize, c[2] as usize);
+            points[start * 2..(start + count) * 2]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|p| [p[0].round(), p[1]])
+                .map(|p| [p[0], if p[0].is_nan() { p[1] } else { p[1].round() }])
+                .collect::<Vec<_>>()
+        };
+        let fill = pairs(&commands[0]);
+        assert_eq!((commands[0][0], commands[0][3]), (7., 0.), "a fill");
+        assert_eq!(
+            &fill[..4],
+            &[[100., 50.], [110., 50.], [110., 60.], [100., 60.]]
+        );
+        assert!(fill[4][0].is_nan() && fill[4][1] == 1., "the square closes");
+        let stroke = pairs(&commands[1]);
+        assert_eq!(commands[1][3], 20., "the width scales with the shape");
+        assert_eq!(&stroke[..3], &[[100., 50.], [100., 60.], [90., 60.]]);
+    }
+
+    #[test]
+    fn shapes_under_a_turn_become_outlines_and_plain_ones_stay_quads() {
+        let (commands, _) = draw(
+            "SCENES.x = { draw(g) {
+               g.rect(0, 0, 10, 10, '#fff'); g.ellipse(5, 5, 4, 2, '#fff');
+               g.translate(20, 0); g.rect(0, 0, 10, 10, '#fff');
+               g.rotate(0.3); g.rect(0, 0, 10, 10, '#fff'); g.ellipse(5, 5, 4, 2, '#fff');
+             } }",
+        );
+        let ops: Vec<f64> = commands.iter().map(|c| c[0]).collect();
+        assert_eq!(ops, [1., 2., 1., 7., 7.]);
+        assert_eq!(
+            commands[2][1], 20.,
+            "a translated rect is still a quad, moved"
+        );
+    }
+
+    #[test]
+    fn noise_is_smooth_and_the_transform_resets_every_frame() {
+        let probe = "SCENES.x = { draw(g) {
+               const a = noise(1.30, 2.70, 0.5), b = noise(1.31, 2.70, 0.5);
+               const far = [0, 1, 2, 3, 4, 5, 6, 7].map(i => noise(i * 3.7, 1.1));
+               const spread = Math.max(...far) - Math.min(...far);
+               g.rect(0, 0, Math.abs(a - b) < 0.05 ? 1 : 0, spread > 0.3 ? 1 : 0, '#fff');
+               g.translate(500, 500);
+             } }";
+        let engine = Engine::new(probe, COLORS, 22.).unwrap();
+        for _ in 0..2 {
+            let (commands, _) = engine.frame((800., 600.), 0.).unwrap();
+            // Nearby inputs stay close, distant ones vary; a frame's
+            // translate doesn't carry into the next (x stays 0).
+            assert_eq!(&commands[..5], &[1., 0., 0., 1., 1.]);
+        }
     }
 }

@@ -39,6 +39,9 @@ tar = "0.4"
 fontdb = "0.23"
 lzma-rs = "0.3"
 rquickjs = "0.14.0"
+# Theme scene previews for agents: a frame's shapes as SVG, rasterized to PNG
+# (the same resvg GPUI draws icons with).
+resvg = { version = "0.46", default-features = false, features = ["text", "raster-images"] }
 
 # The X11 window icon (GPUI's `WindowOptions::icon`), and the in-app browser
 # for the Gentle Design canvas: WebKitGTK as a child of the X11 window (GTK's

@@ -7,6 +7,7 @@
 //! reduced motion or a speed of 0.
 
 pub mod model;
+pub mod preview;
 mod scene;
 
 use std::collections::HashMap;
@@ -305,7 +306,7 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                     // over shapes.
                     if let Some(frame) = &frame {
                         window.paint_layer(bounds, |window| {
-                            paint_frame(&frame.commands, bounds.origin, window, cx)
+                            paint_frame(&frame.commands, &frame.points, bounds.origin, window, cx)
                         });
                     }
                     if veil > 0. {
@@ -320,24 +321,25 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     Some(layer.into_any_element())
 }
 
-/// Calm the middle of the window, where the conversation is, toward the
-/// background, fading in from lively sides.
-fn paint_veil(bg: u32, veil: f32, bounds: Bounds<Pixels>, window: &mut Window) {
-    let w = bounds.size.width;
-    let calm = f64::from(veil) * 0.85;
-    // How calm at `u` (0 left, 1 right): clear at the sides, full in the
-    // middle, with smoothstep shoulders. A straight ramp meeting the flat
-    // middle shows a crease the eye reads as a line, so each shoulder is
-    // many short ramps along a curve whose slope fades to zero at both ends.
+/// How calm the veil is at `u` (0 left, 1 right): clear at the sides, full
+/// in the middle, with smoothstep shoulders. A straight ramp meeting the
+/// flat middle shows a crease the eye reads as a line, so each shoulder is
+/// many short ramps along a curve whose slope fades to zero at both ends.
+fn veil_alpha(veil: f32, u: f32) -> f64 {
     let shoulder = |t: f32| {
         let t = t.clamp(0., 1.);
         t * t * (3. - 2. * t)
     };
-    let alpha = |u: f32| {
-        let rise = shoulder((u - 0.1) / 0.26);
-        let fall = shoulder((0.9 - u) / 0.26);
-        calm * f64::from(rise.min(fall))
-    };
+    let rise = shoulder((u - 0.1) / 0.26);
+    let fall = shoulder((0.9 - u) / 0.26);
+    f64::from(veil) * 0.85 * f64::from(rise.min(fall))
+}
+
+/// Calm the middle of the window, where the conversation is, toward the
+/// background, fading in from lively sides.
+fn paint_veil(bg: u32, veil: f32, bounds: Bounds<Pixels>, window: &mut Window) {
+    let w = bounds.size.width;
+    let alpha = |u: f32| veil_alpha(veil, u);
     // Translucent bands meet edge to edge on whole pixels: any overlap
     // would draw twice and show as a darker line.
     let edge = |at: f32| (bounds.origin.x + w * at).round();
@@ -460,8 +462,28 @@ fn glyph(ch: char, size: f32, bold: bool, window: &mut Window) -> Option<Glyph> 
     shaped
 }
 
+/// The subpaths of a path command's `count` points from `start` (`kit.js`:
+/// each run of x, y pairs ends with a NaN pair, `1` when it closes), or
+/// nothing when the command points outside `points`.
+fn subpaths(points: &[f64], start: f64, count: f64) -> impl Iterator<Item = (&[[f64; 2]], bool)> {
+    let pairs = points.as_chunks::<2>().0;
+    let (start, count) = (start as usize, count as usize);
+    let run = pairs.get(start..start.saturating_add(count)).unwrap_or(&[]);
+    run.split_inclusive(|p| p[0].is_nan())
+        .map(|run| match run.split_last() {
+            Some((last, body)) if last[0].is_nan() => (body, last[1] != 0.),
+            _ => (run, false),
+        })
+}
+
 /// Paint a scene's frame (`kit.js` documents the commands).
-fn paint_frame(commands: &[f64], origin: Point<Pixels>, window: &mut Window, _: &mut App) {
+fn paint_frame(
+    commands: &[f64],
+    points: &[f64],
+    origin: Point<Pixels>,
+    window: &mut Window,
+    _: &mut App,
+) {
     let (ox, oy) = (f32::from(origin.x), f32::from(origin.y));
     let at = |x: f64, y: f64| point(px(ox + x as f32), px(oy + y as f32));
     for c in commands.as_chunks::<STRIDE>().0 {
@@ -539,6 +561,46 @@ fn paint_frame(commands: &[f64], origin: Point<Pixels>, window: &mut Window, _: 
                 path.line_to(at(c[3], c[4]));
                 if let Ok(path) = path.build() {
                     window.paint_path(path, color(c[6], c[7]));
+                }
+            }
+            // path: start, count, stroke width (0 fills), color, alpha
+            // path gradient: start, count, angle, from, to, from alpha, to alpha
+            7 | 8 => {
+                let gradient = c[0] as u32 == 8;
+                let width = if gradient { 0. } else { c[3] as f32 };
+                if !gradient && c[5] < 0.005 {
+                    continue;
+                }
+                let mut path = if width > 0. {
+                    PathBuilder::stroke(px(width))
+                } else {
+                    PathBuilder::fill()
+                };
+                for (run, closed) in subpaths(points, c[1], c[2]) {
+                    let [first, rest @ ..] = run else { continue };
+                    if rest.is_empty() {
+                        continue;
+                    }
+                    path.move_to(at(first[0], first[1]));
+                    for p in rest {
+                        path.line_to(at(p[0], p[1]));
+                    }
+                    if closed || width == 0. {
+                        path.close();
+                    }
+                }
+                let Ok(path) = path.build() else { continue };
+                if gradient {
+                    window.paint_path(
+                        path,
+                        linear_gradient(
+                            c[3] as f32,
+                            linear_color_stop(color(c[4], c[6]), 0.),
+                            linear_color_stop(color(c[5], c[7]), 1.),
+                        ),
+                    );
+                } else {
+                    window.paint_path(path, color(c[4], c[5]));
                 }
             }
             _ => {}
