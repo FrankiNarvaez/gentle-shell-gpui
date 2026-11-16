@@ -1055,7 +1055,17 @@ mod managed_tests {
     fn the_managed_install_runs_its_own_node_in_its_own_homes() {
         let layout = layout("launch");
         let root = &layout.root;
-        let cli = root.join("prefix/node_modules/gentle-pi/bin/gentle-shell.mjs");
+        // Joined part by part: the arguments are strings, compared with the
+        // platform's own separators.
+        let cli = [
+            "prefix",
+            "node_modules",
+            "gentle-pi",
+            "bin",
+            "gentle-shell.mjs",
+        ]
+        .iter()
+        .fold(root.clone(), |path, part| path.join(part));
         let inherited = std::env::join_paths([PathBuf::from("/usr/bin")]).unwrap();
         // Found on the PATH (the WindowsApps shim) or in its own folder (the
         // command binding): the same launch.
