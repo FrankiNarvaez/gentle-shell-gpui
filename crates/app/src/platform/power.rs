@@ -9,8 +9,8 @@ pub enum Power {
     Plugged,
     /// Running on its battery.
     Battery,
-    /// The person asked to save power: Low Power Mode (macOS) or battery
-    /// saver (Windows).
+    /// The person asked to save power: Low Power Mode (macOS), battery saver
+    /// (Windows) or the power-saver profile (Linux).
     Saving,
 }
 
@@ -67,8 +67,14 @@ mod imp {
 mod imp {
     use super::Power;
 
-    /// A battery that's discharging means no mains power.
+    /// The firmware's power-saver profile (what GNOME and KDE's power
+    /// profiles set) means saving power; a battery that's discharging means
+    /// no mains power.
     pub fn current() -> Power {
+        let profile = std::fs::read_to_string("/sys/firmware/acpi/platform_profile");
+        if profile.is_ok_and(|p| p.trim() == "low-power") {
+            return Power::Saving;
+        }
         let Ok(supplies) = std::fs::read_dir("/sys/class/power_supply") else {
             return Power::Plugged;
         };
