@@ -71,6 +71,13 @@ the `background` key.
     your own theme names its own file, `<stem>.js`.
   - `image`: an image file beside the theme, drawn to cover the window
     (animated GIFs play). `dim` (0–0.9) darkens it toward `bg`.
+  - `camera` (with an image): a slow "Ken Burns" move over it, so a still
+    picture feels filmed: `{"zoom": 0.06, "pan": 0.02, "period": 90,
+    "focus": [0.5, 0.5]}`. `zoom` (0–0.3) is how much further in it goes,
+    `pan` (0–0.15) how far it drifts sideways (a share of the window
+    width), `period` (10–900) the seconds per cycle, `focus` the image
+    point (0–1 across, 0–1 down) it moves toward. The image always covers
+    the window. Keep it subtle: zoom 0.04–0.1, pan 0.01–0.03, period 60–180.
   - `sky`: colors of a vertical gradient under everything, top to bottom.
   - `speed`: seconds of scene time per second (0 holds it still; up to 16).
   - `cell`: the ASCII cell size in pixels for cell scenes (default 22).
@@ -227,6 +234,41 @@ claude-desktop-themes' live wallpapers: their scene files work unchanged.
 `koi-pond` shows a `field` sprite whose body follows a moving spine (the
 tail beats, the fins paddle); `lantern-night` shows `art` sprites with
 animation frames, glow, reflections, and near and far versions for depth.
+
+## Realistic themes start from a picture
+
+Shapes drawn in code look like illustrations, however careful. When the
+user wants something realistic (a photo, a painting, a film still), the
+picture has to come from them, and the scene brings it to life:
+
+1. Ask the user for an image (png, jpg or webp; wide, at least 1920 px; a
+   GIF already moves). Copy it beside the theme and name it in `image`.
+2. Look at it before writing anything: where the light sources are (windows,
+   lamps, sun, moon), what could move (smoke, water, leaves, clouds, fog,
+   fireflies, snow, rain), its palette, and where the calm middle falls.
+   Write that down as image coordinates, 0–1 across and down.
+3. Add a `camera` (subtle) and pick `bg`, `text` and `accent` from the
+   picture's own colors, so the UI belongs to it.
+4. Draw only what the picture lacks, pinned to it with
+   `const [x, y] = g.fromImage(u, v)` so it stays put while the camera
+   moves; size it by `g.image.w` so it scales with the picture:
+   - a window or lantern that flickers: a `glow` in the picture's light
+     color, alpha breathing with `noise(t * 2)`, never a hard blink;
+   - smoke from a chimney: a column of soft, growing, fading `glow`s or
+     ellipses drifting with `fbm`, rising from the chimney's point;
+   - mist over water or a valley: wide, faint ellipses sliding slowly in
+     two or three layers;
+   - fireflies, snow, rain, falling petals or leaves: particles whose size,
+     speed and alpha shrink with distance, colored from the picture.
+5. Match the picture: same light direction and color, nothing brighter than
+   its brightest part, nothing sharper than its own detail. Effects should
+   be discovered, not announced; if an effect is the first thing you see in
+   the preview, it is too strong.
+
+In a scene, `g.image` is `{ x, y, w, h }` (where the picture is this frame,
+camera included) or `null` without an image, and `g.fromImage(u, v)`
+returns the window point of the picture point (u, v). A theme with an image
+and a camera but no scene of its own still moves.
 
 ## Design
 

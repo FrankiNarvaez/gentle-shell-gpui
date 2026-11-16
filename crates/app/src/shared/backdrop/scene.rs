@@ -33,10 +33,12 @@ const CPU_SHARE: f64 = 0.08;
 const MAX_FAILURES: u32 = 3;
 
 /// One computed frame: `STRIDE` numbers per command, the x, y pairs its paths
-/// point into (`kit.js` documents both), for a window of `size`.
+/// point into (`kit.js` documents both), and where the theme's image sits in
+/// it (`[x, y, w, h]`, moved by its camera), for a window of `size`.
 pub struct Frame {
     pub commands: Vec<f64>,
     pub points: Vec<f64>,
+    pub image: Option<[f32; 4]>,
     pub size: (f32, f32),
 }
 
@@ -79,6 +81,9 @@ pub struct Setup {
     pub speed: f32,
     /// The theme's colors, as a JSON object (`g.theme` in the scene).
     pub colors: String,
+    /// The theme's image size and camera, so each frame places the image
+    /// and the scene can draw on it (`g.image`, `g.fromImage`).
+    pub image: Option<((f32, f32), Option<super::model::Camera>)>,
 }
 
 impl Scene {
@@ -214,14 +219,21 @@ impl Engine {
         );
     }
 
-    /// The commands and path points for a `size` window at scene time `time`.
-    pub fn frame(&self, size: (f32, f32), time: f64) -> Result<(Vec<f64>, Vec<f64>), String> {
+    /// The commands and path points for a `size` window at scene time `time`,
+    /// with the theme's image at `image` (`[x, y, w, h]`), if it has one.
+    pub fn frame(
+        &self,
+        size: (f32, f32),
+        time: f64,
+        image: Option<[f32; 4]>,
+    ) -> Result<(Vec<f64>, Vec<f64>), String> {
         self.arm(FRAME_BUDGET);
         self.context.with(|ctx| {
             let api: Object = ctx.globals().get("__api").map_err(|e| e.to_string())?;
             let frame: Function = api.get("frame").map_err(|e| e.to_string())?;
+            let image = image.map(|rect| rect.to_vec());
             let count = frame
-                .call::<_, f64>((size.0, size.1, time, self.cell))
+                .call::<_, f64>((size.0, size.1, time, self.cell, image))
                 .map_err(|e| js_error(&ctx, e))? as usize;
             let read = |name: &str, len: usize| -> Result<Vec<f64>, String> {
                 let get: Function = api.get(name).map_err(|e| e.to_string())?;
@@ -273,7 +285,10 @@ fn run(shared: &Shared, setup: Setup) -> Result<(), String> {
             // A still scene shows a moment into it, not its empty start.
             time = 20.;
         }
-        match engine.frame(size, time) {
+        let image = setup.image.map(|(natural, camera)| {
+            super::model::image_rect(size, natural, camera.as_ref(), time)
+        });
+        match engine.frame(size, time, image) {
             Ok((commands, points)) => {
                 failures = 0;
                 if drawn.is_none() {
@@ -283,6 +298,7 @@ fn run(shared: &Shared, setup: Setup) -> Result<(), String> {
                 *shared.frame.lock().unwrap() = Some(Arc::new(Frame {
                     commands,
                     points,
+                    image,
                     size,
                 }));
             }
@@ -325,7 +341,7 @@ mod tests {
             for t in [0., 7.5, 31.] {
                 let started = Instant::now();
                 let (commands, _) = engine
-                    .frame((1440., 900.), t)
+                    .frame((1440., 900.), t, None)
                     .unwrap_or_else(|e| panic!("{name} at {t}: {e}"));
                 assert!(commands.len() > STRIDE * 10, "{name} drew almost nothing");
                 assert_eq!(commands.len() % STRIDE, 0);
@@ -343,7 +359,7 @@ mod tests {
         let endless = "SCENES.x = { draw() { for (;;) {} } }";
         let engine = Engine::new(endless, COLORS, 22.).unwrap();
         let started = Instant::now();
-        assert!(engine.frame((800., 600.), 0.).is_err());
+        assert!(engine.frame((800., 600.), 0., None).is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
 
         let broken = Engine::new("SCENES.x = { draw( }", COLORS, 22.)
@@ -363,7 +379,7 @@ mod tests {
         let probe = "SCENES.x = { draw(g) { g.text(0, 0, [typeof require, typeof fetch, \
             typeof setTimeout, typeof std, typeof os].join(','), '#fff') } }";
         let engine = Engine::new(probe, COLORS, 22.).unwrap();
-        let (commands, _) = engine.frame((100., 100.), 0.).unwrap();
+        let (commands, _) = engine.frame((100., 100.), 0., None).unwrap();
         let text: String = commands
             .as_chunks::<STRIDE>()
             .0
@@ -379,7 +395,7 @@ mod tests {
     /// The commands of one frame of `scene`, as (op, args) rows, and its points.
     fn draw(scene: &str) -> (Vec<[f64; STRIDE]>, Vec<f64>) {
         let engine = Engine::new(scene, COLORS, 22.).unwrap();
-        let (commands, points) = engine.frame((800., 600.), 1.).unwrap();
+        let (commands, points) = engine.frame((800., 600.), 1., None).unwrap();
         (commands.as_chunks::<STRIDE>().0.to_vec(), points)
     }
 
@@ -445,7 +461,7 @@ mod tests {
              } }";
         let engine = Engine::new(probe, COLORS, 22.).unwrap();
         for _ in 0..2 {
-            let (commands, _) = engine.frame((800., 600.), 0.).unwrap();
+            let (commands, _) = engine.frame((800., 600.), 0., None).unwrap();
             // Nearby inputs stay close, distant ones vary; a frame's
             // translate doesn't carry into the next (x stays 0).
             assert_eq!(&commands[..5], &[1., 0., 0., 1., 1.]);

@@ -107,6 +107,15 @@ const __g = {
   width: 0, height: 0, t: 0,
   /** Colors of the theme: bg, text, accent, muted, success, danger, warning, info. */
   theme: {},
+  /** Where the theme's image is this frame ({ x, y, w, h }, moved by its
+   *  camera), or null without one. */
+  image: null,
+  /** A point of the image (u, v from 0 to 1 across it) in window
+   *  coordinates, this frame: [x, y]. Without an image, of the window. */
+  fromImage(u, v) {
+    const m = this.image;
+    return m ? [m.x + u * m.w, m.y + v * m.h] : [u * this.width, v * this.height];
+  },
   rect(x, y, w, h, color, alpha = 1, radius = 0) {
     const [c, a] = __color(color);
     if (__plain) return __push(1, x, y, w, h, radius, c, __clamp(alpha * a), 0);
@@ -441,10 +450,11 @@ const __pick = () => {
   __scene = keys.length ? SCENES[keys[keys.length - 1]] : undefined;
   return !!__scene;
 };
-const __frame = (W, H, t, cell) => {
+const __frame = (W, H, t, cell, image) => {
   __n = 0; __np = 0;
   __g.resetTransform(); __saved.length = 0;
   __g.width = W; __g.height = H; __g.t = t;
+  __g.image = image ? { x: image[0], y: image[1], w: image[2], h: image[3] } : null;
   const most = typeof __scene.size === 'number' ? __scene.size : 22;
   CELL = Math.max(8, Math.min(cell, most));
   __glyphSize = Math.round(CELL * 13 / 22);

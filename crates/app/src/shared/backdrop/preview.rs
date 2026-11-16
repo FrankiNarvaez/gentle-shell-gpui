@@ -16,6 +16,7 @@ use base64::Engine as _;
 use gpui_kit::ImageFormat;
 use resvg::{tiny_skia, usvg};
 
+use super::model::image_rect;
 use super::scene::{Engine, STRIDE, pace};
 use super::subpaths;
 use crate::shared::themes::Theme;
@@ -40,18 +41,37 @@ pub struct Look {
     pub report: String,
 }
 
-/// Draw `theme`'s scene, or `None` when it has no scene.
+/// Draw `theme`'s scene (or its image's camera), or `None` when it has neither.
 pub fn render(theme: &Theme) -> Option<Look> {
     let backdrop = theme.background.as_ref()?;
-    let scene = backdrop.scene.as_ref()?;
+    let natural = backdrop.image.as_ref().and(backdrop.image_size);
+    let (name, code) = match &backdrop.scene {
+        Some(scene) => (scene.name.as_str(), scene.code.clone()),
+        None if backdrop.camera.is_some() && natural.is_some() => {
+            ("none (the image's camera only)", super::STILL.clone())
+        }
+        None => return None,
+    };
     let mut report = format!(
-        "Theme: {}\nScene: {}\nRendered: {}\n",
+        "Theme: {}\nScene: {name}\nRendered: {}\n",
         theme.name,
-        scene.name,
         utc_now()
     );
+    if let Some((w, h)) = natural {
+        let _ = writeln!(
+            report,
+            "Image: {w} x {h} px, {}.",
+            match &backdrop.camera {
+                Some(c) => format!(
+                    "camera zoom {} pan {} period {} s focus [{}, {}]",
+                    c.zoom, c.pan, c.period, c.focus.0, c.focus.1
+                ),
+                None => "no camera".to_string(),
+            }
+        );
+    }
     let colors = super::model::scene_colors(theme);
-    let engine = match Engine::new(&scene.code, &colors, backdrop.cell) {
+    let engine = match Engine::new(&code, &colors, backdrop.cell) {
         Ok(engine) => engine,
         Err(error) => {
             let _ = writeln!(report, "\nThe scene failed to load: {error}");
@@ -62,7 +82,8 @@ pub fn render(theme: &Theme) -> Option<Look> {
     let mut busiest = (0, 0);
     let mut empty = Vec::new();
     for t in MOMENTS {
-        let (commands, points) = match engine.frame(WINDOW, t) {
+        let image = natural.map(|n| image_rect(WINDOW, n, backdrop.camera.as_ref(), t));
+        let (commands, points) = match engine.frame(WINDOW, t, image) {
             Ok(frame) => frame,
             Err(error) => {
                 let _ = writeln!(report, "\nThe scene failed at t = {t} s: {error}");
@@ -70,11 +91,11 @@ pub fn render(theme: &Theme) -> Option<Look> {
             }
         };
         let shapes = commands.len() / STRIDE;
-        if shapes == 0 {
+        if shapes == 0 && backdrop.scene.is_some() {
             empty.push(t);
         }
         busiest = busiest.max((shapes, points.len() / 2));
-        let svg = frame_svg(theme, &commands, &points);
+        let svg = frame_svg(theme, &commands, &points, image);
         match rasterize(&svg) {
             Ok(tile) => tiles.push(tile),
             Err(error) => {
@@ -139,12 +160,17 @@ pub const FOLDER: &str = "previews";
 pub fn refresh(themes: &[Theme], dir: &std::path::Path, drawn: &mut HashMap<String, Theme>) {
     let out = dir.join(FOLDER);
     for theme in themes {
-        let (Some(file), Some(scene)) = (
-            theme.file.as_deref(),
-            theme.background.as_ref().and_then(|b| b.scene.as_ref()),
-        ) else {
+        let Some(file) = theme.file.as_deref() else {
             continue;
         };
+        let Some(backdrop) = theme.background.as_ref() else {
+            continue;
+        };
+        // The camera alone (no scene) is previewed too.
+        let moving_image = backdrop.camera.is_some() && backdrop.image_size.is_some();
+        if backdrop.scene.is_none() && !moving_image {
+            continue;
+        }
         if file.parent() != Some(dir) || drawn.get(&theme.name) == Some(theme) {
             continue;
         }
@@ -155,9 +181,13 @@ pub fn refresh(themes: &[Theme], dir: &std::path::Path, drawn: &mut HashMap<Stri
         );
         let modified =
             |path: &std::path::Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        let newest_input = [file.to_path_buf(), dir.join(format!("{}.js", scene.name))]
-            .iter()
-            .filter_map(|p| modified(p))
+        let scene_file = backdrop
+            .scene
+            .as_ref()
+            .map(|s| dir.join(format!("{}.js", s.name)));
+        let newest_input = std::iter::once(file.to_path_buf())
+            .chain(scene_file)
+            .filter_map(|p| modified(&p))
             .max();
         let current = !drawn.contains_key(&theme.name)
             && modified(&txt).is_some_and(|at| newest_input.is_none_or(|input| at >= input));
@@ -185,7 +215,7 @@ fn timed(engine: &Engine) -> Vec<Duration> {
     (0..TIMED)
         .filter_map(|i| {
             let started = Instant::now();
-            engine.frame(WINDOW, 20. + i as f64 / 24.).ok()?;
+            engine.frame(WINDOW, 20. + i as f64 / 24., None).ok()?;
             Some(started.elapsed())
         })
         .collect()
@@ -331,9 +361,9 @@ fn escape(ch: char) -> String {
     }
 }
 
-/// One frame as the window shows it: background, sky, image, the scene's
-/// commands, then the veil.
-fn frame_svg(theme: &Theme, commands: &[f64], points: &[f64]) -> String {
+/// One frame as the window shows it: background, sky, image (at `image`,
+/// `[x, y, w, h]`, when its size is known), the scene's commands, then the veil.
+fn frame_svg(theme: &Theme, commands: &[f64], points: &[f64], image: Option<[f32; 4]>) -> String {
     let (w, h) = WINDOW;
     let mut svg = Svg::default();
     let _ = write!(
@@ -356,13 +386,19 @@ fn frame_svg(theme: &Theme, commands: &[f64], points: &[f64]) -> String {
                 r#"<rect width="{w}" height="{h}" fill="url(#g{id})"/>"#
             );
         }
-        if let Some(image) = &backdrop.image
-            && let Some(mime) = mime(image.format)
+        if let Some(picture) = &backdrop.image
+            && let Some(mime) = mime(picture.format)
         {
-            let data = base64::engine::general_purpose::STANDARD.encode(&image.bytes);
+            let data = base64::engine::general_purpose::STANDARD.encode(&picture.bytes);
+            let place = match image {
+                Some([x, y, iw, ih]) => format!(
+                    r#"x="{x}" y="{y}" width="{iw}" height="{ih}" preserveAspectRatio="none""#
+                ),
+                None => format!(r#"width="{w}" height="{h}" preserveAspectRatio="xMidYMid slice""#),
+            };
             let _ = write!(
                 svg.body,
-                r#"<image width="{w}" height="{h}" preserveAspectRatio="xMidYMid slice" href="data:{mime};base64,{data}"/>"#
+                r#"<image {place} href="data:{mime};base64,{data}"/>"#
             );
             if backdrop.dim > 0. {
                 let _ = write!(

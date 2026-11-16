@@ -45,8 +45,10 @@ animated background or scene like falling petals, a koi pond, rain), first read 
 similar examples in `{examples}`, then write the theme (and its scene) into `{dir}`. A few seconds \
 after each save, look at `{previews}/<stem>.png` (four moments of the scene) and read \
 `{previews}/<stem>.txt` (frame cost, frame rate, errors); fix and repeat until it looks good and runs \
-at full rate. If the active theme's scene fails, `{error}` says why. Tell the user to pick the theme \
-in Configuration › Theme › Animated backgrounds.
+at full rate. If the active theme's scene fails, `{error}` says why. Shapes drawn in code look like \
+illustrations: when the user wants something realistic, ask them for a picture and animate it (the \
+guide's \"Realistic themes start from a picture\"). Tell the user to pick the theme in Configuration › \
+Theme › Animated backgrounds.
 ",
         guide = dir.join("GUIDE.md").display(),
         examples = dir.join("examples").display(),

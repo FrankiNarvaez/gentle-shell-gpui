@@ -11,7 +11,7 @@ pub mod preview;
 mod scene;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use gpui_kit::prelude::FluentBuilder as _;
@@ -213,27 +213,38 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
 
     // Kept while the layer renders, so the scene stops with the window or the theme.
     let slot = window.use_keyed_state("theme-backdrop", cx, |_, _| Slot::default());
-    let scene = backdrop.scene.as_ref().map(|code| {
+    // A camera moves the image on the scene's clock, so a camera without a
+    // scene still runs one that draws nothing.
+    let natural = backdrop.image.as_ref().and(backdrop.image_size);
+    let code = backdrop
+        .scene
+        .as_ref()
+        .map(|s| s.code.clone())
+        .or_else(|| (backdrop.camera.is_some() && natural.is_some()).then(|| STILL.clone()));
+    let scene = code.as_ref().map(|code| {
         let key = format!(
-            "{}|{}|{}",
+            "{}|{}|{}|{:?}|{:?}",
             model::scene_colors(&theme),
             backdrop.cell,
-            backdrop.speed
+            backdrop.speed,
+            natural,
+            backdrop.camera
         );
         slot.update(cx, |slot, _| {
             let same = slot
                 .running
                 .as_ref()
-                .is_some_and(|(c, k, _)| Arc::ptr_eq(c, &code.code) && *k == key);
+                .is_some_and(|(c, k, _)| Arc::ptr_eq(c, code) && *k == key);
             if !same {
                 let started = Scene::start(Setup {
                     theme: theme.name.clone(),
-                    code: code.code.clone(),
+                    code: code.clone(),
                     cell: backdrop.cell,
                     speed: backdrop.speed,
                     colors: model::scene_colors(&theme),
+                    image: natural.map(|size| (size, backdrop.camera)),
                 });
-                slot.running = Some((code.code.clone(), key, started));
+                slot.running = Some((code.clone(), key, started));
             }
             let (_, _, scene) = slot.running.as_ref().unwrap();
             scene.set_moving(moving);
@@ -241,7 +252,7 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
             scene.frame()
         })
     });
-    if backdrop.scene.is_none() {
+    if code.is_none() {
         slot.update(cx, |slot, _| slot.running = None);
     }
     let frame = scene.flatten();
@@ -250,6 +261,12 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
     let veil = backdrop.veil;
     let bg = theme.bg;
     let size_slot = slot.clone();
+    // With a scene running, the image is painted where each frame puts it,
+    // so what the scene draws on it stays on it as the camera moves.
+    let framed_image = backdrop
+        .image
+        .clone()
+        .filter(|_| code.is_some() && natural.is_some());
 
     let mut layer = div().absolute().inset_0();
     if !sky.is_empty() {
@@ -262,7 +279,7 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
             .inset_0(),
         );
     }
-    if let Some(image) = backdrop.image.clone() {
+    if let Some(image) = backdrop.image.clone().filter(|_| framed_image.is_none()) {
         layer = layer
             .child(
                 img(ImageSource::Image(image))
@@ -275,7 +292,7 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                 d.child(div().absolute().inset_0().bg(rgb(bg)).opacity(dim))
             });
     }
-    if backdrop.scene.is_some() {
+    if code.is_some() {
         let frame_size = frame.as_ref().map(|f| f.size);
         layer = layer.child(
             canvas(
@@ -297,8 +314,32 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                         };
                         ui::request_frame_in(delay, window, cx);
                     }
+                    let image = framed_image?.use_render_image(window, cx)?;
+                    let (index, next) = gif_frame(&image);
+                    if let Some(next) = next.filter(|_| moving) {
+                        ui::request_frame_in(next, window, cx);
+                    }
+                    Some((image, index))
                 },
-                move |bounds, _, window, cx| {
+                move |bounds, image, window, cx| {
+                    if let Some((image, index)) = image {
+                        let size = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+                        let [x, y, w, h] = frame
+                            .as_ref()
+                            .filter(|f| f.size == size)
+                            .and_then(|f| f.image)
+                            .or_else(|| natural.map(|n| model::image_rect(size, n, None, 0.)))
+                            .unwrap_or([0., 0., size.0, size.1]);
+                        let at = Bounds::new(
+                            point(bounds.origin.x + px(x), bounds.origin.y + px(y)),
+                            gpui_kit::size(px(w), px(h)),
+                        );
+                        let _ =
+                            window.paint_image(bounds, at, Corners::default(), image, index, false);
+                        if dim > 0. {
+                            window.paint_quad(fill(bounds, color(f64::from(bg), f64::from(dim))));
+                        }
+                    }
                     // Each in one layer: thousands of overlapping shapes
                     // share one draw order instead of each being placed in
                     // GPUI's bounds tree, by far the costliest part otherwise.
@@ -319,6 +360,35 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         );
     }
     Some(layer.into_any_element())
+}
+
+/// An empty scene: it runs the camera over an image when there's no scene.
+static STILL: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("SCENES.still = {};"));
+
+/// The frame of an animated image (a GIF) to show now, by the wall clock,
+/// and how long until the next one; a still image is frame 0, for good.
+fn gif_frame(image: &RenderImage) -> (usize, Option<Duration>) {
+    let count = image.frame_count();
+    if count < 2 {
+        return (0, None);
+    }
+    let delays: Vec<u128> = (0..count)
+        .map(|i| Duration::from(image.delay(i)).as_millis().max(20))
+        .collect();
+    let total: u128 = delays.iter().sum();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis())
+        % total;
+    let mut start = 0;
+    for (i, delay) in delays.iter().enumerate() {
+        if now < start + delay {
+            let left = (start + delay - now) as u64;
+            return (i, Some(Duration::from_millis(left)));
+        }
+        start += delay;
+    }
+    (0, None)
 }
 
 /// How calm the veil is at `u` (0 left, 1 right): clear at the sides, full
