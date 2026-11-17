@@ -33,7 +33,7 @@ use crate::features::sessions::{SessionsEvent, SessionsView};
 use crate::features::settings::{SettingsEvent, SettingsView};
 use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
-use crate::features::workspaces::{self, SavedPane, SavedState, SavedTab, SavedWorkspace};
+use crate::features::workspaces::{self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout};
 use crate::shared::pane::{
     PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
@@ -50,6 +50,7 @@ mod persistence;
 mod render;
 mod spaces;
 mod stages;
+mod tab_panel;
 mod tabs;
 mod view;
 
@@ -151,6 +152,21 @@ struct Tab {
     id: usize,
     tree: PaneTree<PaneId>,
     focused: PaneId,
+    pinned: bool,
+}
+
+/// Which content the vertical sidebar displays.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SidebarSection {
+    Tabs,
+    Files,
+}
+
+/// A tab dragged onto another tab in the vertical navigator.
+#[derive(Clone)]
+struct TabDrag {
+    tab: usize,
+    title: SharedString,
 }
 
 /// One named workspace.
@@ -249,6 +265,9 @@ pub struct Workspace {
     peek: Option<peek::Peek>,
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
+    tab_layout: TabLayout,
+    sidebar_section: SidebarSection,
+    tab_search: Entity<InputState>,
     save_task: Option<Task<()>>,
     /// Re-reads every pane's title and busy state once a second (non-agent
     /// views can't be observed through `AnyView`), redrawing only on change.
@@ -309,9 +328,12 @@ impl Workspace {
                 saved: Some((w.tabs, w.active_tab)),
             })
             .collect();
+        let tab_search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Find an open tab…")
+        });
         let music = cx.new(|cx| Music::new(window, cx));
         let devices = cx.new(DevicePanel::new);
-        let lifecycle = vec![
+        let mut lifecycle = vec![
             cx.on_app_quit(|this, cx| {
                 this.music.read(cx).shutdown();
                 this.save_now(cx);
@@ -354,6 +376,11 @@ impl Workspace {
                 },
             ),
         ];
+        lifecycle.push(cx.subscribe_in(
+            &tab_search,
+            window,
+            |_, _, _: &InputEvent, _, cx| cx.notify(),
+        ));
         let mut this = Self {
             current: saved.current.min(spaces.len().saturating_sub(1)),
             spaces,
@@ -363,6 +390,9 @@ impl Workspace {
             peek: None,
             sidebar: None,
             sidebar_visible: saved.sidebar,
+            tab_layout: saved.tab_layout,
+            sidebar_section: SidebarSection::Tabs,
+            tab_search,
             save_task: None,
             notices: cx.new(|_| Notices::default()),
             renaming: None,
