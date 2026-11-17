@@ -4,7 +4,7 @@
 //! Interactive state, subscriptions and persistence continue to be handled by
 //! the existing feature modules until their ownership can be migrated safely.
 
-mod advanced;
+mod extensions;
 mod agents;
 mod appearance;
 mod devices;
@@ -30,14 +30,14 @@ impl SettingsView {
         // scoped to the selected configuration section.
         let sections: Div = match page {
             SettingsPage::General => general::render(self, snapshot),
-            SettingsPage::Appearance => appearance::render(self, cx),
+            SettingsPage::Appearance => appearance::render(self, snapshot, cx),
             SettingsPage::Agents => agents::render(self, snapshot, cx),
-            SettingsPage::Models => models::render(snapshot),
+            SettingsPage::Models => models::render(self, snapshot, cx),
             SettingsPage::Devices => devices::render(self, cx),
             SettingsPage::Integrations => integrations::render(self, snapshot, cx),
             SettingsPage::Notifications => notifications::render(self, cx),
             SettingsPage::Updates => updates::render(self, snapshot, cx),
-            SettingsPage::Advanced => advanced::render(self, snapshot, cx),
+            SettingsPage::Extensions => extensions::render(self, snapshot, cx),
         };
         ui::appear("settings-content", sections.p_4()).into_any_element()
     }

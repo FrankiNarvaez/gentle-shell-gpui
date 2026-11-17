@@ -1,4 +1,4 @@
-//! Agent-related controls reuse the existing background and hydration flows.
+//! Agent behavior, permissions, background helpers and generative UI.
 
 use gpui_kit::component::v_flex;
 use gpui_kit::*;
@@ -12,7 +12,6 @@ pub(super) fn render(
 ) -> Div {
     v_flex()
         .gap_3()
-        .child(view.hydration_section(cx))
         .child(view.gentle_ai_section(snapshot, cx))
         .child(view.agent_ui_section(cx))
 }

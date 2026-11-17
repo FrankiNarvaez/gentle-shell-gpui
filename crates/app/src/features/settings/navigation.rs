@@ -21,8 +21,8 @@ pub(super) enum SettingsPage {
     Devices,
     Integrations,
     Notifications,
+    Extensions,
     Updates,
-    Advanced,
 }
 
 impl SettingsPage {
@@ -34,8 +34,8 @@ impl SettingsPage {
         Self::Devices,
         Self::Integrations,
         Self::Notifications,
+        Self::Extensions,
         Self::Updates,
-        Self::Advanced,
     ];
 
     pub fn id(self) -> &'static str {
@@ -48,7 +48,7 @@ impl SettingsPage {
             Self::Integrations => "settings-nav-integrations",
             Self::Notifications => "settings-nav-notifications",
             Self::Updates => "settings-nav-updates",
-            Self::Advanced => "settings-nav-advanced",
+            Self::Extensions => "settings-nav-extensions",
         }
     }
 
@@ -62,7 +62,7 @@ impl SettingsPage {
             Self::Integrations => "Integrations",
             Self::Notifications => "Notifications",
             Self::Updates => "Updates",
-            Self::Advanced => "Advanced",
+            Self::Extensions => "Extensions",
         }
     }
 
@@ -76,7 +76,7 @@ impl SettingsPage {
             Self::Integrations => "Companions and external tools",
             Self::Notifications => "Alerts and notification preferences",
             Self::Updates => "Application and tool updates",
-            Self::Advanced => "Installed packages and extensions",
+            Self::Extensions => "Packages and extension management",
         }
     }
 
@@ -90,7 +90,7 @@ impl SettingsPage {
             Self::Integrations => IconName::Bot,
             Self::Notifications => IconName::Bell,
             Self::Updates => IconName::RefreshCw,
-            Self::Advanced => IconName::Layers,
+            Self::Extensions => IconName::Layers,
         }
     }
 
@@ -98,15 +98,15 @@ impl SettingsPage {
     /// It only locates a page; it never changes a setting or its storage.
     fn keywords(self) -> &'static str {
         match self {
-            Self::General => "home setup requirements agent directory configuration launcher path",
-            Self::Appearance => "theme color dark light import share transparency window opacity interface zoom size fonts",
-            Self::Agents => "background subagents gentle ai hydration water reminders permissions generative ui proactive when asked",
-            Self::Models => "model provider thinking effort profile default scoped",
-            Self::Devices => "devices device discovery phone android emulator switches",
-            Self::Integrations => "claude bridge maestro music gentle stream external tools integrations",
-            Self::Notifications => "notification notifications sounds alert toggle status",
-            Self::Updates => "update upgrade versions app gentle shell engram release install",
-            Self::Advanced => "packages extensions install remove npm git package management",
+            Self::General => "home setup requirements agent directory configuration launcher path environment initial",
+            Self::Appearance => "theme color dark light import share transparency window opacity interface zoom size fonts scene motion background animated library terminal banner rose text",
+            Self::Agents => "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked",
+            Self::Models => "model models provider providers thinking effort profile profiles routing default scoped sign-ins authentication claude bridge pro max code",
+            Self::Devices => "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access",
+            Self::Integrations => "mcp servers maestro ui testing music gentle stream player instruments soundfont external tools integrations",
+            Self::Notifications => "notification notifications sounds alert alerts toggle status turn ended needs you context threshold water hydration reminder frequency preview",
+            Self::Updates => "update upgrade versions app gentle shell engram release install notes check github restart desktop rpc",
+            Self::Extensions => "package packages extension extensions install remove npm git local recommended updates version management advanced",
         }
     }
 
@@ -341,10 +341,10 @@ mod tests {
     #[test]
     fn search_requires_all_terms_and_ignores_whitespace_and_case() {
         assert!(SettingsPage::Appearance.matches_query("  ThEmE   WINDOW  "));
-        assert!(SettingsPage::Agents.matches_query("HYDRATION background"));
+        assert!(SettingsPage::Notifications.matches_query("HYDRATION water"));
         assert!(SettingsPage::Models.matches_query("thinking provider"));
         assert!(!SettingsPage::Appearance.matches_query("theme no-such-option"));
-        assert!(!SettingsPage::Advanced.matches_query("theme"));
+        assert!(!SettingsPage::Extensions.matches_query("theme"));
         assert!(!SettingsPage::General.matches_query("this-setting-does-not-exist"));
 
         // Empty search returns all categories, so clearing it restores the rail.
@@ -355,11 +355,40 @@ mod tests {
     }
 
     #[test]
+    fn moved_settings_are_discoverable_in_their_new_categories() {
+        let locations = [
+            ("water reminder", SettingsPage::Notifications),
+            ("hydration", SettingsPage::Notifications),
+            ("claude bridge", SettingsPage::Models),
+            ("profiles", SettingsPage::Models),
+            ("mcp servers", SettingsPage::Integrations),
+            ("maestro", SettingsPage::Integrations),
+            ("terminal theme", SettingsPage::Appearance),
+            ("banner", SettingsPage::Appearance),
+            ("scene motion", SettingsPage::Appearance),
+            ("ffmpeg", SettingsPage::Devices),
+            ("agent ui", SettingsPage::Agents),
+            ("packages npm", SettingsPage::Extensions),
+            ("engram", SettingsPage::Updates),
+        ];
+        for (query, owner) in locations {
+            assert!(
+                owner.matches_query(query),
+                "{query:?} must locate {}",
+                owner.label()
+            );
+        }
+        assert!(!SettingsPage::Agents.matches_query("hydration"));
+        assert!(!SettingsPage::Integrations.matches_query("claude bridge"));
+        assert!(!SettingsPage::Extensions.matches_query("theme"));
+    }
+
+    #[test]
     fn search_finds_options_by_category_and_setting_name() {
         assert!(SettingsPage::Appearance.matches_query("window transparency"));
         assert!(SettingsPage::Appearance.matches_query("THEME"));
-        assert!(SettingsPage::Integrations.matches_query("claude bridge"));
-        assert!(SettingsPage::Advanced.matches_query("install npm"));
+        assert!(SettingsPage::Models.matches_query("claude bridge"));
+        assert!(SettingsPage::Extensions.matches_query("install npm"));
         assert!(SettingsPage::Updates.matches_query("engram version"));
         assert!(SettingsPage::General.matches_query("setup"));
         assert!(!SettingsPage::Devices.matches_query("theme"));

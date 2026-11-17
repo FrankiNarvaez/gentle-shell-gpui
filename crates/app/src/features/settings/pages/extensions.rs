@@ -1,4 +1,4 @@
-//! Extension and package management, using the existing package controller.
+//! Installed packages and extensions, using the existing package controller.
 
 use gpui_kit::component::v_flex;
 use gpui_kit::*;

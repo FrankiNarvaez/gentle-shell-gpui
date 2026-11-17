@@ -37,7 +37,6 @@ fn gentle_shell_section(snapshot: &Snapshot) -> Div {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "not found".into()),
         ))
-        .child(row("Versions", snapshot.versions.join(" · ")))
         .child(
             h_flex()
                 .pt_2()

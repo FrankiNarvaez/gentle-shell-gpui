@@ -150,8 +150,8 @@ impl SettingsView {
         self.reload(cx);
     }
 
-    /// Gentle Shell's own settings: permissions, persona, background
-    /// subagents (with its switch), banner, terminal theme and MCP servers.
+    /// Gentle Shell's agent behavior: permissions, persona and background
+    /// subagents (with their existing shell-command switch).
     pub(super) fn gentle_ai_section(&self, s: &Snapshot, cx: &mut Context<Self>) -> Div {
         section(IconName::ShieldCheck, "Gentle AI")
             .child(row(
@@ -223,19 +223,7 @@ impl SettingsView {
                         )
                     }),
             )
-            .child(row(
-                "Banner",
-                or_dash(&s.banner, "pink · rose on · text on"),
-            ))
-            .child(row("Theme (terminal)", or_dash(&s.theme, "default")))
-            .child(row(
-                "MCP servers",
-                if s.mcp_servers.is_empty() {
-                    "—".into()
-                } else {
-                    s.mcp_servers.join(", ")
-                },
-            ))
+
     }
 }
 

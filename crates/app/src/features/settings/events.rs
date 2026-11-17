@@ -5,6 +5,8 @@
 
 pub enum SettingsEvent {
     Close,
+    /// Open the application's full profile-routing editor.
+    OpenProfiles,
     /// Packages or sign-ins changed: tabs should reload their backend.
     Changed,
     /// Run this Gentle Shell slash command in the active agent pane and
