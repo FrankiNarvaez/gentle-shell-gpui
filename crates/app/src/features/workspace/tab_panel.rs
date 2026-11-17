@@ -14,7 +14,6 @@ impl Workspace {
             self.sidebar_section = SidebarSection::Tabs;
             if !self.sidebar_visible {
                 self.sidebar_visible = true;
-                cx.emit(WorkspaceEvent::SidebarToggled(true));
             }
         }
         cx.emit(WorkspaceEvent::FilesVisibilityChanged(self.files_sidebar_visible()));
