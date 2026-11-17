@@ -349,13 +349,20 @@ impl Workspace {
                     this.activate(index, window, cx);
                 }
             }))
-            .on_drag(
-                TabDrag { tab: id, title: title.clone() },
-                |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
-            )
             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                 this.reorder_tab_at(drag.tab, id, cx)
             }))
+            .child(
+                div()
+                    .id(("vertical-tab-grip", id))
+                    .flex_none()
+                    .cursor_grab()
+                    .on_drag(
+                        TabDrag { tab: id, title: title.clone() },
+                        |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
+                    )
+                    .child(Icon::new(IconName::GripHorizontal).xsmall().text_color(ui::faint())),
+            )
             .child(
                 div()
                     .size(rems(17. / 16.))
@@ -399,7 +406,11 @@ impl Workspace {
                 d.child(div().size(rems(6. / 16.)).rounded_full().bg(color))
             })
             .child(
-                Button::new(("vertical-tab-actions", id))
+                div()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        Button::new(("vertical-tab-actions", id))
                     .ghost()
                     .xsmall()
                     .icon(Icon::new(IconName::Ellipsis))
@@ -468,6 +479,7 @@ impl Workspace {
                                 }),
                         )
                     }),
+                ),
             )
     }
 }
