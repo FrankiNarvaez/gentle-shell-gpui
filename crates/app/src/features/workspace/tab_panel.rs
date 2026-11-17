@@ -429,6 +429,7 @@ impl Workspace {
                         .item(
                             PopupMenuItem::new("Rename")
                                 .icon(Icon::new(IconName::Pencil))
+                                .disabled(kind != PaneKind::Agent)
                                 .on_click({
                                     let rename = rename.clone();
                                     move |_, window, cx| {
