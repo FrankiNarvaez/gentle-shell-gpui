@@ -6,19 +6,55 @@ use gpui_kit::component::Selectable as _;
 
 impl Workspace {
     pub(super) fn toggle_tab_layout(&mut self, cx: &mut Context<Self>) {
-        self.tab_layout = match self.tab_layout {
+        let next = match self.tab_layout {
             TabLayout::Horizontal => TabLayout::Vertical,
             TabLayout::Vertical => TabLayout::Horizontal,
         };
-        if self.tab_layout == TabLayout::Vertical {
+        self.set_tab_layout(next, cx);
+    }
+
+    /// All presentation controls share one idempotent, persisted state change.
+    pub(super) fn set_tab_layout(&mut self, layout: TabLayout, cx: &mut Context<Self>) {
+        if self.tab_layout == layout {
+            return;
+        }
+        self.tab_layout = layout;
+        if layout == TabLayout::Vertical {
             self.sidebar_section = SidebarSection::Tabs;
-            if !self.sidebar_visible {
-                self.sidebar_visible = true;
-            }
+            self.sidebar_visible = true;
         }
         cx.emit(WorkspaceEvent::FilesVisibilityChanged(self.files_sidebar_visible()));
         self.schedule_save(cx);
         cx.notify();
+    }
+
+    /// The horizontal strip and vertical rows use the same placement menu.
+    pub(super) fn tab_placement_menu(
+        menu: PopupMenu,
+        layout: TabLayout,
+        workspace: WeakEntity<Self>,
+    ) -> PopupMenu {
+        let horizontal = workspace.clone();
+        menu.item(
+            PopupMenuItem::new("Horizontal tabs")
+                .icon(Icon::new(IconName::List))
+                .checked(layout == TabLayout::Horizontal)
+                .on_click(move |_, _, cx| {
+                    let _ = horizontal.update(cx, |this, cx| {
+                        this.set_tab_layout(TabLayout::Horizontal, cx)
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Vertical tabs")
+                .icon(Icon::new(IconName::PanelLeft))
+                .checked(layout == TabLayout::Vertical)
+                .on_click(move |_, _, cx| {
+                    let _ = workspace.update(cx, |this, cx| {
+                        this.set_tab_layout(TabLayout::Vertical, cx)
+                    });
+                }),
+        )
     }
 
     fn select_sidebar_section(&mut self, section: SidebarSection, cx: &mut Context<Self>) {
@@ -321,6 +357,7 @@ impl Workspace {
             .map(|p| p.item.kind)
             .unwrap_or(PaneKind::Agent);
         let weak = cx.entity().downgrade();
+        let placement = weak.clone();
         let pin = weak.clone();
         let up = weak.clone();
         let down = weak.clone();
@@ -351,6 +388,9 @@ impl Workspace {
             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                 this.reorder_tab_at(drag.tab, id, cx)
             }))
+            .context_menu(move |menu, _, _| {
+                Self::tab_placement_menu(menu, TabLayout::Vertical, placement.clone())
+            })
             .child(
                 div()
                     .id(("vertical-tab-grip", id))
