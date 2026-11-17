@@ -5,7 +5,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/upstream-vertical-tabs-panel]
     paths-ignore: ["**.md", "packaging/icons/**"]
   pull_request:
     paths-ignore: ["**.md", "packaging/icons/**"]
