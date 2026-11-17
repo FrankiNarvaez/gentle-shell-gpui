@@ -14,7 +14,7 @@ use super::state::desktop;
 use super::state::{BackendStatus, Dialog, TurnActivity};
 use super::{SessionEvent, SessionView, view};
 use crate::features::browser::CanvasNotice;
-use crate::features::genui::{DiagramEvent, Surface};
+use crate::features::genui::{DiagramEvent, Surface, TemplatesEvent, TemplatesView};
 use crate::features::git;
 use gentle_core::tools;
 use gentle_core::transcript::{self, NoticeLevel};
@@ -263,8 +263,15 @@ impl SessionView {
                 if key == gentle_core::genui::OUTCOME_WIDGET {
                     // The generative UI extension's answer to sent edits;
                     // its clearing record carries no lines.
-                    if let Some(line) = lines.as_ref().and_then(|l| l.first()) {
-                        self.genui.outcome(line, cx);
+                    if let Some(line) = lines.as_ref().and_then(|l| l.first())
+                        && let Some(error) = self.genui.outcome(line, cx)
+                    {
+                        self.toast(
+                            Notification::warning(format!(
+                                "The template couldn't be inserted: {error}"
+                            )),
+                            cx,
+                        );
                     }
                 } else if key == "gentle-agents" {
                     let next = lines.and_then(|l| gentle_core::activity::parse(&l));
@@ -632,7 +639,93 @@ impl SessionView {
                 cx.notify();
             }
             DiagramEvent::OpenWeb(url) => cx.emit(SessionEvent::OpenWeb(url.clone())),
+            DiagramEvent::Pin(on) => {
+                let (id, session) = (surface.id(cx), self.session_file());
+                self.genui.pin(&id, *on, session.as_deref(), cx);
+                cx.notify();
+            }
+            DiagramEvent::Request(command) => {
+                let this = cx.entity().downgrade();
+                self.run_extension_command(command.clone(), cx, move |result, cx| {
+                    let note = match result {
+                        Ok(()) => Notification::success("Asked the agent to add it to the docs."),
+                        Err(error) => Notification::warning(error),
+                    };
+                    let _ = this.update(cx, |this, cx| this.toast(note, cx));
+                });
+            }
+            DiagramEvent::OpenRef(code_ref) => match code_ref.resolve(&self.cwd) {
+                Some(path) if path.is_file() => cx.emit(SessionEvent::OpenFile {
+                    path,
+                    line: code_ref.line,
+                }),
+                Some(_) => self.warn(
+                    format!("{} isn't in the workspace.", code_ref.path),
+                    window,
+                    cx,
+                ),
+                None => self.warn(
+                    format!("{} is outside the workspace.", code_ref.path),
+                    window,
+                    cx,
+                ),
+            },
+            DiagramEvent::Notice(Ok(text)) => {
+                window.push_notification(Notification::success(text.clone()), cx)
+            }
+            DiagramEvent::Notice(Err(error)) => self.warn(error.clone(), window, cx),
         }
+    }
+
+    /// `/ui-template [name]`: insert the template named `name`, or open the
+    /// templates manager.
+    pub(super) fn ui_template(&mut self, name: &str, cx: &mut Context<Self>) {
+        let manager = cx.new(TemplatesView::new);
+        if !name.trim().is_empty() {
+            match manager.read(cx).find(name) {
+                Some(template) => self.insert_template(&template, cx),
+                None => {
+                    let names = manager.read(cx).names();
+                    let known = if names.is_empty() {
+                        "none saved yet".to_string()
+                    } else {
+                        names.join(", ")
+                    };
+                    self.note(
+                        format!("No UI template named “{}” ({known}).", name.trim()),
+                        cx,
+                    );
+                }
+            }
+            return;
+        }
+        let subscription = cx.subscribe(&manager, |this, _, event: &TemplatesEvent, cx| {
+            match event {
+                TemplatesEvent::Insert(template) => {
+                    let template = template.clone();
+                    this.insert_template(&template, cx);
+                    this.genui.set_templates(None);
+                }
+                TemplatesEvent::Close => this.genui.set_templates(None),
+            }
+            cx.notify();
+        });
+        self.genui.set_templates(Some((manager, subscription)));
+        cx.notify();
+    }
+
+    fn insert_template(
+        &mut self,
+        template: &gentle_core::genui::template::Template,
+        cx: &mut Context<Self>,
+    ) {
+        let command = self.genui.insert_command(template);
+        let this = cx.entity().downgrade();
+        self.run_extension_command(command, cx, move |result, cx| {
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| this.toast(Notification::warning(error), cx));
+            }
+        });
     }
 }
 

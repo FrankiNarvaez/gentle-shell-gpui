@@ -257,6 +257,12 @@ impl DiagramView {
                             .disabled(!self.can_redo())
                             .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                     )
+                    .child(super::share::tools(
+                        &self.env,
+                        "diagram",
+                        DiagramView::source,
+                        cx,
+                    ))
                     .child(
                         tool(
                             "genui-expand",
@@ -738,6 +744,42 @@ impl DiagramView {
                         .border_color(ui::accent().opacity(0.35)),
                 ))
             })
+            .when_some(node.code_ref.clone().filter(|_| s >= 0.5), |d, code_ref| {
+                let selector = format!("genui-node-ref-{}", node.id);
+                let found = matches!(
+                    self.env.ref_state(&code_ref),
+                    super::share::RefState::Found(_) | super::share::RefState::Unknown
+                );
+                d.child(
+                    div()
+                        .id(("genui-node-ref", ix))
+                        .debug_selector(move || selector)
+                        .absolute()
+                        .top(px(4. * s))
+                        .right(px(4. * s))
+                        .size(px(18. * s))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(5. * s))
+                        .cursor_pointer()
+                        .text_color(if found { ui::accent() } else { ui::faint() })
+                        .hover(|d| d.bg(ui::surface_hover()))
+                        .child(
+                            Icon::new(if found {
+                                IconName::FileCode
+                            } else {
+                                IconName::FileX
+                            })
+                            .size(px(12. * s)),
+                        )
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.stop_propagation();
+                            cx.emit(DiagramEvent::OpenRef(code_ref.clone()));
+                        })),
+                )
+            })
             .child(handle(false))
             .child(handle(true));
         card.into_any_element()
@@ -1156,12 +1198,43 @@ pub(super) fn expanded_row(surface: super::Surface, title: &str) -> AnyElement {
     .into_any_element()
 }
 
-/// The user's sent edits (the extension's `gentle-ui.event` message).
+/// The surface is pinned to the conversation's side panel.
+pub(super) fn pinned_row(surface: super::Surface, title: &str) -> AnyElement {
+    row(
+        IconName::Pin,
+        ui::info(),
+        title.to_string(),
+        Some("pinned to the side panel".into()),
+    )
+    .child(
+        Button::new("genui-unpin-here")
+            .debug_selector(|| "genui-unpin-here".into())
+            .ghost()
+            .xsmall()
+            .icon(Icon::new(IconName::PinOff))
+            .label("Back here")
+            .on_click(move |_, _, cx| surface.emit(DiagramEvent::Pin(false), cx)),
+    )
+    .into_any_element()
+}
+
+/// The user's sent edits (the extension's `gentle-ui.event` message), a
+/// template they inserted (once its surface is gone) or their request to
+/// add a surface to the docs.
 pub(super) fn event_card(details: &serde_json::Value) -> AnyElement {
     let title = details["title"]
         .as_str()
         .filter(|t| !t.is_empty())
         .unwrap_or("Diagram");
+    if details["request"] == "docs" {
+        return row(
+            IconName::BookOpen,
+            ui::accent(),
+            format!("You asked to add {title} to the docs"),
+            details["format"].as_str().map(|f| format!("as {f}")),
+        )
+        .into_any_element();
+    }
     let summary: Vec<&str> = details["summary"]
         .as_array()
         .into_iter()
@@ -1177,7 +1250,9 @@ pub(super) fn event_card(details: &serde_json::Value) -> AnyElement {
             row(
                 IconName::Pencil,
                 ui::accent(),
-                if details["kind"] == "html" {
+                if details["inserted"] == true {
+                    format!("You inserted {title} from a template")
+                } else if details["kind"] == "html" {
                     format!("You, from {title}")
                 } else {
                     format!("You edited {title}")

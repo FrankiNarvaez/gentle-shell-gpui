@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::diagram::{Errors, MAX_LABEL, array, id_of, text, truncate};
 use super::edits::{Editable, format_number, list_names, number, plural};
+use super::refs::CodeRef;
 
 pub const MAX_COLUMNS: usize = 30;
 pub const MAX_ROWS: usize = 500;
@@ -87,6 +88,8 @@ pub struct Column {
 pub struct Row {
     pub id: String,
     pub cells: Map<String, Value>,
+    /// The code this row is about (`ref`).
+    pub code_ref: Option<CodeRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,7 +304,15 @@ impl Table {
                 }
             }
             cells.retain(|_, v| !v.is_null());
-            rows.push(Row { id, cells });
+            let code_ref = CodeRef::field(raw).unwrap_or_else(|error| {
+                errors.push(format!("row \"{id}\": ref {error}"));
+                None
+            });
+            rows.push(Row {
+                id,
+                cells,
+                code_ref,
+            });
         }
 
         let sort = match spec.get("sort") {
@@ -590,7 +601,13 @@ impl Editable for Table {
             "rows".into(),
             self.rows
                 .iter()
-                .map(|r| json!({"id": r.id, "cells": r.cells}))
+                .map(|r| {
+                    let mut row = json!({"id": r.id, "cells": r.cells});
+                    if let Some(code_ref) = &r.code_ref {
+                        row["ref"] = code_ref.to_value();
+                    }
+                    row
+                })
                 .collect(),
         );
         if let Some(sort) = &self.sort {
@@ -763,5 +780,21 @@ mod tests {
         assert_eq!(status_tone("in progress"), Tone::Info);
         assert_eq!(status_tone("pending review"), Tone::Warning);
         assert_eq!(status_tone("unknown"), Tone::Muted);
+    }
+
+    #[test]
+    fn rows_keep_their_code_ref() {
+        let table = Table::parse(&json!({
+            "columns": ["name"],
+            "rows": [{"id": "a", "cells": {"name": "x"}, "ref": "src/x.rs:10"}, {"id": "b", "cells": ["y"]}]
+        }))
+        .unwrap();
+        assert_eq!(table.rows[0].code_ref.as_ref().unwrap().line, Some(10));
+        assert_eq!(table.rows[1].code_ref, None);
+        assert_eq!(Table::parse(&table.to_value()).unwrap(), table);
+        assert!(
+            Table::parse(&json!({"columns": ["n"], "rows": [{"id": "a", "ref": "../../z"}]}))
+                .is_err()
+        );
     }
 }

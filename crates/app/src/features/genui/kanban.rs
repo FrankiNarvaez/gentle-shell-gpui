@@ -35,7 +35,7 @@ fn card_height(card: &Card) -> f32 {
     if card.description.is_some() {
         h += 20.;
     }
-    if !card.tags.is_empty() || card.assignee.is_some() {
+    if !card.tags.is_empty() || card.assignee.is_some() || card.code_ref.is_some() {
         h += 26.;
     }
     h
@@ -344,6 +344,7 @@ impl PanelView {
             description: None,
             tags: Vec::new(),
             assignee: None,
+            code_ref: None,
         };
         if self.kanban_edit(Change::AddCard { card }, cx) {
             self.glides.appear(&id);
@@ -828,42 +829,51 @@ impl PanelView {
                     .text_color(ui::muted())
                     .child(d)
             }))
-            .when(!card.tags.is_empty() || card.assignee.is_some(), |d| {
-                d.child(
-                    h_flex()
-                        .mt(rems(2. / 16.))
-                        .gap_1()
-                        .min_w_0()
-                        .children(
-                            card.tags.iter().take(3).map(|t| {
+            .when(
+                !card.tags.is_empty() || card.assignee.is_some() || card.code_ref.is_some(),
+                |d| {
+                    d.child(
+                        h_flex()
+                            .mt(rems(2. / 16.))
+                            .gap_1()
+                            .min_w_0()
+                            .children(card.tags.iter().take(3).map(|t| {
                                 ui::chip(t.clone(), ui::provider_color(t)).flex_shrink_0()
-                            }),
-                        )
-                        .when(card.tags.len() > 3, |d| {
-                            d.child(
+                            }))
+                            .when(card.tags.len() > 3, |d| {
+                                d.child(
+                                    div()
+                                        .text_size(rems(10.5 / 16.))
+                                        .text_color(ui::faint())
+                                        .child(format!("+{}", card.tags.len() - 3)),
+                                )
+                            })
+                            .child(div().flex_1())
+                            .children(card.code_ref.as_ref().map(|code_ref| {
+                                super::refs::chip(
+                                    format!("genui-card-ref-{}", card.id),
+                                    code_ref,
+                                    &self.env,
+                                    cx,
+                                )
+                            }))
+                            .children(card.assignee.clone().map(|who| {
                                 div()
-                                    .text_size(rems(10.5 / 16.))
-                                    .text_color(ui::faint())
-                                    .child(format!("+{}", card.tags.len() - 3)),
-                            )
-                        })
-                        .child(div().flex_1())
-                        .children(card.assignee.clone().map(|who| {
-                            div()
-                                .flex_shrink_0()
-                                .size(rems(20. / 16.))
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(ui::champagne().opacity(0.18))
-                                .text_size(rems(9.5 / 16.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(ui::champagne())
-                                .child(initials(&who))
-                        })),
-                )
-            })
+                                    .flex_shrink_0()
+                                    .size(rems(20. / 16.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(ui::champagne().opacity(0.18))
+                                    .text_size(rems(9.5 / 16.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(ui::champagne())
+                                    .child(initials(&who))
+                            })),
+                    )
+                },
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -981,6 +991,14 @@ impl PanelView {
                         .text_color(ui::muted())
                         .whitespace_normal()
                         .child(d)
+                }))
+                .children(card.code_ref.as_ref().map(|code_ref| {
+                    super::refs::chip(
+                        format!("genui-card-details-ref-{}", card.id),
+                        code_ref,
+                        &self.env,
+                        cx,
+                    )
                 }))
                 .child(
                     div()

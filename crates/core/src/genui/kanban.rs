@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 use super::diagram::{Errors, MAX_LABEL, MAX_TEXT, array, id_of, text, truncate};
 use super::edits::{Editable, fresh_id, list_names, plural};
+use super::refs::CodeRef;
 
 pub const MAX_COLUMNS: usize = 12;
 pub const MAX_CARDS: usize = 300;
@@ -28,6 +29,8 @@ pub struct Card {
     pub description: Option<String>,
     pub tags: Vec<String>,
     pub assignee: Option<String>,
+    /// The code this card is about (`ref`).
+    pub code_ref: Option<CodeRef>,
 }
 
 impl Card {
@@ -44,6 +47,9 @@ impl Card {
         }
         if let Some(assignee) = &self.assignee {
             map.insert("assignee".into(), json!(assignee));
+        }
+        if let Some(code_ref) = &self.code_ref {
+            map.insert("ref".into(), code_ref.to_value());
         }
         Value::Object(map)
     }
@@ -162,6 +168,10 @@ impl Board {
                 .iter()
                 .filter_map(|t| t.as_str().map(str::to_string))
                 .collect();
+            let code_ref = CodeRef::field(raw).unwrap_or_else(|error| {
+                errors.push(format!("card \"{id}\": ref {error}"));
+                None
+            });
             cards.push(Card {
                 id,
                 title,
@@ -169,6 +179,7 @@ impl Board {
                 description: text(raw.get("description"), MAX_TEXT),
                 tags: clean_tags(&tags),
                 assignee: text(raw.get("assignee"), MAX_LABEL),
+                code_ref,
             });
         }
         if !errors.0.is_empty() {
@@ -622,6 +633,7 @@ mod tests {
             description: None,
             tags: vec![],
             assignee: None,
+            code_ref: None,
         };
         edits.edit(&Change::AddCard { card }).unwrap();
         edits
@@ -665,5 +677,21 @@ mod tests {
         assert_eq!(drop_index(190., &slots), 2);
         assert_eq!(drop_index(500., &slots), 3);
         assert_eq!(drop_index(0., &[]), 0);
+    }
+
+    #[test]
+    fn cards_keep_their_code_ref() {
+        let board = Board::parse(&json!({
+            "columns": ["To do"],
+            "cards": [{"id": "c1", "title": "Fix", "ref": {"path": "src/lib.rs", "line": 4, "endLine": 9}}]
+        }))
+        .unwrap();
+        let code_ref = board.cards[0].code_ref.as_ref().unwrap();
+        assert_eq!((code_ref.line, code_ref.end_line), (Some(4), Some(9)));
+        assert_eq!(Board::parse(&board.to_value()).unwrap(), board);
+        assert!(
+            Board::parse(&json!({"columns": ["A"], "cards": [{"title": "x", "ref": "../../y"}]}))
+                .is_err()
+        );
     }
 }

@@ -717,6 +717,14 @@ impl PanelView {
                         .when(item.done, |d| d.line_through())
                         .child(item.label.clone()),
                 )
+                .children(item.code_ref.as_ref().map(|code_ref| {
+                    super::refs::chip(
+                        format!("genui-item-ref-{}", item.id),
+                        code_ref,
+                        &self.env,
+                        cx,
+                    )
+                }))
                 .children(item.note.clone().map(|note| {
                     div()
                         .min_w_0()

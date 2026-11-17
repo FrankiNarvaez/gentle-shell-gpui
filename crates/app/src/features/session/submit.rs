@@ -160,6 +160,7 @@ impl SessionView {
             builtins::Builtin::Export(path) => self.export_html(path, cx),
             builtins::Builtin::Reload => self.reload(cx),
             builtins::Builtin::Web(url) => self.open_web(url, cx),
+            builtins::Builtin::UiTemplate(name) => self.ui_template(&name, cx),
         }
     }
 

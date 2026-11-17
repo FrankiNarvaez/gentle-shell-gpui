@@ -23,6 +23,8 @@ use crate::shared::ui;
 
 /// A row's height (px at 100 %): rows glide by whole rows when re-sorted.
 const ROW_H: f32 = 32.;
+/// The Code column's width (px at 100 %), when rows point at code.
+const REF_W: f32 = 132.;
 const HEAD_H: f32 = 30.;
 const TOOLBAR_H: f32 = 40.;
 
@@ -395,6 +397,9 @@ impl PanelView {
                     .children(arrow.map(|a| Icon::new(a).xsmall().text_color(ui::accent())))
                     .on_click(cx.listener(move |this, _, _, cx| this.cycle_sort(&key, cx)))
             }))
+            .when(table.rows.iter().any(|r| r.code_ref.is_some()), |d| {
+                d.child(div().w(rems(REF_W / 16.)).flex_shrink_0().child("Code"))
+            })
             .child(div().w(rems(22. / 16.)).flex_shrink_0());
 
         let rows: Vec<AnyElement> = visible
@@ -513,6 +518,13 @@ impl PanelView {
                         }))
                     }),
             );
+        }
+        if table.rows.iter().any(|r| r.code_ref.is_some()) {
+            element = element.child(div().w(rems(REF_W / 16.)).flex_shrink_0().children(
+                row.code_ref.as_ref().map(|code_ref| {
+                    super::refs::chip(format!("genui-row-ref-{}", row.id), code_ref, &self.env, cx)
+                }),
+            ));
         }
         let label = table.row_label(&row.id);
         element = element.child(

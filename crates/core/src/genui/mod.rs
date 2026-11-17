@@ -8,11 +8,14 @@ pub mod chart;
 pub mod checklist;
 pub mod diagram;
 pub mod edits;
+pub mod export;
 pub mod form;
 pub mod html;
 pub mod kanban;
 pub mod layout;
+pub mod refs;
 pub mod table;
+pub mod template;
 
 use serde_json::{Map, Value, json};
 

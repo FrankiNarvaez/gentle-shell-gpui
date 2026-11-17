@@ -5,6 +5,8 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value, json};
 
+use super::refs::CodeRef;
+
 pub const MAX_NODES: usize = 200;
 pub const MAX_EDGES: usize = 400;
 pub const MAX_GROUPS: usize = 50;
@@ -109,6 +111,8 @@ pub struct Node {
     pub status: Option<Status>,
     pub x: Option<f32>,
     pub y: Option<f32>,
+    /// The code this node is (`ref`).
+    pub code_ref: Option<CodeRef>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,6 +151,7 @@ impl Node {
             status: None,
             x: None,
             y: None,
+            code_ref: None,
         }
     }
 
@@ -162,6 +167,9 @@ impl Node {
         if let (Some(x), Some(y)) = (self.x, self.y) {
             map.insert("x".into(), whole(x));
             map.insert("y".into(), whole(y));
+        }
+        if let Some(code_ref) = &self.code_ref {
+            map.insert("ref".into(), code_ref.to_value());
         }
         Value::Object(map)
     }
@@ -261,6 +269,10 @@ impl Diagram {
                 (Some(x), Some(y)) => (Some(x), Some(y)),
                 _ => (None, None),
             };
+            let code_ref = CodeRef::field(raw).unwrap_or_else(|error| {
+                errors.push(format!("node \"{id}\": ref {error}"));
+                None
+            });
             nodes.push(Node {
                 label: text(raw.get("label"), MAX_LABEL).unwrap_or_else(|| id.clone()),
                 kind: raw
@@ -277,6 +289,7 @@ impl Diagram {
                     .and_then(Status::parse),
                 x,
                 y,
+                code_ref,
                 id,
             });
         }
@@ -612,5 +625,23 @@ mod tests {
         });
         assert_eq!(grouped.fresh_group_id("Back end"), "back-end");
         assert_eq!(grouped.fresh_group_id(""), "group-2");
+    }
+
+    #[test]
+    fn nodes_keep_their_code_ref() {
+        let d = parse(json!({
+            "nodes": [{"id": "api", "ref": {"path": "./src/api.rs", "line": 12}}, {"id": "db"}],
+        }));
+        let code_ref = d.nodes[0].code_ref.as_ref().expect("a ref");
+        assert_eq!(
+            (code_ref.path.as_str(), code_ref.line),
+            ("src/api.rs", Some(12))
+        );
+        assert_eq!(d.nodes[1].code_ref, None);
+        assert_eq!(parse(d.to_value()), d);
+        assert_eq!(
+            errors(json!({"nodes": [{"id": "api", "ref": "../outside.rs"}]})),
+            ["node \"api\": ref path \"../outside.rs\" escapes the workspace"]
+        );
     }
 }

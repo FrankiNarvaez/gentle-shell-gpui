@@ -256,6 +256,14 @@ impl DiagramView {
                             d.child(text(description))
                         });
                 }
+                if let Some(code_ref) = &node.code_ref {
+                    panel = panel.child(super::refs::chip(
+                        format!("genui-details-ref-{}", node.id),
+                        code_ref,
+                        &self.env,
+                        cx,
+                    ));
+                }
                 panel = panel.child(
                     div()
                         .font_family(ui::MONO)

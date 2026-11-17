@@ -421,8 +421,13 @@ fn rasterize(svg: &str) -> Result<tiny_skia::Pixmap, String> {
     rasterize_at(svg, size, TILE_SCALE)
 }
 
-/// `svg` drawn at `scale` into a `size` pixmap.
-fn rasterize_at(svg: &str, size: (u32, u32), scale: f32) -> Result<tiny_skia::Pixmap, String> {
+/// `svg` drawn at `scale` into a `size` pixmap (also generative UI's chart
+/// PNG export).
+pub(crate) fn rasterize_at(
+    svg: &str,
+    size: (u32, u32),
+    scale: f32,
+) -> Result<tiny_skia::Pixmap, String> {
     let options = usvg::Options {
         fontdb: FONTS.clone(),
         font_family: crate::shared::ui::MONO.to_string(),

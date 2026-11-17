@@ -348,6 +348,20 @@ impl FileView {
         }
     }
 
+    /// Put the cursor at the start of `line` (1-based), scrolled into view.
+    pub fn go_to_line(&mut self, line: u32, window: &mut Window, cx: &mut Context<Self>) {
+        if let Body::Code(editor) = &self.body {
+            let row = line.saturating_sub(1);
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(
+                    gpui_kit::component::input::Position::new(row, 0),
+                    window,
+                    cx,
+                )
+            });
+        }
+    }
+
     /// Edits not yet written to disk; closing the pane would lose them.
     pub fn has_unsaved(&self) -> bool {
         self.edit.as_ref().is_some_and(|e| e.dirty)

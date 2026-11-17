@@ -7,7 +7,7 @@
 
 use gentle_core::genui::chart::Chart;
 use gentle_core::genui::checklist::Checklist;
-use gentle_core::genui::edits::plural;
+use gentle_core::genui::edits::{Editable as _, plural};
 use gentle_core::genui::form::Form;
 use gentle_core::genui::kanban::{Board, card_count};
 use gentle_core::genui::table::Table;
@@ -183,6 +183,17 @@ impl Body {
         edits!(self, e => Some(e.event_command(id, version, note)), None)
     }
 
+    /// The spec as the user sees it (unsent edits included), as JSON.
+    fn spec(&self) -> Value {
+        match self {
+            Body::Table(s) => s.edits.working().to_value(),
+            Body::Form(s) => s.edits.working().to_value(),
+            Body::Checklist(s) => s.edits.working().to_value(),
+            Body::Kanban(s) => s.edits.working().to_value(),
+            Body::Chart(s) => s.chart.to_value(),
+        }
+    }
+
     /// The header's counts.
     fn stats(&self) -> String {
         match self {
@@ -252,6 +263,7 @@ pub struct PanelView {
     pub(super) expanded: bool,
     pub(super) focus: FocusHandle,
     pub(super) glides: Glides,
+    pub(super) env: super::share::Env,
 }
 
 impl EventEmitter<DiagramEvent> for PanelView {}
@@ -275,11 +287,23 @@ impl PanelView {
             expanded: false,
             focus: cx.focus_handle(),
             glides: Glides::default(),
+            env: Default::default(),
         }
     }
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// What the panel shows, for the Export menu.
+    pub(super) fn source(&self) -> super::share::Source {
+        super::share::Source {
+            id: self.id.clone(),
+            kind: self.kind.clone(),
+            title: self.title.clone(),
+            spec: self.body.as_ref().map_or(Value::Null, Body::spec),
+            root: self.env.root.clone(),
+        }
     }
 
     pub fn kind(&self) -> &str {
@@ -550,6 +574,12 @@ impl PanelView {
                                 .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
                         )
                     })
+                    .child(super::share::tools(
+                        &self.env,
+                        &self.kind,
+                        PanelView::source,
+                        cx,
+                    ))
                     .child(
                         tool(
                             "genui-panel-expand",

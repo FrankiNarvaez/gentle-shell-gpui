@@ -38,6 +38,15 @@ pub enum DiagramEvent {
     Collapse,
     /// Open this http(s) URL in the in-app browser (the user confirmed).
     OpenWeb(String),
+    /// Pin the surface to the conversation's side panel (`false`: unpin).
+    Pin(bool),
+    /// Run this `/gentle-ui:event …` request (not an edit: no `sent` or
+    /// outcome for the view), e.g. "add this to the docs".
+    Request(String),
+    /// Open this code reference in the file viewer.
+    OpenRef(gentle_core::genui::refs::CodeRef),
+    /// Tell the user how an export went (`Err`: it failed).
+    Notice(Result<String, String>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -183,6 +192,7 @@ pub struct DiagramView {
     /// Viewing only: no moving, connecting or editing.
     pub(super) locked: bool,
     pub(super) focus: FocusHandle,
+    pub(super) env: super::share::Env,
 }
 
 impl EventEmitter<DiagramEvent> for DiagramView {}
@@ -225,6 +235,7 @@ impl DiagramView {
             expanded: false,
             locked: false,
             focus: cx.focus_handle(),
+            env: Default::default(),
         }
     }
 
@@ -283,6 +294,17 @@ impl DiagramView {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The diagram as the user sees it, for the Export menu.
+    pub(super) fn source(&self) -> super::share::Source {
+        super::share::Source {
+            id: self.id.clone(),
+            kind: "diagram".into(),
+            title: self.title.clone(),
+            spec: self.working.to_value(),
+            root: self.env.root.clone(),
+        }
     }
 
     pub fn set_expanded(&mut self, expanded: bool, cx: &mut Context<Self>) {
