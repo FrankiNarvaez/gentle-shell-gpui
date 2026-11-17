@@ -164,6 +164,12 @@ pub(super) fn screen_rows() -> Vec<Row> {
             PaletteAction::ReopenClosed,
         ),
         row(
+            IconName::List,
+            "Toggle vertical tabs",
+            "Switch between horizontal tabs and the vertical tab navigator",
+            PaletteAction::ToggleTabLayout,
+        ),
+        row(
             IconName::PanelLeft,
             "Toggle sidebar",
             &format!("Files and the left panel ({cmd}B)"),
