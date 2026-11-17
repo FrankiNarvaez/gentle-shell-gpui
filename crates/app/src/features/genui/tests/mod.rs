@@ -18,6 +18,7 @@ enum Seen {
     Expand,
     Collapse,
     OpenWeb(String),
+    CancelSubagent(String),
 }
 
 impl From<&DiagramEvent> for Seen {
@@ -28,6 +29,7 @@ impl From<&DiagramEvent> for Seen {
             DiagramEvent::Expand => Seen::Expand,
             DiagramEvent::Collapse => Seen::Collapse,
             DiagramEvent::OpenWeb(url) => Seen::OpenWeb(url.clone()),
+            DiagramEvent::CancelSubagent(id) => Seen::CancelSubagent(id.clone()),
         }
     }
 }

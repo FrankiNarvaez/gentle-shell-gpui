@@ -38,6 +38,8 @@ pub enum DiagramEvent {
     Collapse,
     /// Open this http(s) URL in the in-app browser (the user confirmed).
     OpenWeb(String),
+    /// Stop this subagent (`cancel_subagent`): a kanban card's Stop.
+    CancelSubagent(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]

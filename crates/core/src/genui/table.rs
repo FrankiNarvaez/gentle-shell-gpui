@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::diagram::{Errors, MAX_LABEL, array, id_of, text, truncate};
 use super::edits::{Editable, format_number, list_names, number, plural};
+use super::live::Live;
 
 pub const MAX_COLUMNS: usize = 30;
 pub const MAX_ROWS: usize = 500;
@@ -106,6 +107,8 @@ pub struct Table {
     pub editable: bool,
     /// Selected row ids, in table order.
     pub selection: Vec<String>,
+    /// Rows read from a live source (see `genui::live`).
+    pub live: Option<Box<Live>>,
 }
 
 /// How a status cell is colored, from its words.
@@ -345,6 +348,22 @@ impl Table {
             Vec::new()
         };
 
+        let live = match spec.get("live") {
+            None | Some(Value::Null) => None,
+            Some(raw) => match Live::parse(raw) {
+                Ok(live) => {
+                    let keys: Vec<&str> = columns.iter().map(|c| c.key.as_str()).collect();
+                    live.check_columns(&keys)
+                        .into_iter()
+                        .for_each(|e| errors.push(e));
+                    Some(Box::new(live))
+                }
+                Err(live_errors) => {
+                    live_errors.into_iter().for_each(|e| errors.push(e));
+                    None
+                }
+            },
+        };
         if !errors.0.is_empty() {
             return Err(errors.0);
         }
@@ -355,6 +374,7 @@ impl Table {
             selectable,
             editable: spec.get("editable").and_then(Value::as_bool) == Some(true),
             selection,
+            live,
         })
     }
 
@@ -602,6 +622,9 @@ impl Editable for Table {
         map.insert("selectable".into(), json!(self.selectable));
         map.insert("editable".into(), json!(self.editable));
         map.insert("selection".into(), json!(self.selection));
+        if let Some(live) = &self.live {
+            map.insert("live".into(), live.to_value());
+        }
         Value::Object(map)
     }
 }

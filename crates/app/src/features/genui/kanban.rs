@@ -1,7 +1,10 @@
 //! The kanban panel: columns of cards laid out here (not by flex), so a
 //! card dragged between columns, the gap opening where it will land and
 //! the drop itself all glide. Click a card for its details (edit, ask,
-//! delete); double-click to edit; Alt-arrows move the selected card.
+//! delete); double-click to edit; Alt-arrows move the selected card. A
+//! card moved into a `starts` column goes to the agent at once, which
+//! dispatches a subagent for it; a card with an `agentId` shows that
+//! subagent's live status, and its details can stop it.
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -16,6 +19,8 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use super::diagram::DiagramEvent;
+use super::live::AgentStatus;
 use super::panel::{Body, CHROME, MAX_HEIGHT, PanelView};
 use crate::shared::ui;
 
@@ -38,7 +43,20 @@ fn card_height(card: &Card) -> f32 {
     if !card.tags.is_empty() || card.assignee.is_some() {
         h += 26.;
     }
+    if card.agent.is_some() || card.agent_id.is_some() {
+        h += 20.;
+    }
     h
+}
+
+/// A subagent's status color: working, finished, or stopped short.
+fn agent_color(status: &AgentStatus) -> Hsla {
+    match status.status.as_str() {
+        _ if status.active => ui::accent(),
+        "completed" | "done" | "succeeded" => ui::success(),
+        "failed" | "error" | "cancelled" | "canceled" | "timed_out" | "interrupted" => ui::danger(),
+        _ => ui::muted(),
+    }
 }
 
 /// Where everything sits on the board (px at 100 %, from its top-left).
@@ -286,6 +304,18 @@ impl PanelView {
             },
             cx,
         );
+        self.dispatch_started(cx);
+    }
+
+    /// Cards just moved into a `starts` column go to the agent at once
+    /// (with the other pending edits): it dispatches a subagent for each.
+    fn dispatch_started(&mut self, cx: &mut Context<Self>) {
+        let started = self
+            .kanban()
+            .is_some_and(|s| !Board::dispatches(s.edits.base(), s.edits.working()).is_empty());
+        if started {
+            self.send(cx);
+        }
     }
 
     pub(super) fn start_add_card(
@@ -344,6 +374,8 @@ impl PanelView {
             description: None,
             tags: Vec::new(),
             assignee: None,
+            agent: None,
+            agent_id: None,
         };
         if self.kanban_edit(Change::AddCard { card }, cx) {
             self.glides.appear(&id);
@@ -616,6 +648,7 @@ impl PanelView {
         if let Some(s) = state(self) {
             s.selected = Some(drag.card);
         }
+        self.dispatch_started(cx);
     }
 
     // ── Drawing ────────────────────────────────────────────────────────────
@@ -680,6 +713,23 @@ impl PanelView {
                                     .text_color(ui::fg())
                                     .child(column.label.clone()),
                             )
+                            .when(column.starts, |d| {
+                                d.child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "genui-column-starts-{}",
+                                            column.id
+                                        )))
+                                        .text_color(ui::accent())
+                                        .child(Icon::new(IconName::Bot).xsmall())
+                                        .tooltip(|window, cx| {
+                                            gpui_kit::component::tooltip::Tooltip::new(
+                                                "A card dropped here: the agent starts a subagent on it",
+                                            )
+                                            .build(window, cx)
+                                        }),
+                                )
+                            })
                             .child(ui::chip(
                                 count_text,
                                 if over { ui::warning() } else { ui::muted() },
@@ -864,6 +914,9 @@ impl PanelView {
                         })),
                 )
             })
+            .when(card.agent.is_some() || card.agent_id.is_some(), |d| {
+                d.child(self.agent_row(card))
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -875,6 +928,41 @@ impl PanelView {
                     }
                 }),
             )
+    }
+
+    /// "🤖 worker · running · writing · $0.12": the card's subagent, live
+    /// once the agent reported its id.
+    fn agent_row(&self, card: &Card) -> Stateful<Div> {
+        let status = card
+            .agent_id
+            .as_ref()
+            .and_then(|id| self.agents.iter().find(|a| &a.id == id));
+        let name = status
+            .map(|s| s.agent.clone())
+            .filter(|n| !n.is_empty())
+            .or_else(|| card.agent.as_ref()?.name.clone())
+            .unwrap_or_else(|| "subagent".into());
+        let (text, color) = match (status, &card.agent_id) {
+            (Some(s), _) => {
+                let mut parts = vec![s.status.clone()];
+                parts.extend(s.step.clone().filter(|step| *step != s.status));
+                parts.extend(s.cost.filter(|c| *c > 0.).map(|c| format!("${c:.2}")));
+                (parts.join(" · "), agent_color(s))
+            }
+            (None, Some(_)) => ("dispatched".to_string(), ui::info()),
+            (None, None) => ("not started".to_string(), ui::faint()),
+        };
+        let selector = format!("genui-card-agent-{}", card.id);
+        h_flex()
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector)
+            .gap_1()
+            .min_w_0()
+            .text_size(rems(11. / 16.))
+            .text_color(color)
+            .child(Icon::new(IconName::Bot).xsmall())
+            .child(div().flex_shrink_0().text_color(ui::muted()).child(name))
+            .child(div().min_w_0().truncate().child(text))
     }
 
     /// The selected card's details (or its editor), over the board's
@@ -1010,6 +1098,28 @@ impl PanelView {
                             button("genui-card-delete", IconName::Trash, "Delete").on_click(
                                 cx.listener(move |this, _, _, cx| this.remove_card(&remove_id, cx)),
                             ),
+                        )
+                        .when_some(
+                            card.agent_id
+                                .as_ref()
+                                .filter(|id| self.agents.iter().any(|a| &a.id == *id && a.active))
+                                .cloned(),
+                            |d, id| {
+                                d.child(
+                                    div().debug_selector(|| "genui-card-stop".into()).child(
+                                        button(
+                                            "genui-card-stop",
+                                            IconName::Square,
+                                            "Stop subagent",
+                                        )
+                                        .on_click(
+                                            cx.listener(move |_, _, _, cx| {
+                                                cx.emit(DiagramEvent::CancelSubagent(id.clone()))
+                                            }),
+                                        ),
+                                    ),
+                                )
+                            },
                         ),
                 )
                 .into_any_element(),

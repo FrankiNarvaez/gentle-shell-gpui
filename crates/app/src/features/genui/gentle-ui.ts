@@ -232,6 +232,116 @@ const COLUMN_TYPES = ["text", "number", "date", "status", "link"];
 const ALIGNS = ["left", "center", "right"];
 const FIELD_TYPES = ["text", "textarea", "number", "select", "multiselect", "checkbox", "radio", "slider", "date"];
 const CHART_TYPES = ["bar", "line", "area", "pie", "donut", "scatter"];
+// Live data (`live` on tables, charts and checklists; `gentle_core::genui::live`):
+// the app reads the source and fills the spec, so the agent doesn't push rows.
+const LIVE_SOURCES = ["jobs", "subagents", "git:status", "git:log", "todo", "command"];
+const PUSHED_SOURCES = ["jobs", "subagents", "todo"];
+const LIVE = { minInterval: 5, maxInterval: 3600, gitInterval: 10, commandInterval: 30, command: 500, path: 200 };
+const RUN_STATUSES = ["pending", "running", "done", "failed", "skipped"];
+const RUN_MODES = ["idle", "all", "step"];
+
+/** A JSONPath-lite pick, checked as `live::Path::parse` does: `$`, `.key`,
+ * `["key"]`, `[0]`, `[*]`, `.*`; without `$` it starts at the record. */
+function checkPath(text: string): string {
+	const path = text.trim();
+	if (path === "") throw new Error("a path can't be empty");
+	if (Array.from(path).length > LIVE.path) throw new Error(`bad path "${cut(path, 40)}": longer than ${LIVE.path} characters`);
+	let rest = path.startsWith("$") ? path.slice(1) : path.startsWith("[") ? path : `.${path}`;
+	const segment = /^(?:\.\*|\.[^.[\]"']+|\[\s*(?:\*|\d+)\s*\]|\["[^"]*"\]|\['[^']*'\])/;
+	while (rest !== "") {
+		const match = segment.exec(rest);
+		if (!match) throw new Error(`bad path "${cut(path, 40)}"`);
+		rest = rest.slice(match[0].length);
+	}
+	return path;
+}
+
+/** `live` checked and with defaults (as `live::Live::parse`); undefined when absent. */
+function normalizeLive(raw: unknown, fail: (message: string) => undefined): Json | undefined {
+	if (raw === undefined || raw === null) return undefined;
+	const object = isObject(raw) ? raw : undefined;
+	if (typeof raw !== "string" && object === undefined) return fail("live must be an object or a source name");
+	const named = typeof raw === "string" ? raw : typeof object?.source === "string" ? object.source : undefined;
+	const hasCommand = object?.command !== undefined && object?.command !== null;
+	const source = named !== undefined ? named.trim().toLowerCase() : hasCommand ? "command" : undefined;
+	if (source === undefined) return fail("live needs a source");
+	if (!LIVE_SOURCES.includes(source)) return fail(`unknown live source "${cut(String(named), 40)}" (one of ${LIVE_SOURCES.join(", ")})`);
+	const live: Json = { source };
+	if (source === "command") {
+		const c = object?.command;
+		if (!hasCommand) return fail("a command source needs live.command: {cmd, cwd?, parse?}");
+		const given = typeof c === "string" ? { cmd: c } : isObject(c) ? c : undefined;
+		if (given === undefined) return fail("live.command must be {cmd, cwd?, parse?}");
+		const cmd = typeof given.cmd === "string" ? given.cmd.trim() : "";
+		if (cmd === "") return fail("live.command.cmd must be a non-empty string");
+		if (Array.from(cmd).length > LIVE.command) return fail(`live.command.cmd is longer than ${LIVE.command} characters`);
+		if (/[\u0000-\u001f\u007f-\u009f]/.test(cmd)) return fail("live.command.cmd must be one line");
+		const command: Json = { cmd };
+		if (given.cwd !== undefined && given.cwd !== null) {
+			if (typeof given.cwd !== "string") return fail("live.command.cwd must be a folder path");
+			const dir = given.cwd.trim().replace(/[/\\]+$/, "");
+			if (dir !== "" && dir !== ".") {
+				if (/^[/\\~]/.test(dir) || dir[1] === ":" || dir.split(/[/\\]/).includes("..")) {
+					return fail(`live.command.cwd "${cut(dir, 60)}" must be a folder inside the workspace (relative, without "..")`);
+				}
+				command.cwd = dir;
+			}
+		}
+		const parse = given.parse === undefined || given.parse === null ? "lines" : lower(given.parse);
+		if (!["json", "lines", "csv"].includes(parse)) return fail("live.command.parse must be json, lines or csv");
+		command.parse = parse;
+		live.command = command;
+	} else if (hasCommand) {
+		return fail(`live.command only goes with source "command", not "${source}"`);
+	}
+	if (!PUSHED_SOURCES.includes(source)) {
+		const given = num(object?.interval ?? (isObject(object?.command) ? object.command.interval : undefined));
+		live.interval = given === undefined
+			? (source === "command" ? LIVE.commandInterval : LIVE.gitInterval)
+			: Math.min(LIVE.maxInterval, Math.max(LIVE.minInterval, Math.round(Math.max(0, given))));
+	}
+	const rawMap = object?.map;
+	if (rawMap !== undefined && rawMap !== null) {
+		if (!isObject(rawMap)) return fail("live.map must be an object");
+		const map: Json = {};
+		const pick = (where: string, value: unknown): string | undefined => {
+			if (typeof value !== "string") return fail(`live.map.${where} must be a path string`);
+			try {
+				return checkPath(value);
+			} catch (error) {
+				return fail(`live.map.${where}: ${(error as Error).message}`);
+			}
+		};
+		for (const key of ["items", "id", "label", "status", "note"]) {
+			if (rawMap[key] !== undefined) map[key] = pick(key, rawMap[key]);
+		}
+		for (const key of ["columns", "series"]) {
+			const picks = rawMap[key];
+			if (picks === undefined) continue;
+			if (!isObject(picks)) {
+				fail(`live.map.${key} must be an object of paths`);
+				continue;
+			}
+			map[key] = Object.fromEntries(Object.entries(picks).flatMap(([name, path]) => {
+				const checked = pick(`${key}.${name}`, path);
+				return checked === undefined ? [] : [[name, checked]];
+			}));
+		}
+		if (Object.keys(map).length > 0) live.map = map;
+	}
+	return live;
+}
+
+/** The summary's line about a live spec: the app refreshes it. */
+function withLive(text: string, surface: Surface): string {
+	const live = surface.spec.live;
+	if (!isObject(live)) return text;
+	const from = live.source === "command" && isObject(live.command)
+		? `the command \`${String(live.command.cmd)}\` (run only if the user allows it)`
+		: `the app's ${String(live.source)} data`;
+	const every = typeof live.interval === "number" ? `, every ${live.interval} s` : "";
+	return `${text}\nLive: the app fills it from ${from}${every}; don't update its rows, values or items yourself.`;
+}
 
 /** Hard errors, at most MAX.errors; `check` throws them all at once. */
 function problems(noun: string) {
@@ -358,7 +468,12 @@ function normalizeTable(raw: unknown): Json {
 	const selectable = raw.selectable !== false;
 	const wanted = new Set(list(raw.selection).flatMap((id) => idText(id) ?? []));
 	const selection = selectable ? rows.filter((r) => wanted.has(r.id as string)).map((r) => r.id) : [];
-	return clone({ columns, rows, sort, selectable, editable: raw.editable === true, selection });
+	const live = normalizeLive(raw.live, fail);
+	if (isObject(live?.map) && isObject(live.map.columns)) {
+		for (const key of Object.keys(live.map.columns)) if (!columns.some((c) => c.key === key)) fail(`live.map.columns: "${key}" is not a column`);
+	}
+	check();
+	return clone({ columns, rows, sort, selectable, editable: raw.editable === true, selection, live });
 }
 
 function patchTable(spec: Json, patch: Json): Json {
@@ -373,7 +488,7 @@ function patchTable(spec: Json, patch: Json): Json {
 		const changes = isObject(item.cells) ? item.cells : Object.fromEntries(Object.entries(item).filter(([k]) => k !== "id"));
 		for (const [k, v] of Object.entries(changes)) v === null ? delete cells[k] : (cells[k] = v);
 	});
-	scalars(next, patch, ["sort", "selection", "editable", "selectable"]);
+	scalars(next, patch, ["sort", "selection", "editable", "selectable", "live"]);
 	return normalizeTable(next);
 }
 
@@ -554,7 +669,13 @@ function normalizeChecklist(raw: unknown): Json {
 		const id = given ?? slugOf(text, "item", (s) => seen.has(s));
 		if (seen.has(id)) return fail(`duplicate item id "${id}"`);
 		seen.add(id);
-		return { id, label: text, done: isObject(item) && item.done === true, note: isObject(item) ? optionalText(item.note, MAX.text) : undefined };
+		// `status` wins over `done`; only running, failed and skipped are written out.
+		const named = isObject(item) ? lower(item.status) : "";
+		const status = RUN_STATUSES.includes(named) ? named : isObject(item) && item.done === true ? "done" : "pending";
+		return {
+			id, label: text, done: status === "done", status: status === "done" || status === "pending" ? undefined : status,
+			note: isObject(item) ? optionalText(item.note, MAX.text) : undefined,
+		};
 	};
 	const items: Json[] = [];
 	for (const top of raw.items.slice(0, LIMITS.items)) {
@@ -569,14 +690,43 @@ function normalizeChecklist(raw: unknown): Json {
 		if (subs.length > 0) item.items = subs;
 		items.push(item);
 	}
+	const live = normalizeLive(raw.live, fail);
 	check();
-	return clone({ items });
+	let run = raw.run === true ? "idle" : RUN_MODES.includes(lower(raw.run)) ? lower(raw.run) : undefined;
+	// A run is idle again once nothing runs and it is through (as `Checklist::settle`).
+	const { next, running } = planState(items);
+	if (!running && (run === "step" || (run === "all" && next === undefined))) run = "idle";
+	return clone({ items, run, live });
+}
+
+/** A run plan's steps (items without sub-items), the first pending one and the running one. */
+interface Plan {
+	steps: Json[];
+	statusOf(item: Json): string;
+	next?: Json;
+	running?: Json;
+	/** 1-based, among the steps. */
+	number(item: Json): number;
+}
+
+function planState(items: Json[]): Plan {
+	const all = items.flatMap((top) => [top, ...((top.items as Json[] | undefined) ?? [])]);
+	const steps = all.filter((item) => list(item.items).length === 0);
+	const statusOf = (item: Json) => (item.status as string | undefined) ?? (item.done ? "done" : "pending");
+	return {
+		steps,
+		statusOf,
+		next: steps.find((item) => statusOf(item) === "pending"),
+		running: all.find((item) => statusOf(item) === "running"),
+		number: (item: Json) => steps.indexOf(item) + 1,
+	};
 }
 
 /** Items upsert by id at either level; new ones go to the end of the top
- * level or of `parent`'s sub-items; `parent` on an existing item moves it. */
+ * level or of `parent`'s sub-items; `parent` on an existing item moves it.
+ * An item's `done` or `status` replaces the other; `run` and `live` replace. */
 function patchChecklist(spec: Json, patch: Json): Json {
-	const next = clone(spec) as { items: Json[] };
+	const next = clone(spec) as { items: Json[] } & Json;
 	const gone = removed(patch, "items");
 	next.items = next.items.filter((i) => !gone.has(i.id as string));
 	for (const top of next.items) if (Array.isArray(top.items)) top.items = (top.items as Json[]).filter((s) => !gone.has(s.id as string));
@@ -602,25 +752,77 @@ function patchChecklist(spec: Json, patch: Json): Json {
 				found = { id };
 				(parentGiven ? target! : next.items).push(found);
 			}
+			if ("done" in item && !("status" in item)) delete found.status;
+			if ("status" in item && !("done" in item)) delete found.done;
 			for (const [k, v] of Object.entries(item)) if (k !== "id" && k !== "parent") v === null ? delete found[k] : (found[k] = v);
 		}
 	}
+	scalars(next, patch, ["run", "live"]);
 	return normalizeChecklist(next);
 }
 
+const MARKS: Record<string, string> = { pending: " ", done: "x", running: "~", failed: "!", skipped: "-" };
+
 function summaryChecklist(surface: Surface): string {
-	const items = (surface.spec as { items: Json[] }).items;
+	const spec = surface.spec as { items: Json[]; run?: string };
+	const items = spec.items;
+	const plan = planState(items);
 	const all = items.flatMap((top) => [top, ...((top.items as Json[] | undefined) ?? [])]);
 	const lines = [`Checklist "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user (${all.filter((i) => i.done).length} of ${all.length} done).`];
-	const line = (item: Json, indent: string) =>
-		`${indent}- [${item.done ? "x" : " "}] ${item.id} ${quoted(item.label, 80)}${item.note ? ` — ${cut(String(item.note), 80)}` : ""}`;
+	const line = (item: Json, indent: string) => {
+		const status = plan.statusOf(item);
+		const word = status === "done" || status === "pending" ? "" : ` (${status})`;
+		return `${indent}- [${MARKS[status] ?? " "}] ${item.id} ${quoted(item.label, 80)}${word}${item.note ? ` — ${cut(String(item.note), 80)}` : ""}`;
+	};
 	for (const top of items) {
 		lines.push(line(top, ""));
 		for (const sub of (top.items as Json[] | undefined) ?? []) lines.push(line(sub, "  "));
 	}
 	if (lines.length > LIMITS.summaryLines) lines.splice(LIMITS.summaryLines, lines.length, `… and ${lines.length - LIMITS.summaryLines} more items`);
-	lines.push(`The user can check, add, edit, remove and reorder items; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	if (spec.run === undefined) {
+		lines.push(`The user can check, add, edit, remove and reorder items; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	} else {
+		lines.push(runNext(spec.run, plan));
+	}
 	return lines.join("\n");
+}
+
+/** What a run plan expects of the agent now. */
+function runNext(run: string, plan: Plan): string {
+	const name = (item: Json) => `step ${plan.number(item)} ${quoted(item.label, 80)} (${item.id})`;
+	const report = `report it with gentle_ui update {patch: {items: [{id, status: "done"}]}} (or "failed" with a note saying why)`;
+	if (plan.running) {
+		return `Run plan: ${name(plan.running)} is running: when it is through, ${report}` +
+			(run === "all" ? ", then go on with the next pending step." : ", then stop and wait for the user.");
+	}
+	if (run === "all" && plan.next) {
+		return `Run plan: the user is running it. Do ${name(plan.next)} next: first update it to status "running", do it, then ${report}; then continue with the next pending step.`;
+	}
+	return `Run plan: the user skips and reorders steps and presses Run or Run next; wait for their "${EVENT_MESSAGE}" saying which step to do, and report each step's status with update patches.`;
+}
+
+/** The checklist events that drive the agent: run, stop, run plan on. */
+function checklistInstructions(_before: Surface, after: Surface, changes: unknown[]): string[] {
+	const spec = after.spec as { items: Json[] };
+	const plan = planState(spec.items);
+	const lines: string[] = [];
+	for (const change of changes) {
+		if (!isObject(change)) continue;
+		if (change.op === "run") {
+			const item = plan.steps.find((s) => s.id === change.item);
+			if (item === undefined) continue;
+			lines.push(`Do step ${plan.number(item)} next: ${quoted(item.label, 120)} (${item.id}); it is marked running. ` +
+				`Then report it with gentle_ui update {patch: {items: [{id: "${item.id}", status: "done"}]}} (or "failed" with a note)` +
+				(change.mode === "all"
+					? ", and go on through the next pending steps the same way (mark each running, do it, report it) until none is pending or the user stops the plan."
+					: ", then stop and wait for the user."));
+		} else if (change.op === "stop") {
+			lines.push("The user stopped the plan: don't start another step. If one is running, finish or abandon it and report its status.");
+		} else if (change.op === "run_mode" && change.on === true) {
+			lines.push("The user turned this checklist into a run plan: wait for Run or Run next before doing a step.");
+		}
+	}
+	return lines;
 }
 
 function normalizeKanban(raw: unknown): Json {
@@ -638,7 +840,7 @@ function normalizeKanban(raw: unknown): Json {
 		if (columns.some((o) => o.id === id)) return fail(`duplicate column id "${id}"`);
 		const limit = isObject(c) && Number.isInteger(c.limit) && (c.limit as number) > 0 ? Math.min(c.limit as number, 999) : undefined;
 		const label = typeof c === "string" ? optionalText(c, MAX.label) : isObject(c) ? optionalText(c.label, MAX.label) : undefined;
-		columns.push({ id, label: label ?? id, limit });
+		columns.push({ id, label: label ?? id, limit, starts: isObject(c) && c.starts === true ? true : undefined });
 	});
 	const cards: Json[] = [];
 	cardsRaw.slice(0, LIMITS.cards).forEach((c, i) => {
@@ -651,9 +853,14 @@ function normalizeKanban(raw: unknown): Json {
 		if (column === undefined) return;
 		if (!columns.some((o) => o.id === column)) return fail(`card "${id}" is in column "${column}", which is not in columns`);
 		const tags = [...new Set(list(c.tags).flatMap((t) => (typeof t === "string" && t.trim() !== "" ? [cut(t.trim(), LIMITS.tag)] : [])))].slice(0, LIMITS.tags);
+		const agent: Json = typeof c.agent === "string"
+			? { name: optionalText(c.agent, MAX.label) }
+			: isObject(c.agent) ? { name: optionalText(c.agent.name, MAX.label), task: optionalText(c.agent.task, MAX.text) } : {};
 		cards.push({
 			id, title, column, description: optionalText(c.description, MAX.text),
 			tags: tags.length > 0 ? tags : undefined, assignee: optionalText(c.assignee, MAX.label),
+			agent: agent.name === undefined && agent.task === undefined ? undefined : agent,
+			agentId: idText(c.agentId),
 		});
 	});
 	check();
@@ -682,11 +889,30 @@ function summaryKanban(surface: Surface): string {
 		const cards = spec.cards.filter((c) => c.column === column.id);
 		const count = column.limit ? `${cards.length}/${column.limit}` : `${cards.length}`;
 		const shown = cards.map((c) =>
-			`${c.id} ${quoted(c.title, 60)}${c.assignee ? ` @${c.assignee}` : ""}${c.tags ? ` [${(c.tags as string[]).join(", ")}]` : ""}`);
-		lines.push(listed(`${column.label} (${column.id}, ${count})`, shown).replace(/: $/, ""));
+			`${c.id} ${quoted(c.title, 60)}${c.assignee ? ` @${c.assignee}` : ""}${c.tags ? ` [${(c.tags as string[]).join(", ")}]` : ""}` +
+			`${c.agentId ? ` [subagent ${c.agentId}]` : isObject(c.agent) ? ` [for ${c.agent.name ?? "a subagent"}]` : ""}`);
+		const starts = column.starts ? ", dropping a card here starts a subagent" : "";
+		lines.push(listed(`${column.label} (${column.id}, ${count}${starts})`, shown).replace(/: $/, ""));
 	}
 	lines.push(`The user can drag cards between and within columns, add, edit and remove them; their edits arrive as "${EVENT_MESSAGE}" messages.`);
 	return lines.join("\n");
+}
+
+/** A card dropped into a `starts` column: dispatch a subagent for it (the
+ * app can't start one: Desktop RPC has no start method by design). */
+function kanbanInstructions(_before: Surface, after: Surface, changes: unknown[]): string[] {
+	const cards = (after.spec as { cards: Json[] }).cards;
+	return changes.flatMap((change) => {
+		if (!isObject(change) || change.op !== "dispatch") return [];
+		const card = cards.find((c) => c.id === change.card);
+		if (card === undefined) return [];
+		const agent = isObject(card.agent) ? card.agent : {};
+		const task = typeof agent.task === "string" ? agent.task : `${String(card.title)}${card.description ? `: ${String(card.description)}` : ""}`;
+		return [
+			`Dispatch a subagent for the card ${quoted(card.title, 80)} (${card.id})${typeof agent.name === "string" ? ` using the ${agent.name} agent` : ""} with this task: ${task}. ` +
+				`Use your own subagent tool; once it is dispatched, call gentle_ui update with patch {cards: [{id: "${card.id}", agentId: "<the subagent's id>"}]} so the card follows its live status.`,
+		];
+	});
 }
 
 function normalizeChart(raw: unknown): Json {
@@ -736,11 +962,14 @@ function normalizeChart(raw: unknown): Json {
 			if (count !== labels.length) fail(`series “${s.name}” has ${plural(count, "value")} but there are ${plural(labels.length, "label")}`);
 		}
 	}
+	const live = normalizeLive(raw.live, fail);
+	if (live !== undefined && type === "scatter") fail("a live chart needs labels: any type but scatter");
 	check();
 	return clone({
 		type, labels: type === "scatter" ? undefined : labels, series,
 		xTitle: optionalText(raw.xTitle, MAX.label), yTitle: optionalText(raw.yTitle, MAX.label), unit: optionalText(raw.unit, 16),
 		stacked: raw.stacked === true && (type === "bar" || type === "area") ? true : undefined,
+		live: type === "scatter" ? undefined : live,
 	});
 }
 
@@ -750,7 +979,7 @@ function patchChart(spec: Json, patch: Json): Json {
 	const gone = removed(patch, "series");
 	next.series = next.series.filter((s) => !gone.has(s.name as string));
 	upsert(next.series, patch.series, "name", "series");
-	scalars(next, patch, ["type", "labels", "xTitle", "yTitle", "unit", "stacked"]);
+	scalars(next, patch, ["type", "labels", "xTitle", "yTitle", "unit", "stacked", "live"]);
 	return normalizeChart(next);
 }
 
@@ -879,6 +1108,9 @@ interface KindDef {
 	/** `spec` with `patch` merged, validated. */
 	patch(spec: Json, patch: Json): Json;
 	summary(surface: Surface): string;
+	/** What an event asks of the agent beyond the edits (run a step,
+	 * dispatch a subagent), from the surface before and after it. */
+	instructions?(before: Surface, after: Surface, changes: unknown[]): string[];
 }
 
 const KINDS: Record<string, KindDef> = {
@@ -889,11 +1121,14 @@ const KINDS: Record<string, KindDef> = {
 		patch: (spec, patch) => applyPatch(spec as unknown as Spec, patch) as unknown as Json,
 		summary,
 	},
-	table: { noun: "table", title: "Table", normalize: normalizeTable, patch: patchTable, summary: summaryTable },
+	table: { noun: "table", title: "Table", normalize: normalizeTable, patch: patchTable, summary: (s) => withLive(summaryTable(s), s) },
 	form: { noun: "form", title: "Form", normalize: normalizeForm, patch: patchForm, summary: summaryForm },
-	checklist: { noun: "checklist", title: "Checklist", normalize: normalizeChecklist, patch: patchChecklist, summary: summaryChecklist },
-	kanban: { noun: "board", title: "Board", normalize: normalizeKanban, patch: patchKanban, summary: summaryKanban },
-	chart: { noun: "chart", title: "Chart", normalize: normalizeChart, patch: patchChart, summary: summaryChart },
+	checklist: {
+		noun: "checklist", title: "Checklist", normalize: normalizeChecklist, patch: patchChecklist,
+		summary: (s) => withLive(summaryChecklist(s), s), instructions: checklistInstructions,
+	},
+	kanban: { noun: "board", title: "Board", normalize: normalizeKanban, patch: patchKanban, summary: summaryKanban, instructions: kanbanInstructions },
+	chart: { noun: "chart", title: "Chart", normalize: normalizeChart, patch: patchChart, summary: (s) => withLive(summaryChart(s), s) },
 	html: { noun: "HTML UI", title: "HTML", normalize: normalizeHtml, patch: patchHtml, summary: summaryHtml },
 };
 
@@ -915,11 +1150,13 @@ const Params = Type.Object({
 		description:
 			"Full spec for the kind. diagram: { direction?: LR|TB, groups?: [{id,label,description?}], nodes: [{id,label,kind?,group?,description?,tech?,status?}], edges?: [{id?,from,to,label?,style?}] }; " +
 			`node kind: ${NODE_KINDS.join("|")}, status: ${STATUSES.join("|")}, edge style: ${EDGE_STYLES.join("|")}. ` +
-			`table: { columns: [{key,label?,type?: ${COLUMN_TYPES.join("|")},align?}], rows: [{id,cells:{key:value}}], sort?: {column,direction:asc|desc}, editable?, selectable?, selection?: [row ids] }. ` +
+			`table: { columns: [{key,label?,type?: ${COLUMN_TYPES.join("|")},align?}], rows: [{id,cells:{key:value}}], sort?: {column,direction:asc|desc}, editable?, selectable?, selection?: [row ids], live? }. ` +
 			`form: { fields: [{id,type: ${FIELD_TYPES.join("|")},label,help?,placeholder?,required?,options?: [value|{value,label}],min?,max?,step?,default?}], description?, submitLabel?, values? }. ` +
-			"checklist: { items: [{id,label,done?,note?,items?: [sub-items, one level]}] }. " +
-			"kanban: { columns: [{id,label,limit?}], cards: [{id,title,column,description?,tags?,assignee?}] }. " +
-			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked? }. ` +
+			"checklist: { items: [{id,label,done?,status?: pending|running|done|failed|skipped,note?,items?: [sub-items, one level]}], run?: true (a plan the user runs), live? }. " +
+			"kanban: { columns: [{id,label,limit?,starts?: true (a card dropped here asks you to dispatch a subagent)}], cards: [{id,title,column,description?,tags?,assignee?,agent?: {name?,task?},agentId?}] }. " +
+			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked?, live? }. ` +
+			`live (table, chart, checklist; the app fills the data): { source: ${LIVE_SOURCES.filter((s) => s !== "command").join("|")}, map? } or { command: {cmd, cwd?, parse: json|lines|csv}, interval?: seconds ≥ ${LIVE.minInterval}, map? }; ` +
+			"map: { items?: path to the records, id?, columns?: {key: path} (table), label?, status?, note? (checklist), label?, series?: {name: path} (chart) } with JSONPath-lite paths ($.a.b, $.list[0], $.list[*], relative to each record). " +
 			"html: { html: self-contained page ≤512 KiB, height?: px, data?: object (the page's tool input/result), csp?: { connectDomains?, resourceDomains?, frameDomains?, baseUriDomains? } (origins; default no network) }.",
 	})),
 	patch: Type.Optional(Type.Object({}, {
@@ -928,8 +1165,8 @@ const Params = Type.Object({
 			"Changes for update; lists upsert (null clears a field) and remove: {...} deletes. diagram: { nodes?, edges? (by id or from+to), groups?, remove?: {nodes,edges,groups}, direction? }. " +
 			"table: { rows? (by id, cells merge), columns? (by key), remove?: {rows,columns}, sort?, selection?, editable? }. " +
 			"form: { fields? (by id), values?: {id: value}, remove?: {fields}, submitted? } (an update reopens a submitted form). " +
-			"checklist: { items? (by id at any level; parent: id|null places it), remove?: {items} }. " +
-			"kanban: { cards? (by id), columns? (by id), remove?: {cards,columns} }. chart: { series? (by name), remove?: {series}, labels?, type?, titles? }. " +
+			"checklist: { items? (by id at any level; parent: id|null places it; status: pending|running|done|failed|skipped), remove?: {items}, run?, live? }. " +
+			"kanban: { cards? (by id; agentId: the subagent you dispatched), columns? (by id), remove?: {cards,columns} }. chart: { series? (by name), remove?: {series}, labels?, type?, titles?, live? }. table: also live?. " +
 			"html: { html?, height?, csp? (replace; null clears), data?: {merged; null deletes a key} } (data-only updates reach the open page without reloading).",
 	})),
 });
@@ -1004,6 +1241,9 @@ export default function gentleUi(pi: ExtensionAPI) {
 			"A gentle_ui form's answers arrive once, when the user submits (op submit); wait for them instead of guessing. To ask again or change the questions, update the form: an update reopens it.",
 			`gentle_ui example: ${EXAMPLE}`,
 			...KIND_EXAMPLES,
+			"A gentle_ui checklist with run: true is a plan the user runs: they skip and reorder steps and press Run or Run next, and a gentle-ui.event tells you which step to do next. Before a step, update it {items:[{id, status:\"running\"}]}; after it, update it to done or failed (with a note). After Run (all), go on through the pending steps yourself; after Run next, stop after that step; when the user stops the plan, start no new step.",
+			"A gentle_ui kanban column with starts: true dispatches work: when the user drags a card into it, a gentle-ui.event asks you to dispatch a subagent for that card (card.agent {name, task} says which and what). Dispatch it with your own subagent tool, then update the card with agentId set to the subagent's id: the card then shows its live status, step and cost, and the user can stop it there.",
+			"gentle_ui tables, charts and checklists can be live: spec.live {source: jobs|subagents|git:status|git:log|todo} or {command: {cmd, cwd?, parse}, interval} with a map of JSONPath-lite picks. The app reads the data itself and keeps the UI current (commands only after the user allows them on the card), so don't push rows or values for a live UI; use it for dashboards of background jobs, subagents, git state or a test command's JSON.",
 			"Use gentle_ui kind html only for custom interactive visuals, simulations, calculators or working prototypes no other kind fits (design screens and mockups stay in gentle_design). The page is an MCP App: self-contained (inline JS/CSS, no network unless spec.csp lists origins), put changing values in spec.data and update them with patch {data}.",
 			"A gentle_ui html page talks JSON-RPC 2.0 over window.parent.postMessage(msg, \"*\"): request ui/initialize {protocolVersion:\"2026-01-26\",appInfo:{name,version},appCapabilities:{}} (result.hostContext.styles.variables: theme CSS vars like --color-background-primary, --color-text-primary, --color-ring-primary, --font-sans; apply them), then notify ui/notifications/initialized; it receives ui/notifications/tool-result {structuredContent: spec.data}. Request ui/message {role:\"user\",content:[{type:\"text\",text}]} to message you, ui/update-model-context {content|structuredContent} to share state, ui/open-link {url}; notify ui/notifications/size-changed {height}.",
 		],
@@ -1137,6 +1377,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 					`The user edited the ${def.noun} "${surface.title}" (${surface.id}, now v${surface.version}) in the app:`,
 					...said.map((line) => `- ${line}`),
 					...(note ? [`Note from the user: ${note}`] : []),
+					...(def.instructions?.(current, surface, changes) ?? []),
 					`Changes: ${JSON.stringify(changes)}`,
 					def.summary(surface),
 				].join("\n");

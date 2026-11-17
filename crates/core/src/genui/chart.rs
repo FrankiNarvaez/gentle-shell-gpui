@@ -10,6 +10,7 @@ use serde_json::{Map, Value, json};
 use super::diagram::{Errors, MAX_LABEL, array, id_of, text, truncate};
 use super::edits::{format_number, number, plural};
 use super::layout::{Point, Rect};
+use super::live::Live;
 
 pub const MAX_SERIES: usize = 12;
 pub const MAX_POINTS: usize = 1000;
@@ -77,6 +78,8 @@ pub struct Chart {
     pub stacked: bool,
     /// Appended to values in tooltips ("ms", "USD").
     pub unit: Option<String>,
+    /// Labels and values read from a live source (see `genui::live`).
+    pub live: Option<Box<Live>>,
 }
 
 fn label_of(value: &Value) -> Option<String> {
@@ -209,6 +212,17 @@ impl Chart {
                 }
             }
         }
+        let live = match spec.get("live") {
+            None | Some(Value::Null) => None,
+            Some(_) if kind == ChartType::Scatter => {
+                errors.push("a live chart needs labels: any type but scatter".into());
+                None
+            }
+            Some(raw) => Live::parse(raw)
+                .map_err(|live_errors| live_errors.into_iter().for_each(|e| errors.push(e)))
+                .ok()
+                .map(Box::new),
+        };
         if !errors.0.is_empty() {
             return Err(errors.0);
         }
@@ -221,6 +235,7 @@ impl Chart {
             stacked: spec.get("stacked").and_then(Value::as_bool) == Some(true)
                 && matches!(kind, ChartType::Bar | ChartType::Area),
             unit: text(spec.get("unit"), 16),
+            live,
         })
     }
 
@@ -255,6 +270,9 @@ impl Chart {
         }
         if self.stacked {
             map.insert("stacked".into(), json!(true));
+        }
+        if let Some(live) = &self.live {
+            map.insert("live".into(), live.to_value());
         }
         Value::Object(map)
     }

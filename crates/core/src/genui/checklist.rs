@@ -1,19 +1,101 @@
 //! The checklist kind: items with one level of sub-items that the user
-//! checks off, adds, edits, removes and reorders (plans, TODOs).
+//! checks off, adds, edits, removes and reorders (plans, TODOs). With
+//! `run` on it is a plan the user drives: items carry a [`Status`], the
+//! user skips and reorders steps and asks the agent to run them
+//! ([`Change::Run`], [`Change::Stop`]), and the agent reports each step's
+//! status back with `update`.
 
 use serde_json::{Map, Value, json};
 
 use super::diagram::{Errors, MAX_TEXT, array, id_of, text, truncate};
 use super::edits::{Editable, fresh_id, list_names, plural};
+use super::live::Live;
 
 pub const MAX_ITEMS: usize = 200;
 pub const MAX_ITEM_LABEL: usize = 200;
+
+/// Where an item is in a run plan. `done` is `Done`; the others are only
+/// written out when the item has them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Status {
+    #[default]
+    Pending,
+    Running,
+    Done,
+    Failed,
+    Skipped,
+}
+
+impl Status {
+    pub const ALL: [Status; 5] = [
+        Status::Pending,
+        Status::Running,
+        Status::Done,
+        Status::Failed,
+        Status::Skipped,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Status::Pending => "pending",
+            Status::Running => "running",
+            Status::Done => "done",
+            Status::Failed => "failed",
+            Status::Skipped => "skipped",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Status> {
+        Status::ALL
+            .into_iter()
+            .find(|s| s.name().eq_ignore_ascii_case(name.trim()))
+    }
+
+    /// Implied by `done` alone (so not written out).
+    fn plain(self) -> bool {
+        matches!(self, Status::Pending | Status::Done)
+    }
+}
+
+/// A run plan's state (`spec.run`): `true` or `"idle"` turns it on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Run {
+    /// On, nothing asked for.
+    Idle,
+    /// The user asked the agent to work through every pending step.
+    All,
+    /// The user asked for one step.
+    Step,
+}
+
+impl Run {
+    pub fn name(self) -> &'static str {
+        match self {
+            Run::Idle => "idle",
+            Run::All => "all",
+            Run::Step => "step",
+        }
+    }
+
+    /// `None`: off (absent, false, null, or a word it doesn't know).
+    fn parse(value: Option<&Value>) -> Option<Run> {
+        match value? {
+            Value::Bool(true) => Some(Run::Idle),
+            Value::String(s) => [Run::Idle, Run::All, Run::Step]
+                .into_iter()
+                .find(|r| r.name().eq_ignore_ascii_case(s.trim())),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
     pub id: String,
     pub label: String,
+    /// `status == Done`, kept in step with it.
     pub done: bool,
+    pub status: Status,
     pub note: Option<String>,
     /// Sub-items (only on top-level items: one level).
     pub items: Vec<Item>,
@@ -25,9 +107,15 @@ impl Item {
             id: id.into(),
             label: label.into(),
             done: false,
+            status: Status::Pending,
             note: None,
             items: Vec::new(),
         }
+    }
+
+    fn set_status(&mut self, status: Status) {
+        self.status = status;
+        self.done = status == Status::Done;
     }
 
     fn to_value(&self) -> Value {
@@ -35,6 +123,9 @@ impl Item {
         map.insert("id".into(), json!(self.id));
         map.insert("label".into(), json!(self.label));
         map.insert("done".into(), json!(self.done));
+        if !self.status.plain() {
+            map.insert("status".into(), json!(self.status.name()));
+        }
         if let Some(note) = &self.note {
             map.insert("note".into(), json!(note));
         }
@@ -59,6 +150,10 @@ impl Item {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Checklist {
     pub items: Vec<Item>,
+    /// `Some`: a run plan the user drives.
+    pub run: Option<Run>,
+    /// Boxed: rare, and kept small in the edit history's copies.
+    pub live: Option<Box<Live>>,
 }
 
 /// Where an item sits: its parent (`None`: top level) and index there.
@@ -107,10 +202,21 @@ impl Checklist {
                 return None;
             }
             seen.push(id.clone());
+            // `status` wins over `done`; an unknown word is ignored.
+            let status = raw
+                .get("status")
+                .and_then(Value::as_str)
+                .and_then(Status::parse)
+                .unwrap_or(if raw.get("done").and_then(Value::as_bool) == Some(true) {
+                    Status::Done
+                } else {
+                    Status::Pending
+                });
             Some(Item {
                 id,
                 label,
-                done: raw.get("done").and_then(Value::as_bool) == Some(true),
+                done: status == Status::Done,
+                status,
                 note: text(raw.get("note"), MAX_TEXT),
                 items: Vec::new(),
             })
@@ -132,10 +238,60 @@ impl Checklist {
             }
             list.items.push(item);
         }
+        list.run = Run::parse(spec.get("run"));
+        match spec.get("live") {
+            None | Some(Value::Null) => {}
+            Some(raw) => match Live::parse(raw) {
+                Ok(live) => list.live = Some(Box::new(live)),
+                Err(live_errors) => live_errors.into_iter().for_each(|e| errors.push(e)),
+            },
+        }
         if !errors.0.is_empty() {
             return Err(errors.0);
         }
+        list.settle();
         Ok(list)
+    }
+
+    /// A run that asked for something is idle again once nothing runs and
+    /// it is through: one step (`Step`), or every pending step (`All`).
+    pub fn settle(&mut self) {
+        let through = match self.run {
+            Some(Run::Step) => true,
+            Some(Run::All) => self.next_step().is_none(),
+            _ => false,
+        };
+        if through && self.running().is_none() {
+            self.run = Some(Run::Idle);
+        }
+    }
+
+    /// The steps of a run plan, in order: every item without sub-items.
+    pub fn steps(&self) -> Vec<&Item> {
+        self.flat()
+            .into_iter()
+            .map(|(_, item)| item)
+            .filter(|item| item.items.is_empty())
+            .collect()
+    }
+
+    /// `id`'s step number (1-based) in [`Self::steps`].
+    pub fn step_number(&self, id: &str) -> Option<usize> {
+        self.steps().iter().position(|i| i.id == id).map(|i| i + 1)
+    }
+
+    /// The first pending step (skipped, failed and done ones are passed over).
+    pub fn next_step(&self) -> Option<&Item> {
+        self.steps()
+            .into_iter()
+            .find(|i| i.status == Status::Pending)
+    }
+
+    pub fn running(&self) -> Option<&Item> {
+        self.flat()
+            .into_iter()
+            .map(|(_, item)| item)
+            .find(|item| item.status == Status::Running)
     }
 
     pub fn count(&self) -> usize {
@@ -273,15 +429,65 @@ pub enum Change {
         parent: Option<String>,
         items: Vec<String>,
     },
+    /// A step's run status (the user skips one, or sets a failed one back
+    /// to pending); done ⇄ pending is a [`Change::Toggle`].
+    Status {
+        item: String,
+        status: Status,
+    },
+    /// The toolbar's "Run plan": turns the run plan on or off.
+    RunMode {
+        on: bool,
+    },
+    /// Run / Run next: the agent should do `item` (now running), then go
+    /// on through the pending steps (`All`) or stop there (`Step`).
+    Run {
+        mode: Run,
+        item: Option<String>,
+    },
+    /// Stop: don't start another step.
+    Stop,
 }
 
 impl Editable for Checklist {
     type Change = Change;
 
-    /// Adds, orders (top level first), removes, edits, toggles.
+    /// Run mode on/off, adds, orders (top level first), removes, edits,
+    /// toggles and statuses, then run or stop.
     fn diff(old: &Self, new: &Self) -> Vec<Change> {
         let mut changes = Vec::new();
         let mut sim = old.clone();
+        match (old.run, new.run) {
+            (None, Some(Run::Idle)) => changes.push(Change::RunMode { on: true }),
+            (Some(_), None) => changes.push(Change::RunMode { on: false }),
+            _ => {}
+        }
+        for change in &changes {
+            let _ = sim.apply(change);
+        }
+        // The step a run started: running now and not before.
+        let started = new
+            .flat()
+            .into_iter()
+            .map(|(_, item)| item)
+            .find(|item| {
+                item.status == Status::Running
+                    && old
+                        .item(&item.id)
+                        .is_none_or(|o| o.status != Status::Running)
+            })
+            .map(|item| item.id.clone());
+        let run = match new.run {
+            Some(mode @ (Run::All | Run::Step)) if old.run != new.run || started.is_some() => {
+                Some(Change::Run {
+                    mode,
+                    item: started.clone(),
+                })
+            }
+            Some(Run::Idle) if matches!(old.run, Some(Run::All | Run::Step)) => Some(Change::Stop),
+            _ => None,
+        };
+        let started = started.filter(|_| matches!(run, Some(Change::Run { .. })));
         for (parent, item) in new.flat() {
             if old.item(&item.id).is_none() {
                 let change = Change::Add {
@@ -331,14 +537,22 @@ impl Editable for Checklist {
                     note: (before.note != item.note).then(|| item.note.clone()),
                 });
             }
-            if before.done != item.done {
-                toggles.push(Change::Toggle {
-                    item: item.id.clone(),
-                    done: item.done,
-                });
+            if before.status != item.status {
+                if before.status.plain() && item.status.plain() {
+                    toggles.push(Change::Toggle {
+                        item: item.id.clone(),
+                        done: item.done,
+                    });
+                } else if started.as_ref() != Some(&item.id) {
+                    toggles.push(Change::Status {
+                        item: item.id.clone(),
+                        status: item.status,
+                    });
+                }
             }
         }
         changes.append(&mut toggles);
+        changes.extend(run);
         changes
     }
 
@@ -346,7 +560,34 @@ impl Editable for Checklist {
         let unknown = |id: &str| format!("unknown item \"{id}\"");
         match change {
             Change::Toggle { item, done } => {
-                self.item_mut(item).ok_or_else(|| unknown(item))?.done = *done;
+                self.item_mut(item)
+                    .ok_or_else(|| unknown(item))?
+                    .set_status(if *done { Status::Done } else { Status::Pending });
+            }
+            Change::Status { item, status } => {
+                self.item_mut(item)
+                    .ok_or_else(|| unknown(item))?
+                    .set_status(*status);
+            }
+            Change::RunMode { on } => {
+                self.run = match (on, self.run) {
+                    (true, None) => Some(Run::Idle),
+                    (true, run) => run,
+                    (false, _) => None,
+                };
+            }
+            Change::Run { mode, item } => {
+                if let Some(item) = item {
+                    self.item_mut(item)
+                        .ok_or_else(|| unknown(item))?
+                        .set_status(Status::Running);
+                }
+                self.run = Some(*mode);
+            }
+            Change::Stop => {
+                if self.run.is_some() {
+                    self.run = Some(Run::Idle);
+                }
             }
             Change::Edit { item, label, note } => {
                 let it = self.item_mut(item).ok_or_else(|| unknown(item))?;
@@ -453,6 +694,12 @@ impl Editable for Checklist {
             Change::Order { parent, items } => {
                 json!({"op": "order", "parent": parent, "items": items})
             }
+            Change::Status { item, status } => {
+                json!({"op": "status", "item": item, "status": status.name()})
+            }
+            Change::RunMode { on } => json!({"op": "run_mode", "on": on}),
+            Change::Run { mode, item } => json!({"op": "run", "mode": mode.name(), "item": item}),
+            Change::Stop => json!({"op": "stop"}),
         }
     }
 
@@ -513,11 +760,41 @@ impl Editable for Checklist {
                     "reordered the list".into()
                 }
             }
+            Change::Status { item, status } => match status {
+                Status::Skipped => format!("skipped {}", name(item)),
+                Status::Pending => format!("set {} back to pending", name(item)),
+                other => format!("marked {} as {}", name(item), other.name()),
+            },
+            Change::RunMode { on: true } => "turned on Run plan".into(),
+            Change::RunMode { on: false } => "turned off Run plan".into(),
+            Change::Run { mode, item } => {
+                let step = item.as_deref().map(|id| {
+                    let n = after.step_number(id).unwrap_or(0);
+                    format!("step {n} {}", name(id))
+                });
+                match (mode, step) {
+                    (Run::Step, Some(step)) => format!("asked the agent to do {step} next"),
+                    (_, Some(step)) => format!("ran the plan from {step}"),
+                    _ => "ran the plan".into(),
+                }
+            }
+            Change::Stop => "stopped the plan".into(),
         }
     }
 
     fn to_value(&self) -> Value {
-        json!({"items": self.items.iter().map(Item::to_value).collect::<Vec<_>>()})
+        let mut map = Map::new();
+        map.insert(
+            "items".into(),
+            self.items.iter().map(Item::to_value).collect(),
+        );
+        if let Some(run) = self.run {
+            map.insert("run".into(), json!(run.name()));
+        }
+        if let Some(live) = &self.live {
+            map.insert("live".into(), live.to_value());
+        }
+        Value::Object(map)
     }
 }
 
@@ -701,5 +978,147 @@ mod tests {
         .unwrap();
         assert_eq!(list.ids(None), vec!["ui", "plan", "ship-it"]);
         round_trip(&base, &list);
+    }
+
+    fn plan() -> Checklist {
+        Checklist::parse(&json!({"run": true, "items": [
+            {"id": "backup", "label": "Back up", "status": "done"},
+            {"id": "migrate", "label": "Migrate", "items": [
+                {"id": "users", "label": "users"},
+                {"id": "orders", "label": "orders", "status": "failed", "note": "lock timeout"}
+            ]},
+            {"id": "verify", "label": "Verify"}
+        ]}))
+        .unwrap()
+    }
+
+    #[test]
+    fn statuses_parse_with_done_and_round_trip() {
+        let list = plan();
+        assert_eq!(list.run, Some(Run::Idle));
+        let backup = list.item("backup").unwrap();
+        assert!(backup.done && backup.status == Status::Done);
+        assert_eq!(list.item("orders").unwrap().status, Status::Failed);
+        // `status` wins over `done`; an unknown one falls back to `done`.
+        let odd = Checklist::parse(&json!({"items": [
+            {"id": "a", "label": "A", "done": true, "status": "running"},
+            {"id": "b", "label": "B", "done": true, "status": "later"}
+        ]}))
+        .unwrap();
+        assert_eq!(odd.item("a").unwrap().status, Status::Running);
+        assert!(!odd.item("a").unwrap().done);
+        assert_eq!(odd.item("b").unwrap().status, Status::Done);
+        // Done and pending stay `done` only on the wire.
+        let value = list.to_value();
+        assert_eq!(value["run"], "idle");
+        assert_eq!(
+            value["items"][0],
+            json!({"id": "backup", "label": "Back up", "done": true})
+        );
+        assert_eq!(value["items"][1]["items"][1]["status"], "failed");
+        assert_eq!(Checklist::parse(&value).unwrap(), list);
+        assert_eq!(
+            Checklist::parse(&json!({"items": [], "run": false}))
+                .unwrap()
+                .run,
+            None
+        );
+    }
+
+    #[test]
+    fn steps_are_leaves_and_the_next_is_the_first_pending() {
+        let list = plan();
+        let steps: Vec<&str> = list.steps().iter().map(|i| i.id.as_str()).collect();
+        assert_eq!(steps, vec!["backup", "users", "orders", "verify"]);
+        assert_eq!(list.next_step().map(|i| i.id.as_str()), Some("users"));
+        assert_eq!(list.step_number("verify"), Some(4));
+        assert_eq!(list.running(), None);
+    }
+
+    #[test]
+    fn run_skip_and_stop_are_changes_the_agent_reads() {
+        let base = plan();
+        let mut edits = Edits::new(base.clone());
+        // Skip "users", then Run next: the next pending step is "verify".
+        edits
+            .edit(&Change::Status {
+                item: "users".into(),
+                status: Status::Skipped,
+            })
+            .unwrap();
+        let next = edits.working().next_step().unwrap().id.clone();
+        assert_eq!(next, "verify");
+        edits
+            .edit(&Change::Run {
+                mode: Run::Step,
+                item: Some(next),
+            })
+            .unwrap();
+        let working = edits.working();
+        assert_eq!(working.run, Some(Run::Step));
+        assert_eq!(working.running().map(|i| i.id.as_str()), Some("verify"));
+        let (values, lines) = edits.summarize();
+        assert_eq!(
+            values,
+            vec![
+                json!({"op": "status", "item": "users", "status": "skipped"}),
+                json!({"op": "run", "mode": "step", "item": "verify"}),
+            ]
+        );
+        assert_eq!(
+            lines,
+            vec![
+                "skipped “users”",
+                "asked the agent to do step 4 “Verify” next"
+            ]
+        );
+        round_trip(&base, edits.working());
+
+        // Stop while a step runs: back to idle, the step stays the agent's.
+        let running = edits.working().clone();
+        let mut stopped = running.clone();
+        stopped.apply(&Change::Stop).unwrap();
+        assert_eq!(stopped.run, Some(Run::Idle));
+        assert_eq!(Checklist::diff(&running, &stopped), vec![Change::Stop]);
+
+        // Turning the plan on and off.
+        let mut plain = sample();
+        let before = plain.clone();
+        plain.apply(&Change::RunMode { on: true }).unwrap();
+        assert_eq!(
+            Checklist::diff(&before, &plain),
+            vec![Change::RunMode { on: true }]
+        );
+        plain.apply(&Change::RunMode { on: false }).unwrap();
+        assert_eq!(plain, before);
+    }
+
+    #[test]
+    fn a_run_settles_when_its_steps_are_through() {
+        let run = |mode: &str, statuses: [&str; 2]| {
+            Checklist::parse(&json!({"run": mode, "items": [
+                {"id": "a", "label": "A", "status": statuses[0]},
+                {"id": "b", "label": "B", "status": statuses[1]}
+            ]}))
+            .unwrap()
+            .run
+        };
+        assert_eq!(run("step", ["running", "pending"]), Some(Run::Step));
+        assert_eq!(
+            run("step", ["done", "pending"]),
+            Some(Run::Idle),
+            "one step done"
+        );
+        assert_eq!(
+            run("all", ["done", "pending"]),
+            Some(Run::All),
+            "more to do"
+        );
+        assert_eq!(
+            run("all", ["done", "failed"]),
+            Some(Run::Idle),
+            "nothing pending"
+        );
+        assert_eq!(run("all", ["done", "running"]), Some(Run::All));
     }
 }

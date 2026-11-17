@@ -632,6 +632,8 @@ impl SessionView {
                 cx.notify();
             }
             DiagramEvent::OpenWeb(url) => cx.emit(SessionEvent::OpenWeb(url.clone())),
+            // A kanban card's Stop: the same `cancel_subagent` as the agents panel.
+            DiagramEvent::CancelSubagent(id) => self.stop_agent(id, cx),
         }
     }
 }
