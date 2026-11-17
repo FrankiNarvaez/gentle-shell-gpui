@@ -526,6 +526,7 @@ impl SessionView {
             .gap_1p5()
             .children(self.render_slash_menu(cx))
             .children(self.render_dialog(cx))
+            .children(self.render_review_confirm(cx))
             .child(self.render_activity(rem_size, cx))
             .children(self.render_context_bar())
             .child(composer_box)

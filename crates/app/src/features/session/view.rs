@@ -31,6 +31,8 @@ mod live;
 mod model_picker;
 mod permissions;
 mod rail;
+mod review;
+mod session_changes;
 mod slash_menu;
 mod todo_island;
 mod transcript_list;

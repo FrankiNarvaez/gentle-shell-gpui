@@ -168,6 +168,10 @@ impl SessionView {
             .when(self.jobs_visible(), |this| {
                 this.child(self.render_jobs_chip(cx))
             })
+            // What the agent's session changed (Gentle Shell `main`).
+            .when(!collapse, |this| {
+                this.children(self.render_changes_chip(cx))
+            })
             .when(self.activity.queued > 0, |this| {
                 this.child(ui::chip(
                     format!("{} queued", self.activity.queued),
@@ -212,6 +216,9 @@ impl SessionView {
                         .child(format_tokens(window_tokens)),
                 )
             })
+            // The review switch sits with the permission chip: both are this
+            // workspace's rules for the agent (Gentle Shell `main`).
+            .when(!collapse, |this| this.children(self.render_review_chip(cx)))
             .child(self.render_mode_picker(cx));
 
         h_flex()
