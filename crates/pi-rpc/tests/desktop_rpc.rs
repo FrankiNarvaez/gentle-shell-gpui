@@ -3,17 +3,28 @@
 //! adapter only builds the outer prompt and decodes the widget records.
 
 use pi_rpc::desktop_rpc::{
-    ApplyProfileOutcome, ApplyProfileResult, ConfigChanged, ConfigErrorCode, ConfigLayer,
-    ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus, ConfigStore, ConfigWrite,
-    ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent, DesignEntry,
-    DesignTransition, DesktopAgent, DesktopAgentStep, DesktopAgentUsage, DesktopEvent, DesktopJob,
-    DesktopMethod, DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession,
-    Handoff, JobExitCode, MAX_REQUEST_BYTES, PROMPT_COMMAND, PermissionMode, PermissionModeChanged,
-    PermissionModeState, PinSource, ProfileApplied, ProfileApplyErrorCode, ProfileApplyMode,
-    ProfileConfirmation, ProfileFallbacksData, ProfileNote, ProfileNoteLevel, ProfilesData,
-    ProviderUsage, RateLimitEvent, RateLimitSource, SCHEMA, SetConfigResult,
-    SetPermissionModeResult, UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatus,
-    UsageWindow, WIDGET_KEY, decode_payload, decode_widget,
+    ActivityState, ApplyProfileOutcome, ApplyProfileResult, Capabilities, ChangeDiff, ChangeRoot,
+    ChangeSource, ChangeStatus, ChangedFile, Changes, CommandSource, ConfigChangeOrigin,
+    ConfigChanged, ConfigErrorCode, ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState,
+    ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState,
+    DesignCanvas, DesignCanvasEvent, DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep,
+    DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod,
+    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff,
+    JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
+    MAX_SESSIONS_LIMIT, PROMPT_COMMAND, PackageKind, PackageScope, PackageUpdate,
+    PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
+    PermissionModeState, PiUpdate, PinSource, ProfileApplied, ProfileApplyErrorCode,
+    ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData, ProfileNote, ProfileNoteLevel,
+    ProfilesData, ProviderUsage, RateLimitEvent, RateLimitSource, ReviewConfirmation,
+    ReviewEffective, ReviewMode, ReviewScope, ReviewScopes, ReviewSetting, ReviewSource, SCHEMA,
+    SessionActivity, SessionChangedFile, SessionChanges, SessionChangesSummary, SessionCommand,
+    SessionEntry, SessionJobs, SessionList, SessionPermission, SessionProject, SessionSection,
+    SessionTodo, SessionTodoItem, SessionTodoProgress, SessionWorktree, SessionsScope,
+    SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
+    StatsRange, StatsScope, SubagentThread, SwitchSessionResult, ThreadItem, UpdateState,
+    UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel,
+    UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload,
+    decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -1034,7 +1045,35 @@ fn permission_mode_changed_events_decode_their_typed_data() {
             previous_mode: PermissionMode::Normal,
             default_mode: PermissionMode::Auto,
             persisted: true,
-            source: "desktop".to_string(),
+            source: ChangeSource::Desktop,
+        }
+    );
+
+    // An external change (`/gentle:yolo` in the TUI), exactly as the spec
+    // shows it: same shape, `source: "external"`.
+    let external = record_event(
+        decode_widget(&widget(&event_line(
+            2,
+            "permission_mode_changed",
+            json!({
+                "mode": "yolo",
+                "previous_mode": "normal",
+                "default_mode": "normal",
+                "persisted": false,
+                "source": "external",
+            }),
+        )))
+        .unwrap()
+        .unwrap(),
+    );
+    assert_eq!(
+        external.permission_mode_changed().unwrap(),
+        PermissionModeChanged {
+            mode: PermissionMode::Yolo,
+            previous_mode: PermissionMode::Normal,
+            default_mode: PermissionMode::Normal,
+            persisted: false,
+            source: ChangeSource::External,
         }
     );
 }
@@ -1080,6 +1119,7 @@ fn permission_mode_decoding_rejects_unknown_modes_and_malformed_shapes() {
         json!({ "mode": "turbo", "previous_mode": "normal", "default_mode": "normal", "persisted": false, "source": "desktop" }),
         json!({ "mode": "auto", "previous_mode": "normal", "default_mode": "auto", "persisted": false }),
         json!({ "mode": "auto", "previous_mode": "normal", "default_mode": "auto", "persisted": false, "source": 7 }),
+        json!({ "mode": "auto", "previous_mode": "normal", "default_mode": "auto", "persisted": false, "source": "tui" }),
     ];
     for data in event_cases {
         let event = record_event(
@@ -3831,11 +3871,16 @@ fn config_changed_decodes_its_exact_data_and_checks_the_event_name() {
         ConfigChanged {
             store: ConfigStore::Profiles,
             scope: ConfigScope::Global,
-            write_target: ConfigWriteTarget::Global,
             revision: "sha256:1c80".into(),
-            write_revision: "sha256:c4b0".into(),
-            source: "desktop".into(),
+            origin: ConfigChangeOrigin::Desktop {
+                write_target: ConfigWriteTarget::Global,
+                write_revision: "sha256:c4b0".into(),
+            },
         }
+    );
+    assert_eq!(
+        event.config_changed().unwrap().source(),
+        ChangeSource::Desktop
     );
 
     let pin = config_event(
@@ -3852,7 +3897,13 @@ fn config_changed_decodes_its_exact_data_and_checks_the_event_name() {
     )
     .config_changed()
     .unwrap();
-    assert_eq!(pin.write_target, ConfigWriteTarget::Local);
+    assert!(matches!(
+        pin.origin,
+        ConfigChangeOrigin::Desktop {
+            write_target: ConfigWriteTarget::Local,
+            ..
+        }
+    ));
 
     // A foreign event with the same shape is refused, not misread.
     let foreign = config_event(3, "permission_mode_changed", data.clone());
@@ -3882,6 +3933,7 @@ fn config_changed_decodes_its_exact_data_and_checks_the_event_name() {
         ("writeTarget", json!("repo")),
         ("revision", json!("")),
         ("writeRevision", json!(7)),
+        ("source", json!("tui")),
     ] {
         let mut wrong = data.clone();
         wrong[key] = value;
@@ -3890,6 +3942,62 @@ fn config_changed_decodes_its_exact_data_and_checks_the_event_name() {
     for data in bad {
         assert!(
             config_event(4, "config_changed", data.clone())
+                .config_changed()
+                .is_err(),
+            "{data} must not decode as config_changed"
+        );
+    }
+}
+
+#[test]
+fn config_changed_decodes_an_external_change_without_a_write_target() {
+    // The spec's external example (#3335): status instead of the write
+    // target and its revision, which an outside writer cannot name.
+    let data = json!({
+        "store": "profiles",
+        "scope": "global",
+        "revision": "sha256:5f1d0c7a9e2b4d6f8a0c2e4b6d8f0a1c",
+        "status": "ok",
+        "source": "external",
+    });
+    let changed = config_event(3, "config_changed", data.clone())
+        .config_changed()
+        .unwrap();
+    assert_eq!(
+        changed,
+        ConfigChanged {
+            store: ConfigStore::Profiles,
+            scope: ConfigScope::Global,
+            revision: "sha256:5f1d0c7a9e2b4d6f8a0c2e4b6d8f0a1c".into(),
+            origin: ConfigChangeOrigin::External {
+                status: ConfigStatus::Ok,
+            },
+        }
+    );
+    assert_eq!(changed.source(), ChangeSource::External);
+
+    // A pin gone stale is reported external even after a Desktop write.
+    let missing = config_event(
+        4,
+        "config_changed",
+        json!({ "store": "pins", "scope": "local+repo", "revision": "sha256:9", "status": "missing", "source": "external" }),
+    )
+    .config_changed()
+    .unwrap();
+    assert_eq!(
+        missing.origin,
+        ConfigChangeOrigin::External {
+            status: ConfigStatus::Missing
+        }
+    );
+
+    let mut no_status = data.clone();
+    no_status.as_object_mut().unwrap().remove("status");
+    let mut bad_status = data.clone();
+    bad_status["status"] = json!("broken");
+    for data in [no_status, bad_status] {
+        assert!(
+            config_event(5, "config_changed", data.clone())
                 .config_changed()
                 .is_err(),
             "{data} must not decode as config_changed"
@@ -3972,8 +4080,11 @@ fn config_requests_flow_through_session_correlation_and_sequence() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        record_event(first).config_changed().unwrap().write_revision,
-        "sha256:l2"
+        record_event(first).config_changed().unwrap().origin,
+        ConfigChangeOrigin::Desktop {
+            write_target: ConfigWriteTarget::Local,
+            write_revision: "sha256:l2".into(),
+        }
     );
     assert!(matches!(
         session.accept(&widget(&event_line(4, "config_changed", changed.clone()))),
@@ -4507,4 +4618,1571 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
     .unwrap();
     assert!(!older.supports(DesktopMethod::ApplyProfile));
     assert!(!older.emits("profile_applied"));
+}
+
+// --- Gentle Shell main additions: jobs output, subagent thread, sessions,
+// --- changes, review mode, usage stats, update status, session sections ---
+
+/// The `capabilities` methods of Gentle Shell `main` (0336985), as the spec
+/// and a live backend list them.
+const MAIN_METHODS: [&str; 24] = [
+    "capabilities",
+    "get_snapshot",
+    "get_config",
+    "set_config",
+    "get_permission_mode",
+    "set_permission_mode",
+    "get_subscription_usage",
+    "refresh_subscription_usage",
+    "get_design_canvas",
+    "list_jobs",
+    "cancel_job",
+    "get_job_output",
+    "apply_profile",
+    "list_subagents",
+    "cancel_subagent",
+    "get_subagent_thread",
+    "list_sessions",
+    "switch_session",
+    "get_changes",
+    "get_change_diff",
+    "get_review_mode",
+    "set_review_mode",
+    "get_usage_stats",
+    "get_update_status",
+];
+const MAIN_EVENTS: [&str; 9] = [
+    "config_changed",
+    "permission_mode_changed",
+    "rate_limit",
+    "design_canvas",
+    "jobs_update",
+    "profile_applied",
+    "agents_update",
+    "review_mode_changed",
+    "session_snapshot",
+];
+/// The `capabilities` of an installed Gentle Shell 4.8.0, captured live.
+const RELEASE_4_8_METHODS: [&str; 14] = [
+    "capabilities",
+    "get_snapshot",
+    "get_config",
+    "set_config",
+    "get_permission_mode",
+    "set_permission_mode",
+    "get_subscription_usage",
+    "refresh_subscription_usage",
+    "get_design_canvas",
+    "list_jobs",
+    "cancel_job",
+    "apply_profile",
+    "list_subagents",
+    "cancel_subagent",
+];
+const RELEASE_4_8_EVENTS: [&str; 7] = [
+    "config_changed",
+    "permission_mode_changed",
+    "rate_limit",
+    "design_canvas",
+    "jobs_update",
+    "profile_applied",
+    "agents_update",
+];
+const NEW_METHODS: [DesktopMethod; 10] = [
+    DesktopMethod::GetJobOutput,
+    DesktopMethod::GetSubagentThread,
+    DesktopMethod::ListSessions,
+    DesktopMethod::SwitchSession,
+    DesktopMethod::GetChanges,
+    DesktopMethod::GetChangeDiff,
+    DesktopMethod::GetReviewMode,
+    DesktopMethod::SetReviewMode,
+    DesktopMethod::GetUsageStats,
+    DesktopMethod::GetUpdateStatus,
+];
+
+fn capabilities_of(methods: &[&str], events: &[&str]) -> Capabilities {
+    record_response(
+        decode_widget(&widget(&response_line(
+            "desktop-1",
+            capabilities_data(methods, events),
+        )))
+        .unwrap()
+        .unwrap(),
+    )
+    .capabilities()
+    .unwrap()
+}
+
+/// A successful response carrying `data`, decoded.
+fn ok_response(data: Value) -> DesktopResponse {
+    record_response(
+        decode_widget(&widget(&response_line("desktop-1", data)))
+            .unwrap()
+            .unwrap(),
+    )
+}
+
+/// An event carrying `data`, decoded.
+fn some_event(seq: u64, name: &str, data: Value) -> DesktopEvent {
+    record_event(
+        decode_widget(&widget(&event_line(seq, name, data)))
+            .unwrap()
+            .unwrap(),
+    )
+}
+
+/// The exact inner payload of a request.
+fn payload(request_id: &str, method: &str, params: &str) -> String {
+    format!(
+        r#"{{"schema":"{SCHEMA}","requestId":"{request_id}","method":"{method}","params":{params}}}"#
+    )
+}
+
+#[test]
+fn every_method_round_trips_its_wire_name_in_capabilities_order() {
+    let names: Vec<&str> = DesktopMethod::ALL.iter().map(|m| m.as_str()).collect();
+    assert_eq!(names, MAIN_METHODS);
+    for method in DesktopMethod::ALL {
+        assert_eq!(DesktopMethod::parse(method.as_str()).unwrap(), method);
+        assert_eq!(method.to_string().parse::<DesktopMethod>().unwrap(), method);
+    }
+}
+
+#[test]
+fn capabilities_gate_the_new_methods_and_events_per_backend() {
+    let main = capabilities_of(&MAIN_METHODS, &MAIN_EVENTS);
+    for method in DesktopMethod::ALL {
+        assert!(main.supports(method), "{method}");
+        assert_eq!(main.require(method), Ok(()));
+    }
+    assert!(main.emits("session_snapshot") && main.emits("review_mode_changed"));
+    assert!(main.supports_session_sections());
+
+    // Gentle Shell 4.8.0: every new method is refused before anything is
+    // built, and the old ones still pass.
+    let release = capabilities_of(&RELEASE_4_8_METHODS, &RELEASE_4_8_EVENTS);
+    for method in DesktopMethod::ALL {
+        if NEW_METHODS.contains(&method) {
+            assert_eq!(
+                release.require(method),
+                Err(DesktopRpcError::NotAdvertised(method))
+            );
+        } else {
+            assert_eq!(release.require(method), Ok(()), "{method}");
+        }
+    }
+    assert!(!release.emits("session_snapshot") && !release.emits("review_mode_changed"));
+    // 4.8.0 ignores `sections` instead of refusing it, so the gate is the
+    // feed event, not the method.
+    assert!(release.supports(DesktopMethod::GetSnapshot));
+    assert!(!release.supports_session_sections());
+    assert_eq!(
+        DesktopRpcError::NotAdvertised(DesktopMethod::GetChanges).to_string(),
+        "the backend does not offer desktop get_changes"
+    );
+
+    // Without the feed seam the server omits `session_snapshot`.
+    let without_feed = capabilities_of(&MAIN_METHODS, &MAIN_EVENTS[..8]);
+    assert!(!without_feed.supports_session_sections());
+}
+
+#[test]
+fn new_methods_with_required_params_only_come_from_their_typed_requests() {
+    for method in [
+        DesktopMethod::GetJobOutput,
+        DesktopMethod::GetSubagentThread,
+        DesktopMethod::SwitchSession,
+        DesktopMethod::GetChangeDiff,
+        DesktopMethod::SetReviewMode,
+    ] {
+        assert_eq!(
+            DesktopRequest::new("desktop-1", method, json!({})),
+            Err(DesktopRpcError::TypedParamsRequired(method))
+        );
+        let mut session = DesktopSession::new();
+        assert_eq!(
+            session.issue(method),
+            Err(DesktopRpcError::TypedParamsRequired(method))
+        );
+        assert_eq!(session.pending(), None);
+    }
+    // The reads whose params are all optional also go through `issue`.
+    for method in [
+        DesktopMethod::ListSessions,
+        DesktopMethod::GetChanges,
+        DesktopMethod::GetReviewMode,
+        DesktopMethod::GetUsageStats,
+        DesktopMethod::GetUpdateStatus,
+    ] {
+        let mut session = DesktopSession::new();
+        let request = session.issue(method).unwrap();
+        assert_eq!(
+            request.payload(),
+            payload("desktop-1", method.as_str(), "{}")
+        );
+    }
+}
+
+// --- get_snapshot sections and session_snapshot ---------------------------
+
+/// The live `state.session` of a fresh upstream session (all sixteen
+/// sections; the commands list cut to three entries).
+fn live_session_sections() -> Value {
+    json!({
+        "project": { "name": "work", "branch": "main", "dirty": 1 },
+        "model": { "id": "unknown", "provider": "unknown", "effort": null, "profile": { "name": null, "tier": null } },
+        "context": null,
+        "cost": { "total": 0, "subscription": false },
+        "usage": {
+            "provider": "unknown", "status": "unavailable", "plan": null, "fetchedAt": null,
+            "note": "no subscription usage for this provider", "limits": [],
+            "providers": [{
+                "provider": "unknown", "status": "unavailable", "plan": null, "fetchedAt": null,
+                "note": "no subscription usage for this provider", "limits": []
+            }]
+        },
+        "profiles": null,
+        "permission": { "mode": "normal", "defaultMode": "normal", "yolo": false, "detail": null },
+        "todo": { "items": [], "progress": { "done": 0, "total": 0, "open": 0 }, "current": null, "truncated": false },
+        "changes": {
+            "files": [{ "path": "a.txt", "root": "root-92240cb14571", "status": "modified", "added": 1, "deleted": 0 }],
+            "summary": { "files": 1, "added": 1, "deleted": 0 },
+            "worktrees": [{ "root": "root-92240cb14571", "branch": "main", "files": 1 }],
+            "truncated": false
+        },
+        "agents": { "items": [], "active": 0, "spend": { "runs": 0, "tokens": 0, "cost": 0 } },
+        "jobs": { "running": [], "recent": [] },
+        "review": null,
+        "stats": {
+            "turns": 0, "toolCalls": 0, "toolErrors": 0, "cost": 0, "input": 0, "output": 0,
+            "cacheRead": 0, "cacheWrite": 0, "cacheHitRate": null, "durationMs": 133, "models": []
+        },
+        "activity": {
+            "state": "idle", "streaming": false, "phase": null, "phaseLabel": null,
+            "blockedLabel": null, "agents": 0, "jobs": 0, "label": "Idle"
+        },
+        "pendingQuestion": null,
+        "commands": {
+            "items": [
+                { "name": "new", "description": "Start a new session", "args": null, "terminal": false, "source": "builtin" },
+                { "name": "resume", "description": "Resume another session", "args": null, "terminal": true, "source": "builtin" },
+                { "name": "fork", "description": "Create a new fork from a previous user message", "args": null, "terminal": true, "source": "builtin" }
+            ],
+            "truncated": false
+        }
+    })
+}
+
+fn config_projection() -> Value {
+    json!({ "stores": [
+        { "store": "profiles", "scope": "global", "readOnly": false, "status": "ok", "revision": "sha256:1f0c" }
+    ] })
+}
+
+#[test]
+fn snapshot_sections_requests_are_exact_and_the_legacy_read_is_unchanged() {
+    // Without `sections` the request is the legacy read, byte for byte.
+    assert_eq!(
+        DesktopRequest::get_snapshot("desktop-42")
+            .unwrap()
+            .payload(),
+        payload("desktop-42", "get_snapshot", "{}")
+    );
+    // The spec example: exactly `{ sections }`, in the order asked.
+    let request = DesktopRequest::get_snapshot_sections(
+        "desktop-43",
+        &[
+            SessionSection::Todo,
+            SessionSection::Changes,
+            SessionSection::Activity,
+        ],
+    )
+    .unwrap();
+    assert_eq!(request.method(), DesktopMethod::GetSnapshot);
+    assert_eq!(
+        request.payload(),
+        payload(
+            "desktop-43",
+            "get_snapshot",
+            r#"{"sections":["todo","changes","activity"]}"#
+        )
+    );
+    let all = DesktopRequest::get_snapshot_sections("desktop-44", SessionSection::ALL).unwrap();
+    assert!(all.payload().contains(
+        r#""sections":["project","model","context","cost","usage","profiles","permission","todo","changes","agents","jobs","review","stats","activity","pendingQuestion","commands"]"#
+    ));
+
+    // Empty or repeated lists are refused, without occupying the session.
+    let mut session = DesktopSession::new();
+    for bad in [&[][..], &[SessionSection::Todo, SessionSection::Todo][..]] {
+        assert_eq!(
+            session.issue_get_snapshot_sections(bad),
+            Err(DesktopRpcError::InvalidSessionSections)
+        );
+        assert_eq!(session.pending(), None);
+    }
+    let issued = session
+        .issue_get_snapshot_sections(&[SessionSection::PendingQuestion])
+        .unwrap();
+    assert_eq!(
+        issued.payload(),
+        payload(
+            "desktop-1",
+            "get_snapshot",
+            r#"{"sections":["pendingQuestion"]}"#
+        )
+    );
+    assert_eq!(
+        session.pending(),
+        Some(("desktop-1", DesktopMethod::GetSnapshot))
+    );
+}
+
+#[test]
+fn snapshot_decodes_the_spec_session_sections() {
+    let response = ok_response(json!({
+        "schema": SCHEMA,
+        "sequence": 4,
+        "state": {
+            "config": config_projection(),
+            "session": {
+                "todo": { "items": [{ "id": 2, "title": "Build feed", "state": "in_progress", "note": null }], "progress": { "done": 1, "total": 2, "open": 1 }, "current": "Build feed", "truncated": false },
+                "changes": {
+                    "files": [{ "path": "lib/a.ts", "root": "root-70e56188b8da", "status": "modified", "added": 3, "deleted": 1 }],
+                    "summary": { "files": 1, "added": 3, "deleted": 1 },
+                    "worktrees": [{ "root": "root-70e56188b8da", "branch": "feat/x", "files": 1 }],
+                    "truncated": false
+                },
+                "activity": { "state": "working", "streaming": true, "phase": "implementing", "phaseLabel": "implementing…", "blockedLabel": null, "agents": 0, "jobs": 0, "label": "Working" }
+            }
+        }
+    }));
+    let snapshot = response.snapshot().unwrap();
+    assert_eq!(snapshot.sequence, 4);
+    // `state.config` is kept exactly as the legacy read.
+    assert_eq!(snapshot.state["config"], config_projection());
+    let session = snapshot.session.unwrap();
+    assert_eq!(
+        session.todo,
+        Some(SessionTodo {
+            items: vec![SessionTodoItem {
+                id: 2,
+                title: "Build feed".into(),
+                state: "in_progress".into(),
+                note: None,
+            }],
+            progress: SessionTodoProgress {
+                done: 1,
+                total: 2,
+                open: 1
+            },
+            current: Some("Build feed".into()),
+            truncated: false,
+        })
+    );
+    assert_eq!(
+        session.changes,
+        Some(Some(SessionChanges {
+            files: vec![SessionChangedFile {
+                path: "lib/a.ts".into(),
+                root: Some("root-70e56188b8da".into()),
+                status: "modified".into(),
+                added: Some(3),
+                deleted: Some(1),
+            }],
+            summary: SessionChangesSummary {
+                files: 1,
+                added: 3,
+                deleted: 1
+            },
+            worktrees: vec![SessionWorktree {
+                root: Some("root-70e56188b8da".into()),
+                branch: Some("feat/x".into()),
+                files: 1,
+            }],
+            truncated: false,
+        }))
+    );
+    assert_eq!(
+        session.activity,
+        Some(SessionActivity {
+            state: ActivityState::Working,
+            streaming: true,
+            phase: Some("implementing".into()),
+            phase_label: Some("implementing…".into()),
+            blocked_label: None,
+            agents: 0,
+            jobs: 0,
+            label: "Working".into(),
+        })
+    );
+    // Sections not asked for are absent, not empty.
+    assert_eq!(session.project, None);
+    assert_eq!(session.pending_question, None);
+    assert_eq!(session.commands, None);
+
+    // The legacy answer (and every 4.8.0 answer) has no session.
+    let legacy = ok_response(json!({
+        "schema": SCHEMA, "sequence": 0, "state": { "config": config_projection() }
+    }))
+    .snapshot()
+    .unwrap();
+    assert_eq!(legacy.session, None);
+    let unbound = ok_response(json!({ "schema": SCHEMA, "sequence": 0, "state": {} }))
+        .snapshot()
+        .unwrap();
+    assert_eq!(unbound.session, None);
+}
+
+#[test]
+fn snapshot_decodes_all_sixteen_sections_of_a_live_answer() {
+    let response = ok_response(json!({
+        "schema": SCHEMA,
+        "sequence": 2,
+        "state": { "config": config_projection(), "session": live_session_sections() },
+    }));
+    let session = response.snapshot().unwrap().session.unwrap();
+    assert_eq!(
+        session.project,
+        Some(SessionProject {
+            name: Some("work".into()),
+            branch: Some("main".into()),
+            dirty: Some(1),
+        })
+    );
+    let model = session.model.unwrap();
+    assert_eq!(model.id.as_deref(), Some("unknown"));
+    assert_eq!(model.profile.tier, None);
+    // A feed `null` is a present section with no content.
+    assert_eq!(session.context, Some(None));
+    assert_eq!(session.profiles, Some(None));
+    assert_eq!(session.review, Some(None));
+    assert_eq!(session.pending_question, Some(None));
+    let usage = session.usage.unwrap().unwrap();
+    assert_eq!(usage.current.provider, "unknown");
+    assert_eq!(
+        usage.current.note.as_deref(),
+        Some("no subscription usage for this provider")
+    );
+    assert_eq!(usage.providers.len(), 1);
+    assert_eq!(
+        session.permission,
+        Some(Some(SessionPermission {
+            mode: "normal".into(),
+            default_mode: Some("normal".into()),
+            yolo: false,
+            detail: None,
+        }))
+    );
+    assert_eq!(session.cost.unwrap().total, 0.0);
+    assert_eq!(session.agents.unwrap().unwrap().active, 0);
+    assert_eq!(
+        session.jobs,
+        Some(Some(SessionJobs {
+            running: vec![],
+            recent: vec![]
+        }))
+    );
+    let stats = session.stats.unwrap();
+    assert_eq!((stats.duration_ms, stats.cache_hit_rate), (133, None));
+    assert_eq!(session.activity.unwrap().state, ActivityState::Idle);
+    let commands = session.commands.unwrap();
+    assert_eq!(commands.items.len(), 3);
+    assert_eq!(
+        commands.items[1],
+        SessionCommand {
+            name: "resume".into(),
+            description: Some("Resume another session".into()),
+            args: None,
+            terminal: true,
+            source: CommandSource::Builtin,
+        }
+    );
+}
+
+#[test]
+fn session_sections_refuse_values_outside_their_vocabulary() {
+    for (section, value) in [
+        (
+            "activity",
+            json!({ "state": "sleeping", "streaming": false, "phase": null, "phaseLabel": null, "blockedLabel": null, "agents": 0, "jobs": 0, "label": "x" }),
+        ),
+        (
+            "commands",
+            json!({ "items": [{ "name": "x", "description": null, "args": null, "terminal": false, "source": "plugin" }], "truncated": false }),
+        ),
+        (
+            "todo",
+            json!({ "items": [], "progress": { "done": 0, "total": 0 }, "current": null, "truncated": false }),
+        ),
+        ("project", json!("work")),
+    ] {
+        let response = ok_response(json!({
+            "schema": SCHEMA, "sequence": 0,
+            "state": { "session": { section: value } },
+        }));
+        assert!(
+            matches!(
+                response.snapshot(),
+                Err(DesktopRpcError::MalformedPayload(_))
+            ),
+            "{section} must be refused"
+        );
+    }
+    let not_an_object = ok_response(json!({
+        "schema": SCHEMA, "sequence": 0, "state": { "session": [] },
+    }));
+    assert!(not_an_object.snapshot().is_err());
+    assert_eq!(
+        "pendingQuestion".parse::<SessionSection>(),
+        Ok(SessionSection::PendingQuestion)
+    );
+    assert_eq!(
+        "identity".parse::<SessionSection>(),
+        Err(DesktopRpcError::InvalidValue {
+            field: "sections",
+            value: "identity".into()
+        })
+    );
+}
+
+#[test]
+fn session_snapshot_events_carry_only_the_changed_sections() {
+    // Captured live: the first flush after session start.
+    let event = some_event(
+        2,
+        "session_snapshot",
+        json!({ "sections": {
+            "project": { "name": "work", "branch": "main", "dirty": null },
+            "permission": { "mode": "normal", "defaultMode": "normal", "yolo": false, "detail": null }
+        } }),
+    );
+    let snapshot = event.session_snapshot().unwrap();
+    assert_eq!(
+        snapshot.sections.project,
+        Some(SessionProject {
+            name: Some("work".into()),
+            branch: Some("main".into()),
+            dirty: None,
+        })
+    );
+    assert!(snapshot.sections.permission.is_some());
+    assert_eq!(snapshot.sections.todo, None);
+    assert_eq!(snapshot.sections.activity, None);
+
+    // The spec's urgent-tier example: a question opened in an extension dialog.
+    let question = some_event(
+        5,
+        "session_snapshot",
+        json!({ "sections": { "pendingQuestion": {
+            "kind": "prompt", "tool": null, "toolCallId": null,
+            "question": "Pick one", "header": null,
+            "options": [{ "label": "A", "description": null }, { "label": "B", "description": "the other" }],
+            "multi": false, "custom": false,
+            "questions": [{ "question": "Pick one", "header": null, "options": [], "multi": false, "custom": false }],
+            "promptKind": "select", "terminalOnly": true, "openedAt": "2026-11-17T12:00:00.000Z"
+        } } }),
+    )
+    .session_snapshot()
+    .unwrap();
+    let pending = question.sections.pending_question.unwrap().unwrap();
+    assert_eq!(pending.kind, PendingQuestionKind::Prompt);
+    assert!(pending.terminal_only);
+    assert_eq!(pending.options[1].description.as_deref(), Some("the other"));
+    assert_eq!(pending.prompt_kind.as_deref(), Some("select"));
+
+    // The question answered: the section is present and `null`.
+    let answered = some_event(
+        6,
+        "session_snapshot",
+        json!({ "sections": { "pendingQuestion": null } }),
+    )
+    .session_snapshot()
+    .unwrap();
+    assert_eq!(answered.sections.pending_question, Some(None));
+
+    // The exact name is checked first; a missing `sections` is refused.
+    assert!(matches!(
+        some_event(7, "agents_update", json!({ "sections": {} })).session_snapshot(),
+        Err(DesktopRpcError::UnexpectedEvent {
+            expected: "session_snapshot",
+            ..
+        })
+    ));
+    assert!(
+        some_event(8, "session_snapshot", json!({}))
+            .session_snapshot()
+            .is_err()
+    );
+}
+
+// --- get_job_output and get_subagent_thread -------------------------------
+
+#[test]
+fn job_output_requests_are_exact_and_refuse_an_empty_id() {
+    assert_eq!(
+        DesktopRequest::get_job_output("desktop-60", "job-1")
+            .unwrap()
+            .payload(),
+        payload("desktop-60", "get_job_output", r#"{"id":"job-1"}"#)
+    );
+    let mut session = DesktopSession::new();
+    assert_eq!(
+        session.issue_get_job_output(""),
+        Err(DesktopRpcError::InvalidId(DesktopMethod::GetJobOutput))
+    );
+    assert_eq!(session.pending(), None);
+    assert_eq!(
+        session.issue_get_job_output("job-1").unwrap().payload(),
+        payload("desktop-1", "get_job_output", r#"{"id":"job-1"}"#)
+    );
+}
+
+#[test]
+fn job_output_decodes_the_spec_answer_and_keeps_truncated() {
+    let output = ok_response(json!({
+        "job": { "id": "job-1", "label": "CI for PR 42", "status": "running", "startedAt": 1788600000000u64 },
+        "output": "✓ lint\n✓ typecheck\nrunning tests 100%",
+        "truncated": true
+    }))
+    .job_output()
+    .unwrap();
+    assert_eq!(
+        output,
+        JobOutput {
+            job: DesktopJob {
+                id: "job-1".into(),
+                label: "CI for PR 42".into(),
+                status: "running".into(),
+                started_at: 1788600000000,
+                ended_at: None,
+                exit_code: None,
+            },
+            output: "✓ lint\n✓ typecheck\nrunning tests 100%".into(),
+            truncated: true,
+        }
+    );
+    // A job that has printed nothing yet has an empty tail.
+    let ended = ok_response(json!({
+        "job": { "id": "job-2", "label": "Background job", "status": "exited", "startedAt": 1, "endedAt": 2, "exitCode": null },
+        "output": "",
+        "truncated": false
+    }))
+    .job_output()
+    .unwrap();
+    assert_eq!(ended.job.exit_code, Some(JobExitCode::Null));
+    assert_eq!(ended.output, "");
+
+    for bad in [
+        json!({ "output": "", "truncated": false }),
+        json!({ "job": { "id": "job-1", "label": "x", "status": "running", "startedAt": 1 }, "truncated": false }),
+        json!({ "job": { "id": "job-1", "label": "x", "status": "running", "startedAt": 1 }, "output": "", "truncated": "no" }),
+    ] {
+        assert!(ok_response(bad.clone()).job_output().is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn subagent_thread_requests_send_since_version_only_when_given() {
+    assert_eq!(
+        DesktopRequest::get_subagent_thread("desktop-62", "m3a1-worker", Some(41))
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-62",
+            "get_subagent_thread",
+            r#"{"id":"m3a1-worker","sinceVersion":41}"#
+        )
+    );
+    assert_eq!(
+        DesktopRequest::get_subagent_thread("desktop-62", "m3a1-worker", None)
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-62",
+            "get_subagent_thread",
+            r#"{"id":"m3a1-worker"}"#
+        )
+    );
+    let mut session = DesktopSession::new();
+    assert_eq!(
+        session.issue_get_subagent_thread("", Some(0)),
+        Err(DesktopRpcError::InvalidId(DesktopMethod::GetSubagentThread))
+    );
+    assert_eq!(session.pending(), None);
+}
+
+#[test]
+fn subagent_thread_decodes_every_item_kind_from_the_spec() {
+    let thread = ok_response(json!({
+        "id": "m3a1-worker",
+        "version": 57,
+        "items": [
+            { "kind": "text", "text": "Mapping the repository layout." },
+            { "kind": "tool", "name": "read", "args": "{\"path\":\"README.md\"}", "running": false, "isError": false, "output": "# Project…" },
+            { "kind": "note", "text": "retrying (2/3)" },
+            { "kind": "thinking", "text": "Considering the layout" }
+        ],
+        "dropped": 0,
+        "truncated": false
+    }))
+    .subagent_thread()
+    .unwrap();
+    assert_eq!(
+        thread,
+        SubagentThread {
+            id: "m3a1-worker".into(),
+            version: 57,
+            items: vec![
+                ThreadItem::Text {
+                    text: "Mapping the repository layout.".into()
+                },
+                ThreadItem::Tool {
+                    name: "read".into(),
+                    args: r#"{"path":"README.md"}"#.into(),
+                    running: false,
+                    is_error: false,
+                    output: "# Project…".into(),
+                },
+                ThreadItem::Note {
+                    text: "retrying (2/3)".into()
+                },
+                ThreadItem::Thinking {
+                    text: "Considering the layout".into()
+                },
+            ],
+            dropped: 0,
+            truncated: false,
+        }
+    );
+    // `sinceVersion` equal to the current version: nothing changed.
+    let unchanged = ok_response(json!({ "id": "m3a1-worker", "version": 57, "items": [], "dropped": 3, "truncated": false }))
+        .subagent_thread()
+        .unwrap();
+    assert!(unchanged.items.is_empty());
+    assert_eq!(unchanged.dropped, 3);
+
+    for bad in [
+        json!({ "id": "x", "version": 1, "items": [{ "kind": "image", "text": "x" }], "dropped": 0, "truncated": false }),
+        json!({ "id": "x", "version": 1, "items": [{ "kind": "tool", "name": "read" }], "dropped": 0, "truncated": false }),
+        json!({ "id": "x", "version": -1, "items": [], "dropped": 0, "truncated": false }),
+        json!({ "id": "x", "version": 1, "items": [], "truncated": false }),
+    ] {
+        assert!(ok_response(bad.clone()).subagent_thread().is_err(), "{bad}");
+    }
+}
+
+// --- list_sessions and switch_session -------------------------------------
+
+#[test]
+fn list_sessions_requests_send_only_the_given_params() {
+    let cases = [
+        (ListSessionsQuery::default(), "{}"),
+        (
+            ListSessionsQuery {
+                scope: Some(SessionsScope::Project),
+                limit: Some(20),
+                cursor: None,
+            },
+            r#"{"scope":"project","limit":20}"#,
+        ),
+        (
+            ListSessionsQuery {
+                scope: Some(SessionsScope::All),
+                limit: None,
+                cursor: Some("WzE3OTM0OTEyMDAwMDAsIjVlMjFmMGFhIl0".into()),
+            },
+            r#"{"scope":"all","cursor":"WzE3OTM0OTEyMDAwMDAsIjVlMjFmMGFhIl0"}"#,
+        ),
+    ];
+    for (query, params) in cases {
+        assert_eq!(
+            DesktopRequest::list_sessions("desktop-70", &query)
+                .unwrap()
+                .payload(),
+            payload("desktop-70", "list_sessions", params)
+        );
+    }
+    let mut session = DesktopSession::new();
+    for (query, error) in [
+        (
+            ListSessionsQuery {
+                limit: Some(0),
+                ..Default::default()
+            },
+            DesktopRpcError::InvalidSessionsLimit(0),
+        ),
+        (
+            ListSessionsQuery {
+                limit: Some(51),
+                ..Default::default()
+            },
+            DesktopRpcError::InvalidSessionsLimit(51),
+        ),
+        (
+            ListSessionsQuery {
+                cursor: Some(String::new()),
+                ..Default::default()
+            },
+            DesktopRpcError::InvalidSessionsCursor,
+        ),
+    ] {
+        assert_eq!(session.issue_list_sessions(&query), Err(error));
+        assert_eq!(session.pending(), None);
+    }
+    assert!(
+        session
+            .issue_list_sessions(&ListSessionsQuery {
+                limit: Some(MAX_SESSIONS_LIMIT),
+                ..Default::default()
+            })
+            .is_ok()
+    );
+}
+
+#[test]
+fn list_sessions_decodes_the_spec_page_with_optional_fields() {
+    let list = ok_response(json!({
+        "sessions": [
+            { "id": "0b5c9a12-7d4e-4f3a-9c1e-2a6b8d0f4e31", "name": "Release prep", "modified": 1793577600000u64, "messageCount": 14, "firstMessage": "Prepare the 1.4 release notes", "project": "gentle-shell", "current": true },
+            { "id": "5e21f0aa-3b7c-4d18-8f6e-91c2d4b7a053", "modified": 1793491200000u64, "messageCount": 3, "firstMessage": "Why does the build fail on Windows?", "project": "gentle-shell", "current": false }
+        ],
+        "nextCursor": "WzE3OTM0OTEyMDAwMDAsIjVlMjFmMGFhIl0"
+    }))
+    .list_sessions()
+    .unwrap();
+    assert_eq!(
+        list.sessions[0],
+        SessionEntry {
+            id: "0b5c9a12-7d4e-4f3a-9c1e-2a6b8d0f4e31".into(),
+            name: Some("Release prep".into()),
+            modified: 1793577600000,
+            message_count: Some(14),
+            first_message: "Prepare the 1.4 release notes".into(),
+            project: "gentle-shell".into(),
+            current: true,
+        }
+    );
+    assert_eq!(list.sessions[1].name, None);
+    assert_eq!(
+        list.next_cursor.as_deref(),
+        Some("WzE3OTM0OTEyMDAwMDAsIjVlMjFmMGFhIl0")
+    );
+    // The last page (and a fresh home, live) has no cursor.
+    let last = ok_response(json!({ "sessions": [] }))
+        .list_sessions()
+        .unwrap();
+    assert_eq!(
+        last,
+        SessionList {
+            sessions: vec![],
+            next_cursor: None
+        }
+    );
+    assert!(
+        ok_response(
+            json!({ "sessions": [{ "id": "x", "modified": 1, "project": "p", "current": false }] })
+        )
+        .list_sessions()
+        .is_err()
+    );
+}
+
+#[test]
+fn switch_session_requests_and_answers_follow_the_spec() {
+    assert_eq!(
+        DesktopRequest::switch_session("desktop-71", "5e21f0aa-3b7c-4d18-8f6e-91c2d4b7a053", None)
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-71",
+            "switch_session",
+            r#"{"id":"5e21f0aa-3b7c-4d18-8f6e-91c2d4b7a053"}"#
+        )
+    );
+    assert_eq!(
+        DesktopRequest::switch_session("desktop-71", "abc", Some(SessionsScope::All))
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-71",
+            "switch_session",
+            r#"{"id":"abc","scope":"all"}"#
+        )
+    );
+    for id in [String::new(), "x".repeat(MAX_SESSION_ID_UNITS + 1)] {
+        assert_eq!(
+            DesktopRequest::switch_session("desktop-71", &id, None),
+            Err(DesktopRpcError::InvalidId(DesktopMethod::SwitchSession))
+        );
+    }
+    assert!(DesktopRequest::switch_session("d", &"x".repeat(MAX_SESSION_ID_UNITS), None).is_ok());
+
+    let switched = ok_response(json!({ "id": "5e21", "changed": true }))
+        .switch_session()
+        .unwrap();
+    assert_eq!(
+        switched,
+        SwitchSessionResult {
+            id: "5e21".into(),
+            changed: true,
+            cancelled: false
+        }
+    );
+    let cancelled = ok_response(json!({ "id": "5e21", "changed": false, "cancelled": true }))
+        .switch_session()
+        .unwrap();
+    assert!(!cancelled.changed && cancelled.cancelled);
+    assert!(
+        ok_response(json!({ "id": "5e21" }))
+            .switch_session()
+            .is_err()
+    );
+}
+
+#[test]
+fn a_switch_session_restarts_the_event_sequence() {
+    let mut session = DesktopSession::new();
+    for seq in 3..=4 {
+        session
+            .accept(&widget(&event_line(
+                seq,
+                "jobs_update",
+                json!({ "jobs": [] }),
+            )))
+            .unwrap();
+    }
+    session.issue_switch_session("5e21", None).unwrap();
+    // The new session may speak before the switch answers, from seq 1.
+    session
+        .accept(&widget(&event_line(
+            1,
+            "session_snapshot",
+            json!({ "sections": {} }),
+        )))
+        .unwrap()
+        .unwrap();
+    session
+        .accept(&widget(&response_line(
+            "desktop-1",
+            json!({ "id": "5e21", "changed": true }),
+        )))
+        .unwrap()
+        .unwrap();
+    assert_eq!(session.pending(), None);
+    assert_eq!(session.last_sequence(), None);
+    // After the answer the next event is the new baseline, then the normal
+    // rules apply again.
+    session
+        .accept(&widget(&event_line(
+            2,
+            "session_snapshot",
+            json!({ "sections": {} }),
+        )))
+        .unwrap();
+    assert!(matches!(
+        session.accept(&widget(&event_line(
+            2,
+            "session_snapshot",
+            json!({ "sections": {} })
+        ))),
+        Err(DesktopRpcError::DuplicateSequence { last: 2, got: 2 })
+    ));
+    // Any other request keeps the old sequence strict.
+    session.issue(DesktopMethod::GetChanges).unwrap();
+    assert!(matches!(
+        session.accept(&widget(&event_line(
+            1,
+            "jobs_update",
+            json!({ "jobs": [] })
+        ))),
+        Err(DesktopRpcError::DuplicateSequence { .. })
+    ));
+}
+
+// --- get_changes and get_change_diff --------------------------------------
+
+#[test]
+fn changes_requests_are_exact() {
+    assert_eq!(
+        DesktopRequest::get_changes("desktop-70").unwrap().payload(),
+        payload("desktop-70", "get_changes", "{}")
+    );
+    assert_eq!(
+        DesktopRequest::get_change_diff("desktop-71", "root-1", "notes.md")
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-71",
+            "get_change_diff",
+            r#"{"root":"root-1","path":"notes.md"}"#
+        )
+    );
+    let mut session = DesktopSession::new();
+    assert_eq!(
+        session
+            .issue_get_change_diff("root-1", "lib/a b.ts")
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-1",
+            "get_change_diff",
+            r#"{"root":"root-1","path":"lib/a b.ts"}"#
+        )
+    );
+}
+
+#[test]
+fn changes_decode_the_spec_answers() {
+    let changes = ok_response(json!({
+        "roots": [{ "id": "root-1", "label": "gentle-shell" }],
+        "files": [
+            { "root": "root-1", "path": "lib/shell-changes.ts", "status": "modified", "added": 12, "deleted": 3 },
+            { "root": "root-1", "path": "notes.md", "status": "untracked", "added": 4, "deleted": 0 }
+        ],
+        "truncated": false
+    }))
+    .changes()
+    .unwrap();
+    assert_eq!(
+        changes,
+        Changes {
+            roots: vec![ChangeRoot {
+                id: "root-1".into(),
+                label: "gentle-shell".into()
+            }],
+            files: vec![
+                ChangedFile {
+                    root: "root-1".into(),
+                    path: "lib/shell-changes.ts".into(),
+                    status: ChangeStatus::Modified,
+                    added: 12,
+                    deleted: 3,
+                },
+                ChangedFile {
+                    root: "root-1".into(),
+                    path: "notes.md".into(),
+                    status: ChangeStatus::Untracked,
+                    added: 4,
+                    deleted: 0,
+                },
+            ],
+            truncated: false,
+        }
+    );
+    let clean = ok_response(json!({ "roots": [], "files": [], "truncated": false }))
+        .changes()
+        .unwrap();
+    assert!(clean.roots.is_empty() && clean.files.is_empty());
+    for bad in [
+        json!({ "roots": [], "files": [{ "root": "root-9", "path": "a", "status": "added", "added": 1, "deleted": 0 }], "truncated": false }),
+        json!({ "roots": [{ "id": "root-1", "label": "x" }], "files": [{ "root": "root-1", "path": "a", "status": "copied", "added": 1, "deleted": 0 }], "truncated": false }),
+        json!({ "roots": [], "files": [] }),
+    ] {
+        assert!(ok_response(bad.clone()).changes().is_err(), "{bad}");
+    }
+
+    let diff = ok_response(json!({
+        "root": "root-1",
+        "path": "notes.md",
+        "diff": "diff --git a/notes.md b/notes.md\nnew file mode 100644\n--- /dev/null\n+++ b/notes.md\n@@ -0,0 +1,4 @@\n+…\n",
+        "truncated": false
+    }))
+    .change_diff()
+    .unwrap();
+    assert_eq!(
+        diff,
+        ChangeDiff {
+            root: "root-1".into(),
+            path: "notes.md".into(),
+            diff: "diff --git a/notes.md b/notes.md\nnew file mode 100644\n--- /dev/null\n+++ b/notes.md\n@@ -0,0 +1,4 @@\n+…\n".into(),
+            truncated: false,
+        }
+    );
+    let capped =
+        ok_response(json!({ "root": "root-1", "path": "big.txt", "diff": "", "truncated": true }))
+            .change_diff()
+            .unwrap();
+    assert!(capped.truncated);
+}
+
+// --- get_review_mode, set_review_mode and review_mode_changed -------------
+
+#[test]
+fn review_mode_requests_are_exact() {
+    assert_eq!(
+        DesktopRequest::get_review_mode("desktop-70")
+            .unwrap()
+            .payload(),
+        payload("desktop-70", "get_review_mode", "{}")
+    );
+    assert_eq!(
+        DesktopRequest::set_review_mode("desktop-71", false, ReviewScope::Global, None)
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-71",
+            "set_review_mode",
+            r#"{"enabled":false,"scope":"global"}"#
+        )
+    );
+    assert_eq!(
+        DesktopRequest::set_review_mode("desktop-72", true, ReviewScope::Clone, Some("9b2e"))
+            .unwrap()
+            .payload(),
+        payload(
+            "desktop-72",
+            "set_review_mode",
+            r#"{"enabled":true,"scope":"clone","confirmationToken":"9b2e"}"#
+        )
+    );
+    let mut session = DesktopSession::new();
+    for token in [String::new(), "t".repeat(129)] {
+        assert_eq!(
+            session.issue_set_review_mode(false, ReviewScope::Global, Some(&token)),
+            Err(DesktopRpcError::InvalidConfirmationToken)
+        );
+        assert_eq!(session.pending(), None);
+    }
+    assert!(
+        session
+            .issue_set_review_mode(false, ReviewScope::Global, Some(&"t".repeat(128)))
+            .is_ok()
+    );
+}
+
+#[test]
+fn review_mode_decodes_reads_and_the_confirmation_round() {
+    let read = ok_response(json!({
+        "effective": "disabled", "source": "global",
+        "scopes": { "global": "disabled", "clone": "unset" }
+    }))
+    .review_mode()
+    .unwrap();
+    assert_eq!(
+        read,
+        ReviewMode {
+            effective: ReviewEffective::Disabled,
+            source: ReviewSource::Global,
+            scopes: ReviewScopes {
+                global: ReviewSetting::Disabled,
+                clone: ReviewSetting::Unset
+            },
+        }
+    );
+    // A failed read fails closed to `unknown` everywhere.
+    let unknown = ok_response(json!({
+        "effective": "unknown", "source": "unknown",
+        "scopes": { "global": "unknown", "clone": "unknown" }
+    }))
+    .review_mode()
+    .unwrap();
+    assert_eq!(unknown.effective, ReviewEffective::Unknown);
+
+    // First call: a confirmation, nothing written.
+    let first = ok_response(json!({
+        "status": "confirmation_required",
+        "enabled": false,
+        "scope": "global",
+        "mode": { "effective": "enabled", "source": "default", "scopes": { "global": "unset", "clone": "unset" } },
+        "confirmation": {
+            "title": "Turn review mode off machine-wide?",
+            "message": "Receipt-driven development is currently on (decided by the default). Reviews will be off for every repository on this machine.",
+            "token": "9b2e"
+        }
+    }))
+    .set_review_mode()
+    .unwrap();
+    assert_eq!(first.scope, ReviewScope::Global);
+    assert!(!first.enabled);
+    assert_eq!(first.mode.source, ReviewSource::Default);
+    let SetReviewModeOutcome::ConfirmationRequired(confirmation) = first.outcome else {
+        panic!("expected a confirmation, got {first:?}");
+    };
+    assert_eq!(
+        confirmation,
+        ReviewConfirmation {
+            title: "Turn review mode off machine-wide?".into(),
+            message: "Receipt-driven development is currently on (decided by the default). Reviews will be off for every repository on this machine.".into(),
+            token: "9b2e".into(),
+        }
+    );
+    // The resend carries exactly that token.
+    let resend = DesktopRequest::set_review_mode(
+        "desktop-72",
+        first.enabled,
+        first.scope,
+        Some(&confirmation.token),
+    )
+    .unwrap();
+    assert!(resend.payload().contains(r#""confirmationToken":"9b2e""#));
+
+    // Second call: applied and re-read.
+    let applied = ok_response(json!({
+        "status": "applied",
+        "enabled": false,
+        "scope": "global",
+        "changed": true,
+        "mode": { "effective": "disabled", "source": "global", "scopes": { "global": "disabled", "clone": "unset" } }
+    }))
+    .set_review_mode()
+    .unwrap();
+    assert_eq!(
+        applied.outcome,
+        SetReviewModeOutcome::Applied { changed: true }
+    );
+    assert_eq!(applied.mode.effective, ReviewEffective::Disabled);
+
+    for bad in [
+        json!({ "status": "written", "enabled": false, "scope": "global", "mode": read_mode_json() }),
+        json!({ "status": "applied", "enabled": false, "scope": "global", "mode": read_mode_json() }),
+        json!({ "status": "confirmation_required", "enabled": false, "scope": "global", "mode": read_mode_json() }),
+        json!({ "status": "confirmation_required", "enabled": false, "scope": "global", "mode": read_mode_json(), "confirmation": { "title": "t", "message": "m", "token": "" } }),
+        json!({ "status": "applied", "changed": true, "enabled": false, "scope": "repo", "mode": read_mode_json() }),
+        json!({ "status": "applied", "changed": true, "enabled": false, "scope": "global", "mode": { "effective": "on", "source": "global", "scopes": { "global": "unset", "clone": "unset" } } }),
+    ] {
+        assert!(ok_response(bad.clone()).set_review_mode().is_err(), "{bad}");
+    }
+}
+
+fn read_mode_json() -> Value {
+    json!({ "effective": "disabled", "source": "global", "scopes": { "global": "disabled", "clone": "unset" } })
+}
+
+#[test]
+fn review_mode_changed_decodes_the_spec_event() {
+    let changed = some_event(
+        4,
+        "review_mode_changed",
+        json!({
+            "mode": { "effective": "disabled", "source": "global", "scopes": { "global": "disabled", "clone": "unset" } },
+            "previousMode": { "effective": "enabled", "source": "default", "scopes": { "global": "unset", "clone": "unset" } }
+        }),
+    )
+    .review_mode_changed()
+    .unwrap();
+    assert_eq!(changed.mode.effective, ReviewEffective::Disabled);
+    assert_eq!(
+        changed.previous_mode,
+        ReviewMode {
+            effective: ReviewEffective::Enabled,
+            source: ReviewSource::Default,
+            scopes: ReviewScopes {
+                global: ReviewSetting::Unset,
+                clone: ReviewSetting::Unset
+            },
+        }
+    );
+    assert!(matches!(
+        some_event(
+            5,
+            "config_changed",
+            json!({ "mode": read_mode_json(), "previousMode": read_mode_json() })
+        )
+        .review_mode_changed(),
+        Err(DesktopRpcError::UnexpectedEvent {
+            expected: "review_mode_changed",
+            ..
+        })
+    ));
+}
+
+// --- get_usage_stats ------------------------------------------------------
+
+#[test]
+fn usage_stats_requests_send_only_the_given_params() {
+    for (range, scope, params) in [
+        (None, None, "{}"),
+        (
+            Some(StatsRange::Month),
+            Some(StatsScope::All),
+            r#"{"range":"30d","scope":"all"}"#,
+        ),
+        (Some(StatsRange::Week), None, r#"{"range":"7d"}"#),
+        (None, Some(StatsScope::Project), r#"{"scope":"project"}"#),
+        (Some(StatsRange::All), None, r#"{"range":"all"}"#),
+    ] {
+        assert_eq!(
+            DesktopRequest::get_usage_stats("desktop-61", range, scope)
+                .unwrap()
+                .payload(),
+            payload("desktop-61", "get_usage_stats", params)
+        );
+    }
+}
+
+#[test]
+fn usage_stats_decode_the_spec_answer_and_its_truncation_flags() {
+    let stats = ok_response(json!({
+        "range": "30d",
+        "scope": "all",
+        "totals": { "sessions": 3, "messages": 4, "inputTokens": 1310, "outputTokens": 155, "cacheReadTokens": 1000, "cacheWriteTokens": 200, "totalTokens": 2665, "cost": 1.76 },
+        "byModel": [
+            { "model": "claude-opus-5-5", "messages": 2, "tokens": 1365, "cost": 0.51, "share": 0.512 },
+            { "model": "gpt-5.5", "messages": 2, "tokens": 1300, "cost": 1.25, "share": 0.488 }
+        ],
+        "byDay": [{ "day": "2026-09-20", "tokens": 1000 }, { "day": "2026-10-08", "tokens": 300 }, { "day": "2026-10-09", "tokens": 1365 }],
+        "byProject": [
+            { "name": "alpha", "sessions": 2, "messages": 3, "tokens": 2365, "cost": 1.51 },
+            { "name": "beta", "sessions": 1, "messages": 1, "tokens": 300, "cost": 0.25 }
+        ],
+        "truncated": { "byModel": false, "byDay": false, "byProject": false }
+    }))
+    .usage_stats()
+    .unwrap();
+    assert_eq!(
+        (stats.range, stats.scope),
+        (StatsRange::Month, StatsScope::All)
+    );
+    assert_eq!(
+        stats.totals,
+        UsageStatsTotals {
+            sessions: 3,
+            messages: 4,
+            input_tokens: 1310,
+            output_tokens: 155,
+            cache_read_tokens: 1000,
+            cache_write_tokens: 200,
+            total_tokens: 2665,
+            cost: 1.76,
+        }
+    );
+    assert_eq!(
+        stats.by_model[0],
+        UsageStatsModel {
+            model: "claude-opus-5-5".into(),
+            messages: 2,
+            tokens: 1365,
+            cost: 0.51,
+            share: 0.512,
+        }
+    );
+    assert_eq!(
+        stats.by_day[2],
+        UsageStatsDay {
+            day: "2026-10-09".into(),
+            tokens: 1365
+        }
+    );
+    assert_eq!(stats.by_project.as_ref().unwrap()[1].name, "beta");
+    assert_eq!(
+        stats.truncated,
+        UsageStatsTruncated {
+            by_model: false,
+            by_day: false,
+            by_project: Some(false)
+        }
+    );
+
+    // The live answer of a fresh home: project scope, zeros, no byProject.
+    let empty = ok_response(json!({
+        "range": "7d", "scope": "project",
+        "totals": { "sessions": 0, "messages": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 0, "cost": 0 },
+        "byModel": [], "byDay": [],
+        "truncated": { "byModel": false, "byDay": false }
+    }))
+    .usage_stats()
+    .unwrap();
+    assert_eq!(empty.by_project, None);
+    assert_eq!(empty.truncated.by_project, None);
+
+    for bad in [
+        // byProject for project scope, or missing for all.
+        json!({ "range": "7d", "scope": "project", "totals": zero_totals(), "byModel": [], "byDay": [], "byProject": [], "truncated": { "byModel": false, "byDay": false } }),
+        json!({ "range": "7d", "scope": "all", "totals": zero_totals(), "byModel": [], "byDay": [], "truncated": { "byModel": false, "byDay": false } }),
+        json!({ "range": "90d", "scope": "project", "totals": zero_totals(), "byModel": [], "byDay": [], "truncated": { "byModel": false, "byDay": false } }),
+    ] {
+        assert!(ok_response(bad.clone()).usage_stats().is_err(), "{bad}");
+    }
+}
+
+fn zero_totals() -> Value {
+    json!({ "sessions": 0, "messages": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 0, "cost": 0 })
+}
+
+// --- get_update_status ----------------------------------------------------
+
+#[test]
+fn update_status_requests_send_refresh_only_when_given() {
+    for (refresh, params) in [
+        (None, "{}"),
+        (Some(true), r#"{"refresh":true}"#),
+        (Some(false), r#"{"refresh":false}"#),
+    ] {
+        assert_eq!(
+            DesktopRequest::get_update_status("desktop-71", refresh)
+                .unwrap()
+                .payload(),
+            payload("desktop-71", "get_update_status", params)
+        );
+    }
+}
+
+#[test]
+fn update_status_decodes_the_spec_answer_and_an_offline_read() {
+    let status = ok_response(json!({
+        "refreshed": true,
+        "offline": false,
+        "gentleShell": { "current": "4.8.0", "latest": "4.9.0", "channel": "release", "state": "update_available", "command": "gentle-shell upgrade", "checkedAt": "2026-11-17T12:00:00.000Z" },
+        "pi": { "current": "1.5.2", "latest": null, "state": "unknown", "command": "gentle-shell update", "checkedAt": null },
+        "packages": {
+            "available": true,
+            "items": [
+                { "name": "pi-web-access", "kind": "npm", "scope": "user", "current": "1.4.0", "latest": null, "pinned": false, "state": "update_available" },
+                { "name": "github.com/user/repo", "kind": "git", "scope": "project", "current": null, "latest": null, "pinned": true, "state": "skipped" }
+            ],
+            "truncated": false,
+            "command": "gentle-shell update --extensions",
+            "checkedAt": "2026-11-17T12:00:00.000Z"
+        }
+    }))
+    .update_status()
+    .unwrap();
+    assert!(status.refreshed && !status.offline);
+    assert_eq!(
+        status.gentle_shell,
+        ShellUpdate {
+            current: Some("4.8.0".into()),
+            latest: Some("4.9.0".into()),
+            channel: ShellChannel::Release,
+            state: UpdateState::UpdateAvailable,
+            command: Some("gentle-shell upgrade".into()),
+            checked_at: Some("2026-11-17T12:00:00.000Z".into()),
+        }
+    );
+    assert_eq!(
+        status.pi,
+        PiUpdate {
+            current: Some("1.5.2".into()),
+            latest: None,
+            state: UpdateState::Unknown,
+            command: "gentle-shell update".into(),
+            checked_at: None,
+        }
+    );
+    assert_eq!(
+        status.packages.items[1],
+        PackageUpdate {
+            name: "github.com/user/repo".into(),
+            kind: PackageKind::Git,
+            scope: PackageScope::Project,
+            current: None,
+            latest: None,
+            pinned: Some(true),
+            state: PackageUpdateState::Skipped,
+        }
+    );
+    assert!(status.packages.available && !status.packages.truncated);
+
+    // The live answer under PI_OFFLINE: nothing looked up, nothing claimed.
+    let offline = ok_response(json!({
+        "refreshed": false, "offline": true,
+        "gentleShell": { "current": "4.8.0", "latest": null, "channel": "release", "state": "unknown", "command": "gentle-shell upgrade", "checkedAt": null },
+        "pi": { "current": "1.5.2", "latest": null, "state": "unknown", "command": "gentle-shell update", "checkedAt": null },
+        "packages": { "available": true, "items": [], "truncated": false, "command": "gentle-shell update --extensions", "checkedAt": null }
+    }))
+    .update_status()
+    .unwrap();
+    assert!(offline.offline && !offline.refreshed);
+    assert_eq!(offline.gentle_shell.state, UpdateState::Unknown);
+
+    // An unknown channel has no command; a gentle-ai-managed one has its own.
+    let mut managed = json!({
+        "refreshed": false, "offline": false,
+        "gentleShell": { "current": null, "latest": null, "channel": "gentle-ai-managed", "state": "unknown", "command": "gentle-shell update --extensions", "checkedAt": null },
+        "pi": { "current": null, "latest": null, "state": "unknown", "command": "gentle-shell update", "checkedAt": null },
+        "packages": { "available": false, "items": [], "truncated": false, "command": "gentle-shell update --extensions", "checkedAt": null }
+    });
+    assert_eq!(
+        ok_response(managed.clone())
+            .update_status()
+            .unwrap()
+            .gentle_shell
+            .channel,
+        ShellChannel::GentleAiManaged
+    );
+    managed["gentleShell"]["channel"] = json!("nightly");
+    assert!(ok_response(managed).update_status().is_err());
+}
+
+// --- error codes ----------------------------------------------------------
+
+#[test]
+fn every_documented_error_code_is_typed() {
+    let documented = [
+        "invalid_request",
+        "unknown_store",
+        "read_only",
+        "invalid_data",
+        "revision_conflict",
+        "write_failed",
+        "unsupported_method",
+        "permission_unavailable",
+        "permission_denied",
+        "config_unavailable",
+        "usage_unavailable",
+        "design_unavailable",
+        "jobs_unavailable",
+        "agents_unavailable",
+        "changes_unavailable",
+        "profiles_unavailable",
+        "unknown_profile",
+        "profile_apply_busy",
+        "sessions_unavailable",
+        "session_switching",
+        "session_unavailable",
+        "review_unavailable",
+        "review_mode_busy",
+        "stats_unavailable",
+        "updates_unavailable",
+        "not_found",
+        "internal_error",
+    ];
+    let names: Vec<&str> = DesktopErrorCode::ALL.iter().map(|c| c.as_str()).collect();
+    assert_eq!(names, documented);
+
+    // Live answers of upstream main for unknown ids.
+    for (code, message, kind) in [
+        (
+            "not_found",
+            "No background job with that id in this session",
+            DesktopErrorCode::NotFound,
+        ),
+        (
+            "not_found",
+            "No subagent with that id in this session",
+            DesktopErrorCode::NotFound,
+        ),
+        (
+            "review_unavailable",
+            "Review mode is not available in this session",
+            DesktopErrorCode::ReviewUnavailable,
+        ),
+        (
+            "unsupported_method",
+            "Unsupported Desktop RPC method",
+            DesktopErrorCode::UnsupportedMethod,
+        ),
+    ] {
+        let response = record_response(
+            decode_widget(&widget(&error_line("desktop-60", code, message)))
+                .unwrap()
+                .unwrap(),
+        );
+        let Err(DesktopRpcError::RemoteError(info)) = response.job_output() else {
+            panic!("{code} must surface as a remote error");
+        };
+        assert_eq!(info.kind(), Some(kind));
+        assert_eq!(info.message, message);
+    }
+    let unknown = DesktopErrorInfo {
+        code: "teapot".into(),
+        message: String::new(),
+    };
+    assert_eq!(unknown.kind(), None);
+
+    assert!(DesktopErrorCode::SessionSwitching.is_retryable());
+    assert!(DesktopErrorCode::ReviewModeBusy.is_retryable());
+    assert!(!DesktopErrorCode::NotFound.is_retryable());
 }
