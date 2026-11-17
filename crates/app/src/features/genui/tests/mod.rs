@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use super::diagram::DiagramEvent;
 
+mod canvas;
 mod diagram;
 mod panels;
 

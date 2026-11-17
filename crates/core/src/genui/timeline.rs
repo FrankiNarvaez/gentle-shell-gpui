@@ -794,6 +794,11 @@ impl TimelineLayout {
 }
 
 pub fn layout(timeline: &Timeline) -> TimelineLayout {
+    layout_from(timeline, None)
+}
+
+/// [`layout`] with day `origin` at x = 0 (a drag keeps the axis still).
+pub fn layout_from(timeline: &Timeline, origin: Option<i64>) -> TimelineLayout {
     let first = timeline.tasks.iter().map(|t| t.start).min().unwrap_or(0);
     let last = timeline
         .tasks
@@ -801,7 +806,7 @@ pub fn layout(timeline: &Timeline) -> TimelineLayout {
         .map(|t| t.end)
         .max()
         .unwrap_or(first + 14);
-    let origin = first - MARGIN_DAYS;
+    let origin = origin.unwrap_or(first - MARGIN_DAYS);
     let last = last + MARGIN_DAYS + 1;
     let x_of = |day: i64| (day - origin) as f32 * DAY;
     let width = x_of(last + 1);

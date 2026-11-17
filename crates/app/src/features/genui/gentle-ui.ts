@@ -848,6 +848,569 @@ function summaryHtml(surface: Surface): string {
 	].join("\n");
 }
 
+// ── Canvas kinds: sequence, erd, state, timeline ─────────────────────────────
+// Each mirrors `gentle_core::genui::<sequence|erd|states|timeline>`.
+
+const CANVAS = { participants: 30, messages: 300, fragments: 50, tables: 60, columns: 80, relations: 200, states: 150, transitions: 300, stateGroups: 30, tasks: 200, days: 3660 };
+const PARTICIPANT_KINDS = ["actor", "service", "db", "queue", "external"];
+const MESSAGE_KINDS = ["sync", "async", "return", "self"];
+const FRAGMENT_KINDS = ["alt", "opt", "loop", "par"];
+const CARDINALITIES = ["1-1", "1-n", "n-1", "n-n"];
+const STATE_KINDS = ["initial", "normal", "final", "choice"];
+
+/** Trimmed non-empty text cut to `max`. */
+const txt = (value: unknown, max: number): string | undefined => (typeof value === "string" ? optionalText(value.trim(), max) : undefined);
+const finite = (value: unknown): number | undefined => (typeof value === "number" && Number.isFinite(value) ? value : undefined);
+
+/** Items of `next[key]` minus the removed ids, then `patch[key]` upserted by
+ * id; items without an id are appended (normalizing names them). */
+function upsertAll(next: Json, patch: Json, key: string): void {
+	const items = patch[key];
+	if (items === undefined || items === null) return;
+	if (!Array.isArray(items) || !items.every(isObject)) throw new Error(`patch.${key} must be an array of objects`);
+	const target = (next[key] ??= []) as Json[];
+	for (const item of items) {
+		const id = idText(item.id);
+		const found = id === undefined ? undefined : target.find((existing) => idText(existing.id) === id);
+		if (!found) target.push({ ...item });
+		else for (const [k, v] of Object.entries(item)) if (k !== "id") v === null ? delete found[k] : (found[k] = v);
+	}
+}
+
+function normalizeSequence(raw: unknown): Json {
+	const { fail, check } = problems("sequence");
+	if (!isObject(raw) || !Array.isArray(raw.messages)) throw new Error("spec.messages must be an array");
+	const partsRaw = list(raw.participants);
+	const fragsRaw = list(raw.fragments);
+	for (const [what, count, max] of [["participants", partsRaw.length, CANVAS.participants], ["messages", raw.messages.length, CANVAS.messages], ["fragments", fragsRaw.length, CANVAS.fragments]] as const) {
+		if (count > max) fail(`too many ${what} (${count}, at most ${max})`);
+	}
+	const participants: Json[] = [];
+	partsRaw.slice(0, CANVAS.participants).forEach((p, i) => {
+		const label = typeof p === "string" ? txt(p, MAX.label) : isObject(p) ? txt(p.label ?? p.name, MAX.label) : undefined;
+		const id = typeof p === "string" ? idText(p) : isObject(p) ? idText(p.id) ?? label : undefined;
+		if (id === undefined) return fail(`participant #${i + 1} has no id`);
+		if (participants.some((o) => o.id === id)) return fail(`duplicate participant id "${id}"`);
+		const kind = lower(isObject(p) ? p.kind : undefined);
+		const known = PARTICIPANT_KINDS.includes(kind) ? kind : kind === "database" || kind === "store" ? "db" : kind === "user" || kind === "person" ? "actor" : "service";
+		participants.push({ id, label: label ?? id, kind: known });
+	});
+	const implicit = participants.length === 0;
+	const explicit = new Set(raw.messages.flatMap((m) => (isObject(m) && idText(m.id) !== undefined ? [idText(m.id) as string] : [])));
+	const messages: Json[] = [];
+	raw.messages.slice(0, CANVAS.messages).forEach((m, i) => {
+		const from = isObject(m) ? idText(m.from) : undefined;
+		const to = isObject(m) ? idText(m.to) : undefined;
+		if (!isObject(m) || from === undefined || to === undefined) return fail(`message #${i + 1} needs "from" and "to"`);
+		for (const end of [from, to]) {
+			if (participants.some((p) => p.id === end)) continue;
+			if (implicit && participants.length < CANVAS.participants) participants.push({ id: end, label: end, kind: "service" });
+			else fail(`message #${i + 1}: participant "${end}" is not in participants`);
+		}
+		const id = idText(m.id) ?? slugOf(`m${i + 1}`, "m", (s) => explicit.has(s) || messages.some((o) => o.id === s));
+		if (messages.some((o) => o.id === id)) return fail(`duplicate message id "${id}"`);
+		let kind = lower(m.kind ?? m.type);
+		if (!MESSAGE_KINDS.includes(kind)) kind = "sync";
+		if (from === to) kind = "self";
+		else if (kind === "self") kind = "sync";
+		messages.push({ id, from, to, label: txt(m.label ?? m.text, MAX.label) ?? "", kind, note: txt(m.note, MAX.text) });
+	});
+	const index = (id: string) => messages.findIndex((m) => m.id === id);
+	// A message id or a 1-based message number; undefined: not given, null: no such message.
+	const resolve = (value: unknown): string | undefined | null => {
+		if (value === undefined || value === null) return undefined;
+		if (typeof value === "number") return Number.isInteger(value) && value >= 1 && messages[value - 1] ? (messages[value - 1].id as string) : null;
+		const id = idText(value);
+		return id !== undefined && index(id) >= 0 ? id : null;
+	};
+	const missing = (value: unknown) => `message ${JSON.stringify(value)} does not exist`;
+	const fragments: Json[] = [];
+	fragsRaw.slice(0, CANVAS.fragments).forEach((f, i) => {
+		const what = `fragment #${i + 1}`;
+		if (!isObject(f)) return fail(`${what} needs "from" (a message id or 1-based number)`);
+		const first = resolve(f.from);
+		const last = resolve(f.to);
+		if (first === undefined) return fail(`${what} needs "from" (a message id or 1-based number)`);
+		if (first === null) return fail(`${what}: ${missing(f.from)}`);
+		if (last === null) return fail(`${what}: ${missing(f.to)}`);
+		let [a, b] = [first, last ?? first];
+		if (index(a) > index(b)) [a, b] = [b, a];
+		const branches: Json[] = [];
+		for (const br of list(f.else)) {
+			const at = resolve(isObject(br) ? br.at : undefined);
+			if (at === undefined) fail(`${what}: an else needs "at"`);
+			else if (at === null) fail(`${what}: ${missing(isObject(br) ? br.at : undefined)}`);
+			else if (index(at) <= index(a) || index(at) > index(b)) fail(`${what}: its else at "${at}" is outside the fragment`);
+			else branches.push({ at, label: txt(isObject(br) ? br.label : undefined, MAX.label) });
+		}
+		branches.sort((x, y) => index(x.at as string) - index(y.at as string));
+		const id = idText(f.id) ?? slugOf(`f${i + 1}`, "f", (s) => fragments.some((o) => o.id === s));
+		if (fragments.some((o) => o.id === id)) return fail(`duplicate fragment id "${id}"`);
+		const kind = lower(f.kind ?? f.type);
+		fragments.push({ id, kind: FRAGMENT_KINDS.includes(kind) ? kind : "opt", label: txt(f.label, MAX.label), from: a, to: b, else: branches.length > 0 ? branches : undefined });
+	});
+	let activations: Json[] | undefined;
+	if (Array.isArray(raw.activations)) {
+		activations = [];
+		raw.activations.slice(0, CANVAS.messages).forEach((act, i) => {
+			const what = `activation #${i + 1}`;
+			const participant = isObject(act) ? idText(act.participant) : undefined;
+			if (!isObject(act) || participant === undefined) return fail(`${what} needs a "participant"`);
+			if (!participants.some((p) => p.id === participant)) return fail(`${what}: participant "${participant}" is not in participants`);
+			const first = resolve(act.from);
+			const last = resolve(act.to);
+			if (first === undefined) return fail(`${what} needs "from"`);
+			if (first === null) return fail(`${what}: ${missing(act.from)}`);
+			if (last === null) return fail(`${what}: ${missing(act.to)}`);
+			let [a, b] = [first, last ?? first];
+			if (index(a) > index(b)) [a, b] = [b, a];
+			activations!.push({ participant, from: a, to: b });
+		});
+	}
+	check();
+	return clone({ participants, messages, fragments, activations });
+}
+
+/** Upserts by id (`at`: a message's 1-based place); removing a message drops
+ * the fragments and activations it bounds. */
+function patchSequence(spec: Json, patch: Json): Json {
+	const next = clone(spec) as Json & { participants: Json[]; messages: Json[]; fragments: Json[]; activations?: Json[] };
+	const goneParticipants = removed(patch, "participants");
+	const goneMessages = removed(patch, "messages");
+	const goneFragments = removed(patch, "fragments");
+	next.participants = next.participants.filter((p) => !goneParticipants.has(p.id as string));
+	next.messages = next.messages.filter((m) => !goneMessages.has(m.id as string) && !goneParticipants.has(m.from as string) && !goneParticipants.has(m.to as string));
+	const kept = (id: unknown) => next.messages.some((m) => m.id === id);
+	next.fragments = next.fragments.filter((f) => !goneFragments.has(f.id as string) && kept(f.from) && kept(f.to));
+	for (const f of next.fragments) if (Array.isArray(f.else)) f.else = (f.else as Json[]).filter((b) => kept(b.at));
+	if (Array.isArray(next.activations)) next.activations = next.activations.filter((a) => kept(a.from) && kept(a.to) && !goneParticipants.has(a.participant as string));
+	upsertAll(next, patch, "participants");
+	upsertAll(next, patch, "messages");
+	upsertAll(next, patch, "fragments");
+	for (const m of list(patch.messages)) {
+		const id = isObject(m) ? idText(m.id) : undefined;
+		const at = isObject(m) && Number.isInteger(m.at) ? (m.at as number) : undefined;
+		const from = next.messages.findIndex((o) => o.id === id);
+		if (at === undefined || from < 0) continue;
+		const [moved] = next.messages.splice(from, 1);
+		delete moved.at;
+		next.messages.splice(Math.max(0, Math.min(at - 1, next.messages.length)), 0, moved);
+	}
+	if ("activations" in patch) patch.activations === null ? delete next.activations : (next.activations = patch.activations as Json[]);
+	return normalizeSequence(next);
+}
+
+function summarySequence(surface: Surface): string {
+	const spec = surface.spec as { participants: Json[]; messages: Json[]; fragments: Json[] };
+	const who = (id: unknown) => (spec.participants.find((p) => p.id === id)?.label as string | undefined) ?? String(id);
+	const lines = [`Sequence diagram "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user ` +
+		`(${plural(spec.participants.length, "participant")}, ${plural(spec.messages.length, "message")}, ${plural(spec.fragments.length, "fragment")}).`];
+	lines.push(listed("Participants, left to right", spec.participants.map((p) => `${p.id} ${quoted(p.label)} (${p.kind})`)));
+	spec.messages.forEach((m, i) => lines.push(`${i + 1}. ${m.id} ${who(m.from)} → ${who(m.to)}${m.label ? ` ${quoted(m.label, 60)}` : ""}${m.kind === "sync" ? "" : ` [${m.kind}]`}${m.note ? ` — ${cut(String(m.note), 80)}` : ""}`));
+	for (const f of spec.fragments) {
+		const branches = ((f.else as Json[] | undefined) ?? []).map((b) => ` else at ${b.at}${b.label ? ` ${quoted(b.label)}` : ""}`).join(",");
+		lines.push(`Fragment ${f.id} ${f.kind}${f.label ? ` ${quoted(f.label)}` : ""}: ${f.from}–${f.to}${branches}`);
+	}
+	if (lines.length > LIMITS.summaryLines) lines.splice(LIMITS.summaryLines, lines.length, `… and ${lines.length - LIMITS.summaryLines} more lines`);
+	lines.push(`The user can reorder participants and messages, rename them, add and remove messages and change a message's kind; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	return lines.join("\n");
+}
+
+/** `{path, line?, endLine?}`, or `"path"`, `"path:42"`, `"path:42-50"`. */
+function tableRef(value: unknown): Json | string {
+	let path = "";
+	let line: number | undefined;
+	let endLine: number | undefined;
+	if (typeof value === "string") {
+		const match = /^(.*?)(?::(\d+)(?:-(\d+))?)?$/.exec(value.trim());
+		path = match?.[1] ?? "";
+		line = match?.[2] ? Number(match[2]) : undefined;
+		endLine = match?.[3] ? Number(match[3]) : undefined;
+	} else if (isObject(value)) {
+		path = typeof value.path === "string" ? value.path : "";
+		line = Number.isInteger(value.line) ? (value.line as number) : undefined;
+		endLine = Number.isInteger(value.endLine) ? (value.endLine as number) : undefined;
+	} else return "must be {path, line?, endLine?}";
+	path = path.trim().replace(/\\/g, "/").replace(/^(\.\/)+/, "");
+	if (path === "") return "needs a path";
+	if (path.split("/")[0] === "..") return `"${path}" is outside the project`;
+	line = line !== undefined && line > 0 ? line : undefined;
+	endLine = line !== undefined && endLine !== undefined && endLine > line ? endLine : undefined;
+	return { path, line, endLine };
+}
+
+function normalizeErd(raw: unknown): Json {
+	const { fail, check } = problems("erd");
+	if (!isObject(raw) || !Array.isArray(raw.tables)) throw new Error("spec.tables must be an array");
+	const relationsRaw = list(raw.relations);
+	if (raw.tables.length > CANVAS.tables) fail(`too many tables (${raw.tables.length}, at most ${CANVAS.tables})`);
+	if (relationsRaw.length > CANVAS.relations) fail(`too many relations (${relationsRaw.length}, at most ${CANVAS.relations})`);
+	const tables: Json[] = [];
+	const fks: { column: Json; owner: string; raw: unknown }[] = [];
+	raw.tables.slice(0, CANVAS.tables).forEach((t, i) => {
+		const name = isObject(t) ? txt(t.name ?? t.label, MAX.label) : undefined;
+		const id = (isObject(t) ? idText(t.id) : undefined) ?? name;
+		if (!isObject(t) || id === undefined) return fail(`table #${i + 1} has no id`);
+		if (tables.some((o) => o.id === id)) return fail(`duplicate table id "${id}"`);
+		const columnsRaw = list(t.columns);
+		if (columnsRaw.length > CANVAS.columns) fail(`table "${id}": too many columns (${columnsRaw.length}, at most ${CANVAS.columns})`);
+		const columns: Json[] = [];
+		columnsRaw.slice(0, CANVAS.columns).forEach((c, j) => {
+			const cname = typeof c === "string" ? idText(c) : isObject(c) ? idText(c.name) : undefined;
+			if (cname === undefined) return fail(`table "${id}": column #${j + 1} has no name`);
+			if (columns.some((o) => o.name === cname)) return fail(`table "${id}": duplicate column "${cname}"`);
+			const flag = (key: string) => (isObject(c) && c[key] === true ? true : undefined);
+			const column: Json = { name: cname, type: isObject(c) ? txt(c.type, MAX.label) : undefined, pk: flag("pk"), nullable: flag("nullable"), unique: flag("unique"), note: isObject(c) ? txt(c.note, MAX.text) : undefined };
+			if (isObject(c) && c.fk !== undefined && c.fk !== null) fks.push({ column, owner: `${id}.${cname}`, raw: c.fk });
+			columns.push(column);
+		});
+		let ref: Json | undefined;
+		if (t.ref !== undefined && t.ref !== null) {
+			const read = tableRef(t.ref);
+			if (typeof read === "string") fail(`table "${id}": ref ${read}`);
+			else ref = read;
+		}
+		const x = finite(t.x);
+		const y = finite(t.y);
+		const pinned = x !== undefined && y !== undefined;
+		tables.push({ id, name: name ?? id, columns, note: txt(t.note, MAX.text), ref, x: pinned ? Math.round(x) : undefined, y: pinned ? Math.round(y) : undefined });
+	});
+	const tableOf = (id: string) => tables.find((t) => t.id === id);
+	const columnOf = (end: Json) => (tableOf(end.table as string)?.columns as Json[] | undefined)?.find((c) => c.name === end.column);
+	// "table.column" (a table id may hold dots) or {table, column}; a foreign
+	// key may leave the column out (the primary key, else id).
+	const readEnd = (value: unknown, fk: boolean): Json | string => {
+		let table: string;
+		let column: string | undefined;
+		if (typeof value === "string") {
+			const s = value.trim();
+			const prefix = tables.find((t) => s.startsWith(`${t.id}.`));
+			if (prefix) [table, column] = [prefix.id as string, s.slice((prefix.id as string).length + 1)];
+			else {
+				const dot = s.lastIndexOf(".");
+				[table, column] = dot < 0 ? [s, undefined] : [s.slice(0, dot), s.slice(dot + 1)];
+			}
+		} else if (isObject(value)) [table, column] = [idText(value.table) ?? "", idText(value.column)];
+		else return "must be \"table.column\"";
+		const t = tableOf(table);
+		if (!t) return `table "${table}" does not exist`;
+		if (column === undefined || column === "") {
+			if (!fk) return `"${table}" needs a column (table.column)`;
+			column = ((t.columns as Json[]).find((c) => c.pk)?.name as string | undefined) ?? "id";
+		}
+		if (!(t.columns as Json[]).some((c) => c.name === column)) return `column "${table}.${column}" does not exist`;
+		return { table, column };
+	};
+	for (const { column, owner, raw: fk } of fks) {
+		const end = readEnd(fk, true);
+		if (typeof end === "string") fail(`column ${owner}: fk ${end}`);
+		else column.fk = end;
+	}
+	const same = (a: Json, b: unknown) => isObject(b) && a.table === b.table && a.column === b.column;
+	const implied = (from: Json, to: Json): string => {
+		const a = columnOf(from);
+		const b = columnOf(to);
+		if (!a || !b) return "1-n";
+		const one = (c: Json) => c.pk === true || c.unique === true;
+		if (same(to, a.fk)) return one(a) ? "1-1" : "n-1";
+		if (same(from, b.fk)) return one(b) ? "1-1" : "1-n";
+		if (!a.pk && b.pk) return "n-1";
+		if (a.pk && b.pk) return "1-1";
+		return "1-n";
+	};
+	const relations: Json[] = [];
+	const wire = (end: Json) => `${end.table}.${end.column}`;
+	const freshRelation = (from: Json, to: Json) => {
+		const base = `${wire(from)}->${wire(to)}`;
+		if (!relations.some((r) => r.id === base)) return base;
+		let n = 2;
+		while (relations.some((r) => r.id === `${base}#${n}`)) n += 1;
+		return `${base}#${n}`;
+	};
+	const ends: [Json, Json][] = [];
+	relationsRaw.slice(0, CANVAS.relations).forEach((r, i) => {
+		const what = `relation #${i + 1}`;
+		const from = isObject(r) && r.from !== undefined ? readEnd(r.from, false) : undefined;
+		const to = isObject(r) && r.to !== undefined ? readEnd(r.to, false) : undefined;
+		if (typeof from === "string") return fail(`${what}: ${from}`);
+		if (typeof to === "string") return fail(`${what}: ${to}`);
+		if (!isObject(r) || from === undefined || to === undefined) return fail(`${what} needs "from" and "to" (table.column)`);
+		const id = idText(r.id) ?? freshRelation(from, to);
+		if (relations.some((o) => o.id === id)) return fail(`duplicate relation id "${id}"`);
+		const cardinality = CARDINALITIES.includes(lower(r.cardinality)) ? lower(r.cardinality) : implied(from, to);
+		ends.push([from, to]);
+		relations.push({ id, from: wire(from), to: wire(to), cardinality, label: txt(r.label, MAX.label) });
+	});
+	// Every foreign key is drawn: one no relation covers gets its own.
+	for (const t of tables) {
+		for (const c of t.columns as Json[]) {
+			if (!isObject(c.fk) || relations.length >= CANVAS.relations) continue;
+			const own = { table: t.id, column: c.name };
+			const fk = c.fk;
+			if (ends.some(([a, b]) => (same(a, own) && same(b, fk)) || (same(b, own) && same(a, fk)))) continue;
+			ends.push([own, fk]);
+			relations.push({ id: freshRelation(own, fk), from: wire(own), to: wire(fk), cardinality: implied(own, fk) });
+		}
+	}
+	check();
+	return clone({ tables, relations });
+}
+
+/** Tables and relations upsert by id (a table's columns replace); removing a
+ * table or a column (`remove.columns: ["table.column"]`) drops what used it. */
+function patchErd(spec: Json, patch: Json): Json {
+	const next = clone(spec) as Json & { tables: Json[]; relations: Json[] };
+	const goneTables = removed(patch, "tables");
+	const goneRelations = removed(patch, "relations");
+	const goneColumns = new Set(list(isObject(patch.remove) ? patch.remove.columns : undefined).filter((c): c is string => typeof c === "string"));
+	const gone = (table: string, column: string) => goneTables.has(table) || goneColumns.has(`${table}.${column}`);
+	next.tables = next.tables.filter((t) => !goneTables.has(t.id as string));
+	for (const t of next.tables) {
+		t.columns = (t.columns as Json[]).filter((c) => !goneColumns.has(`${t.id}.${c.name}`));
+		for (const c of t.columns as Json[]) if (isObject(c.fk) && gone(c.fk.table as string, c.fk.column as string)) delete c.fk;
+	}
+	const endGone = (end: unknown) => {
+		const s = String(end);
+		return [...goneTables].some((t) => s.startsWith(`${t}.`)) || goneColumns.has(s);
+	};
+	next.relations = next.relations.filter((r) => !goneRelations.has(r.id as string) && !endGone(r.from) && !endGone(r.to));
+	upsertAll(next, patch, "tables");
+	upsertAll(next, patch, "relations");
+	return normalizeErd(next);
+}
+
+function summaryErd(surface: Surface): string {
+	const spec = surface.spec as { tables: Json[]; relations: Json[] };
+	const lines = [`Data model "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user (${plural(spec.tables.length, "table")}, ${plural(spec.relations.length, "relation")}).`];
+	for (const t of spec.tables) {
+		const columns = (t.columns as Json[]).map((c) => [c.name, c.type, c.pk ? "PK" : "", isObject(c.fk) ? `FK→${c.fk.table}.${c.fk.column}` : "", c.unique ? "unique" : "", c.nullable ? "null" : ""].filter(Boolean).join(" "));
+		const ref = isObject(t.ref) ? ` @ ${t.ref.path}${t.ref.line ? `:${t.ref.line}${t.ref.endLine ? `-${t.ref.endLine}` : ""}` : ""}` : "";
+		lines.push(`${t.id}${t.name !== t.id ? ` ${quoted(t.name)}` : ""}${ref}: ${columns.join(", ") || "no columns"}`);
+	}
+	if (spec.relations.length > 0) lines.push(listed("Relations", spec.relations.map((r) => `${r.from} → ${r.to} (${r.cardinality})${r.label ? ` ${quoted(r.label)}` : ""}`)));
+	if (lines.length > LIMITS.summaryLines) lines.splice(LIMITS.summaryLines, lines.length, `… and ${lines.length - LIMITS.summaryLines} more tables`);
+	lines.push(`The user can move and rename tables, add, rename and retype columns and relate columns; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	return lines.join("\n");
+}
+
+function normalizeState(raw: unknown): Json {
+	const { fail, check } = problems("state");
+	if (!isObject(raw) || !Array.isArray(raw.states)) throw new Error("spec.states must be an array");
+	const transitionsRaw = list(raw.transitions);
+	const groupsRaw = list(raw.groups);
+	for (const [what, count, max] of [["states", raw.states.length, CANVAS.states], ["transitions", transitionsRaw.length, CANVAS.transitions], ["groups", groupsRaw.length, CANVAS.stateGroups]] as const) {
+		if (count > max) fail(`too many ${what} (${count}, at most ${max})`);
+	}
+	const groups: Json[] = [];
+	groupsRaw.slice(0, CANVAS.stateGroups).forEach((g, i) => {
+		const id = isObject(g) ? idText(g.id) : undefined;
+		if (!isObject(g) || id === undefined) return fail(`group #${i + 1} has no id`);
+		if (groups.some((o) => o.id === id)) return fail(`duplicate group id "${id}"`);
+		groups.push({ id, label: txt(g.label, MAX.label) ?? id });
+	});
+	const states: Json[] = [];
+	raw.states.slice(0, CANVAS.states).forEach((s, i) => {
+		const label = typeof s === "string" ? txt(s, MAX.label) : isObject(s) ? txt(s.label, MAX.label) : undefined;
+		const id = typeof s === "string" ? idText(s) : isObject(s) ? idText(s.id) ?? label : undefined;
+		if (id === undefined) return fail(`state #${i + 1} has no id`);
+		if (states.some((o) => o.id === id)) return fail(`duplicate state id "${id}"`);
+		const group = isObject(s) ? idText(s.group ?? s.parent) : undefined;
+		if (group !== undefined && !groups.some((g) => g.id === group)) fail(`state "${id}": group "${group}" is not in groups`);
+		const kind = lower(isObject(s) ? s.kind : undefined);
+		const x = isObject(s) ? finite(s.x) : undefined;
+		const y = isObject(s) ? finite(s.y) : undefined;
+		const pinned = x !== undefined && y !== undefined;
+		states.push({
+			id, label: label ?? id, kind: STATE_KINDS.includes(kind) ? kind : "normal", group,
+			description: isObject(s) ? txt(s.description, MAX.text) : undefined, x: pinned ? Math.round(x) : undefined, y: pinned ? Math.round(y) : undefined,
+		});
+	});
+	const explicit = new Set(transitionsRaw.flatMap((t) => (isObject(t) && idText(t.id) !== undefined ? [idText(t.id) as string] : [])));
+	const transitions: Json[] = [];
+	transitionsRaw.slice(0, CANVAS.transitions).forEach((t, i) => {
+		const from = isObject(t) ? idText(t.from) : undefined;
+		const to = isObject(t) ? idText(t.to) : undefined;
+		if (!isObject(t) || from === undefined || to === undefined) return fail(`transition #${i + 1} needs "from" and "to"`);
+		let id = idText(t.id);
+		if (id === undefined) {
+			const base = `${from}->${to}`;
+			const taken = (s: string) => explicit.has(s) || transitions.some((o) => o.id === s);
+			id = base;
+			for (let n = 2; taken(id); n += 1) id = `${base}#${n}`;
+		}
+		if (transitions.some((o) => o.id === id)) return fail(`duplicate transition id "${id}"`);
+		for (const end of [from, to]) if (!states.some((s) => s.id === end)) fail(`transition "${id}": state "${end}" does not exist`);
+		transitions.push({ id, from, to, event: txt(t.event ?? t.label, MAX.label), guard: txt(t.guard, MAX.label), action: txt(t.action, MAX.label) });
+	});
+	const current = idText(raw.current);
+	if (current !== undefined && !states.some((s) => s.id === current)) fail(`current state "${current}" does not exist`);
+	check();
+	const direction = lower(raw.direction) === "tb" ? "TB" : "LR";
+	return clone({ direction, groups, states, transitions, current });
+}
+
+/** States, transitions and groups upsert by id; removing a state drops its
+ * transitions, removing a group takes its states out of it. */
+function patchState(spec: Json, patch: Json): Json {
+	const next = clone(spec) as Json & { states: Json[]; transitions: Json[]; groups: Json[] };
+	const goneStates = removed(patch, "states");
+	const goneGroups = removed(patch, "groups");
+	const goneTransitions = removed(patch, "transitions");
+	next.states = next.states.filter((s) => !goneStates.has(s.id as string));
+	for (const s of next.states) if (goneGroups.has(s.group as string)) delete s.group;
+	next.groups = next.groups.filter((g) => !goneGroups.has(g.id as string));
+	next.transitions = next.transitions.filter((t) => !goneTransitions.has(t.id as string) && !goneStates.has(t.from as string) && !goneStates.has(t.to as string));
+	if (goneStates.has(next.current as string)) delete next.current;
+	upsertAll(next, patch, "groups");
+	upsertAll(next, patch, "states");
+	upsertAll(next, patch, "transitions");
+	scalars(next, patch, ["current", "direction"]);
+	return normalizeState(next);
+}
+
+function summaryState(surface: Surface): string {
+	const spec = surface.spec as { states: Json[]; transitions: Json[]; groups: Json[]; current?: string };
+	const lines = [`State machine "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user ` +
+		`(${plural(spec.states.length, "state")}, ${plural(spec.transitions.length, "transition")}${spec.current ? `, current: ${spec.current}` : ""}).`];
+	if (spec.groups.length > 0) lines.push(listed("Composite states", spec.groups.map((g) => `${g.id} ${quoted(g.label)}`)));
+	lines.push(listed("States", spec.states.map((s) => `${s.id}${s.label !== s.id ? ` ${quoted(s.label)}` : ""}${s.kind === "normal" ? "" : ` (${s.kind})`}${s.group ? ` in ${s.group}` : ""}`)));
+	const label = (t: Json) => [t.event, t.guard ? `[${t.guard}]` : "", t.action ? `/ ${t.action}` : ""].filter(Boolean).join(" ");
+	if (spec.transitions.length > 0) lines.push(listed("Transitions", spec.transitions.map((t) => `${t.from} → ${t.to}${label(t) ? ` ${quoted(label(t), 60)}` : ""}`)));
+	lines.push(`The user can move, rename, add and delete states and transitions, change a state's kind and relabel transitions; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	return lines.join("\n");
+}
+
+const DAY_MS = 86_400_000;
+/** Days since 1970-01-01 of `YYYY-MM-DD` (a time after it is ignored). */
+function dayOf(value: unknown): number | undefined {
+	if (typeof value !== "string") return undefined;
+	const date = value.trim().slice(0, 10);
+	return isDate(date) ? Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) / DAY_MS : undefined;
+}
+const dateOf = (day: number): string => new Date(day * DAY_MS).toISOString().slice(0, 10);
+
+function normalizeTimeline(raw: unknown): Json {
+	const { fail, check } = problems("timeline");
+	if (!isObject(raw) || !Array.isArray(raw.tasks)) throw new Error("spec.tasks must be an array");
+	if (raw.tasks.length > CANVAS.tasks) fail(`too many tasks (${raw.tasks.length}, at most ${CANVAS.tasks})`);
+	const tasks: Json[] = [];
+	const wanted: unknown[][] = [];
+	raw.tasks.slice(0, CANVAS.tasks).forEach((t, i) => {
+		const given = isObject(t) ? idText(t.id) : undefined;
+		const label = (isObject(t) ? txt(t.label ?? t.name, MAX.label) : undefined) ?? given;
+		if (!isObject(t) || label === undefined) return fail(`task #${i + 1} has no label`);
+		const id = given ?? slugOf(label, "task", (s) => tasks.some((o) => o.id === s));
+		if (tasks.some((o) => o.id === id)) return fail(`duplicate task id "${id}"`);
+		if (typeof t.start !== "string") return fail(`task "${id}" needs a "start" date (YYYY-MM-DD)`);
+		const start = dayOf(t.start);
+		if (start === undefined) return fail(`task "${id}": start "${t.start}" is not a date (YYYY-MM-DD)`);
+		const milestone = t.milestone === true;
+		const duration = num(t.duration);
+		let end: number;
+		if (milestone) end = start;
+		else if (typeof t.end === "string") {
+			const day = dayOf(t.end);
+			if (day === undefined) return fail(`task "${id}": end "${t.end}" is not a date (YYYY-MM-DD)`);
+			end = day;
+		} else if (duration !== undefined) {
+			if (Math.round(duration) < 1) return fail(`task "${id}": duration must be at least 1 day`);
+			end = start + Math.round(duration) - 1;
+		} else return fail(`task "${id}" needs an "end" date or a "duration" in days`);
+		if (end < start) return fail(`task "${id}" ends before it starts`);
+		if (end - start >= CANVAS.days) return fail(`task "${id}" is longer than ${CANVAS.days} days`);
+		const deps = t.dependsOn ?? t.depends_on ?? t.after;
+		wanted.push(deps === undefined || deps === null ? [] : Array.isArray(deps) ? deps : [deps]);
+		const progress = num(t.progress);
+		tasks.push({
+			id, label, start: dateOf(start), end: dateOf(end),
+			progress: progress === undefined ? undefined : Math.round(Math.min(100, Math.max(0, progress <= 1 ? progress * 100 : progress))),
+			group: txt(t.group, MAX.label), dependsOn: [] as string[], milestone: milestone || undefined,
+		});
+	});
+	tasks.forEach((task, i) => {
+		const deps: string[] = [];
+		for (const raw of wanted[i]) {
+			const dep = idText(raw);
+			if (dep === undefined) continue;
+			if (dep === task.id) fail(`task "${task.id}" can't depend on itself`);
+			else if (!tasks.some((o) => o.id === dep)) fail(`task "${task.id}": dependency "${dep}" does not exist`);
+			else if (!deps.includes(dep)) deps.push(dep);
+		}
+		task.dependsOn = deps.length > 0 ? deps : undefined;
+	});
+	check();
+	// A dependency loop, as ids from and back to its first task.
+	const mark = new Map<string, number>();
+	const path: string[] = [];
+	const visit = (id: string): string[] | undefined => {
+		if (mark.get(id) === 2) return undefined;
+		if (mark.get(id) === 1) return [...path.slice(path.indexOf(id)), id];
+		mark.set(id, 1);
+		path.push(id);
+		for (const dep of (tasks.find((t) => t.id === id)?.dependsOn as string[] | undefined) ?? []) {
+			const cycle = visit(dep);
+			if (cycle) return cycle;
+		}
+		path.pop();
+		mark.set(id, 2);
+		return undefined;
+	};
+	for (const task of tasks) {
+		const cycle = visit(task.id as string);
+		if (cycle) throw new Error(`invalid timeline spec:\n- dependency cycle: ${cycle.join(" → ")}`);
+	}
+	const days = tasks.flatMap((t) => [dayOf(t.start) as number, dayOf(t.end) as number]);
+	if (days.length > 0 && Math.max(...days) - Math.min(...days) >= CANVAS.days) throw new Error(`invalid timeline spec:\n- the timeline spans more than ${CANVAS.days} days`);
+	return clone({ tasks });
+}
+
+/** Tasks upsert by id (`end` or `duration` replaces the other); removing a
+ * task takes it out of every `dependsOn`. */
+function patchTimeline(spec: Json, patch: Json): Json {
+	const next = clone(spec) as Json & { tasks: Json[] };
+	const gone = removed(patch, "tasks");
+	next.tasks = next.tasks.filter((t) => !gone.has(t.id as string));
+	for (const t of next.tasks) if (Array.isArray(t.dependsOn)) t.dependsOn = (t.dependsOn as string[]).filter((d) => !gone.has(d));
+	for (const t of list(patch.tasks)) {
+		if (!isObject(t)) continue;
+		const found = next.tasks.find((o) => o.id === idText(t.id));
+		if (found && "duration" in t && !("end" in t)) delete found.end;
+		if (found && "end" in t) delete found.duration;
+	}
+	upsertAll(next, patch, "tasks");
+	return normalizeTimeline(next);
+}
+
+function summaryTimeline(surface: Surface): string {
+	const tasks = (surface.spec as { tasks: Json[] }).tasks;
+	const day = (t: Json, key: "start" | "end") => dayOf(t[key]) as number;
+	const lines = [`Timeline "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user (${plural(tasks.length, "task")}` +
+		`${tasks.length > 0 ? `, ${tasks.map((t) => t.start as string).sort()[0]} to ${tasks.map((t) => t.end as string).sort().at(-1)}` : ""}).`];
+	for (const t of tasks) {
+		const span = t.milestone ? `${t.start} (milestone)` : `${t.start} → ${t.end} (${plural(day(t, "end") - day(t, "start") + 1, "day")})`;
+		const deps = Array.isArray(t.dependsOn) ? ` after ${(t.dependsOn as string[]).join(", ")}` : "";
+		lines.push(`- ${t.id} ${quoted(t.label, 60)}: ${span}${t.progress !== undefined ? `, ${t.progress}%` : ""}${t.group ? ` [${t.group}]` : ""}${deps}`);
+	}
+	if (lines.length > LIMITS.summaryLines) lines.splice(LIMITS.summaryLines, lines.length, `… and ${lines.length - LIMITS.summaryLines} more tasks`);
+	// Critical path: from the task ending last back through the dependency ending last.
+	const byId = new Map<string, Json>(tasks.map((t) => [t.id as string, t]));
+	let at = tasks.reduce<Json | undefined>((best, t) => (best === undefined || day(t, "end") > day(best, "end") ? t : best), undefined);
+	const chain: string[] = [];
+	while (at && !chain.includes(at.id as string)) {
+		chain.unshift(at.id as string);
+		const deps = ((at.dependsOn as string[] | undefined) ?? []).map((d) => byId.get(d)).filter((t): t is Json => t !== undefined);
+		at = deps.reduce<Json | undefined>((best, t) => (best === undefined || day(t, "end") > day(best, "end") ? t : best), undefined);
+	}
+	if (chain.length > 1) lines.push(`Critical path: ${chain.join(" → ")}`);
+	const late = tasks.flatMap((t) => ((t.dependsOn as string[] | undefined) ?? []).flatMap((d) => {
+		const dep = byId.get(d);
+		return dep && day(t, "start") < day(dep, "end") + (dep.milestone ? 0 : 1) ? [`${t.id} starts before ${d} ends`] : [];
+	}));
+	if (late.length > 0) lines.push(listed("Late", late));
+	lines.push(`The user can drag tasks to move or resize them, link and unlink dependencies, rename, add and remove tasks; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	return lines.join("\n");
+}
+
 function contextText(change: Json): string {
 	const blocks = Array.isArray(change.content) ? change.content : [];
 	const parts = blocks.flatMap((b) => (isObject(b) ? [b.type === "text" && typeof b.text === "string" ? b.text : `[${String(b.type)} omitted]`] : []));
@@ -895,6 +1458,10 @@ const KINDS: Record<string, KindDef> = {
 	kanban: { noun: "board", title: "Board", normalize: normalizeKanban, patch: patchKanban, summary: summaryKanban },
 	chart: { noun: "chart", title: "Chart", normalize: normalizeChart, patch: patchChart, summary: summaryChart },
 	html: { noun: "HTML UI", title: "HTML", normalize: normalizeHtml, patch: patchHtml, summary: summaryHtml },
+	sequence: { noun: "sequence diagram", title: "Sequence", normalize: normalizeSequence, patch: patchSequence, summary: summarySequence },
+	erd: { noun: "data model", title: "Data model", normalize: normalizeErd, patch: patchErd, summary: summaryErd },
+	state: { noun: "state machine", title: "State machine", normalize: normalizeState, patch: patchState, summary: summaryState },
+	timeline: { noun: "timeline", title: "Timeline", normalize: normalizeTimeline, patch: patchTimeline, summary: summaryTimeline },
 };
 
 const KIND_EXAMPLES = [
@@ -903,13 +1470,17 @@ const KIND_EXAMPLES = [
 	{ kind: "checklist", title: "Migration plan", spec: { items: [{ id: "backup", label: "Back up the DB" }, { id: "migrate", label: "Run migrations", items: [{ id: "users", label: "users table" }] }] } },
 	{ kind: "kanban", title: "Sprint", spec: { columns: [{ id: "todo", label: "To do" }, { id: "doing", label: "Doing", limit: 3 }, { id: "done", label: "Done" }], cards: [{ id: "oauth", title: "OAuth login", column: "doing", tags: ["backend"] }] } },
 	{ kind: "chart", title: "p95 latency", spec: { type: "line", labels: ["Mon", "Tue", "Wed"], series: [{ name: "api", values: [120, 135, 98] }], unit: "ms" } },
+	{ kind: "sequence", title: "Login", spec: { participants: [{ id: "web", label: "Web", kind: "actor" }, { id: "api", label: "API" }, { id: "db", label: "Users DB", kind: "db" }], messages: [{ from: "web", to: "api", label: "POST /login" }, { from: "api", to: "db", label: "find user" }, { from: "db", to: "api", label: "row", kind: "return" }, { from: "api", to: "web", label: "token", kind: "return" }], fragments: [{ kind: "opt", label: "not cached", from: 2, to: 3 }] } },
+	{ kind: "erd", title: "Orders schema", spec: { tables: [{ id: "users", ref: { path: "db/migrations/001_users.sql" }, columns: [{ name: "id", type: "uuid", pk: true }, { name: "email", type: "text", unique: true }] }, { id: "orders", ref: { path: "src/models/order.ts", line: 8 }, columns: [{ name: "id", type: "uuid", pk: true }, { name: "user_id", type: "uuid", fk: "users.id" }] }] } },
+	{ kind: "state", title: "Pull request", spec: { states: [{ id: "start", kind: "initial" }, "Draft", "Review", { id: "merged", kind: "final" }], transitions: [{ from: "start", to: "Draft" }, { from: "Draft", to: "Review", event: "submit" }, { from: "Review", to: "Draft", event: "reject" }, { from: "Review", to: "merged", event: "approve", guard: "CI green" }], current: "Review" } },
+	{ kind: "timeline", title: "Launch plan", spec: { tasks: [{ id: "design", label: "Design", start: "2026-03-02", duration: 5 }, { id: "build", label: "Build", start: "2026-03-09", end: "2026-03-20", dependsOn: ["design"], progress: 30 }, { id: "launch", label: "Launch", start: "2026-03-23", milestone: true, dependsOn: ["build"] }] } },
 ].map((example) => `gentle_ui ${example.kind} example: ${JSON.stringify({ action: "show", ...example })}`);
 
 const Params = Type.Object({
 	action: StringEnum(["show", "update", "close"] as const),
 	id: Type.Optional(Type.String({ description: "Stable slug for the UI (show) or the id to update/close" })),
 	title: Type.Optional(Type.String({ description: "Short title, default the kind's name (\"Diagram\", \"Table\"…)" })),
-	kind: Type.Optional(StringEnum(["diagram", "table", "form", "checklist", "kanban", "chart", "html"] as const, { description: "For show, default diagram; an id keeps its kind" })),
+	kind: Type.Optional(StringEnum(["diagram", "table", "form", "checklist", "kanban", "chart", "html", "sequence", "erd", "state", "timeline"] as const, { description: "For show, default diagram; an id keeps its kind" })),
 	spec: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
 		description:
@@ -920,6 +1491,10 @@ const Params = Type.Object({
 			"checklist: { items: [{id,label,done?,note?,items?: [sub-items, one level]}] }. " +
 			"kanban: { columns: [{id,label,limit?}], cards: [{id,title,column,description?,tags?,assignee?}] }. " +
 			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked? }. ` +
+			`sequence: { participants?: [{id,label,kind?: ${PARTICIPANT_KINDS.join("|")}}] (default: from the messages), messages: [{id?,from,to,label?,kind?: ${MESSAGE_KINDS.join("|")},note?}] (in time order), fragments?: [{id?,kind: ${FRAGMENT_KINDS.join("|")},label?,from,to (message ids or 1-based numbers),else?: [{at,label?}]}], activations?: [{participant,from,to}] (default: each sync call until its return) }. ` +
+			"erd: { tables: [{id,name?,columns: [{name,type?,pk?,fk?: \"table.column\"|{table,column},nullable?,unique?,note?}],note?,ref?: {path,line?,endLine?}}], relations?: [{id?,from: \"table.column\",to: \"table.column\",cardinality?: 1-1|1-n|n-1|n-n,label?}] } (every fk is drawn as a relation). " +
+			`state: { direction?: LR|TB, groups?: [{id,label}] (composite states), states: [{id,label?,kind?: ${STATE_KINDS.join("|")},group?,description?}], transitions: [{id?,from,to,event?,guard?,action?}], current?: state id }. ` +
+			"timeline: { tasks: [{id,label,start: YYYY-MM-DD,end?: YYYY-MM-DD (inclusive) | duration?: days,progress?: 0-1 or percent,group?,dependsOn?: [task ids],milestone?}] }. " +
 			"html: { html: self-contained page ≤512 KiB, height?: px, data?: object (the page's tool input/result), csp?: { connectDomains?, resourceDomains?, frameDomains?, baseUriDomains? } (origins; default no network) }.",
 	})),
 	patch: Type.Optional(Type.Object({}, {
@@ -930,6 +1505,8 @@ const Params = Type.Object({
 			"form: { fields? (by id), values?: {id: value}, remove?: {fields}, submitted? } (an update reopens a submitted form). " +
 			"checklist: { items? (by id at any level; parent: id|null places it), remove?: {items} }. " +
 			"kanban: { cards? (by id), columns? (by id), remove?: {cards,columns} }. chart: { series? (by name), remove?: {series}, labels?, type?, titles? }. " +
+			"sequence: { participants?, messages? (by id; at: 1-based place), fragments? (by id), remove?: {participants,messages,fragments}, activations? (replace; null derives them) }. erd: { tables? (by id; columns replace), relations? (by id), remove?: {tables,relations,columns: [\"table.column\"]} }. " +
+			"state: { states?, transitions?, groups? (by id), remove?: {states,transitions,groups}, current?, direction? }. timeline: { tasks? (by id; end or duration replaces the other), remove?: {tasks} }. " +
 			"html: { html?, height?, csp? (replace; null clears), data?: {merged; null deletes a key} } (data-only updates reach the open page without reloading).",
 	})),
 });
@@ -1005,6 +1582,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 			`gentle_ui example: ${EXAMPLE}`,
 			...KIND_EXAMPLES,
 			"Use gentle_ui kind html only for custom interactive visuals, simulations, calculators or working prototypes no other kind fits (design screens and mockups stay in gentle_design). The page is an MCP App: self-contained (inline JS/CSS, no network unless spec.csp lists origins), put changing values in spec.data and update them with patch {data}.",
+			"More gentle_ui kinds: sequence for calls between components over time (who calls whom, in order, with alt/opt/loop/par fragments); erd for data models, derived from the migrations or ORM models with each table's ref pointing at its file; state for state machines and lifecycles (set current to the live state); timeline for dated plans with durations and dependencies (a Gantt chart; the summary gives the critical path).",
 			"A gentle_ui html page talks JSON-RPC 2.0 over window.parent.postMessage(msg, \"*\"): request ui/initialize {protocolVersion:\"2026-01-26\",appInfo:{name,version},appCapabilities:{}} (result.hostContext.styles.variables: theme CSS vars like --color-background-primary, --color-text-primary, --color-ring-primary, --font-sans; apply them), then notify ui/notifications/initialized; it receives ui/notifications/tool-result {structuredContent: spec.data}. Request ui/message {role:\"user\",content:[{type:\"text\",text}]} to message you, ui/update-model-context {content|structuredContent} to share state, ui/open-link {url}; notify ui/notifications/size-changed {height}.",
 		],
 		parameters: Params,

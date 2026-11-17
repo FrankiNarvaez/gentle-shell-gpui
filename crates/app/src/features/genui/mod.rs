@@ -17,10 +17,12 @@ use gentle_core::genui::{self, Snapshot};
 use gentle_core::transcript::{Item, ToolStatus};
 use gpui_kit::*;
 
+mod canvas;
 mod chart;
 mod checklist;
 mod details;
 mod diagram;
+mod erd;
 mod extension;
 mod form;
 mod html;
@@ -29,9 +31,12 @@ mod motion;
 mod paint;
 mod panel;
 mod pointer;
+mod sequence;
+mod states;
 mod table;
 #[cfg(test)]
 mod tests;
+mod timeline;
 mod view;
 
 pub use diagram::{DiagramEvent, DiagramView};
