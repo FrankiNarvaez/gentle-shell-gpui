@@ -207,7 +207,7 @@ impl SettingsView {
     }
 
     /// Reuse a single navigation path for the sidebar, compact picker and search.
-    pub(super) fn navigate_to(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
+    fn navigate_to(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
         self.compact_categories_open = false;
         if self.page != page {
             self.page = page;
