@@ -233,6 +233,7 @@ pub(super) fn sidebar(
     v_flex()
         .id("settings-navigation")
         .w(rems(220. / 16.))
+        .h_full()
         .flex_shrink_0()
         .min_h_0()
         .border_r_1()
