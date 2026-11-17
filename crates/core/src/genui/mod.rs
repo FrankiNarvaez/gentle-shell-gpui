@@ -12,6 +12,7 @@ pub mod form;
 pub mod html;
 pub mod kanban;
 pub mod layout;
+pub mod review;
 pub mod table;
 
 use serde_json::{Map, Value, json};
