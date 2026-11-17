@@ -1,8 +1,12 @@
 # gentle-shell-gpui
 
-A native desktop app for [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell), built in Rust with [GPUI](https://gpui.rs) and [GPUI Kit](https://github.com/longbridge/gpui-kit). Use Gentle Shell from a window instead of a terminal. The layout follows [Tern](https://stencil.so/tern): translucent glass chrome, tabs in the title bar, a centered composer, and tool calls shown as cards.
+A native desktop app for [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell), built in Rust with [GPUI](https://gpui.rs) and [GPUI Kit](https://github.com/longbridge/gpui-kit). Use Gentle Shell from a window instead of a terminal. The layout follows [Tern](https://stencil.so/tern): translucent glass chrome, tabs in the title bar by default (or an optional vertical tab navigator), a centered composer, and tool calls shown as cards.
 
 The app does not reimplement Gentle Shell. Each tab starts `gentle-shell --mode rpc` and talks to it over Pi's [RPC protocol](https://pi.dev/docs/latest/rpc), so el Gentleman, ODD, Gentle Agents, permissions, Engram memory, review, skills and every extension run unchanged. The app sets `GENTLE_SHELL_INTERACTIVE_HOST=1`, which enables `ask_user_question` dialogs and the live helper activity feed. Gentle Shell's own screens are terminal-UI components that never reach an RPC host, so the app rebuilds them natively from the same files and events.
+
+## Optional vertical tab navigator
+
+Click the list icon in the title bar, or run **Toggle vertical tabs** from the command palette, to move tabs into the left sidebar. The layout choice is remembered across launches. In vertical mode, **Tabs** and **Files** share the sidebar: Files retains its own Files / Changes / Branches views, and the workspace buttons let you switch projects. Search filters open tabs in the current workspace. Drag a tab onto another to reorder, or use its ⋯ menu to pin/unpin, move up/down, rename, or close it; pinned tabs stay at the top. Agent state is shown by a colored indicator. Click the layout icon again to return to the original horizontal tabs. The pane arrangements within each tab are unchanged.
 
 ## Features
 
