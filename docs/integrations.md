@@ -528,7 +528,7 @@ Engram (`engram.rs`): the installed version from `engram version`, the latest fr
 
 ### App update (`features/app_update/`)
 
-`network.rs` queries `https://api.github.com/repos/ismaelosuna7824/gentle-shell-gpui/releases/latest`; `release.rs` (pure) accepts only published `vX.Y.Z` tags, picks the asset with `asset_name` (`gentle-shell-gpui-<v>-macos-<arch>.zip`, `-windows-x86_64.zip`, `-linux-x86_64.tar.gz`) and verifies it against `SHA256SUMS`. `archive.rs` extracts, `install.rs` replaces the binary per OS and `relaunch.rs` reopens the app on exit. 6 h cache and skipped version in `app-update.json`. Dev versions (`is_dev`) are not checked automatically.
+`network.rs` queries `https://api.github.com/repos/Gentleman-Programming/gentle-shell-gpui/releases/latest`; `release.rs` (pure) accepts only published `vX.Y.Z` tags, picks the asset with `asset_name` (`gentle-shell-gpui-<v>-macos-<arch>.zip`, `-windows-x86_64.zip`, `-linux-x86_64.tar.gz`) and verifies it against `SHA256SUMS`. `archive.rs` extracts, `install.rs` replaces the binary per OS and `relaunch.rs` reopens the app on exit. 6 h cache and skipped version in `app-update.json`. Dev versions (`is_dev`) are not checked automatically.
 
 ### Installers (`features/setup/`)
 
