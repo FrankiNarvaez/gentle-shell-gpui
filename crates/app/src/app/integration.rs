@@ -1,5 +1,5 @@
 //! Registers the terminal, file-viewer and history panes with the tiling
-//! layer, and wires the file sidebar to the workspace.
+//! layer, and wires the right-side file explorer to the workspace.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -96,7 +96,7 @@ pub fn register(cx: &mut App) {
     });
 }
 
-/// The Files | Changes | Branches sidebar for `workspace`, re-rooted when the shown
+/// The right Files | Changes | Branches sidebar for `workspace`, re-rooted when the shown
 /// workspace changes. The subscriptions live as long as the workspace.
 pub fn attach_sidebar(
     workspace: &Entity<crate::features::workspace::Workspace>,
