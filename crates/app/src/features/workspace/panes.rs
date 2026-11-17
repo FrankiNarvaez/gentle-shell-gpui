@@ -604,8 +604,9 @@ impl Workspace {
         let mut lines = Vec::new();
         if !unsaved.is_empty() {
             lines.push(format!(
-                "Unsaved edits in {} are lost. ⌘S saves first.",
-                names(&unsaved)
+                "Unsaved edits in {} are lost. {} saves first.",
+                names(&unsaved),
+                ui::shortcut("S")
             ));
         }
         if !busy.is_empty() {

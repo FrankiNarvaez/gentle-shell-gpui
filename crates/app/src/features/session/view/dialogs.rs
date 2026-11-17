@@ -265,7 +265,11 @@ impl SessionView {
                 let editor = matches!(dialog.method, UiMethod::Editor { .. });
                 hints = vec![
                     (
-                        if editor { "⌘↵" } else { "↵" },
+                        if editor {
+                            ui::platform_shortcut("⌘↵", "Ctrl+↵")
+                        } else {
+                            "↵"
+                        },
                         "submit",
                         Some(KeyAction::SubmitInput),
                     ),
