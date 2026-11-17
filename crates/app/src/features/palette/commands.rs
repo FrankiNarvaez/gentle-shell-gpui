@@ -219,11 +219,36 @@ pub(super) fn command_row((name, detail): (String, String)) -> Option<Row> {
 mod tests {
     use gentle_core::commands::Screen;
 
-    use super::super::PaletteAction;
-    use super::command_row;
+    use super::super::{PaletteAction, TabLayout};
+    use super::{command_row, screen_rows};
 
     fn action(name: &str) -> Option<PaletteAction> {
         command_row((name.into(), "detail".into())).map(|row| row.action)
+    }
+
+    #[test]
+    fn tab_placement_command_matches_current_layout() {
+        for (current, expected_title, target, absent) in [
+            (
+                TabLayout::Horizontal,
+                "View: Show tabs vertically",
+                TabLayout::Vertical,
+                "View: Show tabs horizontally",
+            ),
+            (
+                TabLayout::Vertical,
+                "View: Show tabs horizontally",
+                TabLayout::Horizontal,
+                "View: Show tabs vertically",
+            ),
+        ] {
+            let rows = screen_rows(current);
+            assert!(rows.iter().any(|row| {
+                row.title == expected_title
+                    && row.action == PaletteAction::SetTabLayout(target)
+            }));
+            assert!(!rows.iter().any(|row| row.title == absent));
+        }
     }
 
     #[test]
