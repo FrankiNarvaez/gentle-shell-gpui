@@ -102,6 +102,7 @@ impl Workspace {
             PaletteAction::ClosePane => self.on_close_pane(&ClosePane, window, cx),
             PaletteAction::ReopenClosed => self.reopen_closed(window, cx),
             PaletteAction::ToggleSidebar => self.toggle_sidebar(cx),
+            PaletteAction::ToggleTabLayout => self.toggle_tab_layout(cx),
             PaletteAction::Agents => {
                 if let Some(tab) = tab {
                     tab.update(cx, |s, cx| s.open_agents_panel(AgentsTab::Agents, cx));
