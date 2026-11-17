@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use gpui_kit::*;
 
-use crate::shared::ui;
+use crate::shared::{themes, ui};
 
 const TEXT_LOGO: &[&str] = &[
     "              ▄▄▄▀▀▀▀▀██                              ▄▄▀▄▄          ▄▄█▀▀▀██         ▄▄▀▄▄           ▄▄▀▄▄    ▄▄▀▄▄",
@@ -268,6 +268,21 @@ impl Default for BannerConfig {
     }
 }
 
+/// The banner's colors in a solid theme: the rose blooms in the theme's
+/// `petal`, the wordmark is written in its `fg`, and the shadow dims from
+/// the ink (like the fixed palettes: dimmer and grayer than the ink).
+/// `None` keeps the palette `banner.json` chose, for every other theme.
+fn theme_colors(solid: bool, petal: Hsla, fg: Hsla) -> Option<(Hsla, Hsla, Hsla)> {
+    solid.then(|| {
+        let shadow = Hsla {
+            l: fg.l * 0.44,
+            s: fg.s * 0.45,
+            ..fg
+        };
+        (petal, fg, shadow)
+    })
+}
+
 /// `<config>/banner.json`, tolerant like the launcher's own read: missing or
 /// malformed fields fall back to the defaults.
 pub fn read_config(config_home: &Path) -> BannerConfig {
@@ -362,8 +377,15 @@ fn lighten(color: Hsla, by: f32) -> Hsla {
 /// paused while the window is in the background).
 pub fn banner(config: BannerConfig, scale: f32, reveal: f32) -> impl IntoElement {
     let art = &*ART;
-    let (rose_color, ink, shadow) = config.palette.colors();
-    let (rose_base, ink, shadow) = (Hsla::from(rose_color), Hsla::from(ink), Hsla::from(shadow));
+    // A solid theme tints the banner in its own colors; every other theme
+    // keeps the palette banner.json chose (which stays read-only).
+    let (rose_base, ink, shadow) = if themes::solid() {
+        let (petal, fg) = themes::palette(|p| (p.accent, p.fg));
+        theme_colors(true, petal, fg).expect("solid theme")
+    } else {
+        let (rose_color, ink, shadow) = config.palette.colors();
+        (Hsla::from(rose_color), Hsla::from(ink), Hsla::from(shadow))
+    };
     let logo_size = size(
         px(art.logo_size.0 as f32 * scale),
         px(art.logo_size.1 as f32 * scale),
@@ -541,6 +563,22 @@ mod tests {
                 assert_eq!(dots, shade.is_ascii_digit(), "{line:?} at {ch:?}");
             }
         }
+    }
+
+    #[test]
+    fn solid_themes_tint_the_banner_and_others_keep_banner_json() {
+        use gpui_kit::hsla;
+        let petal = hsla(330. / 360., 0.85, 0.62, 1.);
+        let fg = hsla(240. / 360., 0.03, 0.93, 1.);
+        // A solid theme: the rose blooms in the theme's petal, the wordmark
+        // is written in its fg, and the shadow dims from the ink.
+        let (rose, ink, shadow) = super::theme_colors(true, petal, fg).expect("solid theme");
+        assert_eq!((rose.h, rose.s, rose.l), (petal.h, petal.s, petal.l));
+        assert_eq!((ink.h, ink.s, ink.l), (fg.h, fg.s, fg.l));
+        assert!((shadow.l - fg.l * 0.44).abs() < 1e-5);
+        assert!((shadow.s - fg.s * 0.45).abs() < 1e-5);
+        // Any other theme keeps the palette banner.json chose.
+        assert_eq!(super::theme_colors(false, petal, fg), None);
     }
 
     #[test]

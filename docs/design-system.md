@@ -240,7 +240,7 @@ Guidelines:
 
 ## Brand
 
-`crates/app/src/shared/banner.rs` draws the Gentle Shell banner (the braille rose and the "Gentle Shell" pixel art logotype) as real pixels. The art comes from the brand assets `gentle_rose.txt` and `gentle_shell_combo.txt`: the rose keeps the per-cell shading of `gentle_rose_color.txt` as a lightness map (`ROSE_SHADE`, applied to whichever palette is active), and the layout follows the combo (a braille dot is half a logotype pixel, 5 columns between rose and logotype, both centered). The palettes and the `banner.json` format come from gentle-pi's `extensions/startup-banner.ts`; `Pink` uses the assets' ink (255, 118, 195) and shadow (120, 45, 80).
+`crates/app/src/shared/banner.rs` draws the Gentle Shell banner (the braille rose and the "Gentle Shell" pixel art logotype) as real pixels. The art comes from the brand assets `gentle_rose.txt` and `gentle_shell_combo.txt`: the rose keeps the per-cell shading of `gentle_rose_color.txt` as a lightness map (`ROSE_SHADE`, applied to whichever palette is active), and the layout follows the combo (a braille dot is half a logotype pixel, 5 columns between rose and logotype, both centered). The palettes and the `banner.json` format come from gentle-pi's `extensions/startup-banner.ts`; `Pink` uses the assets' ink (255, 118, 195) and shadow (120, 45, 80). In a **solid theme** the start banner follows the theme instead: the rose blooms in the theme's `petal`, the wordmark is written in its `fg`, and the shadow dims from the ink; every other theme keeps the `banner.json` palette (the file stays read-only).
 
 | API | What it does |
 | --- | --- |
