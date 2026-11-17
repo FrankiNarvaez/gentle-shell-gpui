@@ -131,13 +131,12 @@ impl SettingsView {
                     InputEvent::Change => cx.notify(),
                     InputEvent::PressEnter { .. } => {
                         let query = input.read(cx).value().to_string();
-                        if !query.trim().is_empty() {
-                            if let Some(page) = SettingsPage::ALL
+                        if !query.trim().is_empty()
+                            && let Some(page) = SettingsPage::ALL
                                 .into_iter()
                                 .find(|page| page.matches_query(&query))
-                            {
-                                this.navigate_to(page, cx);
-                            }
+                        {
+                            this.navigate_to(page, cx);
                         }
                     }
                     _ => {}
