@@ -110,6 +110,12 @@ impl SessionView {
 
         let width = self.pane_width.get();
         let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
+        let window_tokens = self
+            .models
+            .current
+            .as_ref()
+            .map(|m| m.context_window)
+            .unwrap_or(0);
         let statuses: Vec<(String, String)> = self
             .extension
             .statuses
@@ -195,6 +201,17 @@ impl SessionView {
                         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 },
             ))
+            .child(self.render_context_chip(cx))
+            .when(window_tokens > 0, |this| {
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(ui::MONO)
+                        .text_size(rems(10. / 16.))
+                        .text_color(ui::faint())
+                        .child(format_tokens(window_tokens)),
+                )
+            })
             .child(self.render_mode_picker(cx));
 
         h_flex()

@@ -43,7 +43,7 @@ impl SessionView {
             .when(!narrow, |b| b.label(current.clone()))
             .child(effort_meter(index, levels.len()));
         Popover::new("effort-popover")
-            .anchor(Anchor::BottomLeft)
+            .anchor(Anchor::BottomRight)
             .trigger(trigger)
             .w(rems(EFFORT_W / 16.))
             .appearance(false)

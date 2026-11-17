@@ -313,15 +313,18 @@ backdrop.occlude().child(ui::pop_in(
 
 ### Session status chips
 
-`features/session/view/activity.rs` draws the activity line above the composer. On the left, while the agent works: `pulse` of a 6 px `petal` dot, clock in `MONO` and `muted`, a 1×10 px separator in `border_strong`, `✿ phase…` in `petal` and the current tool, truncated, in `muted`. On the right, the chips.
+`features/session/view/activity.rs` draws the activity line above the composer. On the left, while the agent works: `pulse` of a 6 px `petal` dot, clock in `MONO` and `muted`, a 1×10 px separator in `border_strong`, `✿ phase…` in `petal` and the current tool, truncated, in `muted`. On the right, the chips, then the context chip (the window's share, with compact-now and auto-compaction in its card) and the model's context window in `MONO` `faint`, and last the permission mode chip: it is the composer's one status row. The thin context gauge only appears under the row when the window is above 0% used.
 
 Every new chip uses `chip_popover(id, icon, color, label, title, count, body)`: a `ghost().xsmall()` `Button` with `text_color(color)` that opens a `Popover` anchored `BottomRight`, 360 px wide, with `appearance(false)`, content in `ui::island(cx)` + `ui::popover_in`. The card shows icon and title (`text_sm MEDIUM`), the count in `MONO` and a scrollable list; `body` builds the rows only on open. Chip color: `accent` if something is running, `muted` at rest, `faint` for passive information (token usage). In panels narrower than `TINY`, extension states collapse into a single chip.
+
+The composer keeps only the attach button and the send/stop pill inside its box. Below the box, a quiet row carries the folder path, the branch and the session's cost on the left, and the model and effort pickers as quiet text buttons on the right; their menus open upward from that row (`Anchor::BottomRight`).
 
 ### Conversation cards
 
 Tool cards (`render_card` in `features/session/view.rs`) and extension message cards (`features/session/view/cards.rs`) share a shape:
 
 - `ui::card().w_full().overflow_hidden()`; if the tone is danger or warning, `border_color(color.opacity(0.35))`.
+- The card's sections (header, code well, output, status footer) separate with space and the change of surface (`surface` → `well`); there are no rules inside a card or inside a user bubble.
 - Header `px_3 py_2 gap_2`: `small` icon (tone or `muted`), 13 px `SEMIBOLD` title in `champagne`, truncated, optional chip (`info` for tools, the tone for extensions), subject in `MONO` 12 px `muted`, `+n` in `success` and `−n` in `danger`, `faint` chevron if it collapses. A collapsible header has a `surface_hover` hover.
 - Body `px_3 pb_2`: 13 px text in `muted`; outputs in `MONO` 12 px (`CustomBody::Tail`); Markdown with `TextView` in `fg`. Long content is cut and offers "N more lines" / "Show less".
 - The tone (`Tone::{Success, Danger, Warning, Info, Muted}`) is decided by a pure function from the type and the `details` (`custom_look`), with tests.
