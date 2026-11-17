@@ -101,7 +101,7 @@ impl SettingsPage {
             Self::General => "home setup requirements agent directory configuration launcher path environment initial",
             Self::Appearance => "theme color dark light import share transparency window opacity interface zoom size fonts scene motion background animated library terminal banner rose text",
             Self::Agents => "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked",
-            Self::Models => "model models provider providers thinking effort profile profiles routing default scoped sign-ins authentication claude bridge pro max code",
+            Self::Models => "model models provider providers thinking effort profile profiles routing default scoped sign-ins authentication claude bridge pro max code manage",
             Self::Devices => "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access",
             Self::Integrations => "mcp servers maestro ui testing music gentle stream player instruments soundfont external tools integrations",
             Self::Notifications => "notification notifications sounds alert alerts toggle status turn ended needs you context threshold water hydration reminder frequency preview",
@@ -320,6 +320,8 @@ mod tests {
             assert!(!page.description().is_empty(), "settings page without description");
         }
         assert_eq!(ids.len(), 9);
+        assert_eq!(SettingsPage::ALL[7], SettingsPage::Extensions);
+        assert_eq!(SettingsPage::ALL[8], SettingsPage::Updates);
     }
 
     #[test]
@@ -361,6 +363,7 @@ mod tests {
             ("hydration", SettingsPage::Notifications),
             ("claude bridge", SettingsPage::Models),
             ("profiles", SettingsPage::Models),
+            ("manage profiles", SettingsPage::Models),
             ("mcp servers", SettingsPage::Integrations),
             ("maestro", SettingsPage::Integrations),
             ("terminal theme", SettingsPage::Appearance),

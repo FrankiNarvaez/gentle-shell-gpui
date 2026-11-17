@@ -4,10 +4,10 @@
 //! Interactive state, subscriptions and persistence continue to be handled by
 //! the existing feature modules until their ownership can be migrated safely.
 
-mod extensions;
 mod agents;
 mod appearance;
 mod devices;
+mod extensions;
 mod general;
 mod integrations;
 mod models;
