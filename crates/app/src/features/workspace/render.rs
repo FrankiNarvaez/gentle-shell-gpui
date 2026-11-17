@@ -413,7 +413,10 @@ impl Render for Workspace {
                                                 } else {
                                                     IconName::PanelLeftOpen
                                                 }))
-                                                .tooltip(format!("Toggle sidebar ({})", ui::shortcut("B")))
+                                                .tooltip(format!(
+                                                    "Toggle sidebar ({})",
+                                                    ui::shortcut("B")
+                                                ))
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_sidebar(cx)
                                                 })),
