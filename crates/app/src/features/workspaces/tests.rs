@@ -82,6 +82,17 @@ fn json_round_trip() {
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
+
+    // Data saved before this feature must still load without layout or pin fields.
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("tab_layout");
+    legacy["workspaces"][0]["tabs"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("pinned");
+    let old: SavedState = serde_json::from_value(legacy).unwrap();
+    assert_eq!(old.tab_layout, TabLayout::Horizontal);
+    assert!(!old.workspaces[0].tabs[0].pinned);
     assert_eq!(SavedState::default().sidebar, minimal.sidebar);
 }
 
