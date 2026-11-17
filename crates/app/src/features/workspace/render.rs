@@ -22,6 +22,8 @@ impl Render for Workspace {
         }
         let sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
         let has_sidebar = self.sidebar.is_some();
+        let vertical_tabs = self.tab_layout == TabLayout::Vertical;
+        let show_sidebar = self.sidebar_visible && (has_sidebar || vertical_tabs);
         // Below this the screen buttons fold into one overflow menu.
         let narrow = window.viewport_size().width < rems(900. / 16.).to_pixels(window.rem_size());
         // Native web views would cover a screen opened over them; device
@@ -108,7 +110,7 @@ impl Render for Workspace {
                                             .h(rems(14. / 16.))
                                             .bg(ui::border()),
                                     )
-                                    .child(self.render_tabs(cx)),
+                                    .when(!vertical_tabs, |row| row.child(self.render_tabs(cx))),
                             )
                             .child(
                                 h_flex()
@@ -238,6 +240,24 @@ impl Render for Workspace {
                                                 cx,
                                             ))
                                     })
+                                    .child(
+                                        Button::new("toggle-tab-layout")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(Icon::new(if vertical_tabs {
+                                                IconName::PanelLeft
+                                            } else {
+                                                IconName::List
+                                            }))
+                                            .tooltip(if vertical_tabs {
+                                                "Use horizontal tabs"
+                                            } else {
+                                                "Show tabs in the sidebar"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_tab_layout(cx)
+                                            })),
+                                    )
                                     .child(
                                         Button::new("open-palette")
                                             .ghost()
@@ -404,7 +424,7 @@ impl Render for Workspace {
                                             |this, window, cx| this.open_providers(window, cx),
                                         ))
                                     })
-                                    .when(has_sidebar, |d| {
+                                    .when(has_sidebar || vertical_tabs, |d| {
                                         d.child(
                                             Button::new("toggle-sidebar")
                                                 .ghost()
@@ -430,8 +450,8 @@ impl Render for Workspace {
                     .px_1p5()
                     .pb_1p5()
                     .gap_1p5()
-                    .children(sidebar.map(|view| {
-                        ui::appear(
+                    .when(show_sidebar, |row| {
+                        row.child(ui::appear(
                             "sidebar-in",
                             div()
                                 .w(rems(SIDEBAR_WIDTH / 16.))
@@ -442,9 +462,20 @@ impl Render for Workspace {
                                 .border_1()
                                 .border_color(gpui_kit::transparent_black())
                                 .overflow_hidden()
-                                .child(view.cached(StyleRefinement::default().size_full())),
-                        )
-                    }))
+                                .child(if vertical_tabs {
+                                    self.render_vertical_sidebar(sidebar.clone(), cx)
+                                        .into_any_element()
+                                } else {
+                                    sidebar
+                                        .clone()
+                                        .map(|view| {
+                                            view.cached(StyleRefinement::default().size_full())
+                                                .into_any_element()
+                                        })
+                                        .unwrap_or_else(|| div().into_any_element())
+                                }),
+                        ))
+                    })
                     .child(
                         div()
                             .relative()
