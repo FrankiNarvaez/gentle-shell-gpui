@@ -22,6 +22,8 @@ pub(super) struct Closed {
     /// The tab, by id, and where it sat among the tabs.
     tab: usize,
     index: usize,
+    /// Pin state to restore when an entire tab is reopened.
+    pinned: bool,
     /// The tab's layout just before the close.
     layout: PaneTree<Slot>,
     /// What the notice names.
@@ -54,6 +56,7 @@ impl Workspace {
             space: self.current,
             tab: tab.id,
             index,
+            pinned: tab.pinned,
             layout,
             title,
         };
@@ -150,10 +153,14 @@ impl Workspace {
                 };
                 let id = self.alloc_id();
                 let focused = tree.leaves()[0];
-                let index = closed.index.min(self.space().tabs.len());
-                self.space_mut()
-                    .tabs
-                    .insert(index, Tab { id, tree, focused });
+                let tabs = &mut self.space_mut().tabs;
+                let boundary = tabs.iter().take_while(|tab| tab.pinned).count();
+                let index = if closed.pinned {
+                    closed.index.min(boundary)
+                } else {
+                    closed.index.max(boundary).min(tabs.len())
+                };
+                tabs.insert(index, Tab { id, tree, focused, pinned: closed.pinned });
                 self.show_reopened(index, &reopened, window, cx);
             }
         }
