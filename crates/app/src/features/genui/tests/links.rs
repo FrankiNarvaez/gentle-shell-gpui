@@ -150,6 +150,51 @@ fn clicking_a_code_ref_asks_to_open_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn an_erd_tables_ref_opens_from_its_header(cx: &mut TestAppContext) {
+    let root = temp("erd-ref");
+    let (host, cx) = open(
+        cx,
+        "erd",
+        json!({"tables": [
+            {"id": "users", "ref": "src/a.rs:1", "columns": [{"name": "id", "type": "uuid", "pk": true}]},
+            {"id": "orders", "columns": [{"name": "id", "pk": true}, {"name": "user_id", "fk": "users.id"}]}
+        ]}),
+        &root,
+    );
+    // The first frame measures the canvas, the second fits the tables in it.
+    for _ in 0..2 {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    assert!(cx.debug_bounds("genui-erd-table-orders").is_some());
+    assert!(cx.debug_bounds("genui-erd-ref-orders").is_none(), "no ref");
+    click(cx, "genui-erd-ref-users");
+    assert_eq!(seen(&host, cx), [Seen::OpenRef("src/a.rs:1".into())]);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[gpui::test]
+fn a_review_exports_as_a_patch(cx: &mut TestAppContext) {
+    let root = temp("export-review");
+    let (host, cx) = open(
+        cx,
+        "review",
+        json!({"files": [{"path": "src/a.rs", "hunks": [{"oldStart": 1, "newStart": 1, "lines": ["-fn a() {}", "+fn b() {}"]}]}]}),
+        &root,
+    );
+    run(&host, Action::Copy(Format::Patch), cx);
+    let copied = cx.read_from_clipboard().and_then(|item| item.text());
+    assert_eq!(
+        copied.as_deref(),
+        Some(
+            "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,1 +1,1 @@\n-fn a() {}\n+fn b() {}\n"
+        )
+    );
+    assert!(matches!(seen(&host, cx).as_slice(), [Seen::Notice(Ok(_))]));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[gpui::test]
 fn the_pin_button_pins_and_unpins(cx: &mut TestAppContext) {
     let root = temp("pin");
     let (host, cx) = open(cx, "checklist", json!({"items": ["One"]}), &root);

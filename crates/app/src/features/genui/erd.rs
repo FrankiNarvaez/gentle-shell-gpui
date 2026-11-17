@@ -13,14 +13,16 @@ use gentle_core::genui::erd::{
     Relation, Table,
 };
 use gentle_core::genui::layout::{Point as P, Rect};
+use gentle_core::genui::refs::CodeRef;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::canvas::{self, Canvas, Drawn, Head, Shape, moved};
-use super::diagram::snap;
+use super::diagram::{DiagramEvent, snap};
 use super::panel::{Body, PanelView};
+use super::share::RefState;
 use crate::shared::ui;
 
 /// How close (px) a press must be to a relation to pick it.
@@ -412,6 +414,10 @@ impl PanelView {
                     .text_size(px(10.5 * scale))
                     .text_color(ui::faint())
                     .child(t.columns.len().to_string()),
+            )
+            .when_some(
+                t.code_ref.clone().filter(|_| scale >= 0.5),
+                |d, code_ref| d.child(self.erd_ref_button(ti, &t.id, code_ref, scale, cx)),
             );
         let rows = t.columns.iter().map(|col| {
             let end = End::new(&t.id, &col.name);
@@ -555,6 +561,55 @@ impl PanelView {
             .into_any_element()
     }
 
+    /// A table's code link in its header: the file icon, muted when the
+    /// file isn't there; a click opens it (the details show the path).
+    fn erd_ref_button(
+        &self,
+        ti: usize,
+        table: &str,
+        code_ref: CodeRef,
+        scale: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selector = format!("genui-erd-ref-{table}");
+        let found = matches!(
+            self.env.ref_state(&code_ref),
+            RefState::Found(_) | RefState::Unknown
+        );
+        div()
+            .id(("genui-erd-ref", ti))
+            .debug_selector(move || selector)
+            .flex_shrink_0()
+            .size(px(18. * scale))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(5. * scale))
+            .cursor_pointer()
+            .text_color(if found { ui::accent() } else { ui::faint() })
+            .hover(|d| d.bg(ui::surface_hover()))
+            .tooltip({
+                let tip: SharedString = code_ref.text().into();
+                move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                }
+            })
+            .child(
+                Icon::new(if found {
+                    IconName::FileCode
+                } else {
+                    IconName::FileX
+                })
+                .size(px(12. * scale)),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(move |_, _, _, cx| {
+                cx.stop_propagation();
+                cx.emit(DiagramEvent::OpenRef(code_ref.clone()));
+            }))
+            .into_any_element()
+    }
+
     fn erd_details(&self, shown: &Erd, key: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
         let (what, rest) = key.split_once(':')?;
         let rename =
@@ -578,18 +633,13 @@ impl PanelView {
                         ))
                         .into_any_element(),
                 ];
-                rows.extend(t.code_ref.as_ref().map(|r| {
-                    div()
-                        .truncate()
-                        .font_family(ui::MONO)
-                        .text_size(rems(11. / 16.))
-                        .text_color(ui::faint())
-                        .child(match (r.line, r.end_line) {
-                            (Some(a), Some(b)) => format!("{}:{a}-{b}", r.path),
-                            (Some(a), None) => format!("{}:{a}", r.path),
-                            _ => r.path.clone(),
-                        })
-                        .into_any_element()
+                rows.extend(t.code_ref.as_ref().map(|code_ref| {
+                    super::refs::chip(
+                        format!("genui-erd-details-ref-{}", t.id),
+                        code_ref,
+                        &self.env,
+                        cx,
+                    )
                 }));
                 rows.push(canvas::actions(vec![
                     rename("genui-erd-rename", "Rename", key.to_string(), cx),

@@ -11,91 +11,11 @@ use super::diagram::{
 };
 use super::edits::{Editable, fresh_id, plural};
 use super::layout::{self, Cubic, EdgePath, Point, Rect};
+use super::refs::CodeRef;
 
 pub const MAX_TABLES: usize = 60;
 pub const MAX_COLUMNS: usize = 80;
 pub const MAX_RELATIONS: usize = 200;
-
-/// Where an item's code lives: `{path, line?, endLine?}` (or `"path"`,
-/// `"path:42"`, `"path:42-50"`). Kept and sent back as is.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodeRef {
-    pub path: String,
-    pub line: Option<u32>,
-    pub end_line: Option<u32>,
-}
-
-impl CodeRef {
-    pub fn parse(value: &Value) -> Result<CodeRef, String> {
-        let (path, line, end_line) = match value {
-            Value::String(s) => {
-                let (path, lines) = match s.rsplit_once(':') {
-                    Some((path, lines))
-                        if lines.chars().all(|c| c.is_ascii_digit() || c == '-') =>
-                    {
-                        (path, Some(lines))
-                    }
-                    _ => (s.as_str(), None),
-                };
-                let (a, b) = match lines.map(|l| l.split_once('-').unwrap_or((l, ""))) {
-                    Some((a, b)) => (a.parse().ok(), b.parse().ok()),
-                    None => (None, None),
-                };
-                (path.to_string(), a, b)
-            }
-            Value::Object(map) => {
-                let line = |key: &str| {
-                    map.get(key)
-                        .and_then(Value::as_u64)
-                        .and_then(|n| u32::try_from(n).ok())
-                };
-                (
-                    map.get("path")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string(),
-                    line("line"),
-                    line("endLine"),
-                )
-            }
-            _ => return Err("must be {path, line?, endLine?}".into()),
-        };
-        let path = path.trim().replace('\\', "/");
-        let path = path.trim_start_matches("./").to_string();
-        if path.is_empty() {
-            return Err("needs a path".into());
-        }
-        if path.split('/').next() == Some("..") {
-            return Err(format!("\"{path}\" is outside the project"));
-        }
-        let end_line = end_line.filter(|e| line.is_some_and(|l| *e > l));
-        Ok(CodeRef {
-            path,
-            line: line.filter(|l| *l > 0),
-            end_line,
-        })
-    }
-
-    /// `item.ref`: `None` when absent or null.
-    pub fn field(item: &Value) -> Result<Option<CodeRef>, String> {
-        match item.get("ref") {
-            None | Some(Value::Null) => Ok(None),
-            Some(value) => CodeRef::parse(value).map(Some),
-        }
-    }
-
-    pub fn to_value(&self) -> Value {
-        let mut map = Map::new();
-        map.insert("path".into(), json!(self.path));
-        if let Some(line) = self.line {
-            map.insert("line".into(), json!(line));
-        }
-        if let Some(end) = self.end_line {
-            map.insert("endLine".into(), json!(end));
-        }
-        Value::Object(map)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum Cardinality {

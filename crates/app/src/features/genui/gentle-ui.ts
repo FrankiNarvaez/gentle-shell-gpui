@@ -1678,29 +1678,6 @@ function summarySequence(surface: Surface): string {
 	return lines.join("\n");
 }
 
-/** `{path, line?, endLine?}`, or `"path"`, `"path:42"`, `"path:42-50"`. */
-function tableRef(value: unknown): Json | string {
-	let path = "";
-	let line: number | undefined;
-	let endLine: number | undefined;
-	if (typeof value === "string") {
-		const match = /^(.*?)(?::(\d+)(?:-(\d+))?)?$/.exec(value.trim());
-		path = match?.[1] ?? "";
-		line = match?.[2] ? Number(match[2]) : undefined;
-		endLine = match?.[3] ? Number(match[3]) : undefined;
-	} else if (isObject(value)) {
-		path = typeof value.path === "string" ? value.path : "";
-		line = Number.isInteger(value.line) ? (value.line as number) : undefined;
-		endLine = Number.isInteger(value.endLine) ? (value.endLine as number) : undefined;
-	} else return "must be {path, line?, endLine?}";
-	path = path.trim().replace(/\\/g, "/").replace(/^(\.\/)+/, "");
-	if (path === "") return "needs a path";
-	if (path.split("/")[0] === "..") return `"${path}" is outside the project`;
-	line = line !== undefined && line > 0 ? line : undefined;
-	endLine = line !== undefined && endLine !== undefined && endLine > line ? endLine : undefined;
-	return { path, line, endLine };
-}
-
 function normalizeErd(raw: unknown): Json {
 	const { fail, check } = problems("erd");
 	if (!isObject(raw) || !Array.isArray(raw.tables)) throw new Error("spec.tables must be an array");
@@ -1726,12 +1703,7 @@ function normalizeErd(raw: unknown): Json {
 			if (isObject(c) && c.fk !== undefined && c.fk !== null) fks.push({ column, owner: `${id}.${cname}`, raw: c.fk });
 			columns.push(column);
 		});
-		let ref: Json | undefined;
-		if (t.ref !== undefined && t.ref !== null) {
-			const read = tableRef(t.ref);
-			if (typeof read === "string") fail(`table "${id}": ref ${read}`);
-			else ref = read;
-		}
+		const ref = normalizeRef(t.ref, `table "${id}"`, fail);
 		const x = finite(t.x);
 		const y = finite(t.y);
 		const pinned = x !== undefined && y !== undefined;
@@ -2255,29 +2227,25 @@ export default function gentleUi(pi: ExtensionAPI) {
 		name: TOOL,
 		label: "Gentle UI",
 		description:
-			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, table, form, checklist, kanban board, chart, change review or an html page), " +
+			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, sequence diagram, data model, state machine, timeline, table, form, checklist, kanban board, chart, change review or html page), " +
 			"update it (spec replaces, patch merges) or close it. The user can edit or use it (charts are read-only); the result summarizes its current state.",
-		promptSnippet: "Show, update or close an interactive diagram, table, form, checklist, kanban board, chart, change review or html page the user can edit in the app",
+		promptSnippet: "Show, update or close an interactive diagram, sequence, data model, state machine, timeline, table, form, checklist, board, chart, change review or html page the user can edit in the app",
 		promptGuidelines: [
-			"Use gentle_ui when the user should see or act on structured content, picking the kind by what they will do: diagram for architecture, data flow and dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs they check off or reorder; kanban for work items across stages; chart for numbers (read-only). Don't use gentle_ui for an answer that fits in a short reply.",
-			"The user is in the Gentle Shell desktop app, where a gentle_ui diagram appears right in the conversation and they can move, connect and correct it. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
+			"Use gentle_ui when the user should see or act on structured content, picking the kind by what they will do: diagram for architecture, data flow and dependencies; sequence for calls between components over time; erd for data models (read from the migrations or ORM models); state for state machines and lifecycles (current: the live state); timeline for dated plans with dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs; kanban for work items across stages; chart for numbers (read-only); review for file changes you propose. Don't use gentle_ui for an answer that fits in a short reply.",
+			"The user is in the Gentle Shell desktop app, where gentle_ui surfaces appear right in the conversation and they can move, connect and correct them. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
 			"To change a UI already shown, call gentle_ui with action update and a small patch instead of a new show; ids are stable slugs (api, orders-db) reused across updates.",
-			`Whenever a gentle_ui item corresponds to code (a diagram node for a module, a table row for a function or test, a checklist item or kanban card for a change), attach ref: { path (repo-relative), line?, endLine? } so the user can open it, e.g. {"id":"auth","label":"Auth service","ref":{"path":"src/auth/mod.rs","line":42}}; paths outside the workspace are rejected.`,
-			`The user may insert a saved UI (a "${EVENT_MESSAGE}" message saying so) or ask you to add one to the project's docs; treat inserted UIs like your own (update them by id).`,
-			"In gentle_ui specs omit x/y and let auto-layout place nodes; keep labels short and put details in description or tech.",
-			`The user's edits to a gentle_ui UI arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them.`,
+			`Attach ref { path (repo-relative), line?, endLine? } to every gentle_ui item that corresponds to code (a diagram node, erd table, table row, checklist item or kanban card) so the user can open it, e.g. "ref":{"path":"src/auth/mod.rs","line":42}; paths outside the workspace are rejected.`,
+			`The user's edits to a gentle_ui UI arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them. Such a message may also insert a saved UI (treat it like your own, update it by id) or ask you to add one to the project's docs.`,
+			"In gentle_ui specs omit x/y and let auto-layout place things; keep labels short and put details in description, tech or note.",
 			"A gentle_ui form's answers arrive once, when the user submits (op submit); wait for them instead of guessing. To ask again or change the questions, update the form: an update reopens it.",
 			`gentle_ui example: ${EXAMPLE}`,
 			...KIND_EXAMPLES,
-			"A gentle_ui checklist with run: true is a plan the user runs: they skip and reorder steps and press Run or Run next, and a gentle-ui.event tells you which step to do next. Before a step, update it {items:[{id, status:\"running\"}]}; after it, update it to done or failed (with a note). After Run (all), go on through the pending steps yourself; after Run next, stop after that step; when the user stops the plan, start no new step.",
-			"A gentle_ui kanban column with starts: true dispatches work: when the user drags a card into it, a gentle-ui.event asks you to dispatch a subagent for that card (card.agent {name, task} says which and what). Dispatch it with your own subagent tool, then update the card with agentId set to the subagent's id: the card then shows its live status, step and cost, and the user can stop it there.",
-			"gentle_ui tables, charts and checklists can be live: spec.live {source: jobs|subagents|git:status|git:log|todo} or {command: {cmd, cwd?, parse}, interval} with a map of JSONPath-lite picks. The app reads the data itself and keeps the UI current (commands only after the user allows them on the card), so don't push rows or values for a live UI; use it for dashboards of background jobs, subagents, git state or a test command's JSON.",
+			"A gentle_ui checklist with run: true is a plan the user runs (Run, Run next, skip, reorder); an event tells you which step to do. Before a step update it to status running, after it to done or failed (with a note). After Run go on through the pending steps; after Run next stop after that step; after Stop start no new step.",
+			"A gentle_ui kanban column with starts: true dispatches work: a card dragged into it asks you to dispatch a subagent (card.agent {name, task} says which and what) with your own subagent tool; then update the card with agentId so it shows the subagent's live status and the user can stop it.",
+			"gentle_ui tables, charts and checklists can be live: spec.live {source: jobs|subagents|git:status|git:log|todo} or {command: {cmd, cwd?, parse}, interval} with a map of JSONPath-lite picks. The app keeps them current itself (commands only once the user allows them), so don't push rows or values to a live UI.",
+			"Use gentle_ui kind review before large or risky edits, and before every edit when the user asked for review mode: per file hunks (lines \"+…\", \"-…\", \" …\" with oldStart/newStart) or before/after texts. Write none of it until the decisions arrive, then apply ONLY the accepted hunks (as proposed or as their comments ask), never rejected or undecided ones, and update with patch {applied: [hunk ids]}. Use wait: true only when you can't continue without the decisions (the call returns them); otherwise end your turn after showing it.",
 			"Use gentle_ui kind html only for custom interactive visuals, simulations, calculators or working prototypes no other kind fits (design screens and mockups stay in gentle_design). The page is an MCP App: self-contained (inline JS/CSS, no network unless spec.csp lists origins), put changing values in spec.data and update them with patch {data}.",
-			"More gentle_ui kinds: sequence for calls between components over time (who calls whom, in order, with alt/opt/loop/par fragments); erd for data models, derived from the migrations or ORM models with each table's ref pointing at its file; state for state machines and lifecycles (set current to the live state); timeline for dated plans with durations and dependencies (a Gantt chart; the summary gives the critical path).",
 			"A gentle_ui html page talks JSON-RPC 2.0 over window.parent.postMessage(msg, \"*\"): request ui/initialize {protocolVersion:\"2026-01-26\",appInfo:{name,version},appCapabilities:{}} (result.hostContext.styles.variables: theme CSS vars like --color-background-primary, --color-text-primary, --color-ring-primary, --font-sans; apply them), then notify ui/notifications/initialized; it receives ui/notifications/tool-result {structuredContent: spec.data}. Request ui/message {role:\"user\",content:[{type:\"text\",text}]} to message you, ui/update-model-context {content|structuredContent} to share state, ui/open-link {url}; notify ui/notifications/size-changed {height}.",
-			"Use gentle_ui kind review to let the user review proposed file changes before you write them: show it before large or risky edits, and before every edit when the user asked for review mode. Give per file hunks (lines \"+…\", \"-…\", \" …\" with oldStart/newStart) or before/after texts. Don't write any of those changes until the decisions arrive.",
-			`gentle_ui review decisions arrive as a "${EVENT_MESSAGE}" message (or, with wait: true, as the tool result): apply ONLY the accepted hunks, exactly as proposed or as their comments ask; never apply rejected or undecided ones (revise a rejected hunk with update if its comment asks for something else). Then call update with patch {applied: [hunk ids]} so the card shows them applied.`,
-			"Use gentle_ui review with wait: true when you can't continue without the decisions (the call returns them; the user can stop it); otherwise end your turn after showing the review.",
 		],
 		parameters: Params,
 		executionMode: "sequential",

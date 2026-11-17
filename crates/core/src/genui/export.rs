@@ -1,7 +1,8 @@
 //! Exporting a surface as a file people keep: a diagram as Mermaid or SVG,
 //! a table as CSV or Markdown, checklists and boards as Markdown, a chart
 //! as an image (an SVG the app rasterizes to PNG) or CSV of its data, a
-//! form's values as JSON and an html page as itself.
+//! form's values as JSON, an html page as itself, sequence diagrams, data
+//! models, state machines and timelines as Mermaid, and a review as a patch.
 
 use std::fmt::Write as _;
 
@@ -10,12 +11,17 @@ use serde_json::{Map, Value, json};
 use super::chart::{Axes, Chart, ChartType, Geometry, Shape, short_number};
 use super::checklist::Checklist;
 use super::diagram::{Diagram, EdgeStyle, NodeKind, Status};
+use super::erd::Erd;
 use super::form::Form;
 use super::html::HtmlSpec;
 use super::kanban::Board;
 use super::layout::{self, GROUP_HEADER, Point, Rect};
 use super::refs::CodeRef;
+use super::review::{self, Review};
+use super::sequence::{self, FragmentKind, MessageKind, ParticipantKind, Sequence};
+use super::states::{Machine, StateKind};
 use super::table::{Align, ColumnType, Table, cell_text, link_url};
+use super::timeline::{self, Timeline};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -27,6 +33,8 @@ pub enum Format {
     Png,
     Json,
     Html,
+    /// A unified diff (`git apply`).
+    Patch,
 }
 
 impl Format {
@@ -40,6 +48,7 @@ impl Format {
             Format::Png => "PNG",
             Format::Json => "JSON",
             Format::Html => "HTML",
+            Format::Patch => "Patch",
         }
     }
 
@@ -52,6 +61,7 @@ impl Format {
             Format::Png => "png",
             Format::Json => "json",
             Format::Html => "html",
+            Format::Patch => "patch",
         }
     }
 
@@ -63,6 +73,7 @@ impl Format {
             Format::Csv => Some("csv"),
             Format::Json => Some("json"),
             Format::Markdown | Format::Png => None,
+            Format::Patch => Some("diff"),
         }
     }
 }
@@ -76,6 +87,8 @@ pub fn formats(kind: &str) -> &'static [Format] {
         "chart" => &[Format::Png, Format::Csv],
         "form" => &[Format::Json],
         "html" => &[Format::Html],
+        "sequence" | "erd" | "state" | "timeline" => &[Format::Mermaid],
+        "review" => &[Format::Patch],
         _ => &[],
     }
 }
@@ -160,6 +173,11 @@ pub fn render(
         ("chart", _) => chart_svg(&Chart::parse(spec).map_err(errors)?, title, palette),
         ("form", _) => form_json(&Form::parse(spec).map_err(errors)?),
         ("html", _) => HtmlSpec::parse(spec).map_err(errors)?.html,
+        ("sequence", _) => sequence_mermaid(&Sequence::parse(spec).map_err(errors)?, title),
+        ("erd", _) => erd_mermaid(&Erd::parse(spec).map_err(errors)?, title),
+        ("state", _) => state_mermaid(&Machine::parse(spec).map_err(errors)?, title),
+        ("timeline", _) => timeline_gantt(&Timeline::parse(spec).map_err(errors)?, title),
+        ("review", _) => review_patch(&Review::parse(spec).map_err(errors)?),
         _ => unreachable!("checked against formats()"),
     })
 }
@@ -188,6 +206,13 @@ pub fn docs_command(id: &str, kind: &str, title: &str, spec: &Value) -> Result<S
 }
 
 // ── Mermaid ────────────────────────────────────────────────────────────────
+
+/// A Mermaid front matter `title`, when there is one.
+fn mermaid_title(out: &mut String, title: &str) {
+    if !title.trim().is_empty() {
+        let _ = writeln!(out, "---\ntitle: {}\n---", title.replace('\n', " "));
+    }
+}
 
 /// A Mermaid `flowchart` id for each of `ids`: letters, digits and `_`,
 /// prefixed so none is a keyword (`end`, `graph`), unique.
@@ -224,9 +249,7 @@ pub fn mermaid(d: &Diagram, title: &str) -> String {
     let groups = mermaid_ids("g_", d.groups.iter().map(|g| g.id.as_str()));
     let node_id = |id: &str| d.node_index(id).map(|i| nodes[i].as_str());
     let mut out = String::new();
-    if !title.trim().is_empty() {
-        let _ = writeln!(out, "---\ntitle: {}\n---", title.replace('\n', " "));
-    }
+    mermaid_title(&mut out, title);
     let _ = writeln!(out, "flowchart {}", d.direction.name());
     let node_line = |out: &mut String, i: usize, indent: &str| {
         let node = &d.nodes[i];
@@ -930,6 +953,326 @@ pub fn form_json(form: &Form) -> String {
     text
 }
 
+/// Free text after a `:` in a sequence or state diagram: one line, and
+/// `;`/`#` (statement and entity syntax) as entities.
+fn mermaid_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '#' => out.push_str("#35;"),
+            ';' => out.push_str("#59;"),
+            '\r' => {}
+            '\n' => out.push_str("<br/>"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The sequence as a Mermaid `sequenceDiagram`: actors and participants,
+/// messages by kind (`->>` sync, `-)` async, `-->>` return), notes,
+/// `alt`/`opt`/`loop`/`par` blocks with their `else`/`and` branches and
+/// the activation bars.
+pub fn sequence_mermaid(seq: &Sequence, title: &str) -> String {
+    let ids = mermaid_ids("p_", seq.participants.iter().map(|p| p.id.as_str()));
+    let who = |id: &str| seq.lane(id).map_or("?", |i| ids[i].as_str());
+    let mut out = String::new();
+    mermaid_title(&mut out, title);
+    out.push_str("sequenceDiagram\n");
+    for (i, p) in seq.participants.iter().enumerate() {
+        let keyword = if p.kind == ParticipantKind::Actor {
+            "actor"
+        } else {
+            "participant"
+        };
+        let _ = writeln!(out, "  {keyword} {} as {}", ids[i], mermaid_line(&p.label));
+    }
+    // Blocks by message place; nested ones open outermost first.
+    let mut blocks: Vec<(usize, usize, &sequence::Fragment)> = seq
+        .fragments
+        .iter()
+        .filter_map(|f| {
+            let (a, b) = (seq.index(&f.first)?, seq.index(&f.last)?);
+            Some((a.min(b), a.max(b), f))
+        })
+        .collect();
+    blocks.sort_by_key(|(a, b, _)| (*a, std::cmp::Reverse(*b)));
+    let bars = seq.bars();
+    for (mi, m) in seq.messages.iter().enumerate() {
+        for (_, _, f) in blocks.iter().filter(|(a, ..)| *a == mi) {
+            let label = f.label.as_deref().map(mermaid_line).unwrap_or_default();
+            let _ = writeln!(out, "  {} {label}", f.kind.name());
+        }
+        for (a, _, f) in &blocks {
+            let divider = match f.kind {
+                FragmentKind::Alt => "else",
+                FragmentKind::Par => "and",
+                FragmentKind::Opt | FragmentKind::Loop => continue,
+            };
+            for branch in f.branches.iter().filter(|b| b.at == m.id && *a < mi) {
+                let label = branch
+                    .label
+                    .as_deref()
+                    .map(mermaid_line)
+                    .unwrap_or_default();
+                let _ = writeln!(out, "  {divider} {label}");
+            }
+        }
+        let arrow = match m.kind {
+            MessageKind::Sync | MessageKind::SelfCall => "->>",
+            MessageKind::Async => "-)",
+            MessageKind::Return => "-->>",
+        };
+        let (from, to) = (who(&m.from), who(&m.to));
+        let _ = writeln!(out, "  {from}{arrow}{to}: {}", mermaid_line(&m.label));
+        if let Some(note) = &m.note {
+            let place = if from == to {
+                format!("right of {from}")
+            } else {
+                format!("over {from},{to}")
+            };
+            let _ = writeln!(out, "  Note {place}: {}", mermaid_line(note));
+        }
+        for (lane, ..) in bars.iter().filter(|(_, first, _)| *first == mi) {
+            let _ = writeln!(out, "  activate {}", ids[*lane]);
+        }
+        for (lane, ..) in bars.iter().filter(|(_, _, last)| *last == mi) {
+            let _ = writeln!(out, "  deactivate {}", ids[*lane]);
+        }
+        for _ in blocks.iter().filter(|(_, b, _)| *b == mi) {
+            out.push_str("  end\n");
+        }
+    }
+    out
+}
+
+/// A Mermaid `erDiagram` word (entity names and attribute types): letters,
+/// digits, `_`, `-` and the brackets of `varchar(255)` / `text[]`.
+fn mermaid_word(text: &str, fallback: &str) -> String {
+    let word: String = text
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "_-()[]".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    match word.chars().next() {
+        None => fallback.to_string(),
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => word,
+        Some(_) => format!("_{word}"),
+    }
+}
+
+/// The data model as a Mermaid `erDiagram`: each table with its columns
+/// (`PK`/`FK`/`UK`, notes and nullability as comments), each relation with
+/// crow's-foot ends, code refs as `%%` comments.
+pub fn erd_mermaid(erd: &Erd, title: &str) -> String {
+    let names = mermaid_ids("", erd.tables.iter().map(|t| t.name.as_str()));
+    let entity = |id: &str| erd.table_index(id).map_or("?", |i| names[i].as_str());
+    let mut out = String::new();
+    mermaid_title(&mut out, title);
+    out.push_str("erDiagram\n");
+    for (i, t) in erd.tables.iter().enumerate() {
+        let _ = writeln!(out, "  {} {{", mermaid_word(&names[i], "table"));
+        for c in &t.columns {
+            let keys: Vec<&str> = [
+                (c.pk, "PK"),
+                (c.fk.is_some(), "FK"),
+                (c.unique && !c.pk, "UK"),
+            ]
+            .into_iter()
+            .filter_map(|(on, key)| on.then_some(key))
+            .collect();
+            let mut line = format!(
+                "    {} {}",
+                mermaid_word(c.ty.as_deref().unwrap_or(""), "any"),
+                mermaid_word(&c.name, "column")
+            );
+            if !keys.is_empty() {
+                let _ = write!(line, " {}", keys.join(", "));
+            }
+            let comment: Vec<&str> = c
+                .note
+                .as_deref()
+                .into_iter()
+                .chain(c.nullable.then_some("nullable"))
+                .collect();
+            if !comment.is_empty() {
+                let _ = write!(line, " \"{}\"", comment.join("; ").replace('"', "'"));
+            }
+            let _ = writeln!(out, "{line}");
+        }
+        out.push_str("  }\n");
+    }
+    for r in &erd.relations {
+        let (from_many, to_many) = r.cardinality.many();
+        let left = if from_many { "}o" } else { "||" };
+        let right = if to_many { "o{" } else { "||" };
+        let label = r
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("{} → {}", r.from.column, r.to.column));
+        let _ = writeln!(
+            out,
+            "  {} {left}--{right} {} : \"{}\"",
+            mermaid_word(entity(&r.from.table), "table"),
+            mermaid_word(entity(&r.to.table), "table"),
+            label.replace('"', "'").replace('\n', " ")
+        );
+    }
+    for (i, t) in erd.tables.iter().enumerate() {
+        if let Some(code_ref) = &t.code_ref {
+            let _ = writeln!(out, "  %% {}: {}", names[i], code_ref.text());
+        }
+    }
+    out
+}
+
+/// The state machine as a Mermaid `stateDiagram-v2`: initial and final
+/// states as `[*]`, choices as `<<choice>>`, composite groups as nested
+/// `state … { }` blocks, transitions labelled `event [guard] / action`,
+/// the current state as the `current` class.
+pub fn state_mermaid(m: &Machine, title: &str) -> String {
+    let ids = mermaid_ids("s_", m.states.iter().map(|s| s.id.as_str()));
+    let groups = mermaid_ids("g_", m.groups.iter().map(|g| g.id.as_str()));
+    let end = |id: &str| match m.state_index(id) {
+        Some(i) if matches!(m.states[i].kind, StateKind::Initial | StateKind::Final) => "[*]",
+        Some(i) => ids[i].as_str(),
+        None => "?",
+    };
+    let group_of = |id: &str| m.state(id).and_then(|s| s.group.as_deref());
+    let mut out = String::new();
+    mermaid_title(&mut out, title);
+    out.push_str("stateDiagram-v2\n");
+    let _ = writeln!(out, "  direction {}", m.direction.name());
+    // One scope's states and the transitions that stay inside it.
+    let scope = |out: &mut String, group: Option<&str>, indent: &str| {
+        for (i, s) in m.states.iter().enumerate() {
+            if s.group.as_deref() != group {
+                continue;
+            }
+            match s.kind {
+                StateKind::Initial | StateKind::Final => {}
+                StateKind::Choice => {
+                    let _ = writeln!(out, "{indent}state {} <<choice>>", ids[i]);
+                }
+                StateKind::Normal => {
+                    let label = s.label.replace('"', "'").replace('\n', " ");
+                    let _ = writeln!(out, "{indent}state \"{label}\" as {}", ids[i]);
+                }
+            }
+            if let Some(description) = &s.description
+                && !s.kind.pseudo()
+            {
+                let _ = writeln!(out, "{indent}{} : {}", ids[i], mermaid_line(description));
+            }
+        }
+        for t in &m.transitions {
+            let inside = group_of(&t.from) == group && group_of(&t.to) == group;
+            if !inside {
+                continue;
+            }
+            let label = t.label();
+            let _ = write!(out, "{indent}{} --> {}", end(&t.from), end(&t.to));
+            if !label.is_empty() {
+                let _ = write!(out, " : {}", mermaid_line(&label));
+            }
+            out.push('\n');
+        }
+    };
+    for (gi, g) in m.groups.iter().enumerate() {
+        let label = g.label.replace('"', "'").replace('\n', " ");
+        let _ = writeln!(out, "  state \"{label}\" as {} {{", groups[gi]);
+        scope(&mut out, Some(g.id.as_str()), "    ");
+        out.push_str("  }\n");
+    }
+    scope(&mut out, None, "  ");
+    // Transitions between scopes, by their real states ([*] is per scope).
+    for t in &m.transitions {
+        if group_of(&t.from) == group_of(&t.to) {
+            continue;
+        }
+        let side = |id: &str| m.state_index(id).map_or("?", |i| ids[i].as_str());
+        let label = t.label();
+        let _ = write!(out, "  {} --> {}", side(&t.from), side(&t.to));
+        if !label.is_empty() {
+            let _ = write!(out, " : {}", mermaid_line(&label));
+        }
+        out.push('\n');
+    }
+    if let Some(i) = m.current.as_deref().and_then(|id| m.state_index(id)) {
+        let _ = writeln!(
+            out,
+            "  classDef current stroke-width:3px\n  class {} current",
+            ids[i]
+        );
+    }
+    out
+}
+
+/// The timeline as a Mermaid `gantt`: tasks with their dates and length in
+/// days, groups as sections, done/active from the progress, the critical
+/// path as `crit`, milestones; dependencies as `%%` comments (the dates
+/// are explicit, so Mermaid's `after` would move nothing).
+pub fn timeline_gantt(timeline: &Timeline, title: &str) -> String {
+    let ids = mermaid_ids("t_", timeline.tasks.iter().map(|t| t.id.as_str()));
+    let critical = timeline.critical_path();
+    let mut out = String::new();
+    mermaid_title(&mut out, title);
+    out.push_str("gantt\n  dateFormat YYYY-MM-DD\n");
+    for group in timeline.groups() {
+        if let Some(group) = group {
+            let _ = writeln!(
+                out,
+                "  section {}",
+                group.replace([':', '#', ';', '\n'], " ")
+            );
+        }
+        for (i, t) in timeline.tasks.iter().enumerate() {
+            if t.group.as_deref() != group {
+                continue;
+            }
+            let mut tags: Vec<&str> = Vec::new();
+            match t.progress {
+                Some(100) => tags.push("done"),
+                Some(p) if p > 0 => tags.push("active"),
+                _ => {}
+            }
+            if critical.contains(&t.id) {
+                tags.push("crit");
+            }
+            if t.milestone {
+                tags.push("milestone");
+            }
+            let length = if t.milestone { 0 } else { t.end - t.start + 1 };
+            tags.push(&ids[i]);
+            let _ = writeln!(
+                out,
+                "  {} :{}, {}, {length}d",
+                t.label.replace([':', '#', ';', '\n'], " "),
+                tags.join(", "),
+                timeline::date_of(t.start)
+            );
+            if !t.depends_on.is_empty() {
+                let _ = writeln!(out, "  %% {} after {}", ids[i], t.depends_on.join(", "));
+            }
+        }
+    }
+    out
+}
+
+// ── Reviews ───────────────────────────────────────────────────────────────
+
+/// The review as one unified patch (`git apply`-able): every file's hunks
+/// as proposed, whatever their decisions.
+pub fn review_patch(review: &Review) -> String {
+    review.files.iter().map(review::File::patch).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1188,5 +1531,171 @@ mod tests {
         )
         .unwrap();
         assert!(event["text"].is_null());
+    }
+
+    /// Each `open` line is closed by an `end` line, in order.
+    fn balanced(text: &str, opens: &[&str]) {
+        let mut depth = 0i32;
+        for line in text.lines().map(str::trim) {
+            let word = line.split(' ').next().unwrap_or("");
+            if opens.contains(&word) {
+                depth += 1;
+            } else if line == "end" {
+                depth -= 1;
+                assert!(depth >= 0, "end without a block in\n{text}");
+            }
+        }
+        assert_eq!(depth, 0, "unclosed block in\n{text}");
+    }
+
+    #[test]
+    fn sequence_as_mermaid() {
+        let seq = Sequence::parse(&json!({
+            "participants": [{"id": "web", "label": "Web", "kind": "actor"}, {"id": "api", "label": "API"}, {"id": "db", "label": "Users; DB", "kind": "db"}],
+            "messages": [
+                {"id": "m1", "from": "web", "to": "api", "label": "POST /login"},
+                {"id": "m2", "from": "api", "to": "db", "label": "find user", "note": "by #email"},
+                {"id": "m3", "from": "db", "to": "api", "label": "row", "kind": "return"},
+                {"id": "m4", "from": "api", "to": "web", "label": "401", "kind": "return"},
+                {"id": "m5", "from": "api", "to": "web", "label": "200", "kind": "return"},
+                {"id": "m6", "from": "api", "to": "api", "label": "audit", "kind": "async"}
+            ],
+            "fragments": [
+                {"kind": "alt", "label": "wrong password", "from": "m4", "to": "m5", "else": [{"at": "m5", "label": "ok"}]},
+                {"kind": "loop", "label": "retries", "from": "m1", "to": "m5"}
+            ]
+        }))
+        .unwrap();
+        let text = sequence_mermaid(&seq, "Login");
+        assert!(text.starts_with("---\ntitle: Login\n---\nsequenceDiagram\n"));
+        assert!(text.contains("  actor p_web as Web\n"));
+        assert!(text.contains("  participant p_db as Users#59; DB\n"));
+        assert!(text.contains("  p_web->>p_api: POST /login\n"));
+        assert!(text.contains("  Note over p_api,p_db: by #35;email\n"));
+        assert!(text.contains("  p_db-->>p_api: row\n"));
+        // A message to itself is a self call.
+        assert!(text.contains("  p_api->>p_api: audit\n"));
+        // The loop opens before the alt it holds; `else` splits the alt.
+        let at = |needle: &str| text.find(needle).unwrap();
+        assert!(at("  loop retries") < at("  alt wrong password"));
+        assert!(at("  p_api-->>p_web: 401") < at("  else ok") && at("  else ok") < at(": 200"));
+        balanced(&text, &["loop", "alt", "opt", "par"]);
+        // The derived activation bars open and close in pairs.
+        assert_eq!(
+            text.matches("  activate ").count(),
+            text.matches("  deactivate ").count()
+        );
+        assert!(text.contains("  activate p_api\n"));
+    }
+
+    #[test]
+    fn erd_as_mermaid() {
+        let erd = Erd::parse(&json!({"tables": [
+            {"id": "users", "ref": "db/001_users.sql:3", "columns": [
+                {"name": "id", "type": "uuid", "pk": true},
+                {"name": "email", "type": "varchar(255)", "unique": true, "note": "login \"name\""}
+            ]},
+            {"id": "orders", "columns": [
+                {"name": "id", "type": "uuid", "pk": true},
+                {"name": "user_id", "type": "uuid", "fk": "users.id", "nullable": true},
+                {"name": "total", "type": "numeric 10,2"}
+            ]}
+        ]}))
+        .unwrap();
+        let text = erd_mermaid(&erd, "");
+        assert!(text.starts_with("erDiagram\n"));
+        assert!(text.contains(
+            "  users {\n    uuid id PK\n    varchar(255) email UK \"login 'name'\"\n  }\n"
+        ));
+        assert!(text.contains("    uuid user_id FK \"nullable\"\n"));
+        assert!(text.contains("    numeric_10_2 total\n"));
+        // The foreign key is many orders to one user.
+        assert!(text.contains("  orders }o--|| users : \"user_id → id\"\n"));
+        assert!(text.contains("  %% users: db/001_users.sql:3\n"));
+        assert_eq!(text.matches('{').count(), text.matches('}').count() - 1);
+    }
+
+    #[test]
+    fn state_machine_as_mermaid() {
+        let machine = Machine::parse(&json!({
+            "direction": "LR",
+            "groups": [{"id": "review", "label": "In review"}],
+            "states": [
+                {"id": "start", "kind": "initial"},
+                {"id": "draft", "label": "Draft", "description": "not shared"},
+                {"id": "checks", "label": "Checks", "group": "review"},
+                {"id": "approved", "label": "Approved", "group": "review"},
+                {"id": "pick", "kind": "choice"},
+                {"id": "done", "kind": "final"}
+            ],
+            "transitions": [
+                {"from": "start", "to": "draft"},
+                {"from": "draft", "to": "checks", "event": "submit", "guard": "ci green", "action": "notify"},
+                {"from": "checks", "to": "approved", "event": "approve"},
+                {"from": "approved", "to": "pick"},
+                {"from": "pick", "to": "done", "event": "merge"}
+            ],
+            "current": "checks"
+        }))
+        .unwrap();
+        let text = state_mermaid(&machine, "PR");
+        assert!(text.contains("stateDiagram-v2\n  direction LR\n"));
+        assert!(
+            text.contains(
+                "  state \"In review\" as g_review {\n    state \"Checks\" as s_checks\n"
+            )
+        );
+        assert!(text.contains("    s_checks --> s_approved : approve\n  }\n"));
+        assert!(text.contains("  state s_pick <<choice>>\n"));
+        assert!(text.contains("  s_draft : not shared\n"));
+        assert!(text.contains("  [*] --> s_draft\n"));
+        assert!(text.contains("  s_pick --> [*] : merge\n"));
+        assert!(text.contains("  s_draft --> s_checks : submit [ci green] / notify\n"));
+        assert!(text.contains("  s_approved --> s_pick\n"));
+        assert!(text.contains("  class s_checks current\n"));
+    }
+
+    #[test]
+    fn timeline_as_gantt() {
+        let timeline = Timeline::parse(&json!({"tasks": [
+            {"id": "design", "label": "Design: v1", "start": "2026-03-02", "duration": 5, "progress": 1},
+            {"id": "build", "label": "Build", "group": "Eng", "start": "2026-03-09", "end": "2026-03-20", "dependsOn": ["design"], "progress": 30},
+            {"id": "launch", "label": "Launch", "start": "2026-03-23", "milestone": true, "dependsOn": "build"}
+        ]}))
+        .unwrap();
+        let text = timeline_gantt(&timeline, "Launch plan");
+        assert!(text.contains("gantt\n  dateFormat YYYY-MM-DD\n"));
+        assert!(text.contains("  Design  v1 :done, crit, t_design, 2026-03-02, 5d\n"));
+        assert!(text.contains("  Launch :crit, milestone, t_launch, 2026-03-23, 0d\n"));
+        assert!(text.contains("  section Eng\n  Build :active, crit, t_build, 2026-03-09, 12d\n"));
+        assert!(text.contains("  %% t_build after design\n"));
+        // Ungrouped tasks come before the first section.
+        assert!(text.find("Launch :").unwrap() < text.find("section Eng").unwrap());
+    }
+
+    #[test]
+    fn review_as_a_patch() {
+        let spec = json!({"files": [
+            {"path": "src/auth.rs", "hunks": [{"id": "sig", "oldStart": 1, "newStart": 1, "lines": [" fn main() {", "-    login();", "+    sign_in();", " }"], "decision": "rejected"}]},
+            {"path": "NEW.md", "status": "added", "hunks": [{"oldStart": 0, "newStart": 1, "lines": ["+hello"]}]}
+        ]});
+        let text = render(
+            "review",
+            "Rename",
+            &spec,
+            Format::Patch,
+            &Palette::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            text,
+            "diff --git a/src/auth.rs b/src/auth.rs\n--- a/src/auth.rs\n+++ b/src/auth.rs\n@@ -1,3 +1,3 @@\n fn main() {\n-    login();\n+    sign_in();\n }\n\
+             diff --git a/NEW.md b/NEW.md\nnew file mode 100644\n--- /dev/null\n+++ b/NEW.md\n@@ -0,0 +1,1 @@\n+hello\n"
+        );
+        assert_eq!(docs_format("review"), Some(Format::Patch));
+        assert_eq!(Format::Patch.fence(), Some("diff"));
+        for kind in ["sequence", "erd", "state", "timeline"] {
+            assert_eq!(docs_format(kind), Some(Format::Mermaid));
+        }
     }
 }
