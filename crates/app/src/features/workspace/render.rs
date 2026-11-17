@@ -25,12 +25,11 @@ impl Render for Workspace {
         // Below this the screen buttons fold into one overflow menu.
         let narrow = window.viewport_size().width < rems(900. / 16.).to_pixels(window.rem_size());
         // Native web views would cover a screen or a dialog opened over
-        // them; device cards stop capturing while covered. The quick look
-        // opens over the panes only.
+        // them; device cards stop capturing while covered.
         let covered =
             self.overlay.is_some() || window.has_active_dialog(cx) || window.has_active_sheet(cx);
         self.set_stages_covered(covered, cx);
-        self.sync_web_views(covered || self.peek.is_some(), cx);
+        self.sync_web_views(covered, cx);
         let (devices_docked, devices_floating) = {
             let panel = self.devices.read(cx);
             let docked = panel.mode() == crate::features::devices::Mode::Docked;
@@ -56,6 +55,7 @@ impl Render for Workspace {
             })
             .on_action(cx.listener(Self::on_new_tab))
             .on_action(cx.listener(Self::on_show_in_pane))
+            .on_action(cx.listener(Self::on_close_viewer))
             .on_action(cx.listener(Self::on_new_terminal_tab))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_next_tab))
@@ -458,8 +458,7 @@ impl Render for Workspace {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(self.render_body(window, cx))
-                            .children(self.render_peek(cx)),
+                            .child(self.render_body(window, cx)),
                     )
                     .when(devices_docked, |row| row.child(self.devices.clone())),
             )

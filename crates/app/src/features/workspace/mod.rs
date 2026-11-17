@@ -35,7 +35,7 @@ use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
 use crate::features::workspaces::{self, SavedPane, SavedState, SavedTab, SavedWorkspace};
 use crate::shared::pane::{
-    PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
+    CloseViewer, PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
 use crate::shared::ui;
 use gentle_core::commands::Screen;
@@ -45,7 +45,6 @@ mod closed;
 mod layout;
 mod overlays;
 mod panes;
-mod peek;
 mod persistence;
 mod render;
 mod spaces;
@@ -248,8 +247,6 @@ pub struct Workspace {
     /// Agent panes last told their web views may show (see
     /// `sync_web_views`).
     web_shown: std::collections::HashSet<PaneId>,
-    /// The file shown in the quick-look modal over the panes.
-    peek: Option<peek::Peek>,
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     save_task: Option<Task<()>>,
@@ -364,7 +361,6 @@ impl Workspace {
             next_id: 0,
             overlay: None,
             web_shown: Default::default(),
-            peek: None,
             sidebar: None,
             sidebar_visible: saved.sidebar,
             save_task: None,
@@ -498,11 +494,6 @@ impl Workspace {
 
     /// Show `path` in the tab's preview pane, or a new split beside the largest pane.
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // Already in the quick look: move that view (edits included) instead.
-        if self.peek.as_ref().is_some_and(|peek| peek.path == path) {
-            self.pin_peek(window, cx);
-            return;
-        }
         if self.tab().is_none() {
             self.open_tab(PaneKind::File, path, None, None, window, cx);
             return;

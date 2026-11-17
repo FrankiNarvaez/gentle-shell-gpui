@@ -11,15 +11,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A link followed inside the quick look shows there too.
-        if self
-            .peek
-            .as_ref()
-            .is_some_and(|peek| peek.item.view.entity_id() == action.pane)
-        {
-            self.peek_file(action.path.clone(), window, cx);
-            return;
-        }
         let Some(id) = self
             .panes
             .iter()
@@ -209,6 +200,24 @@ impl Workspace {
         self.open_providers(window, cx);
     }
 
+    /// The file view's header ✕ asks to close the pane showing it.
+    pub(super) fn on_close_viewer(
+        &mut self,
+        action: &CloseViewer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self
+            .panes
+            .iter()
+            .find(|(_, pane)| pane.item.view.entity_id() == action.pane)
+            .map(|(id, _)| *id)
+        else {
+            return;
+        };
+        self.close_pane(id, window, cx);
+    }
+
     pub(super) fn on_close_overlay(
         &mut self,
         _: &CloseOverlay,
@@ -220,7 +229,6 @@ impl Workspace {
             Some((Overlay::Onboarding(view), _)) if view.read(cx).busy() => {}
             Some((Overlay::Welcome(view), _)) if view.read(cx).busy(cx) => {}
             Some(_) => self.close_overlay(window, cx),
-            None if self.peek.is_some() => self.close_peek(window, cx),
             None => cx.propagate(),
         }
     }

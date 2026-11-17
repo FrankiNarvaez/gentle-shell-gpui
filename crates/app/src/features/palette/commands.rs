@@ -24,7 +24,10 @@ pub(super) fn screen_rows() -> Vec<Row> {
         row(
             IconName::Users,
             "Agents",
-            &format!("Helpers working for this session ({})", ui::shortcut_shift("A")),
+            &format!(
+                "Helpers working for this session ({})",
+                ui::shortcut_shift("A")
+            ),
             PaletteAction::Agents,
         ),
         row(
@@ -96,7 +99,10 @@ pub(super) fn screen_rows() -> Vec<Row> {
         row(
             IconName::Plus,
             "New session",
-            &format!("Start a fresh conversation in this pane ({})", ui::shortcut("N")),
+            &format!(
+                "Start a fresh conversation in this pane ({})",
+                ui::shortcut("N")
+            ),
             PaletteAction::NewSession,
         ),
         row(

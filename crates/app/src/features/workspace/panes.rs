@@ -388,11 +388,9 @@ impl Workspace {
         }
     }
 
-    /// Focus the quick look while it shows, else the active tab's focused pane.
+    /// Focus the active tab's focused pane.
     pub(super) fn focus_active(&self, window: &mut Window, cx: &mut App) {
-        if let Some(peek) = &self.peek {
-            peek.item.focus.focus(window, cx);
-        } else if let Some(pane) = self.focused_pane().and_then(|id| self.panes.get(&id)) {
+        if let Some(pane) = self.focused_pane().and_then(|id| self.panes.get(&id)) {
             pane.item.focus.focus(window, cx);
         }
     }
