@@ -1063,7 +1063,7 @@ impl ChangesView {
                         Button::new("changes-commit-main")
                             .flex_1()
                             .label(primary_label)
-                            .child(ui::kbd("⌘↵"))
+                            .child(ui::kbd(ui::shortcut("↵")))
                             .on_click(cx.listener(|this, _, window, cx| this.primary(window, cx))),
                     )
                     .dropdown_menu(move |menu, _, _| {
