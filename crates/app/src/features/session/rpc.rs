@@ -9,13 +9,15 @@ use anyhow::Result;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use pi_rpc::PiProcess;
-use pi_rpc::desktop_rpc::{ConfigStore, ConfigWrite, DesktopMethod};
+use pi_rpc::desktop_rpc::{ConfigStore, ConfigWrite, DesktopMethod, ReviewScope};
 use serde_json::{Value, json};
 
+use super::state::desktop::changes::{Applied as ChangesApplied, FileKey};
 use super::state::desktop::config::Applied as ConfigApplied;
 use super::state::desktop::design::Applied as DesignApplied;
 use super::state::desktop::output::Applied as OutputApplied;
 use super::state::desktop::permission::Applied as PermissionApplied;
+use super::state::desktop::review::Applied as ReviewApplied;
 use super::state::desktop::subscription::Applied as SubscriptionApplied;
 use super::state::desktop::supervision::Applied as SupervisionApplied;
 use super::state::desktop::{self, Applied as DesktopApplied, Send as DesktopSend};
@@ -220,6 +222,21 @@ impl SessionView {
         cx.notify();
     }
 
+    /// Act on a review-mode decision: say what failed, send what the slice
+    /// asked for, and redraw the chip and its confirmation.
+    pub(super) fn apply_review(&mut self, applied: ReviewApplied, cx: &mut Context<Self>) {
+        if let Some(report) = applied.report {
+            self.transcript
+                .notice(NoticeLevel::Warning, report.message());
+        }
+        self.send_desktop(applied.sends, cx);
+        // A gap seen while the review request was in flight is due now that
+        // it settled or rolled back.
+        let resync = self.desktop.flush_resync();
+        self.send_desktop(resync, cx);
+        cx.notify();
+    }
+
     /// Send an owed job output or thread read once the channel is free.
     pub(super) fn sync_output(&mut self, cx: &mut Context<Self>) {
         let applied = self.desktop.output_pump();
@@ -262,6 +279,83 @@ impl SessionView {
         cx.notify();
     }
 
+    /// Send what the review slice owes once the channel is free.
+    pub(super) fn sync_review(&mut self, cx: &mut Context<Self>) {
+        let applied = self.desktop.review_pump();
+        if !applied.sends.is_empty() || applied.report.is_some() {
+            self.apply_review(applied, cx);
+        }
+    }
+
+    /// Ask Gentle Shell to turn reviews on or off for `scope`. Nothing is
+    /// written yet: it answers the confirmation the human sees first.
+    pub(super) fn request_review_mode(
+        &mut self,
+        enabled: bool,
+        scope: ReviewScope,
+        cx: &mut Context<Self>,
+    ) {
+        if self.desktop.review_request(enabled, scope) {
+            self.sync_review(cx);
+        }
+        cx.notify();
+    }
+
+    /// The human approved the confirmation: resend with its token.
+    pub(super) fn confirm_review_mode(&mut self, cx: &mut Context<Self>) {
+        if self.desktop.review_confirm() {
+            self.sync_review(cx);
+        }
+        cx.notify();
+    }
+
+    /// The human declined the confirmation: nothing is resent.
+    pub(super) fn dismiss_review_mode(&mut self, cx: &mut Context<Self>) {
+        self.desktop.review_dismiss();
+        cx.notify();
+    }
+
+    /// Read the switch again: a change made in the TUI emits no event.
+    pub(super) fn refresh_review_mode(&mut self, cx: &mut Context<Self>) {
+        self.desktop.review_refresh();
+        self.sync_review(cx);
+    }
+
+    /// Act on a changes decision: say what failed, send what the slice asked
+    /// for, and bring the card's diff viewer up to the answer.
+    pub(super) fn apply_changes(&mut self, applied: ChangesApplied, cx: &mut Context<Self>) {
+        if let Some(report) = applied.report {
+            self.transcript
+                .notice(NoticeLevel::Warning, report.message());
+        }
+        self.send_desktop(applied.sends, cx);
+        let resync = self.desktop.flush_resync();
+        self.send_desktop(resync, cx);
+        self.sync_changes_viewer(cx);
+        cx.notify();
+    }
+
+    /// Send what the changes slice owes once the channel is free.
+    pub(super) fn sync_changes(&mut self, cx: &mut Context<Self>) {
+        let applied = self.desktop.changes_pump();
+        if !applied.sends.is_empty() || applied.report.is_some() {
+            self.apply_changes(applied, cx);
+        }
+    }
+
+    /// Read this session's change set again (turn end, the card opened).
+    pub(super) fn refresh_session_changes(&mut self, cx: &mut Context<Self>) {
+        self.desktop.changes_mark_stale();
+        self.sync_changes(cx);
+    }
+
+    /// Show one changed file's diff in the card, or close it.
+    pub(super) fn select_session_change(&mut self, file: Option<FileKey>, cx: &mut Context<Self>) {
+        self.desktop.changes_select(file);
+        self.sync_changes_viewer(cx);
+        self.sync_changes(cx);
+        cx.notify();
+    }
     /// Whether the Profiles screen edits this tab's config over Desktop RPC,
     /// waits for the probe, or keeps its direct-file path. No backend to ask
     /// (it failed or exited) is the direct-file path too: there is no writer
@@ -493,6 +587,14 @@ impl SessionView {
                 let applied = self.desktop.config_expire(generation);
                 self.apply_config(applied, cx);
             }
+            DesktopMethod::GetReviewMode | DesktopMethod::SetReviewMode => {
+                let applied = self.desktop.review_expire(generation);
+                self.apply_review(applied, cx);
+            }
+            DesktopMethod::GetChanges | DesktopMethod::GetChangeDiff => {
+                let applied = self.desktop.changes_expire(generation);
+                self.apply_changes(applied, cx);
+            }
             DesktopMethod::GetJobOutput | DesktopMethod::GetSubagentThread => {
                 let applied = self.desktop.output_expire(generation);
                 self.apply_output(applied, cx);
@@ -500,16 +602,15 @@ impl SessionView {
             // No slice issues these yet, so no request of theirs is pending.
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
-            | DesktopMethod::GetChanges
-            | DesktopMethod::GetChangeDiff
-            | DesktopMethod::GetReviewMode
-            | DesktopMethod::SetReviewMode
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus => {}
         }
         // Whichever request was dropped, the shared slot may be free for the
-        // next queued config request or owed output read.
+        // next queued config request, review change, changes read or owed
+        // output read.
         self.sync_config(cx);
+        self.sync_review(cx);
+        self.sync_changes(cx);
         self.sync_output(cx);
     }
 
@@ -552,6 +653,14 @@ impl SessionView {
                 let applied = self.desktop.config_outer(generation, handled);
                 self.apply_config(applied, cx);
             }
+            DesktopMethod::GetReviewMode | DesktopMethod::SetReviewMode => {
+                let applied = self.desktop.review_outer(generation, handled);
+                self.apply_review(applied, cx);
+            }
+            DesktopMethod::GetChanges | DesktopMethod::GetChangeDiff => {
+                let applied = self.desktop.changes_outer(generation, handled);
+                self.apply_changes(applied, cx);
+            }
             DesktopMethod::GetJobOutput | DesktopMethod::GetSubagentThread => {
                 let applied = self.desktop.output_outer(generation, handled);
                 self.apply_output(applied, cx);
@@ -559,14 +668,12 @@ impl SessionView {
             // No slice issues these yet, so no request of theirs is pending.
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
-            | DesktopMethod::GetChanges
-            | DesktopMethod::GetChangeDiff
-            | DesktopMethod::GetReviewMode
-            | DesktopMethod::SetReviewMode
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus => {}
         }
         self.sync_config(cx);
+        self.sync_review(cx);
+        self.sync_changes(cx);
         self.sync_output(cx);
     }
 
