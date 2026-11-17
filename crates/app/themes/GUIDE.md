@@ -70,7 +70,7 @@ the `background` and `solid` keys.
   `border`, `success`, `error`, `warning`, `toolTitle`, `userMessageBg`,
   `selectedBg`, …, and `export.pageBg`) also works when you want finer control.
 - `solid`: `true` keeps every pane opaque at any transparency, in the
-  theme's own colors (like *Studio*), so the Transparency slider has no
+  theme's own colors (like *Studio* or *Clay*), so the Transparency slider has no
   visible effect on it.
 - `background` (all optional):
   - `scene`: a built-in scene's name (see below) or a `.js` file beside the
