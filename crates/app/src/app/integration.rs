@@ -115,7 +115,7 @@ pub fn attach_sidebar(
         cx: &mut App,
     ) -> Subscription {
         let tree = cx.new(|cx| FileTreeView::new(root, window, cx));
-        let shown = workspace.read(cx).sidebar_visible();
+        let shown = workspace.read(cx).files_sidebar_visible();
         tree.update(cx, |tree, cx| tree.set_visible(shown, cx));
         let target = workspace.downgrade();
         window
@@ -152,7 +152,7 @@ pub fn attach_sidebar(
             .detach();
         let visible = tree.downgrade();
         let toggled = window.subscribe(workspace, cx, move |_, event: &WorkspaceEvent, _, cx| {
-            if let WorkspaceEvent::SidebarToggled(shown) = event {
+            if let WorkspaceEvent::FilesVisibilityChanged(shown) = event {
                 let _ = visible.update(cx, |tree, cx| tree.set_visible(*shown, cx));
             }
         });
