@@ -237,12 +237,14 @@ impl PanelView {
                 dash: None,
                 head: Head::None,
             });
+            // An end is optional when the other end's column may be null
+            // (an order with no user: zero or one user).
             let (many_from, many_to) = r.cardinality.many();
             marker(
                 g.path.start(),
                 g.from_dir,
                 many_from,
-                nullable(&r.from),
+                nullable(&r.to),
                 color,
                 &mut shapes,
             );
@@ -250,7 +252,7 @@ impl PanelView {
                 g.path.end(),
                 g.to_dir,
                 many_to,
-                nullable(&r.to),
+                nullable(&r.from),
                 color,
                 &mut shapes,
             );
