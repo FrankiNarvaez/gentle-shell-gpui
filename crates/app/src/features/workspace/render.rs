@@ -20,10 +20,9 @@ impl Render for Workspace {
         {
             tab.focused = inside;
         }
-        let sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
-        let has_sidebar = self.sidebar.is_some();
+        let files_sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
+        let has_files_sidebar = self.sidebar.is_some();
         let vertical_tabs = self.tab_layout == TabLayout::Vertical;
-        let show_sidebar = self.sidebar_visible && (has_sidebar || vertical_tabs);
         // Below this the screen buttons fold into one overflow menu.
         let narrow = window.viewport_size().width < rems(900. / 16.).to_pixels(window.rem_size());
         // Native web views would cover a screen opened over them; device
@@ -424,17 +423,17 @@ impl Render for Workspace {
                                             |this, window, cx| this.open_providers(window, cx),
                                         ))
                                     })
-                                    .when(has_sidebar || vertical_tabs, |d| {
+                                    .when(has_files_sidebar, |d| {
                                         d.child(
                                             Button::new("toggle-sidebar")
                                                 .ghost()
                                                 .xsmall()
                                                 .icon(Icon::new(if self.sidebar_visible {
-                                                    IconName::PanelLeftClose
+                                                    IconName::PanelRightClose
                                                 } else {
-                                                    IconName::PanelLeftOpen
+                                                    IconName::PanelRightOpen
                                                 }))
-                                                .tooltip("Toggle sidebar (⌘B)")
+                                                .tooltip("Toggle Files sidebar (⌘B)")
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_sidebar(cx)
                                                 })),
@@ -450,9 +449,11 @@ impl Render for Workspace {
                     .px_1p5()
                     .pb_1p5()
                     .gap_1p5()
-                    .when(show_sidebar, |row| {
+                    // Vertical tabs have their own left sidebar, independent of
+                    // whether the Files / Changes / Branches panel is open.
+                    .when(vertical_tabs, |row| {
                         row.child(ui::appear(
-                            "sidebar-in",
+                            "tabs-sidebar-in",
                             div()
                                 .w(rems(SIDEBAR_WIDTH / 16.))
                                 .flex_none()
@@ -462,18 +463,7 @@ impl Render for Workspace {
                                 .border_1()
                                 .border_color(gpui_kit::transparent_black())
                                 .overflow_hidden()
-                                .child(if vertical_tabs {
-                                    self.render_vertical_sidebar(sidebar.clone(), cx)
-                                        .into_any_element()
-                                } else {
-                                    sidebar
-                                        .clone()
-                                        .map(|view| {
-                                            view.cached(StyleRefinement::default().size_full())
-                                                .into_any_element()
-                                        })
-                                        .unwrap_or_else(|| div().into_any_element())
-                                }),
+                                .child(self.render_vertical_sidebar(cx)),
                         ))
                     })
                     .child(
@@ -486,7 +476,26 @@ impl Render for Workspace {
                             .child(self.render_body(window, cx))
                             .children(self.render_peek(cx)),
                     )
-                    .when(devices_docked, |row| row.child(self.devices.clone())),
+                    .when(devices_docked, |row| row.child(self.devices.clone()))
+                    // The file browser always sits on the right, in both tab
+                    // layouts. Ctrl/Cmd+B controls only this panel.
+                    .when_some(files_sidebar, |row, view| {
+                        row.child(ui::appear(
+                            "files-sidebar-in",
+                            div()
+                                .w(rems(SIDEBAR_WIDTH / 16.))
+                                .flex_none()
+                                .h_full()
+                                .rounded_xl()
+                                .bg(ui::panel())
+                                .border_1()
+                                .border_color(gpui_kit::transparent_black())
+                                .overflow_hidden()
+                                .child(
+                                    view.cached(StyleRefinement::default().size_full()),
+                                ),
+                        ))
+                    }),
             )
             .children(self.stages.iter().filter_map(Stage::element))
             .when(devices_floating, |root| root.child(self.devices.clone()))
