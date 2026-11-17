@@ -93,8 +93,6 @@ pub const SIDEBAR_WIDTH: f32 = 260.;
 pub enum WorkspaceEvent {
     /// The shown workspace changed; its root folder.
     RootChanged(PathBuf),
-    /// The left sidebar was shown or hidden.
-    SidebarToggled(bool),
     /// Whether the files pane is actually in view (not hidden behind Tabs).
     FilesVisibilityChanged(bool),
 }
