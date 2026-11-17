@@ -75,8 +75,8 @@ impl Workspace {
     }
 
     /// Called by the drag-and-drop targets in the sidebar.
-    fn reorder_tab_before(&mut self, moving: usize, before: usize, cx: &mut Context<Self>) {
-        if moving == before {
+    fn reorder_tab_at(&mut self, moving: usize, target: usize, cx: &mut Context<Self>) {
+        if moving == target {
             return;
         }
         self.with_reordered_tabs(
@@ -84,14 +84,14 @@ impl Workspace {
                 let Some(from) = tabs.iter().position(|tab| tab.id == moving) else {
                     return;
                 };
-                let Some(to) = tabs.iter().position(|tab| tab.id == before) else {
+                let Some(to) = tabs.iter().position(|tab| tab.id == target) else {
                     return;
                 };
                 if tabs[from].pinned != tabs[to].pinned {
                     return;
                 }
                 let tab = tabs.remove(from);
-                tabs.insert(if from < to { to - 1 } else { to }, tab);
+                tabs.insert(to, tab);
             },
             cx,
         );
@@ -352,7 +352,7 @@ impl Workspace {
                 |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
             )
             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                this.reorder_tab_before(drag.tab, id, cx)
+                this.reorder_tab_at(drag.tab, id, cx)
             }))
             .child(
                 div()
