@@ -27,7 +27,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{file_icon, human_size, language, mermaid};
-use crate::shared::pane::ShowInPane;
+use crate::shared::pane::{CloseViewer, ShowInPane};
 use crate::shared::ui;
 
 actions!(file_view, [Save]);
@@ -782,7 +782,9 @@ impl FileView {
         let mut budget = self.header_width.get() / unit
             - 32.
             - 24.
+            // Two trailing xsmall icon buttons (reveal and close): 20 px + 8 px gap each.
             - 32.
+            - 28.
             - save_width
             - toggle_width
             - path_width;
@@ -942,6 +944,17 @@ impl FileView {
                     .tooltip("Open with default app")
                     .on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&path))),
             )
+            .child({
+                let view = cx.entity_id();
+                Button::new("file-view-close")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::X))
+                    .tooltip("Close pane")
+                    .on_click(move |_, window, cx| {
+                        window.dispatch_action(Box::new(CloseViewer { pane: view }), cx)
+                    })
+            })
     }
 
     /// The outside-write or save-error notice above the buffer, tinted, with

@@ -52,6 +52,7 @@ impl Render for Workspace {
             })
             .on_action(cx.listener(Self::on_new_tab))
             .on_action(cx.listener(Self::on_show_in_pane))
+            .on_action(cx.listener(Self::on_close_viewer))
             .on_action(cx.listener(Self::on_new_terminal_tab))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_next_tab))
@@ -454,8 +455,7 @@ impl Render for Workspace {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(self.render_body(window, cx))
-                            .children(self.render_peek(cx)),
+                            .child(self.render_body(window, cx)),
                     )
                     .when(devices_docked, |row| row.child(self.devices.clone())),
             )
