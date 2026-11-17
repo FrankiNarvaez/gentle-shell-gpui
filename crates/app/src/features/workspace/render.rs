@@ -433,7 +433,15 @@ impl Render for Workspace {
                                                 } else {
                                                     IconName::PanelRightOpen
                                                 }))
-                                                .tooltip("Toggle Files sidebar (⌘B)")
+                                                .tooltip(format!(
+                                                    "{} Files sidebar ({})",
+                                                    if self.sidebar_visible { "Hide" } else { "Show" },
+                                                    if cfg!(target_os = "macos") {
+                                                        "⌘B"
+                                                    } else {
+                                                        "Ctrl+B"
+                                                    }
+                                                ))
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_sidebar(cx)
                                                 })),
@@ -492,7 +500,8 @@ impl Render for Workspace {
                                 .border_color(gpui_kit::transparent_black())
                                 .overflow_hidden()
                                 .child(
-                                    view.cached(StyleRefinement::default().size_full()),
+                                    view.cached(StyleRefinement::default().size_full())
+                                        .into_any_element(),
                                 ),
                         ))
                     }),
