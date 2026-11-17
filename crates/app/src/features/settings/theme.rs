@@ -375,8 +375,8 @@ impl SettingsView {
     }
 }
 
-/// Interface size: smaller and bigger a step at a time (the same steps as
-/// ⌘- and ⌘=), back to 100 %, and the size now. It applies to every window.
+/// Interface size: smaller and bigger a step at a time (also via the
+/// platform's shortcut keys), back to 100 %, and the size now.
 fn interface_size_row(size: u16) -> Div {
     let keys = format!(
         "{} bigger · {} smaller · {} resets",
