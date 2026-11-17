@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body { margin: 0; height: 100%; overflow: hidden; background: {{BACKGROUND}}; }
+iframe { display: block; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<!-- The page itself: sandboxed (an opaque origin with scripts only: no
+     same-origin access, popups, top navigation, forms or downloads). This
+     document only relays its MCP Apps messages to the app and back. -->
+<iframe id="view" sandbox="allow-scripts" allow="" referrerpolicy="no-referrer" src="{{VIEW}}"></iframe>
+<script>
+(() => {
+  const view = document.getElementById("view");
+  window.addEventListener("message", (event) => {
+    if (event.source !== view.contentWindow) return;
+    let text;
+    try { text = JSON.stringify(event.data); } catch { return; }
+    if (typeof text === "string") window.ipc.postMessage(text);
+  });
+  Object.defineProperty(window, "__gentleDeliver", {
+    value: (message) => view.contentWindow && view.contentWindow.postMessage(message, "*"),
+  });
+})();
+</script>
+</body>
+</html>

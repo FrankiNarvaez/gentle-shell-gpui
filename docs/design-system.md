@@ -333,6 +333,10 @@ A `gentle_ui` diagram (`features/genui/view.rs`) is a conversation card with a c
 - The selection's details float over the canvas' top-right corner in a `ui::island` (kind/status/group chips, tech in `MONO`, description, Rename / Ask about this / Delete). Rename edits in place with a `field` over the node.
 - The rows around it reuse the card header shape: drawing (spinner), failed (`danger` border, the error in `MONO`), superseded or closed (`faint`, at 0.7), shown expanded (with "Back here"), and the user's sent edits ("You edited …", the summary as bullets and the note).
 
+### Generative UI HTML card
+
+A `gentle_ui` html page (`features/genui/html.rs`) uses the diagram card's shell (`surface`, `rounded_xl`, `border()`): in the conversation a compact card (`CARD_HEIGHT` 104 px at 100 %) with the `CodeXml` icon in `info`, the `champagne` title, the `v<n>` chip, what the page may reach (`ShieldCheck` in `success` "isolated · no network", or `Globe` in `warning` with the origins) and a `primary().xsmall()` Open; below, one `faint` line (or the last send's result in `success`/`danger`). The whole card opens it on click and takes `surface_hover`. Expanded: the same title row with a `ghost` collapse button, the page in a `well` box with `rounded_lg` corners (its height is what the page reports, else the spec's, else the room there is), and a footer like the diagram's (hint in `faint`, a spinner while a message goes, "Sent to the agent" in `success`, errors in `danger`). A link the page asks to open replaces the page with a centered question (`ExternalLink` in `accent`, the URL in `MONO` on `raised`, `ghost` Cancel, `primary` "Open in the browser card"): the native view can't sit under GPUI content. The page gets the app's look as MCP Apps theme variables (`apps::style_variables`: backgrounds from `well`/`raised`/`panel`, text from `fg`/`muted`/`faint`, borders, `accent` as `--color-ring-primary`, the status tones, the interface font and `MONO`, sizes from the rem) plus a base style (text color, font, `color-scheme`) under its own.
+
 ### Buttons and footers
 
 | Rule | Example |

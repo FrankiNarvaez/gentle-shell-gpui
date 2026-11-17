@@ -14,7 +14,7 @@ use super::state::desktop;
 use super::state::{BackendStatus, Dialog, TurnActivity};
 use super::{SessionEvent, SessionView, view};
 use crate::features::browser::CanvasNotice;
-use crate::features::genui::{DiagramEvent, DiagramView};
+use crate::features::genui::{DiagramEvent, Surface};
 use crate::features::git;
 use gentle_core::tools;
 use gentle_core::transcript::{self, NoticeLevel};
@@ -576,14 +576,26 @@ impl SessionView {
     /// Listen to generative UI surfaces created since the last frame.
     pub(super) fn watch_surfaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for surface in self.genui.take_fresh() {
-            let subscription = cx.subscribe_in(&surface, window, Self::on_surface_event);
+            let on = surface.clone();
+            let subscription = match &surface {
+                Surface::Diagram(view) => {
+                    cx.subscribe_in(view, window, move |this, _, event, window, cx| {
+                        this.on_surface_event(&on, event, window, cx)
+                    })
+                }
+                Surface::Html(view) => {
+                    cx.subscribe_in(view, window, move |this, _, event, window, cx| {
+                        this.on_surface_event(&on, event, window, cx)
+                    })
+                }
+            };
             self.genui.keep(surface.entity_id(), subscription);
         }
     }
 
     fn on_surface_event(
         &mut self,
-        surface: &Entity<DiagramView>,
+        surface: &Surface,
         event: &DiagramEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -594,7 +606,7 @@ impl SessionView {
             DiagramEvent::Send(command) => {
                 let surface = surface.clone();
                 self.run_extension_command(command.clone(), cx, move |result, cx| {
-                    surface.update(cx, |surface, cx| surface.sent(result, cx));
+                    surface.sent(result, cx);
                 });
             }
             DiagramEvent::Ask(text) => self.composer.update(cx, |state, cx| {
@@ -602,7 +614,7 @@ impl SessionView {
                 state.focus(window, cx);
             }),
             DiagramEvent::Expand => {
-                let id = surface.read(cx).id().to_string();
+                let id = surface.id(cx);
                 self.genui.set_expanded(Some(id), cx);
                 cx.notify();
             }
@@ -610,6 +622,7 @@ impl SessionView {
                 self.genui.set_expanded(None, cx);
                 cx.notify();
             }
+            DiagramEvent::OpenWeb(url) => cx.emit(SessionEvent::OpenWeb(url.clone())),
         }
     }
 }

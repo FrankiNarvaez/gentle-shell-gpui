@@ -34,6 +34,8 @@ pub enum DiagramEvent {
     Ask(String),
     Expand,
     Collapse,
+    /// Open this http(s) URL in the in-app browser (the user confirmed).
+    OpenWeb(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
