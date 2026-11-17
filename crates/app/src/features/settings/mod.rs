@@ -23,6 +23,7 @@ mod hydration;
 mod layout;
 mod maestro;
 mod models;
+mod navigation;
 mod music;
 mod notifications;
 mod packages;
@@ -34,6 +35,7 @@ pub use claude::forget_claude_auth;
 pub use snapshot::npm_name;
 
 use layout::{row, section};
+use navigation::SettingsPage;
 use snapshot::{Snapshot, probe, read_snapshot};
 
 pub enum SettingsEvent {
@@ -56,6 +58,7 @@ pub enum SettingsEvent {
 
 pub struct SettingsView {
     cwd: PathBuf,
+    page: SettingsPage,
     snapshot: Option<Snapshot>,
     package_input: Entity<InputState>,
     running: Option<String>,
@@ -138,6 +141,7 @@ impl SettingsView {
         });
         let mut this = Self {
             cwd,
+            page: SettingsPage::default(),
             snapshot: None,
             package_input,
             running: None,
@@ -212,6 +216,7 @@ impl SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let page = self.page;
         let body: AnyElement = match &self.snapshot {
             None => h_flex()
                 .p_6()
@@ -227,7 +232,7 @@ impl Render for SettingsView {
                 v_flex()
                     .gap_3()
                     .p_4()
-                    .child(
+                    .when(page == SettingsPage::General, |this| this.child(
                         section(IconName::SquareTerminal, "Gentle Shell")
                             .child(row(
                                 "Home",
@@ -247,11 +252,6 @@ impl Render for SettingsView {
                                     .unwrap_or_else(|| "not found".into()),
                             ))
                             .child(row("Versions", s.versions.join(" · ")))
-                            .when_some(s.update.clone(), |d, offer| {
-                                d.child(self.render_update(offer, cx))
-                            })
-                            .children(self.upgrade.as_ref().map(upgrade::upgrade_result))
-                            .child(self.render_engram_update(s.engram_update.clone(), cx))
                             .child(
                                 h_flex()
                                     .pt_2()
@@ -284,12 +284,12 @@ impl Render for SettingsView {
                     .child(
                         section(IconName::CircleCheck, "Setup & requirements")
                             .child(self.setup.clone()),
-                    )
-                    .child(self.devices_section(cx))
-                    .child(self.maestro_section(cx))
-                    .child(self.music_section(cx))
-                    .child(self.hydration_section(cx))
-                    .child(
+                    ))
+                    .when(page == SettingsPage::Devices, |this| this.child(self.devices_section(cx)))
+                    .when(page == SettingsPage::Integrations, |this| this.child(self.maestro_section(cx)))
+                    .when(page == SettingsPage::Integrations, |this| this.child(self.music_section(cx)))
+                    .when(page == SettingsPage::Agents, |this| this.child(self.hydration_section(cx)))
+                    .when(page == SettingsPage::Appearance, |this| this.child(
                         div()
                             .id("theme-drop")
                             .rounded_xl()
@@ -300,21 +300,32 @@ impl Render for SettingsView {
                                 this.theme_drop(paths, cx)
                             }))
                             .child(self.theme_section(cx)),
-                    )
-                    .child(models::models_section(s))
-                    .child(self.gentle_ai_section(s, cx))
-                    .child(self.notifications_section(cx))
-                    .child(self.bridge_section(s, cx))
-                    .child(self.packages_section(s, cx)),
+                    ))
+                    .when(page == SettingsPage::Models, |this| this.child(models::models_section(s)))
+                    .when(page == SettingsPage::Agents, |this| this.child(self.gentle_ai_section(s, cx)))
+                    .when(page == SettingsPage::Notifications, |this| this.child(self.notifications_section(cx)))
+                    .when(page == SettingsPage::Integrations, |this| this.child(self.bridge_section(s, cx)))
+                    .when(page == SettingsPage::Advanced, |this| this.child(self.packages_section(s, cx)))
+                    .when(page == SettingsPage::Updates, |this| {
+                        this.child(app::app_section(cx)).child(
+                            section(IconName::RefreshCw, "Gentle Shell and Engram")
+                                .child(row("Versions", s.versions.join(" · ")))
+                                .when_some(s.update.clone(), |d, offer| {
+                                    d.child(self.render_update(offer, cx))
+                                })
+                                .children(self.upgrade.as_ref().map(upgrade::upgrade_result))
+                                .child(self.render_engram_update(s.engram_update.clone(), cx)),
+                        )
+                    }),
             )
             .into_any_element(),
         };
-        let (backdrop, panel) = ui::screen(Some(820.));
+        let (backdrop, panel) = ui::screen(Some(960.));
         backdrop.occlude().child(ui::pop_in(
             "settings-screen",
             panel
                 .w_full()
-                .max_w(rems(820. / 16.))
+                .max_w(rems(960. / 16.))
                 .child(
                     ui::screen_header()
                         .child(
@@ -337,7 +348,7 @@ impl Render for SettingsView {
                                 .truncate()
                                 .text_xs()
                                 .text_color(ui::muted())
-                                .child("Your Gentle Shell setup, as the terminal sees it"),
+                                .child("Manage Gentle Shell and the desktop experience"),
                         )
                         .child(
                             Button::new("settings-refresh")
@@ -356,13 +367,45 @@ impl Render for SettingsView {
                         ),
                 )
                 .child(
-                    div()
-                        .id("settings-body")
+                    h_flex()
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .child(div().px_4().pt_4().child(app::app_section(cx)))
-                        .child(body),
+                        .child(navigation::sidebar(page, cx))
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .min_h_0()
+                                .child(
+                                    v_flex()
+                                        .px_4()
+                                        .py_3()
+                                        .gap_1()
+                                        .border_b_1()
+                                        .border_color(ui::border())
+                                        .child(
+                                            div()
+                                                .text_base()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(ui::fg())
+                                                .child(page.label()),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(ui::muted())
+                                                .child(page.description()),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id("settings-body")
+                                        .flex_1()
+                                        .min_h_0()
+                                        .overflow_y_scroll()
+                                        .child(body),
+                                ),
+                        ),
                 ),
         ))
     }
