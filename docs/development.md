@@ -268,7 +268,7 @@ Workflow steps:
 
 | Module | Role |
 | --- | --- |
-| `network.rs` | `GET https://api.github.com/repos/ismaelosuna7824/gentle-shell-gpui/releases/latest`, download with SHA-256 and progress. |
+| `network.rs` | `GET https://api.github.com/repos/Gentleman-Programming/gentle-shell-gpui/releases/latest`, download with SHA-256 and progress. |
 | `release.rs` | Only counts published releases, not `draft`, not `prerelease`, with a stable `vX.Y.Z`. `asset_name(version, os, arch)` picks `macos-<arch>.zip`, `windows-x86_64.zip` or `linux-x86_64.tar.gz` (there is no asset for Linux/Windows aarch64). `expected_digest` reads `SHA256SUMS`. `is_dev`: `0.0.0` or a non-stable version does not check at startup. |
 | `cache.rs` | `app-update.json`: 6 h cache (`TTL_MS`) and skipped version. |
 | `archive.rs` | Safe zip and tar.gz extraction. |
@@ -281,7 +281,7 @@ Therefore: renaming an asset, changing the `SHA256SUMS` format or the binary nam
 
 ### macOS
 
-- `packaging/macos/Info.plist` (identifier `io.github.ismaelosuna7824.gentle-shell-gpui`, `@VERSION@` and `@MIN_MACOS@` replaced by `bundle.sh`). `GENTLE_BIN=<path>` packages an already built binary.
+- `packaging/macos/Info.plist` (identifier `io.github.ismaelosuna7824.gentle-shell-gpui`, `@VERSION@` and `@MIN_MACOS@` replaced by `bundle.sh`; the identifier predates the move to Gentleman-Programming and stays, since changing it makes macOS treat the app as a different one: its permissions and saved state). `GENTLE_BIN=<path>` packages an already built binary.
 - Outside a `.app` (`cargo run`), `platform/icons.rs` (`set_dock_icon`) sets the Dock icon at runtime from `icon-512.png`; inside the bundle it uses `AppIcon.icns`.
 - Ad hoc signing, not notarized: Gatekeeper blocks the first launch (README). `bundle.sh` clears xattrs before signing because they would break the seal.
 

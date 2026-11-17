@@ -10,7 +10,7 @@ use super::release::{Release, hex, parse_release};
 use super::{Phase, Problem, SUMS, fail};
 
 const LATEST_API: &str =
-    "https://api.github.com/repos/ismaelosuna7824/gentle-shell-gpui/releases/latest";
+    "https://api.github.com/repos/Gentleman-Programming/gentle-shell-gpui/releases/latest";
 const USER_AGENT: &str = concat!("gentle-shell-gpui/", env!("CARGO_PKG_VERSION"));
 const CHECK_TIMEOUT: Duration = Duration::from_secs(15);
 

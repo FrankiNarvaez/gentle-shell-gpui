@@ -30,7 +30,8 @@ use relaunch::{remove_leftovers, spawn_relaunch};
 use release::{Outcome, platform_asset};
 
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
-pub const RELEASES_URL: &str = "https://github.com/ismaelosuna7824/gentle-shell-gpui/releases";
+pub const RELEASES_URL: &str =
+    "https://github.com/Gentleman-Programming/gentle-shell-gpui/releases";
 const SUMS: &str = "SHA256SUMS";
 /// The executable inside every archive (`.exe` on Windows).
 const BINARY: &str = "gentle-shell-gpui";

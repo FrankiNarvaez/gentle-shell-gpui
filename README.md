@@ -57,7 +57,7 @@ The app does not reimplement Gentle Shell. Each tab starts `gentle-shell --mode 
 
 ### From a release
 
-Download the asset for your system from [Releases](https://github.com/ismaelosuna7824/gentle-shell-gpui/releases) (names under [Packages and releases](#packages-and-releases)).
+Download the asset for your system from [Releases](https://github.com/Gentleman-Programming/gentle-shell-gpui/releases) (names under [Packages and releases](#packages-and-releases)).
 
 - **macOS:** open `gentle-shell-gpui-<version>-macos-aarch64.dmg` (Apple silicon) or `…-macos-x86_64.dmg` (Intel) and drag **Gentle Shell** onto **Applications**. The app is ad-hoc signed, not notarized, so the first launch is blocked: right-click the app → **Open** → **Open**, or allow it in System Settings → Privacy & Security → **Open Anyway**. From a terminal, `xattr -dr com.apple.quarantine /Applications/"Gentle Shell.app"` does the same. Later versions install from inside the app ([Updating the app](#updating-the-app)).
 - **Windows:** run `gentle-shell-gpui-<version>-windows-x86_64-setup.exe`. It installs for your user only (no admin rights) into `%LOCALAPPDATA%\Programs\Gentle Shell`, adds Gentle Shell to the Start menu (and the desktop if you tick it) and to Apps → Installed apps for uninstalling; installing a newer setup over it upgrades in place. SmartScreen may warn about an unknown publisher: **More info** → **Run anyway**. The `…-windows-x86_64.zip` holds the bare exe (the in-app updater uses it). The in-app browser uses the Microsoft Edge WebView2 Runtime, which Windows 11 and updated Windows 10 already have.
@@ -69,7 +69,7 @@ Download the asset for your system from [Releases](https://github.com/ismaelosun
 2. Build and run:
 
    ```bash
-   git clone https://github.com/ismaelosuna7824/gentle-shell-gpui.git
+   git clone https://github.com/Gentleman-Programming/gentle-shell-gpui.git
    cd gentle-shell-gpui
    cargo run --release -- .
    ```
