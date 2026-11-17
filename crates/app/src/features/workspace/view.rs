@@ -137,7 +137,10 @@ impl Workspace {
     pub(super) fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let space = self.space();
         let weak = cx.entity().downgrade();
+        let placement = weak.clone();
+        let layout = self.tab_layout;
         h_flex()
+            .id("horizontal-tab-strip")
             .gap(px(2.))
             .min_w_0()
             .children(space.tabs.iter().enumerate().map(|(i, tab)| {
@@ -339,6 +342,9 @@ impl Workspace {
                         },
                     )),
             )
+            .context_menu(move |menu, _, _| {
+                Self::tab_placement_menu(menu, layout, placement.clone())
+            })
     }
 
     pub(super) fn render_tree(
