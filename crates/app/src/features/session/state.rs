@@ -247,9 +247,13 @@ pub(in crate::features::session) mod desktop {
     pub(in crate::features::session) mod changes;
     #[cfg(test)]
     mod live;
+    #[cfg(test)]
+    mod live_tests;
+    pub(in crate::features::session) mod output;
     /// The screens' one-shot reads, in `state/desktop/reads.rs`.
     pub(in crate::features::session) mod reads;
     pub(in crate::features::session) mod review;
+    pub(in crate::features::session) mod sections;
 
     /// A request the tab must hand to its backend, with the generation of the
     /// pending timeout that guards it: a timer only expires its own generation.
@@ -357,6 +361,12 @@ pub(in crate::features::session) mod desktop {
         config: config::Config,
         /// The screens' one-shot reads (sessions, stats, update status).
         reads: reads::Reads,
+        /// Gentle Shell's session state (`session_snapshot`), when offered.
+        sections: sections::Sections,
+        /// The snapshot in flight asked for [`sections::SECTIONS`].
+        snapshot_sections: bool,
+        /// Job output and subagent threads read on demand.
+        output: output::Output,
         /// The review-mode switch (`get_review_mode`/`set_review_mode`).
         review: review::Review,
         /// What this session changed (`get_changes`/`get_change_diff`).
@@ -385,6 +395,9 @@ pub(in crate::features::session) mod desktop {
                 design: design::Design::new(),
                 config: config::Config::default(),
                 reads: reads::Reads::default(),
+                sections: sections::Sections::default(),
+                snapshot_sections: false,
+                output: output::Output::default(),
                 review: review::Review::default(),
                 changes: changes::ChangeSet::default(),
             }
@@ -407,6 +420,9 @@ pub(in crate::features::session) mod desktop {
             self.design.reset(&mut self.session);
             self.config.reset(&mut self.session);
             self.reads.reset();
+            self.sections.reset();
+            self.snapshot_sections = false;
+            self.output.reset();
             self.review.reset();
             self.changes.reset();
         }
@@ -473,6 +489,8 @@ pub(in crate::features::session) mod desktop {
                             self.subscription.set_capabilities(capabilities.clone());
                             self.config.set_capabilities(capabilities.clone());
                             self.reads.set_capabilities(capabilities.clone());
+                            self.sections.set_capabilities(&capabilities);
+                            self.output.set_capabilities(capabilities.clone());
                             self.review.set_capabilities(capabilities.clone());
                             self.changes.set_capabilities(capabilities.clone());
                             self.design.set_capabilities(capabilities);
@@ -484,21 +502,36 @@ pub(in crate::features::session) mod desktop {
                         Err(error) => self.unavailable(Report::Capabilities(error)),
                     },
                     Some(DesktopMethod::GetSnapshot) => match response.snapshot() {
-                        Ok(snapshot) => {
+                        Ok(mut snapshot) => {
                             // A snapshot sets (or keeps) the event baseline; an
                             // older one must not rewind the session into replays.
                             if self.session.resync_from_snapshot(&snapshot).is_ok() {
                                 self.covered = Some(snapshot.sequence);
+                                // Its session sections live in their slice.
+                                if let Some(sections) = snapshot.session.take() {
+                                    self.sections.replace(sections);
+                                }
                                 self.snapshot = Some(snapshot);
                             }
                             self.step = Step::Ready;
                             Applied::default()
                         }
+                        // The sections read was refused (the feed went away):
+                        // read the legacy state instead, and only that from
+                        // here on, so the channel itself keeps working.
+                        Err(DesktopRpcError::RemoteError(_)) if self.snapshot_sections => {
+                            self.sections.fail();
+                            Applied {
+                                sends: self.issue(DesktopMethod::GetSnapshot, Step::Snapshot),
+                                report: None,
+                            }
+                        }
                         Err(error) => self.unavailable(Report::Snapshot(error)),
                     },
                     // The permission, supervision, subscription, design,
-                    // config, review and changes methods are served by their
-                    // own slices; this channel only probes and sequences.
+                    // config, review, changes and output (job output,
+                    // subagent thread) methods are served by their own
+                    // slices; this channel only probes and sequences.
                     Some(DesktopMethod::GetPermissionMode)
                     | Some(DesktopMethod::SetPermissionMode)
                     | Some(DesktopMethod::ListSubagents)
@@ -525,6 +558,7 @@ pub(in crate::features::session) mod desktop {
                 },
                 Ok(Some(DesktopRecord::Event(event))) => {
                     self.covered = Some(event.seq);
+                    self.sections.apply_event(&event);
                     Applied::default()
                 }
                 // Not this protocol's widget.
@@ -967,6 +1001,61 @@ pub(in crate::features::session) mod desktop {
             self.reads.take(ticket)
         }
 
+        /// Gentle Shell's session sections, as the last reads and events left
+        /// them; `None`-filled until a read carried them.
+        pub(in crate::features::session) fn sections(&self) -> &sections::Sections {
+            &self.sections
+        }
+
+        /// Whether the session sections moved since the last call.
+        pub(in crate::features::session) fn take_sections_changed(&mut self) -> bool {
+            self.sections.take_changed()
+        }
+
+        /// The job output and subagent thread reads.
+        pub(in crate::features::session) fn output(&self) -> &output::Output {
+            &self.output
+        }
+
+        /// Choose what the output reads watch; [`Self::output_pump`] sends.
+        pub(in crate::features::session) fn output_mut(&mut self) -> &mut output::Output {
+            &mut self.output
+        }
+
+        /// Send an owed output read once the probe has landed, no resync is
+        /// owed and the shared slot is free.
+        pub(in crate::features::session) fn output_pump(&mut self) -> output::Applied {
+            if self.step != Step::Ready || self.pending_resync {
+                return output::Applied::default();
+            }
+            self.output.pump(&mut self.session)
+        }
+
+        /// One incoming UI request for the output slice.
+        pub(in crate::features::session) fn output_apply(
+            &mut self,
+            request: &UiRequest,
+        ) -> output::Applied {
+            self.output.apply(&mut self.session, request)
+        }
+
+        /// The pending timeout for an output read.
+        pub(in crate::features::session) fn output_expire(
+            &mut self,
+            generation: u64,
+        ) -> output::Applied {
+            self.output.expire(&mut self.session, generation)
+        }
+
+        /// Pi answered the outer prompt of an output read.
+        pub(in crate::features::session) fn output_outer(
+            &mut self,
+            generation: u64,
+            handled: bool,
+        ) -> output::Applied {
+            self.output.outer(&mut self.session, generation, handled)
+        }
+
         /// The review-mode slice, for the chip and its confirmation.
         pub(in crate::features::session) fn review(&self) -> &review::Review {
             &self.review
@@ -1154,10 +1243,22 @@ pub(in crate::features::session) mod desktop {
 
         /// One request; the step follows only when the channel really asked.
         fn issue(&mut self, method: DesktopMethod, step: Step) -> Vec<Send> {
-            let Ok(request) = self.session.issue(method) else {
+            // Every channel snapshot (probe and resync) reads the session
+            // sections too once the peer offers them, so a gap re-reads them.
+            let with_sections = method == DesktopMethod::GetSnapshot && self.sections.wanted();
+            let request = if with_sections {
+                self.session
+                    .issue_get_snapshot_sections(&sections::SECTIONS)
+            } else {
+                self.session.issue(method)
+            };
+            let Ok(request) = request else {
                 // One request in flight already, and it owns the step.
                 return Vec::new();
             };
+            if method == DesktopMethod::GetSnapshot {
+                self.snapshot_sections = with_sections;
+            }
             self.generation += 1;
             self.step = step;
             vec![Send {
