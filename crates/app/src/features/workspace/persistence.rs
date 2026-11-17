@@ -75,6 +75,7 @@ impl Workspace {
                                     .filter(|id| self.panes.contains_key(id))
                                     .collect();
                                 Some(SavedTab {
+                                    pinned: tab.pinned,
                                     layout: tab
                                         .tree
                                         .filter_map(&mut |id| self.saved_pane(*id, cx))?,
@@ -102,6 +103,7 @@ impl Workspace {
             current: self.current,
             workspaces,
             sidebar: self.sidebar_visible,
+            tab_layout: self.tab_layout,
         }
     }
 
