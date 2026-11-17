@@ -72,6 +72,7 @@ macro_rules! wire_enum {
         }
     };
 }
+pub(super) use wire_enum;
 
 wire_enum!(NodeKind, 9, [
     Service => "service",
