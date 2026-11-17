@@ -226,15 +226,25 @@ impl Workspace {
                                 .on_action(cx.listener(Self::cancel_tab_rename))
                                 .child(Input::new(&rename.input).appearance(false).xsmall())
                                 .into_any_element(),
-                            None => div()
-                                .min_w_0()
-                                .max_w(rems(180. / 16.))
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .whitespace_nowrap()
-                                .when(active, |d| d.font_weight(FontWeight::MEDIUM))
-                                .child(self.pane_title(tab.focused))
-                                .into_any_element(),
+                            None => {
+                                let title = self.pane_title(tab.focused);
+                                div()
+                                    .id(("tab-title", tab.id))
+                                    .min_w_0()
+                                    .max_w(rems(180. / 16.))
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .whitespace_nowrap()
+                                    .when(active, |d| d.font_weight(FontWeight::MEDIUM))
+                                    .tooltip({
+                                        let title = title.clone();
+                                        move |window, cx| {
+                                            Tooltip::new(title.clone()).build(window, cx)
+                                        }
+                                    })
+                                    .child(title)
+                                    .into_any_element()
+                            }
                         },
                     )
                     .when(count > 1, |d| {

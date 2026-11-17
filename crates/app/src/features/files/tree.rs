@@ -1108,7 +1108,9 @@ impl FileTreeView {
         }
         let click = entry.clone();
         let menu_target = entry.path.clone();
+        let full_name = entry.name.clone();
         shell
+            .tooltip(move |window, cx| Tooltip::new(full_name.clone()).build(window, cx))
             .child(
                 div()
                     .flex_1()
