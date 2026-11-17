@@ -476,7 +476,8 @@ pub(in crate::features::session) mod desktop {
                     },
                     // The permission, supervision, subscription, design and
                     // config methods are served by their own slices; this
-                    // channel only probes and sequences.
+                    // channel only probes and sequences. No slice issues the
+                    // Gentle Shell `main` additions yet.
                     Some(DesktopMethod::GetPermissionMode)
                     | Some(DesktopMethod::SetPermissionMode)
                     | Some(DesktopMethod::ListSubagents)
@@ -488,7 +489,17 @@ pub(in crate::features::session) mod desktop {
                     | Some(DesktopMethod::GetDesignCanvas)
                     | Some(DesktopMethod::GetConfig)
                     | Some(DesktopMethod::SetConfig)
-                    | Some(DesktopMethod::ApplyProfile) => Applied::default(),
+                    | Some(DesktopMethod::ApplyProfile)
+                    | Some(DesktopMethod::GetJobOutput)
+                    | Some(DesktopMethod::GetSubagentThread)
+                    | Some(DesktopMethod::ListSessions)
+                    | Some(DesktopMethod::SwitchSession)
+                    | Some(DesktopMethod::GetChanges)
+                    | Some(DesktopMethod::GetChangeDiff)
+                    | Some(DesktopMethod::GetReviewMode)
+                    | Some(DesktopMethod::SetReviewMode)
+                    | Some(DesktopMethod::GetUsageStats)
+                    | Some(DesktopMethod::GetUpdateStatus) => Applied::default(),
                     None => Applied::default(),
                 },
                 Ok(Some(DesktopRecord::Event(event))) => {

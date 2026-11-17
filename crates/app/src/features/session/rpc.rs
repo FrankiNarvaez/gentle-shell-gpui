@@ -440,6 +440,17 @@ impl SessionView {
                 let applied = self.desktop.config_expire(generation);
                 self.apply_config(applied, cx);
             }
+            // No slice issues these yet, so no request of theirs is pending.
+            DesktopMethod::GetJobOutput
+            | DesktopMethod::GetSubagentThread
+            | DesktopMethod::ListSessions
+            | DesktopMethod::SwitchSession
+            | DesktopMethod::GetChanges
+            | DesktopMethod::GetChangeDiff
+            | DesktopMethod::GetReviewMode
+            | DesktopMethod::SetReviewMode
+            | DesktopMethod::GetUsageStats
+            | DesktopMethod::GetUpdateStatus => {}
         }
         // Whichever request was dropped, the shared slot may be free for the
         // next queued config request.
@@ -485,6 +496,17 @@ impl SessionView {
                 let applied = self.desktop.config_outer(generation, handled);
                 self.apply_config(applied, cx);
             }
+            // No slice issues these yet, so no request of theirs is pending.
+            DesktopMethod::GetJobOutput
+            | DesktopMethod::GetSubagentThread
+            | DesktopMethod::ListSessions
+            | DesktopMethod::SwitchSession
+            | DesktopMethod::GetChanges
+            | DesktopMethod::GetChangeDiff
+            | DesktopMethod::GetReviewMode
+            | DesktopMethod::SetReviewMode
+            | DesktopMethod::GetUsageStats
+            | DesktopMethod::GetUpdateStatus => {}
         }
         self.sync_config(cx);
     }
