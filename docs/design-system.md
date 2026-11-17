@@ -333,6 +333,17 @@ A `gentle_ui` diagram (`features/genui/view.rs`) is a conversation card with a c
 - The selection's details float over the canvas' top-right corner in a `ui::island` (kind/status/group chips, tech in `MONO`, description, Rename / Ask about this / Delete). Rename edits in place with a `field` over the node.
 - The rows around it reuse the card header shape: drawing (spinner), failed (`danger` border, the error in `MONO`), superseded or closed (`faint`, at 0.7), shown expanded (with "Back here"), and the user's sent edits ("You edited …", the summary as bullets and the note).
 
+### Generative UI panels
+
+Tables, forms, checklists, kanban boards and charts (`features/genui/panel.rs` and one file per kind) use the diagram card's frame: the same header (the kind's icon in `info`: `Table`, `ClipboardList`, `ListChecks`, `SquareKanban`, `ChartColumn`; `champagne` title, `v<n>` chip, counts in `MONO`; `ghost().xsmall()` add / undo / expand tools) and footer (hint in `faint`, or `N changes` in `accent`, "Add a note…", Discard, `primary` Send to agent; a form's footer is its Submit). Their height follows the content up to 480 px at 100 % (more scrolls inside, or opens expanded).
+
+- Table: a `field` filter, a `well` header row (sort arrow in `accent`), 32 px rows with hairline `border()` separators, selected rows washed with `accent` at 0.10; typed columns have fixed widths (number and date in `MONO`, status as a `chip` toned by its words, links in `accent`).
+- Form: label 12.5 px `MEDIUM` (`*` in `danger` when required), help in `muted`, controls in `field` frames; choices are pills (`accent` at 0.14 when on), radios use `Circle`/`CircleCheck`; problems in `danger` under each field. Submitted answers show read-only as label/value rows.
+- Checklist: 32 px rows (grip and actions on hover), `CircleCheck` in `success` when done with the label struck through in `faint`; sub-items indented 26 px with a `n/m` count on their parent.
+- Kanban: columns are `well` boxes (236 px), cards `surface` with a `border()` (`accent` when selected or held, `shadow_lg` while dragged), tags as `chip`s toned with `ui::provider_color`, the assignee as initials on `champagne`; a column over its limit gets a `warning` count and outline. Details and the card editor open in a `ui::island`.
+- Chart: painted with `PathBuilder`/`paint_quad`, series in the theme's tones (`info`, `accent`, `success`, `warning`, `champagne`, `petal`, `danger`, `muted`), `border()` grid lines, `faint` `MONO` ticks; the hovered value in a `ui::island` tooltip, the selected one in an island with Ask about this.
+- Motion: only `ui::spring`/ease-out-quint glides and tweens, gated by reduced motion, backdrop motion Still and the window being active.
+
 ### Buttons and footers
 
 | Rule | Example |

@@ -1,8 +1,9 @@
 //! Generative UI: surfaces the agent shows in the conversation with the
 //! `gentle_ui` tool (from the Pi extension the app ships, `gentle-ui.ts`),
 //! drawn natively and edited by the user; the edits go back to the agent
-//! through the extension's `/gentle-ui:event` command. Phase 1 has one
-//! kind, the diagram.
+//! through the extension's `/gentle-ui:event` command. Kinds: the diagram
+//! ([`DiagramView`]) and the panels ([`PanelView`]: table, form, checklist,
+//! kanban, chart).
 //!
 //! Nothing is stored apart from the conversation: every version is a tool
 //! result's or a `gentle-ui.event` message's `details`, so [`GenUi::sync`]
@@ -14,18 +15,117 @@ use gentle_core::genui::{self, Snapshot};
 use gentle_core::transcript::{Item, ToolStatus};
 use gpui_kit::*;
 
+mod chart;
+mod checklist;
 mod diagram;
 mod extension;
+mod form;
+mod kanban;
+mod motion;
 mod paint;
+mod panel;
+mod table;
+#[cfg(test)]
+mod tests;
 mod view;
 
 pub use diagram::{DiagramEvent, DiagramView};
 pub use extension::install;
+pub use panel::PanelView;
+
+/// One surface's live view. Every kind emits [`DiagramEvent`].
+#[derive(Clone)]
+pub enum Surface {
+    Diagram(Entity<DiagramView>),
+    /// Table, form, checklist, kanban and chart.
+    Panel(Entity<PanelView>),
+}
+
+impl Surface {
+    fn new(snapshot: &Snapshot, cx: &mut App) -> Self {
+        if panel::handles(&snapshot.kind) {
+            Surface::Panel(cx.new(|cx| PanelView::new(snapshot, cx)))
+        } else {
+            Surface::Diagram(cx.new(|cx| DiagramView::new(snapshot, cx)))
+        }
+    }
+
+    /// Whether this view draws `kind` (a reloaded transcript may reuse an id).
+    fn fits(&self, kind: &str, cx: &App) -> bool {
+        match self {
+            Surface::Diagram(_) => !panel::handles(kind),
+            Surface::Panel(view) => view.read(cx).kind() == kind,
+        }
+    }
+
+    pub fn entity_id(&self) -> EntityId {
+        match self {
+            Surface::Diagram(view) => view.entity_id(),
+            Surface::Panel(view) => view.entity_id(),
+        }
+    }
+
+    pub fn id(&self, cx: &App) -> String {
+        match self {
+            Surface::Diagram(view) => view.read(cx).id().to_string(),
+            Surface::Panel(view) => view.read(cx).id().to_string(),
+        }
+    }
+
+    fn set_snapshot(&self, snapshot: &Snapshot, reset: bool, cx: &mut App) {
+        match self {
+            Surface::Diagram(view) => {
+                view.update(cx, |view, cx| view.set_snapshot(snapshot, reset, cx))
+            }
+            Surface::Panel(view) => {
+                view.update(cx, |view, cx| view.set_snapshot(snapshot, reset, cx))
+            }
+        }
+    }
+
+    fn set_expanded(&self, expanded: bool, cx: &mut App) {
+        match self {
+            Surface::Diagram(view) => view.update(cx, |view, cx| view.set_expanded(expanded, cx)),
+            Surface::Panel(view) => view.update(cx, |view, cx| view.set_expanded(expanded, cx)),
+        }
+    }
+
+    /// The extension's answer to [`DiagramEvent::Send`].
+    pub fn sent(&self, result: Result<(), String>, cx: &mut App) {
+        match self {
+            Surface::Diagram(view) => view.update(cx, |view, cx| view.sent(result, cx)),
+            Surface::Panel(view) => view.update(cx, |view, cx| view.sent(result, cx)),
+        }
+    }
+
+    /// Ask the conversation to show it back in its card.
+    pub fn collapse(&self, cx: &mut App) {
+        match self {
+            Surface::Diagram(view) => view.update(cx, |_, cx| cx.emit(DiagramEvent::Collapse)),
+            Surface::Panel(view) => view.update(cx, |_, cx| cx.emit(DiagramEvent::Collapse)),
+        }
+    }
+
+    /// The card's height in the conversation (px at 100 %).
+    fn height(&self, cx: &App) -> f32 {
+        match self {
+            Surface::Diagram(_) => view::CARD_HEIGHT,
+            Surface::Panel(view) => view.read(cx).card_height(),
+        }
+    }
+
+    pub fn view(&self) -> AnyView {
+        match self {
+            Surface::Diagram(view) => view.clone().into(),
+            Surface::Panel(view) => view.clone().into(),
+        }
+    }
+}
 
 /// The surfaces of one conversation.
 #[derive(Default)]
 pub struct GenUi {
-    surfaces: HashMap<String, Entity<DiagramView>>,
+    surfaces: HashMap<String, Surface>,
     /// The item each surface's live card is drawn at: its latest
     /// `gentle_ui` tool item. Earlier items of the same id are superseded.
     homes: HashMap<usize, String>,
@@ -33,7 +133,7 @@ pub struct GenUi {
     closed: HashSet<usize>,
     expanded: Option<String>,
     /// Created since the conversation last subscribed to them.
-    fresh: Vec<Entity<DiagramView>>,
+    fresh: Vec<Surface>,
     subscriptions: HashMap<EntityId, Subscription>,
 }
 
@@ -51,7 +151,7 @@ fn tool_title(args: &serde_json::Value, snapshot: Option<&Snapshot>) -> String {
         .map(|s| s.title.as_str())
         .or(args["title"].as_str())
         .filter(|t| !t.is_empty())
-        .unwrap_or("Diagram")
+        .unwrap_or_else(|| panel::default_title(args["kind"].as_str().unwrap_or_default()))
         .to_string()
 }
 
@@ -114,9 +214,14 @@ impl GenUi {
                 continue;
             }
             match self.surfaces.get(&id) {
-                Some(view) => view.update(cx, |view, cx| view.set_snapshot(&snapshot, reset, cx)),
-                None => {
-                    let view = cx.new(|cx| DiagramView::new(&snapshot, cx));
+                Some(view) if view.fits(&snapshot.kind, cx) => {
+                    view.set_snapshot(&snapshot, reset, cx)
+                }
+                _ => {
+                    if let Some(old) = self.surfaces.remove(&id) {
+                        self.subscriptions.remove(&old.entity_id());
+                    }
+                    let view = Surface::new(&snapshot, cx);
                     self.fresh.push(view.clone());
                     self.surfaces.insert(id, view);
                 }
@@ -133,7 +238,7 @@ impl GenUi {
 
     /// Surfaces created since the last call, for the conversation to
     /// subscribe to (and hand back with [`Self::keep`]).
-    pub fn take_fresh(&mut self) -> Vec<Entity<DiagramView>> {
+    pub fn take_fresh(&mut self) -> Vec<Surface> {
         std::mem::take(&mut self.fresh)
     }
 
@@ -145,18 +250,18 @@ impl GenUi {
     pub fn set_expanded(&mut self, id: Option<String>, cx: &mut App) {
         for (surface, view) in &self.surfaces {
             let on = id.as_ref() == Some(surface);
-            view.update(cx, |view, cx| view.set_expanded(on, cx));
+            view.set_expanded(on, cx);
         }
         self.expanded = id.filter(|id| self.surfaces.contains_key(id));
     }
 
-    pub fn expanded(&self) -> Option<Entity<DiagramView>> {
+    pub fn expanded(&self) -> Option<Surface> {
         self.surfaces.get(self.expanded.as_ref()?).cloned()
     }
 
     /// What a `gentle_ui` tool item shows: the live surface, or a row for
     /// a version still arriving, failed, closed or superseded.
-    pub fn render_tool(&self, ix: usize, item: &Item) -> AnyElement {
+    pub fn render_tool(&self, ix: usize, item: &Item, cx: &App) -> AnyElement {
         let Item::Tool {
             args,
             status,
@@ -187,8 +292,8 @@ impl GenUi {
             }
             Some((_, view)) => div()
                 .w_full()
-                .h(rems(view::CARD_HEIGHT / 16.))
-                .child(view.clone().cached(StyleRefinement::default().size_full()))
+                .h(rems(view.height(cx) / 16.))
+                .child(view.view().cached(StyleRefinement::default().size_full()))
                 .into_any_element(),
             None => view::superseded_row(&title, snapshot.map_or(0, |s| s.version), false),
         }

@@ -652,7 +652,7 @@ impl SessionView {
                 }
             }
             Item::Tool { name, .. } if name == gentle_core::genui::TOOL => {
-                self.genui.render_tool(ix, item)
+                self.genui.render_tool(ix, item, cx)
             }
             Item::Custom { kind, details, .. } if kind == gentle_core::genui::EVENT_MESSAGE => {
                 GenUi::render_event(details)
@@ -1443,7 +1443,11 @@ impl Render for SessionView {
                         .map(|d| if narrow { d.px_3() } else { d.px_6() })
                         .pt_4()
                         .pb_2()
-                        .child(surface.cached(StyleRefinement::default().size_full())),
+                        .child(
+                            surface
+                                .view()
+                                .cached(StyleRefinement::default().size_full()),
+                        ),
                 ),
                 None => main.child(
                     div()

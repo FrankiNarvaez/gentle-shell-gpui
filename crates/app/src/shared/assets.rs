@@ -115,7 +115,18 @@ gpui_kit::assets::icon_assets!(
         ZoomIn,
         ZoomOut,
         Scan,
-        Send
+        Send,
+        // Generative UI panels: tables, forms, checklists, kanban, charts.
+        Table,
+        ClipboardList,
+        ListChecks,
+        SquareKanban,
+        ChartColumn,
+        GripVertical,
+        Circle,
+        ListIndentIncrease,
+        ListIndentDecrease,
+        ArrowUpDown
     ]
 );
 

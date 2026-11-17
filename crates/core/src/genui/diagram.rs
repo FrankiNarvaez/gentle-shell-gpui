@@ -409,22 +409,22 @@ fn first_free_edge_id(from: &str, to: &str, taken: impl Fn(&str) -> bool) -> Str
 }
 
 #[derive(Default)]
-struct Errors(Vec<String>);
+pub(super) struct Errors(pub(super) Vec<String>);
 
 impl Errors {
-    fn push(&mut self, error: String) {
+    pub(super) fn push(&mut self, error: String) {
         if self.0.len() < MAX_ERRORS {
             self.0.push(error);
         }
     }
 }
 
-fn array(value: Option<&Value>) -> &[Value] {
+pub(super) fn array(value: Option<&Value>) -> &[Value] {
     value.and_then(Value::as_array).map_or(&[], Vec::as_slice)
 }
 
 /// A non-empty string or a number (models sometimes number their nodes), cut to MAX_ID.
-fn id_of(value: &Value) -> Option<String> {
+pub(super) fn id_of(value: &Value) -> Option<String> {
     let id = match value {
         Value::String(s) => s.trim().to_string(),
         Value::Number(n) => n.to_string(),
@@ -437,7 +437,7 @@ fn id_of(value: &Value) -> Option<String> {
 }
 
 /// Trimmed non-empty text, cut to `max` chars with a trailing "…".
-fn text(value: Option<&Value>, max: usize) -> Option<String> {
+pub(super) fn text(value: Option<&Value>, max: usize) -> Option<String> {
     let s = value?.as_str()?.trim();
     (!s.is_empty()).then(|| truncate(s, max))
 }

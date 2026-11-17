@@ -46,6 +46,12 @@ resvg = { version = "0.46", default-features = false, features = ["text", "raste
 # A theme image's size without decoding it, for the camera over it.
 imagesize = "0.14"
 
+# Interaction tests drive real views in a headless window (GPUI's
+# `TestAppContext`; gpui-kit's own `test-support` pulls GPUI Fast's pinned
+# dependencies into the lockfile).
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
+
 # The X11 window icon (GPUI's `WindowOptions::icon`), and the in-app browser
 # for the Gentle Design canvas: WebKitGTK as a child of the X11 window (GTK's
 # loop is pumped while it is open; Wayland has no child windows).
