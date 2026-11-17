@@ -22,17 +22,68 @@ const STATUSES = ["planned", "existing", "deprecated", "risk"];
 const EDGE_STYLES = ["sync", "async", "data", "dependency"];
 const MAX = { nodes: 200, edges: 400, groups: 50, id: 64, label: 80, text: 1000, errors: 10, listed: 60 };
 const SLUG = /^[a-z0-9][a-z0-9-_]{0,63}$/;
+// The session's cwd: absolute code refs inside it are stored relative to it.
+let workspaceRoot = "";
 
 type Json = Record<string, unknown>;
 interface Group { id: string; label: string; description?: string }
 interface Node {
 	id: string; label: string; kind: string; group?: string; description?: string;
-	tech?: string; status?: string; x?: number; y?: number;
+	tech?: string; status?: string; x?: number; y?: number; ref?: Json;
 }
 interface Edge { id: string; from: string; to: string; label?: string; style: string }
 interface Spec { direction: "LR" | "TB"; groups: Group[]; nodes: Node[]; edges: Edge[] }
 interface Surface { id: string; version: number; kind: string; title: string; spec: Json }
 type Details = Surface | { id: string; version: number; kind: string; title: string; spec: null; closed: true };
+
+/** A code reference `{path, line?, endLine?}` (or `"path:line[-end]"`) for an
+ * item that corresponds to code: `/` separators, `.`/`..` folded, absolute
+ * paths inside the workspace made relative. A path leaving the workspace
+ * is a hard error (reported through `fail`, like the app's check). */
+function normalizeRef(value: unknown, where: string, fail: (message: string) => unknown): Json | undefined {
+	if (value === undefined || value === null) return undefined;
+	let path: unknown;
+	let line: unknown;
+	let endLine: unknown;
+	if (typeof value === "string") {
+		const match = /^(.+?):([1-9]\d*)(?:-(\d+))?$/.exec(value.trim());
+		[path, line, endLine] = match ? [match[1], Number(match[2]), match[3] === undefined ? undefined : Number(match[3])] : [value, undefined, undefined];
+	} else if (isObject(value)) {
+		[path, line, endLine] = [value.path, value.line, value.endLine ?? value.end_line];
+	} else {
+		fail(`${where}: ref must be an object {path, line?, endLine?} or "path:line"`);
+		return undefined;
+	}
+	if (typeof path !== "string" || path.trim() === "") {
+		fail(`${where}: ref needs a path`);
+		return undefined;
+	}
+	let text = path.trim().replace(/\\/g, "/").replace(/^file:\/\//, "");
+	const root = workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "");
+	if (root !== "" && text.startsWith(`${root}/`)) text = text.slice(root.length + 1);
+	const drive = /^[A-Za-z]:\//.exec(text)?.[0];
+	const absolute = text.startsWith("/") || drive !== undefined;
+	if (absolute && root !== "") {
+		fail(`${where}: ref path "${cut(text, 80)}" is outside the workspace`);
+		return undefined;
+	}
+	const prefix = text.startsWith("/") ? "/" : (drive ?? "");
+	const parts: string[] = [];
+	for (const part of text.slice(prefix.length).split("/")) {
+		if (part === "" || part === ".") continue;
+		if (part !== "..") parts.push(part);
+		else if (parts.pop() === undefined && !absolute) {
+			fail(`${where}: ref path "${cut(text, 80)}" escapes the workspace`);
+			return undefined;
+		}
+	}
+	if (parts.length === 0) {
+		fail(`${where}: ref path "${cut(text, 80)}" names no file`);
+		return undefined;
+	}
+	const [first, last] = [line, endLine].map((n) => (typeof n === "number" && Number.isInteger(n) && n >= 1 ? n : undefined));
+	return { path: prefix + parts.join("/"), line: first, endLine: first !== undefined && last !== undefined && last > first ? last : undefined };
+}
 
 const isObject = (value: unknown): value is Json =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
@@ -107,6 +158,7 @@ function normalize(raw: unknown): Spec {
 			status: STATUSES.includes(status) ? status : undefined,
 			x: placed ? Math.round(item.x as number) : undefined,
 			y: placed ? Math.round(item.y as number) : undefined,
+			ref: normalizeRef(item.ref, `node "${id}"`, fail),
 		});
 	});
 
@@ -345,7 +397,7 @@ function normalizeTable(raw: unknown): Json {
 			const value = cleanCell(source);
 			if (value !== undefined && value !== null) cells[column.key as string] = value;
 		});
-		rows.push({ id, cells });
+		rows.push({ id, cells, ref: normalizeRef(r.ref, `row "${id}"`, fail) });
 	});
 	let sort: Json | undefined;
 	if (raw.sort !== undefined && raw.sort !== null) {
@@ -554,7 +606,10 @@ function normalizeChecklist(raw: unknown): Json {
 		const id = given ?? slugOf(text, "item", (s) => seen.has(s));
 		if (seen.has(id)) return fail(`duplicate item id "${id}"`);
 		seen.add(id);
-		return { id, label: text, done: isObject(item) && item.done === true, note: isObject(item) ? optionalText(item.note, MAX.text) : undefined };
+		return {
+			id, label: text, done: isObject(item) && item.done === true, note: isObject(item) ? optionalText(item.note, MAX.text) : undefined,
+			ref: normalizeRef(isObject(item) ? item.ref : undefined, `item "${id}"`, fail),
+		};
 	};
 	const items: Json[] = [];
 	for (const top of raw.items.slice(0, LIMITS.items)) {
@@ -653,7 +708,7 @@ function normalizeKanban(raw: unknown): Json {
 		const tags = [...new Set(list(c.tags).flatMap((t) => (typeof t === "string" && t.trim() !== "" ? [cut(t.trim(), LIMITS.tag)] : [])))].slice(0, LIMITS.tags);
 		cards.push({
 			id, title, column, description: optionalText(c.description, MAX.text),
-			tags: tags.length > 0 ? tags : undefined, assignee: optionalText(c.assignee, MAX.label),
+			tags: tags.length > 0 ? tags : undefined, assignee: optionalText(c.assignee, MAX.label), ref: normalizeRef(c.ref, `card "${id}"`, fail),
 		});
 	});
 	check();
@@ -913,12 +968,13 @@ const Params = Type.Object({
 	spec: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
 		description:
-			"Full spec for the kind. diagram: { direction?: LR|TB, groups?: [{id,label,description?}], nodes: [{id,label,kind?,group?,description?,tech?,status?}], edges?: [{id?,from,to,label?,style?}] }; " +
+			"Full spec for the kind. diagram: { direction?: LR|TB, groups?: [{id,label,description?}], nodes: [{id,label,kind?,group?,description?,tech?,status?,ref?}], edges?: [{id?,from,to,label?,style?}] }; " +
 			`node kind: ${NODE_KINDS.join("|")}, status: ${STATUSES.join("|")}, edge style: ${EDGE_STYLES.join("|")}. ` +
-			`table: { columns: [{key,label?,type?: ${COLUMN_TYPES.join("|")},align?}], rows: [{id,cells:{key:value}}], sort?: {column,direction:asc|desc}, editable?, selectable?, selection?: [row ids] }. ` +
+			`table: { columns: [{key,label?,type?: ${COLUMN_TYPES.join("|")},align?}], rows: [{id,cells:{key:value},ref?}], sort?: {column,direction:asc|desc}, editable?, selectable?, selection?: [row ids] }. ` +
 			`form: { fields: [{id,type: ${FIELD_TYPES.join("|")},label,help?,placeholder?,required?,options?: [value|{value,label}],min?,max?,step?,default?}], description?, submitLabel?, values? }. ` +
-			"checklist: { items: [{id,label,done?,note?,items?: [sub-items, one level]}] }. " +
-			"kanban: { columns: [{id,label,limit?}], cards: [{id,title,column,description?,tags?,assignee?}] }. " +
+			"checklist: { items: [{id,label,done?,note?,ref?,items?: [sub-items, one level]}] }. " +
+			"kanban: { columns: [{id,label,limit?}], cards: [{id,title,column,description?,tags?,assignee?,ref?}] }. " +
+			"ref (any item that is code): { path: repo-relative, line?, endLine? } or \"path:line\". " +
 			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked? }. ` +
 			"html: { html: self-contained page ≤512 KiB, height?: px, data?: object (the page's tool input/result), csp?: { connectDomains?, resourceDomains?, frameDomains?, baseUriDomains? } (origins; default no network) }.",
 	})),
@@ -960,8 +1016,14 @@ export default function gentleUi(pi: ExtensionAPI) {
 			}
 		}
 	};
-	pi.on("session_start", async (_event, ctx) => reconstruct(ctx));
-	pi.on("session_tree", async (_event, ctx) => reconstruct(ctx));
+	pi.on("session_start", async (_event, ctx) => {
+		workspaceRoot = ctx.cwd;
+		reconstruct(ctx);
+	});
+	pi.on("session_tree", async (_event, ctx) => {
+		workspaceRoot = ctx.cwd;
+		reconstruct(ctx);
+	});
 	// ui/update-model-context: the page's latest context reaches the model at
 	// the next turn, once (MCP Apps: deferred, last update wins).
 	pi.on("before_agent_start", async () => {
@@ -999,6 +1061,8 @@ export default function gentleUi(pi: ExtensionAPI) {
 			"Use gentle_ui when the user should see or act on structured content, picking the kind by what they will do: diagram for architecture, data flow and dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs they check off or reorder; kanban for work items across stages; chart for numbers (read-only). Don't use gentle_ui for an answer that fits in a short reply.",
 			"The user is in the Gentle Shell desktop app, where a gentle_ui diagram appears right in the conversation and they can move, connect and correct it. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
 			"To change a UI already shown, call gentle_ui with action update and a small patch instead of a new show; ids are stable slugs (api, orders-db) reused across updates.",
+			`Whenever a gentle_ui item corresponds to code (a diagram node for a module, a table row for a function or test, a checklist item or kanban card for a change), attach ref: { path (repo-relative), line?, endLine? } so the user can open it, e.g. {"id":"auth","label":"Auth service","ref":{"path":"src/auth/mod.rs","line":42}}; paths outside the workspace are rejected.`,
+			`The user may insert a saved UI (a "${EVENT_MESSAGE}" message saying so) or ask you to add one to the project's docs; treat inserted UIs like your own (update them by id).`,
 			"In gentle_ui specs omit x/y and let auto-layout place nodes; keep labels short and put details in description or tech.",
 			`The user's edits to a gentle_ui UI arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them.`,
 			"A gentle_ui form's answers arrive once, when the user submits (op submit); wait for them instead of guessing. To ask again or change the questions, update the form: an update reopens it.",
@@ -1023,7 +1087,8 @@ export default function gentleUi(pi: ExtensionAPI) {
 			}
 			return parsed as never;
 		},
-		async execute(_toolCallId, params) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+			workspaceRoot = ctx.cwd;
 			if (params.action === "close") {
 				const surface = existing(params.id);
 				surfaces.delete(surface.id);
@@ -1086,6 +1151,37 @@ export default function gentleUi(pi: ExtensionAPI) {
 				ctx.ui.setWidget(OUTCOME_WIDGET, [JSON.stringify({ id, version: baseVersion ?? 0, ...outcome })]);
 				ctx.ui.setWidget(OUTCOME_WIDGET, undefined);
 			};
+			workspaceRoot = ctx.cwd;
+			// A saved template the user inserts: a new surface, as if shown.
+			if (event.op === "insert") {
+				const kind = typeof event.kind === "string" ? event.kind : "";
+				const def = KINDS[kind];
+				let spec: Json;
+				try {
+					if (!def) throw new Error(`unknown kind "${kind}"`);
+					spec = def.normalize(event.spec);
+				} catch (error) {
+					answer({ ok: false, error: (error as Error).message });
+					return;
+				}
+				const title = (typeof event.title === "string" && event.title.trim()) || def.title;
+				const surface: Surface = { id: freshId(id || undefined), version: 1, kind, title, spec };
+				surfaces.set(surface.id, surface);
+				seen.add(surface.id);
+				const template = typeof event.template === "string" && event.template.trim() !== "" ? event.template.trim() : title;
+				const content = [
+					`The user inserted the ${def.noun} "${title}" (${surface.id}, v1) from their saved template "${template}"; it is shown in the conversation and is yours to update like any gentle_ui surface.`,
+					def.summary(surface),
+				].join("\n");
+				// Shown at once; the agent reads it with the next prompt (or now, mid-turn).
+				pi.sendMessage(
+					{ customType: EVENT_MESSAGE, display: true, content, details: { ...surface, inserted: true, template, changes: [], summary: [] } },
+					ctx.isIdle() ? { triggerTurn: false } : { deliverAs: "steer" },
+				);
+				ctx.ui.setWidget(OUTCOME_WIDGET, [JSON.stringify({ id: surface.id, version: 0, ok: true, current: 1 })]);
+				ctx.ui.setWidget(OUTCOME_WIDGET, undefined);
+				return;
+			}
 			const current = surfaces.get(id);
 			if (!current) {
 				const open = [...surfaces.keys()].join(", ") || "none";
@@ -1093,6 +1189,23 @@ export default function gentleUi(pi: ExtensionAPI) {
 				return;
 			}
 			const def = KINDS[current.kind] ?? KINDS.diagram;
+			// "Ask agent to add to docs": the surface as the app exported it.
+			if (event.op === "docs") {
+				const format = typeof event.format === "string" ? event.format : "Markdown";
+				const fence = typeof event.fence === "string" ? event.fence : "";
+				const text = typeof event.text === "string" ? event.text : undefined;
+				const content = [
+					`The user asks you to add the ${def.noun} "${current.title}" (${current.id}, v${current.version}) to the project's documentation, as ${format}: ` +
+						"put it where it belongs under docs/ (extend a fitting file or create one), with a short introduction, and say where it went.",
+					text === undefined ? def.summary(current) : fence === "" ? text : `\`\`\`${fence}\n${text.replace(/\n$/, "")}\n\`\`\``,
+				].join("\n");
+				pi.sendMessage(
+					{ customType: EVENT_MESSAGE, display: true, content, details: { request: "docs", surface: current.id, kind: current.kind, title: current.title, version: current.version, format } },
+					ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "steer" },
+				);
+				answer({ ok: true, current: current.version });
+				return;
+			}
 			const changes = Array.isArray(event.changes) ? event.changes : [];
 			const html = current.kind === "html";
 			if (html) {

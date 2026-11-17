@@ -111,6 +111,7 @@ pub struct HtmlView {
     /// The space the page may take, written while painting.
     area: Rc<Cell<Bounds<Pixels>>>,
     _ipc: Task<()>,
+    pub(super) env: super::share::Env,
 }
 
 impl EventEmitter<DiagramEvent> for HtmlView {}
@@ -157,6 +158,7 @@ impl HtmlView {
             content_height: None,
             area: Rc::default(),
             _ipc: receiver,
+            env: Default::default(),
         };
         view.read_spec(&snapshot.spec);
         view
@@ -164,6 +166,17 @@ impl HtmlView {
 
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// The page as the agent sent it, for the Export menu.
+    fn source(&self) -> super::share::Source {
+        super::share::Source {
+            id: self.id.clone(),
+            kind: "html".into(),
+            title: self.display_title().to_string(),
+            spec: self.spec_value.clone(),
+            root: self.env.root.clone(),
+        }
     }
 
     fn read_spec(&mut self, value: &Value) {
@@ -685,7 +698,7 @@ impl HtmlView {
         }
     }
 
-    fn display_title(&self) -> &str {
+    pub(super) fn display_title(&self) -> &str {
         if self.title.is_empty() {
             "HTML"
         } else {
@@ -836,22 +849,29 @@ impl HtmlView {
                     cx.emit(DiagramEvent::Expand);
                 }
             }))
-            .child(h_flex().gap_2().child(self.title_row().flex_1()).when(
-                self.spec.is_some(),
-                |row| {
-                    row.child(
-                        Button::new("genui-html-open")
-                            .primary()
-                            .xsmall()
-                            .icon(Icon::new(IconName::Maximize2))
-                            .label("Open")
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.stop_propagation();
-                                cx.emit(DiagramEvent::Expand);
-                            })),
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(self.title_row().flex_1())
+                    .child(
+                        div()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(super::share::tools(&self.env, "html", Self::source, cx)),
                     )
-                },
-            ))
+                    .when(self.spec.is_some(), |row| {
+                        row.child(
+                            Button::new("genui-html-open")
+                                .primary()
+                                .xsmall()
+                                .icon(Icon::new(IconName::Maximize2))
+                                .label("Open")
+                                .on_click(cx.listener(|_, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.emit(DiagramEvent::Expand);
+                                })),
+                        )
+                    }),
+            )
             .child(
                 div()
                     .min_w_0()
@@ -869,6 +889,7 @@ impl HtmlView {
             .gap_2()
             .min_w_0()
             .child(self.title_row().flex_1())
+            .child(super::share::tools(&self.env, "html", Self::source, cx))
             .child(
                 Button::new("genui-html-collapse")
                     .ghost()

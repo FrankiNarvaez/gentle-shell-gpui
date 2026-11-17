@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 use super::diagram::{Errors, MAX_TEXT, array, id_of, text, truncate};
 use super::edits::{Editable, fresh_id, list_names, plural};
+use super::refs::CodeRef;
 
 pub const MAX_ITEMS: usize = 200;
 pub const MAX_ITEM_LABEL: usize = 200;
@@ -15,6 +16,8 @@ pub struct Item {
     pub label: String,
     pub done: bool,
     pub note: Option<String>,
+    /// The code this item is about (`ref`).
+    pub code_ref: Option<CodeRef>,
     /// Sub-items (only on top-level items: one level).
     pub items: Vec<Item>,
 }
@@ -26,6 +29,7 @@ impl Item {
             label: label.into(),
             done: false,
             note: None,
+            code_ref: None,
             items: Vec::new(),
         }
     }
@@ -37,6 +41,9 @@ impl Item {
         map.insert("done".into(), json!(self.done));
         if let Some(note) = &self.note {
             map.insert("note".into(), json!(note));
+        }
+        if let Some(code_ref) = &self.code_ref {
+            map.insert("ref".into(), code_ref.to_value());
         }
         if !self.items.is_empty() {
             map.insert(
@@ -107,11 +114,16 @@ impl Checklist {
                 return None;
             }
             seen.push(id.clone());
+            let code_ref = CodeRef::field(raw).unwrap_or_else(|error| {
+                errors.push(format!("item \"{id}\": ref {error}"));
+                None
+            });
             Some(Item {
                 id,
                 label,
                 done: raw.get("done").and_then(Value::as_bool) == Some(true),
                 note: text(raw.get("note"), MAX_TEXT),
+                code_ref,
                 items: Vec::new(),
             })
         };
@@ -701,5 +713,28 @@ mod tests {
         .unwrap();
         assert_eq!(list.ids(None), vec!["ui", "plan", "ship-it"]);
         round_trip(&base, &list);
+    }
+
+    #[test]
+    fn items_keep_their_code_ref() {
+        let list = Checklist::parse(&json!({"items": [
+            {"id": "a", "label": "A", "ref": "src/a.rs:3"},
+            {"id": "b", "label": "B", "items": [{"id": "c", "label": "C", "ref": {"path": "src/c.rs"}}]}
+        ]}))
+        .unwrap();
+        assert_eq!(
+            list.item("a").unwrap().code_ref.as_ref().unwrap().line,
+            Some(3)
+        );
+        assert_eq!(
+            list.item("c").unwrap().code_ref.as_ref().unwrap().path,
+            "src/c.rs"
+        );
+        assert_eq!(Checklist::parse(&list.to_value()).unwrap(), list);
+        assert_eq!(
+            Checklist::parse(&json!({"items": [{"id": "a", "label": "A", "ref": "../x"}]}))
+                .unwrap_err(),
+            ["item \"a\": ref path \"../x\" escapes the workspace"]
+        );
     }
 }

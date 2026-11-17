@@ -22,6 +22,10 @@ pub(super) const BUILTINS: &[(&str, &str)] = &[
         "web",
         "Open a URL in the in-app browser: /web http://localhost:3000",
     ),
+    (
+        "ui-template",
+        "Insert UI template… (saved generative UI): /ui-template [name]",
+    ),
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +40,8 @@ pub(super) enum Builtin {
     Reload,
     /// `/web <url>`; opens the in-app browser on any http(s) page.
     Web(String),
+    /// `/ui-template [name]`; no name opens the templates manager.
+    UiTemplate(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +70,7 @@ pub(super) fn parse_builtin(text: &str) -> Option<Builtin> {
         "export" => Builtin::Export(args_opt),
         "reload" => Builtin::Reload,
         "web" => Builtin::Web(args.to_string()),
+        "ui-template" => Builtin::UiTemplate(args.to_string()),
         _ => return None,
     })
 }

@@ -512,6 +512,33 @@ impl Workspace {
         }
     }
 
+    /// [`Self::open_file`], then put its cursor at `line` (1-based).
+    pub fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_file(path.clone(), window, cx);
+        let Some(line) = line else { return };
+        let view = self
+            .panes
+            .iter()
+            .filter(|(_, pane)| pane.path.as_ref() == Some(&path))
+            .max_by_key(|(id, _)| **id)
+            .and_then(|(_, pane)| {
+                pane.item
+                    .view
+                    .clone()
+                    .downcast::<crate::features::files::FileView>()
+                    .ok()
+            });
+        if let Some(view) = view {
+            view.update(cx, |view, cx| view.go_to_line(line, window, cx));
+        }
+    }
+
     /// Show `path`'s changes against HEAD, placed like [`Self::open_file`].
     pub fn open_diff(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let (Some(factory), Some(_)) = (PaneFactories::get(cx).diff, self.focused_pane()) else {

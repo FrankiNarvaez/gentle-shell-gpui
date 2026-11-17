@@ -18,7 +18,6 @@ use gpui_kit::*;
 use super::attachments;
 use super::state::BackendStatus;
 use super::{CONTEXT, SessionView};
-use crate::features::genui::GenUi;
 use crate::shared::ui;
 use gentle_core::tools;
 use gentle_core::transcript::{Block, Item, NoticeLevel, ToolStatus};
@@ -144,8 +143,11 @@ impl SessionView {
             self.track_live(from);
             self.list.prepare(&self.transcript.items, from);
             self.request_images(from, dirty.reset, cx);
+            self.genui.set_root(&self.cwd, cx);
             self.genui
                 .sync(&self.transcript.items, from, dirty.reset, cx);
+            let session = self.session_file();
+            self.genui.restore_pins(session.as_deref(), cx);
         }
         self.sync_live(cx);
         let tail = self.tail_rows();
@@ -655,7 +657,7 @@ impl SessionView {
                 self.genui.render_tool(ix, item, cx)
             }
             Item::Custom { kind, details, .. } if kind == gentle_core::genui::EVENT_MESSAGE => {
-                GenUi::render_event(details)
+                self.genui.render_event(ix, details, cx)
             }
             Item::Tool { .. } | Item::Shell { .. } => {
                 let computed;
@@ -1486,7 +1488,8 @@ impl Render for SessionView {
             )
             .when_some(self.render_todo_island(rem_size, cx), |this, island| {
                 this.child(island)
-            });
+            })
+            .children(self.genui.render_templates(cx));
 
         h_flex()
             .key_context(CONTEXT)
@@ -1500,6 +1503,7 @@ impl Render for SessionView {
             .size_full()
             .child(main)
             .children(self.render_agents_panel(cx))
+            .children(self.genui.render_pinned(cx))
     }
 }
 

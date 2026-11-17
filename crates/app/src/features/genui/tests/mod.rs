@@ -8,6 +8,7 @@ use serde_json::Value;
 use super::diagram::DiagramEvent;
 
 mod diagram;
+mod links;
 mod panels;
 
 /// What a surface asked the conversation for.
@@ -18,6 +19,11 @@ enum Seen {
     Expand,
     Collapse,
     OpenWeb(String),
+    Pin(bool),
+    Request(String),
+    /// The ref as `path:line`.
+    OpenRef(String),
+    Notice(Result<String, String>),
 }
 
 impl From<&DiagramEvent> for Seen {
@@ -28,6 +34,10 @@ impl From<&DiagramEvent> for Seen {
             DiagramEvent::Expand => Seen::Expand,
             DiagramEvent::Collapse => Seen::Collapse,
             DiagramEvent::OpenWeb(url) => Seen::OpenWeb(url.clone()),
+            DiagramEvent::Pin(on) => Seen::Pin(*on),
+            DiagramEvent::Request(command) => Seen::Request(command.clone()),
+            DiagramEvent::OpenRef(code_ref) => Seen::OpenRef(code_ref.text()),
+            DiagramEvent::Notice(result) => Seen::Notice(result.clone()),
         }
     }
 }

@@ -63,6 +63,12 @@ pub enum SessionEvent {
     /// A tool printed a local web app's URL: the window keeps it in its
     /// instance tray until the user looks.
     AgentWeb(String),
+    /// Show this file in the file viewer, at this line (a code reference
+    /// in a generative UI surface).
+    OpenFile {
+        path: std::path::PathBuf,
+        line: Option<u32>,
+    },
 }
 
 /// What the window reads from a tab, to emit [`SessionEvent::ChromeChanged`]
