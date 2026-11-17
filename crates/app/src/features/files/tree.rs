@@ -108,9 +108,7 @@ pub fn init(cx: &mut App) {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileTreeEvent {
-    /// Show a file in the quick-look modal over the panes (a single click).
-    Peek(PathBuf),
-    /// Show a file in the tab's preview pane.
+    /// Show a file in the tab's preview pane (a single or double click).
     Open(PathBuf),
     /// Show a file in a new split beside the focused pane.
     OpenToSide(PathBuf),
@@ -570,8 +568,8 @@ impl FileTreeView {
         cx.notify();
     }
 
-    /// A click on a row: folders toggle; a file shows in the quick-look modal,
-    /// and the second click of a double click moves it into a pane.
+    /// A click on a row: folders toggle; a file opens in the tab's preview
+    /// pane. A double click's second press needs no second open.
     fn click_entry(
         &mut self,
         entry: &Entry,
@@ -581,12 +579,10 @@ impl FileTreeView {
     ) {
         self.selected = Some(entry.path.clone());
         self.focus.focus(window, cx);
-        if entry.is_dir {
-            self.toggle_dir(&entry.path, cx);
-        } else if clicks >= 2 {
-            cx.emit(FileTreeEvent::Open(entry.path.clone()));
-        } else {
-            cx.emit(FileTreeEvent::Peek(entry.path.clone()));
+        match click_outcome(entry.is_dir, clicks) {
+            ClickOutcome::Toggle => self.toggle_dir(&entry.path, cx),
+            ClickOutcome::Open => cx.emit(FileTreeEvent::Open(entry.path.clone())),
+            ClickOutcome::Nothing => {}
         }
         cx.notify();
     }
@@ -1589,4 +1585,43 @@ fn show_toplevel(root: &Path) -> Option<PathBuf> {
         .ok()?;
     let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (out.status.success() && !top.is_empty()).then(|| PathBuf::from(top))
+}
+
+/// What a click on a tree row does, by click count.
+enum ClickOutcome {
+    /// Folders toggle open and closed.
+    Toggle,
+    /// A file opens in the tab's preview pane.
+    Open,
+    /// The second press of a double click opens nothing more.
+    Nothing,
+}
+
+fn click_outcome(is_dir: bool, clicks: usize) -> ClickOutcome {
+    if is_dir {
+        ClickOutcome::Toggle
+    } else if clicks == 1 {
+        ClickOutcome::Open
+    } else {
+        ClickOutcome::Nothing
+    }
+}
+
+#[cfg(test)]
+mod click_tests {
+    use super::{ClickOutcome, click_outcome};
+
+    /// A single click opens a file; a folder toggles instead.
+    #[test]
+    fn a_single_click_opens_a_file_and_a_folder_toggles() {
+        assert!(matches!(click_outcome(false, 1), ClickOutcome::Open));
+        assert!(matches!(click_outcome(true, 1), ClickOutcome::Toggle));
+    }
+
+    /// The second press of a double click opens nothing more.
+    #[test]
+    fn the_second_press_of_a_double_click_opens_nothing_more() {
+        assert!(matches!(click_outcome(false, 2), ClickOutcome::Nothing));
+        assert!(matches!(click_outcome(true, 2), ClickOutcome::Toggle));
+    }
 }

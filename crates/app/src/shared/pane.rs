@@ -17,6 +17,14 @@ pub struct ShowInPane {
     pub path: PathBuf,
 }
 
+/// A file view asks to be closed from its header's ✕. `pane` is the pane
+/// item's view; the workspace closes the pane showing it.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = gentle, no_json)]
+pub struct CloseViewer {
+    pub pane: EntityId,
+}
+
 /// What a pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
