@@ -92,6 +92,9 @@ pub struct SessionView {
     /// Generative UI surfaces the agent showed (`gentle_ui`), rebuilt
     /// from the transcript.
     genui: crate::features::genui::GenUi,
+    /// This conversation is on screen with nothing over the window (the
+    /// workspace says so): its web views may show.
+    web_shown: bool,
     composer: Entity<TextareaState>,
     /// The composer has the keyboard: its border takes the accent.
     composer_focused: bool,
@@ -258,6 +261,7 @@ impl SessionView {
             markdown: HashMap::new(),
             expanded: HashSet::new(),
             genui: Default::default(),
+            web_shown: false,
             composer,
             composer_focused: false,
             composer_pulse: None,
@@ -325,6 +329,16 @@ impl SessionView {
     /// A dialog (a question, a confirmation) waits for an answer.
     pub fn needs_you(&self) -> bool {
         !self.extension.dialogs.is_empty()
+    }
+
+    /// Whether this conversation is on screen with nothing over the window;
+    /// an expanded HTML surface's web view hides otherwise.
+    pub fn set_web_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.web_shown != shown {
+            self.web_shown = shown;
+            self.genui.set_obscured(!shown, cx);
+            cx.notify();
+        }
     }
 
     pub fn composer(&self) -> Entity<TextareaState> {

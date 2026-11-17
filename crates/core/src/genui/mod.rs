@@ -2,12 +2,14 @@
 //! `gentle_ui` tool (phase 1: architecture diagrams) and the user's edits
 //! sent back to it as `gentle-ui:event` commands.
 
+pub mod apps;
 pub mod changes;
 pub mod chart;
 pub mod checklist;
 pub mod diagram;
 pub mod edits;
 pub mod form;
+pub mod html;
 pub mod kanban;
 pub mod layout;
 pub mod table;

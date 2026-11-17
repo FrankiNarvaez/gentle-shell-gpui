@@ -1138,7 +1138,7 @@ pub(super) fn superseded_row(title: &str, version: u64, closed: bool) -> AnyElem
 }
 
 /// The surface is open in place of the conversation.
-pub(super) fn expanded_row(view: super::Surface, title: &str) -> AnyElement {
+pub(super) fn expanded_row(surface: super::Surface, title: &str) -> AnyElement {
     row(
         IconName::Workflow,
         ui::info(),
@@ -1151,7 +1151,7 @@ pub(super) fn expanded_row(view: super::Surface, title: &str) -> AnyElement {
             .xsmall()
             .icon(Icon::new(IconName::Minimize2))
             .label("Back here")
-            .on_click(move |_, _, cx| view.collapse(cx)),
+            .on_click(move |_, _, cx| surface.emit(DiagramEvent::Collapse, cx)),
     )
     .into_any_element()
 }
@@ -1177,7 +1177,11 @@ pub(super) fn event_card(details: &serde_json::Value) -> AnyElement {
             row(
                 IconName::Pencil,
                 ui::accent(),
-                format!("You edited {title}"),
+                if details["kind"] == "html" {
+                    format!("You, from {title}")
+                } else {
+                    format!("You edited {title}")
+                },
                 None,
             )
             .border_0()

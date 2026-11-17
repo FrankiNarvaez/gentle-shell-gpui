@@ -1,9 +1,11 @@
 // Gentle Shell GPUI: generative UI. The `gentle_ui` tool shows an interactive
-// surface (a diagram, table, form, checklist, kanban board or chart) in the
-// desktop app's conversation; the user edits it natively and the app sends the
-// edits back with `/gentle-ui:event {json}`. State lives only in the session
-// (tool result details and gentle-ui.event messages), so branches, forks and
-// resumes rebuild it. Written by the app; edits here are overwritten.
+// surface in the desktop app's conversation: a diagram, table, form, checklist,
+// kanban board or chart the user edits natively, or an html page (an MCP App)
+// run in an isolated web view. The app sends what the user does back with
+// `/gentle-ui:event {json}` and the extension answers each event through the
+// `gentle-ui.outcome` widget. State lives only in the session (tool result
+// details and gentle-ui.event messages), so branches, forks and resumes
+// rebuild it. Written by the app; edits here are overwritten.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -12,6 +14,8 @@ const TOOL = "gentle_ui";
 const EVENT_MESSAGE = "gentle-ui.event";
 const EVENT_COMMAND = "gentle-ui:event";
 const OUTCOME_WIDGET = "gentle-ui.outcome";
+// Model context an html page shares: held until the next turn starts.
+const CONTEXT_MESSAGE = "gentle-ui.context";
 
 const NODE_KINDS = ["service", "database", "queue", "cache", "client", "external", "storage", "function", "note"];
 const STATUSES = ["planned", "existing", "deprecated", "risk"];
@@ -765,6 +769,92 @@ function summaryChart(surface: Surface): string {
 	return lines.join("\n");
 }
 
+// ── html: an agent-written page, run as an MCP App ─────────────────────────
+
+const HTML_MAX = 512 * 1024;
+const CSP_KEYS = ["connectDomains", "resourceDomains", "frameDomains", "baseUriDomains"];
+const MAX_ORIGINS = 20;
+// Web origins only (as the app checks): https/wss anywhere, http/ws on loopback.
+const ORIGIN = /^(?:(?:https|wss):\/\/(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*|(?:http|ws):\/\/(?:localhost|127\.0\.0\.1))(?::\d{1,5})?(?:\/[A-Za-z0-9\-._~%/]*)?$/i;
+
+/** An html spec `{ html, height?, csp?, data? }`, checked; throws readable errors. */
+function normalizeHtml(raw: unknown): Json {
+	if (!isObject(raw)) throw new Error("spec must be an object: { html, height?, csp?, data? }");
+	const errors: string[] = [];
+	const spec: Json = {};
+	if (typeof raw.html !== "string" || raw.html.trim() === "") errors.push("spec.html must be a non-empty string with the page");
+	else if (new TextEncoder().encode(raw.html).length > HTML_MAX) errors.push(`spec.html is larger than ${HTML_MAX / 1024} KiB`);
+	else spec.html = raw.html;
+	if (raw.height !== undefined && raw.height !== null) {
+		if (typeof raw.height === "number" && Number.isFinite(raw.height)) spec.height = Math.round(Math.min(2000, Math.max(120, raw.height)));
+		else errors.push("spec.height must be a number (px)");
+	}
+	if (raw.csp !== undefined && raw.csp !== null) {
+		if (!isObject(raw.csp)) errors.push("spec.csp must be an object");
+		else {
+			const csp: Json = {};
+			for (const key of CSP_KEYS) {
+				const origins = raw.csp[key];
+				if (origins === undefined || origins === null) continue;
+				if (!Array.isArray(origins) || origins.length > MAX_ORIGINS) {
+					errors.push(`spec.csp.${key} must be an array of at most ${MAX_ORIGINS} origins`);
+					continue;
+				}
+				const trimmed = origins.map((o) => (typeof o === "string" ? o.trim().replace(/\/+$/, "") : ""));
+				const bad = trimmed.filter((o) => !ORIGIN.test(o) || /^(?:https|wss):\/\/\*\.[^.]+$/i.test(o));
+				if (bad.length > 0) errors.push(`spec.csp.${key}: not origins like https://api.example.com: ${bad.map((o) => JSON.stringify(o)).join(", ")}`);
+				else if (trimmed.length > 0) csp[key] = [...new Set(trimmed)];
+			}
+			if (Object.keys(csp).length > 0) spec.csp = csp;
+		}
+	}
+	if (raw.data !== undefined && raw.data !== null) {
+		if (isObject(raw.data)) spec.data = raw.data;
+		else errors.push("spec.data must be an object");
+	}
+	if (errors.length > 0) throw new Error(`invalid html spec:\n- ${errors.join("\n- ")}`);
+	return clone(spec);
+}
+
+/** html patch: html/height/csp replace (null clears); data merges one level (null deletes a key). */
+function patchHtml(spec: Json, patch: Json): Json {
+	const next: Json = { ...spec };
+	for (const key of ["html", "height", "csp"]) {
+		if (!(key in patch)) continue;
+		if (patch[key] === null) delete next[key];
+		else next[key] = patch[key];
+	}
+	if (patch.data === null) delete next.data;
+	else if (patch.data !== undefined) {
+		if (!isObject(patch.data)) throw new Error("patch.data must be an object");
+		const data: Json = { ...(isObject(next.data) ? next.data : {}) };
+		merge(data, patch.data);
+		next.data = data;
+	}
+	return normalizeHtml(next);
+}
+
+function summaryHtml(surface: Surface): string {
+	const { spec } = surface;
+	const size = Math.ceil(new TextEncoder().encode(String(spec.html ?? "")).length / 1024);
+	const csp = isObject(spec.csp) ? spec.csp : {};
+	const origins = CSP_KEYS.flatMap((key) => (Array.isArray(csp[key]) ? (csp[key] as string[]) : []));
+	const data = isObject(spec.data) ? Object.keys(spec.data) : [];
+	return [
+		`HTML UI "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user as an isolated MCP App page ` +
+			`(${size} KiB, ${origins.length > 0 ? `may reach ${[...new Set(origins)].join(", ")}` : "no network"}).`,
+		data.length > 0 ? listed("Data keys (the page's tool input and structuredContent)", data) : "No data: the page gets an empty tool input.",
+		`The user opens it from the conversation. Messages it sends arrive as "${EVENT_MESSAGE}" messages; context it shares arrives with the next turn.`,
+	].join("\n");
+}
+
+function contextText(change: Json): string {
+	const blocks = Array.isArray(change.content) ? change.content : [];
+	const parts = blocks.flatMap((b) => (isObject(b) ? [b.type === "text" && typeof b.text === "string" ? b.text : `[${String(b.type)} omitted]`] : []));
+	if (isObject(change.structuredContent)) parts.push(JSON.stringify(change.structuredContent));
+	return parts.join("\n");
+}
+
 const EXAMPLE = JSON.stringify({
 	action: "show",
 	id: "checkout",
@@ -804,6 +894,7 @@ const KINDS: Record<string, KindDef> = {
 	checklist: { noun: "checklist", title: "Checklist", normalize: normalizeChecklist, patch: patchChecklist, summary: summaryChecklist },
 	kanban: { noun: "board", title: "Board", normalize: normalizeKanban, patch: patchKanban, summary: summaryKanban },
 	chart: { noun: "chart", title: "Chart", normalize: normalizeChart, patch: patchChart, summary: summaryChart },
+	html: { noun: "HTML UI", title: "HTML", normalize: normalizeHtml, patch: patchHtml, summary: summaryHtml },
 };
 
 const KIND_EXAMPLES = [
@@ -818,7 +909,7 @@ const Params = Type.Object({
 	action: StringEnum(["show", "update", "close"] as const),
 	id: Type.Optional(Type.String({ description: "Stable slug for the UI (show) or the id to update/close" })),
 	title: Type.Optional(Type.String({ description: "Short title, default the kind's name (\"Diagram\", \"Table\"…)" })),
-	kind: Type.Optional(StringEnum(["diagram", "table", "form", "checklist", "kanban", "chart"] as const, { description: "For show, default diagram; an id keeps its kind" })),
+	kind: Type.Optional(StringEnum(["diagram", "table", "form", "checklist", "kanban", "chart", "html"] as const, { description: "For show, default diagram; an id keeps its kind" })),
 	spec: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
 		description:
@@ -828,7 +919,8 @@ const Params = Type.Object({
 			`form: { fields: [{id,type: ${FIELD_TYPES.join("|")},label,help?,placeholder?,required?,options?: [value|{value,label}],min?,max?,step?,default?}], description?, submitLabel?, values? }. ` +
 			"checklist: { items: [{id,label,done?,note?,items?: [sub-items, one level]}] }. " +
 			"kanban: { columns: [{id,label,limit?}], cards: [{id,title,column,description?,tags?,assignee?}] }. " +
-			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked? }.`,
+			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked? }. ` +
+			"html: { html: self-contained page ≤512 KiB, height?: px, data?: object (the page's tool input/result), csp?: { connectDomains?, resourceDomains?, frameDomains?, baseUriDomains? } (origins; default no network) }.",
 	})),
 	patch: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
@@ -837,12 +929,15 @@ const Params = Type.Object({
 			"table: { rows? (by id, cells merge), columns? (by key), remove?: {rows,columns}, sort?, selection?, editable? }. " +
 			"form: { fields? (by id), values?: {id: value}, remove?: {fields}, submitted? } (an update reopens a submitted form). " +
 			"checklist: { items? (by id at any level; parent: id|null places it), remove?: {items} }. " +
-			"kanban: { cards? (by id), columns? (by id), remove?: {cards,columns} }. chart: { series? (by name), remove?: {series}, labels?, type?, titles? }.",
+			"kanban: { cards? (by id), columns? (by id), remove?: {cards,columns} }. chart: { series? (by name), remove?: {series}, labels?, type?, titles? }. " +
+			"html: { html?, height?, csp? (replace; null clears), data?: {merged; null deletes a key} } (data-only updates reach the open page without reloading).",
 	})),
 });
 
 export default function gentleUi(pi: ExtensionAPI) {
 	const surfaces = new Map<string, Surface>();
+	// The latest context each html page shared, sent when the next turn starts.
+	const pendingContext = new Map<string, { surface: Surface; change: Json }>();
 	// Every id seen on the branch, closed ones included, so `ui-<n>` never repeats.
 	const seen = new Set<string>();
 
@@ -855,6 +950,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 
 	const reconstruct = (ctx: ExtensionContext) => {
 		surfaces.clear();
+		pendingContext.clear();
 		seen.clear();
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === TOOL) {
@@ -866,6 +962,17 @@ export default function gentleUi(pi: ExtensionAPI) {
 	};
 	pi.on("session_start", async (_event, ctx) => reconstruct(ctx));
 	pi.on("session_tree", async (_event, ctx) => reconstruct(ctx));
+	// ui/update-model-context: the page's latest context reaches the model at
+	// the next turn, once (MCP Apps: deferred, last update wins).
+	pi.on("before_agent_start", async () => {
+		if (pendingContext.size === 0) return;
+		const shared = [...pendingContext.values()];
+		pendingContext.clear();
+		const content = shared
+			.map(({ surface, change }) => `Context shared by the HTML UI "${surface.title}" (${surface.id}):\n${contextText(change)}`)
+			.join("\n\n");
+		return { message: { customType: CONTEXT_MESSAGE, content, display: false, details: { ids: shared.map((s) => s.surface.id) } } };
+	});
 
 	const existing = (id: string | undefined): Surface => {
 		const surface = id === undefined ? undefined : surfaces.get(id);
@@ -885,9 +992,9 @@ export default function gentleUi(pi: ExtensionAPI) {
 		name: TOOL,
 		label: "Gentle UI",
 		description:
-			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, table, form, checklist, kanban board or chart), " +
-			"update it (spec replaces, patch merges) or close it. The user can edit it (charts are read-only); the result summarizes its current state.",
-		promptSnippet: "Show, update or close an interactive diagram, table, form, checklist, kanban board or chart the user can edit in the app",
+			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, table, form, checklist, kanban board, chart or an html page), " +
+			"update it (spec replaces, patch merges) or close it. The user can edit or use it (charts are read-only); the result summarizes its current state.",
+		promptSnippet: "Show, update or close an interactive diagram, table, form, checklist, kanban board, chart or html page the user can edit in the app",
 		promptGuidelines: [
 			"Use gentle_ui when the user should see or act on structured content, picking the kind by what they will do: diagram for architecture, data flow and dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs they check off or reorder; kanban for work items across stages; chart for numbers (read-only). Don't use gentle_ui for an answer that fits in a short reply.",
 			"The user is in the Gentle Shell desktop app, where a gentle_ui diagram appears right in the conversation and they can move, connect and correct it. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
@@ -897,6 +1004,8 @@ export default function gentleUi(pi: ExtensionAPI) {
 			"A gentle_ui form's answers arrive once, when the user submits (op submit); wait for them instead of guessing. To ask again or change the questions, update the form: an update reopens it.",
 			`gentle_ui example: ${EXAMPLE}`,
 			...KIND_EXAMPLES,
+			"Use gentle_ui kind html only for custom interactive visuals, simulations, calculators or working prototypes no other kind fits (design screens and mockups stay in gentle_design). The page is an MCP App: self-contained (inline JS/CSS, no network unless spec.csp lists origins), put changing values in spec.data and update them with patch {data}.",
+			"A gentle_ui html page talks JSON-RPC 2.0 over window.parent.postMessage(msg, \"*\"): request ui/initialize {protocolVersion:\"2026-01-26\",appInfo:{name,version},appCapabilities:{}} (result.hostContext.styles.variables: theme CSS vars like --color-background-primary, --color-text-primary, --color-ring-primary, --font-sans; apply them), then notify ui/notifications/initialized; it receives ui/notifications/tool-result {structuredContent: spec.data}. Request ui/message {role:\"user\",content:[{type:\"text\",text}]} to message you, ui/update-model-context {content|structuredContent} to share state, ui/open-link {url}; notify ui/notifications/size-changed {height}.",
 		],
 		parameters: Params,
 		executionMode: "sequential",
@@ -918,6 +1027,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 			if (params.action === "close") {
 				const surface = existing(params.id);
 				surfaces.delete(surface.id);
+				pendingContext.delete(surface.id);
 				const noun = (KINDS[surface.kind] ?? KINDS.diagram).noun;
 				return {
 					content: [{ type: "text", text: `Closed ${noun} "${surface.title}" (${surface.id}).` }],
@@ -957,7 +1067,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand(EVENT_COMMAND, {
-		description: "Gentle Shell app: the user's edits to a gentle_ui UI (sent by the app)",
+		description: "Gentle Shell app: what the user did in a gentle_ui UI (sent by the app)",
 		handler: async (args, ctx) => {
 			let event: Json;
 			try {
@@ -970,7 +1080,8 @@ export default function gentleUi(pi: ExtensionAPI) {
 			}
 			const id = typeof event.id === "string" ? event.id : "";
 			const baseVersion = typeof event.version === "number" ? event.version : undefined;
-			// The app's card waits for this answer: Sent, or the error with Retry.
+			// Every event is answered, whatever its kind: the app's card shows
+			// Sending until then, and Sent, or the error with Retry.
 			const answer = (outcome: { ok: true; current: number } | { ok: false; error: string }) => {
 				ctx.ui.setWidget(OUTCOME_WIDGET, [JSON.stringify({ id, version: baseVersion ?? 0, ...outcome })]);
 				ctx.ui.setWidget(OUTCOME_WIDGET, undefined);
@@ -978,36 +1089,58 @@ export default function gentleUi(pi: ExtensionAPI) {
 			const current = surfaces.get(id);
 			if (!current) {
 				const open = [...surfaces.keys()].join(", ") || "none";
-				answer({ ok: false, error: `The agent no longer has a diagram "${id}" open (open: ${open}).` });
-				return;
-			}
-			if (baseVersion !== undefined && baseVersion !== current.version) {
-				answer({
-					ok: false,
-					error: `The agent changed this diagram meanwhile (now v${current.version}); review your edits on it and send again.`,
-				});
+				answer({ ok: false, error: `The agent no longer has the UI "${id}" open (open: ${open}).` });
 				return;
 			}
 			const def = KINDS[current.kind] ?? KINDS.diagram;
+			const changes = Array.isArray(event.changes) ? event.changes : [];
+			const html = current.kind === "html";
+			if (html) {
+				// A page doesn't edit its spec: what it says or shares is about the
+				// page as the agent last sent it, so no version check applies.
+				// Model context waits for the next turn instead of starting one.
+				if (changes.length > 0 && changes.every((c) => isObject(c) && c.op === "context")) {
+					pendingContext.set(current.id, { surface: current, change: changes[changes.length - 1] as Json });
+					answer({ ok: true, current: current.version });
+					return;
+				}
+			} else if (baseVersion !== undefined && baseVersion !== current.version) {
+				answer({
+					ok: false,
+					error: `The agent changed this ${def.noun} meanwhile (now v${current.version}); review your edits on it and send again.`,
+				});
+				return;
+			}
 			let spec: Json;
 			try {
-				spec = def.normalize(event.spec);
+				spec = html ? current.spec : def.normalize(event.spec);
 			} catch (error) {
 				answer({ ok: false, error: (error as Error).message });
 				return;
 			}
 			const surface: Surface = { ...current, version: current.version + 1, spec };
 			surfaces.set(surface.id, surface);
-			const changes = Array.isArray(event.changes) ? event.changes : [];
 			const said = Array.isArray(event.summary) ? event.summary.filter((s): s is string => typeof s === "string") : [];
 			const note = typeof event.note === "string" && event.note.trim() !== "" ? event.note.trim() : undefined;
-			const content = [
-				`The user edited the ${def.noun} "${surface.title}" (${surface.id}, now v${surface.version}) in the app:`,
-				...said.map((line) => `- ${line}`),
-				...(note ? [`Note from the user: ${note}`] : []),
-				`Changes: ${JSON.stringify(changes)}`,
-				def.summary(surface),
-			].join("\n");
+			let content: string;
+			if (html) {
+				const shared = pendingContext.get(current.id);
+				pendingContext.delete(current.id);
+				const messages = changes.flatMap((c) => (isObject(c) && c.op === "message" && typeof c.text === "string" ? [c.text] : []));
+				content = [
+					`From the HTML UI "${surface.title}" (${surface.id}, v${surface.version}) the user says:`,
+					...messages,
+					...(shared ? [`Context the page shared: ${contextText(shared.change)}`] : []),
+				].join("\n");
+			} else {
+				content = [
+					`The user edited the ${def.noun} "${surface.title}" (${surface.id}, now v${surface.version}) in the app:`,
+					...said.map((line) => `- ${line}`),
+					...(note ? [`Note from the user: ${note}`] : []),
+					`Changes: ${JSON.stringify(changes)}`,
+					def.summary(surface),
+				].join("\n");
+			}
 			pi.sendMessage(
 				{ customType: EVENT_MESSAGE, display: true, content, details: { ...surface, changes, summary: said, note, baseVersion: current.version } },
 				ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "steer" },

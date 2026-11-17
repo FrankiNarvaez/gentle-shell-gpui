@@ -21,8 +21,8 @@ use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-    SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos, WNDCLASSW, WS_CLIPCHILDREN, WS_EX_TOOLWINDOW,
-    WS_POPUP,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos, WNDCLASSW, WS_CLIPCHILDREN,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::w;
 
@@ -99,6 +99,7 @@ impl NativeView {
         url: &str,
         background: (u8, u8, u8, u8),
         script: Option<&str>,
+        sandbox: Option<&super::Sandbox>,
     ) -> Result<Self, String> {
         let owner = host.0;
         register_class();
@@ -130,7 +131,7 @@ impl NativeView {
                 std::mem::size_of_val(&corners) as u32,
             );
         }
-        let webview = wry::WebViewBuilder::new()
+        let builder = wry::WebViewBuilder::new()
             .with_url(url)
             // Runs before the page's own scripts (a device panel names its device).
             .with_initialization_script(script.unwrap_or_default())
@@ -138,8 +139,12 @@ impl NativeView {
             .with_bounds(wry::Rect {
                 position: wry::dpi::PhysicalPosition::new(0, 0).into(),
                 size: wry::dpi::PhysicalSize::new(1u32, 1u32).into(),
-            })
-            .build_as_child(&Parent(popup));
+            });
+        let webview = match sandbox {
+            Some(sandbox) => super::isolate(builder, sandbox),
+            None => builder,
+        }
+        .build_as_child(&Parent(popup));
         match webview {
             Ok(webview) => Ok(Self {
                 webview: Some(webview),
@@ -208,6 +213,28 @@ impl NativeView {
         if let Some(webview) = &self.webview {
             let _ = webview.reload();
         }
+    }
+
+    pub(super) fn evaluate(&self, script: &str) {
+        if let Some(webview) = &self.webview {
+            let _ = webview.evaluate_script(script);
+        }
+    }
+
+    /// Hide the popup now; the next `place` shows it again.
+    pub(super) fn conceal(&mut self) {
+        unsafe {
+            let _ = SetWindowPos(
+                self.popup,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOMOVE | SWP_NOSIZE | SWP_HIDEWINDOW,
+            );
+        }
+        self.placed = None;
     }
 }
 

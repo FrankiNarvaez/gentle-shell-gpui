@@ -1409,8 +1409,13 @@ impl Render for SessionView {
         let view = cx.entity_id();
         let narrow = self.pane_width.get() < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
         // An expanded generative UI surface takes the conversation's place;
-        // the composer stays, to talk about it.
+        // the composer stays, to talk about it. A web view there hides while
+        // the `/` menu, which opens over it, is up, or the tab isn't shown.
         let expanded = self.genui.expanded();
+        if expanded.is_some() {
+            let obscured = !self.web_shown || self.slash_menu_open(cx);
+            self.genui.set_obscured(obscured, cx);
+        }
         let main = v_flex()
             .relative()
             .flex_1()

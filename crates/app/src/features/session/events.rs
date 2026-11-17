@@ -585,6 +585,7 @@ impl SessionView {
             let subscription = match &surface {
                 Surface::Diagram(view) => Self::watch_surface(view, surface.clone(), window, cx),
                 Surface::Panel(view) => Self::watch_surface(view, surface.clone(), window, cx),
+                Surface::Html(view) => Self::watch_surface(view, surface.clone(), window, cx),
             };
             self.genui.keep(surface.entity_id(), subscription);
         }
@@ -630,6 +631,7 @@ impl SessionView {
                 self.genui.set_expanded(None, cx);
                 cx.notify();
             }
+            DiagramEvent::OpenWeb(url) => cx.emit(SessionEvent::OpenWeb(url.clone())),
         }
     }
 }

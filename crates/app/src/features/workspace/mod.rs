@@ -245,6 +245,9 @@ pub struct Workspace {
     panes: HashMap<PaneId, Pane>,
     next_id: usize,
     overlay: Option<(Overlay, Subscription)>,
+    /// Agent panes last told their web views may show (see
+    /// `sync_web_views`).
+    web_shown: std::collections::HashSet<PaneId>,
     /// The file shown in the quick-look modal over the panes.
     peek: Option<peek::Peek>,
     sidebar: Option<AnyView>,
@@ -360,6 +363,7 @@ impl Workspace {
             panes: HashMap::new(),
             next_id: 0,
             overlay: None,
+            web_shown: Default::default(),
             peek: None,
             sidebar: None,
             sidebar_visible: saved.sidebar,
