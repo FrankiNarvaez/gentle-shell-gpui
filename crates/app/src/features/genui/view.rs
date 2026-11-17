@@ -106,7 +106,7 @@ impl Render for DiagramView {
         let reduce = cx.reduce_motion();
         let motion_now = backdrop::motion_now(cx);
         let active = window.is_window_active();
-        let marches = motion::marches(active, reduce, motion_now);
+        let marches = motion::may_move(active, reduce, motion_now);
         let visible = self.visible(rem);
         let marching_on_screen = self
             .working
@@ -388,15 +388,17 @@ impl DiagramView {
             select,
         };
         let cell = self.bounds.clone();
-        let entity = cx.entity_id();
         let painter = canvas(
-            move |bounds, _, cx| {
+            move |bounds, window, _| {
                 let old = cell.get();
                 cell.set(bounds);
+                // The fit and the visible edges were worked out for the
+                // last size: render again for this one on the next frame
+                // (notifying from prepaint would draw this frame stale).
                 if (old.size.width - bounds.size.width).abs() > px(1.)
                     || (old.size.height - bounds.size.height).abs() > px(1.)
                 {
-                    cx.notify(entity);
+                    window.request_animation_frame();
                 }
             },
             move |bounds, _, window, _| frame.paint(bounds, window),
@@ -1136,7 +1138,7 @@ pub(super) fn superseded_row(title: &str, version: u64, closed: bool) -> AnyElem
 }
 
 /// The surface is open in place of the conversation.
-pub(super) fn expanded_row(view: Entity<DiagramView>, title: &str) -> AnyElement {
+pub(super) fn expanded_row(view: super::Surface, title: &str) -> AnyElement {
     row(
         IconName::Workflow,
         ui::info(),
@@ -1149,7 +1151,7 @@ pub(super) fn expanded_row(view: Entity<DiagramView>, title: &str) -> AnyElement
             .xsmall()
             .icon(Icon::new(IconName::Minimize2))
             .label("Back here")
-            .on_click(move |_, _, cx| view.update(cx, |_, cx| cx.emit(DiagramEvent::Collapse))),
+            .on_click(move |_, _, cx| view.collapse(cx)),
     )
     .into_any_element()
 }

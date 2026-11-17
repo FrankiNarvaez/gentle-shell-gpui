@@ -1,8 +1,9 @@
 // Gentle Shell GPUI: generative UI. The `gentle_ui` tool shows an interactive
-// diagram in the desktop app's conversation; the user edits it natively and the
-// app sends the edits back with `/gentle-ui:event {json}`. State lives only in
-// the session (tool result details and gentle-ui.event messages), so branches,
-// forks and resumes rebuild it. Written by the app; edits here are overwritten.
+// surface (a diagram, table, form, checklist, kanban board or chart) in the
+// desktop app's conversation; the user edits it natively and the app sends the
+// edits back with `/gentle-ui:event {json}`. State lives only in the session
+// (tool result details and gentle-ui.event messages), so branches, forks and
+// resumes rebuild it. Written by the app; edits here are overwritten.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -26,8 +27,8 @@ interface Node {
 }
 interface Edge { id: string; from: string; to: string; label?: string; style: string }
 interface Spec { direction: "LR" | "TB"; groups: Group[]; nodes: Node[]; edges: Edge[] }
-interface Surface { id: string; version: number; kind: "diagram"; title: string; spec: Spec }
-type Details = Surface | { id: string; version: number; kind: "diagram"; title: string; spec: null; closed: true };
+interface Surface { id: string; version: number; kind: string; title: string; spec: Json }
+type Details = Surface | { id: string; version: number; kind: string; title: string; spec: null; closed: true };
 
 const isObject = (value: unknown): value is Json =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
@@ -196,7 +197,7 @@ function listed(label: string, items: string[]): string {
 
 /** What the model sees of a surface. */
 function summary(surface: Surface): string {
-	const { spec } = surface;
+	const spec = surface.spec as unknown as Spec;
 	const lines = [
 		`Diagram "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user ` +
 			`(${plural(spec.nodes.length, "node")}, ${plural(spec.edges.length, "edge")}, ${plural(spec.groups.length, "group")}, ${spec.direction}).`,
@@ -215,6 +216,555 @@ function summary(surface: Surface): string {
 	return lines.join("\n");
 }
 
+// ── Native kinds: table, form, checklist, kanban, chart ──────────────────────
+// Each mirrors `gentle_core::genui::<kind>` (same defaults and hard errors).
+
+const LIMITS = {
+	columns: 30, rows: 500, cell: 500, fields: 50, options: 50, items: 200, itemLabel: 200,
+	boardColumns: 12, cards: 300, tags: 8, tag: 40, cardTitle: 120, series: 12, points: 1000,
+	summaryRows: 30, summaryLines: 80,
+};
+const COLUMN_TYPES = ["text", "number", "date", "status", "link"];
+const ALIGNS = ["left", "center", "right"];
+const FIELD_TYPES = ["text", "textarea", "number", "select", "multiselect", "checkbox", "radio", "slider", "date"];
+const CHART_TYPES = ["bar", "line", "area", "pie", "donut", "scatter"];
+
+/** Hard errors, at most MAX.errors; `check` throws them all at once. */
+function problems(noun: string) {
+	const errors: string[] = [];
+	return {
+		fail: (message: string): undefined => {
+			if (errors.length < MAX.errors) errors.push(message);
+			return undefined;
+		},
+		check: () => {
+			if (errors.length > 0) throw new Error(`invalid ${noun} spec:\n- ${errors.join("\n- ")}`);
+		},
+	};
+}
+
+/** A trimmed non-empty string or a number, cut to MAX.id. */
+function idText(value: unknown): string | undefined {
+	const id = typeof value === "number" ? String(value) : typeof value === "string" ? value.trim() : "";
+	return id === "" ? undefined : Array.from(id).slice(0, MAX.id).join("");
+}
+
+/** A finite number, or a numeric string ("1,200" included). */
+function num(value: unknown): number | undefined {
+	const n = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value.replace(/,/g, "")) : NaN;
+	return Number.isFinite(n) ? n : undefined;
+}
+
+const lower = (value: unknown): string => (typeof value === "string" ? value.trim().toLowerCase() : "");
+const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
+
+/** A slug of `label` (`fallback` when it has none), "-2", "-3"… until free. */
+function slugOf(label: string, fallback: string, taken: (id: string) => boolean): string {
+	const slug = Array.from(label.toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, "-").replace(/^-+|-+$/g, "")).slice(0, MAX.id - 4).join("") || fallback;
+	if (!taken(slug)) return slug;
+	let n = 2;
+	while (taken(`${slug}-${n}`)) n += 1;
+	return `${slug}-${n}`;
+}
+
+/** Upsert `items` into `target` by `key`: found ones merge (null clears a
+ * field), new ones are appended. */
+function upsert(target: Json[], items: unknown, key: string, where: string, mergeOne?: (found: Json, item: Json) => void): void {
+	if (items === undefined || items === null) return;
+	if (!Array.isArray(items) || !items.every(isObject)) throw new Error(`patch.${where} must be an array of objects`);
+	for (const item of items) {
+		const id = idText(item[key]);
+		if (id === undefined) throw new Error(`every item in patch.${where} needs a ${key}`);
+		const found = target.find((existing) => idText(existing[key]) === id);
+		if (!found) target.push({ ...item });
+		else if (mergeOne) mergeOne(found, item);
+		else for (const [k, v] of Object.entries(item)) if (k !== key) v === null ? delete found[k] : (found[k] = v);
+	}
+}
+
+/** Top-level `keys` of `patch` copied onto `next` (null clears). */
+function scalars(next: Json, patch: Json, keys: string[]): void {
+	for (const key of keys) if (key in patch) patch[key] === null ? delete next[key] : (next[key] = patch[key]);
+}
+
+const removed = (patch: Json, key: string): Set<string> =>
+	new Set(list(isObject(patch.remove) ? patch.remove[key] : undefined).flatMap((id) => idText(id) ?? []));
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const quoted = (text: unknown, max = 40): string => `"${cut(String(text ?? ""), max)}"`;
+
+function cellText(value: unknown): string {
+	if (value === null || value === undefined) return "";
+	if (typeof value === "boolean") return value ? "yes" : "no";
+	if (isObject(value)) return String(value.text ?? value.url ?? "");
+	return String(value);
+}
+
+function cleanCell(value: unknown): unknown {
+	if (value === null || typeof value === "boolean") return value;
+	if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+	if (typeof value === "string") return cut(value.trim(), LIMITS.cell);
+	if (isObject(value) && typeof value.url === "string") {
+		const text = optionalText(value.text, LIMITS.cell);
+		return text === undefined ? { url: cut(value.url, LIMITS.cell) } : { text, url: cut(value.url, LIMITS.cell) };
+	}
+	return undefined;
+}
+
+function normalizeTable(raw: unknown): Json {
+	const { fail, check } = problems("table");
+	if (!isObject(raw) || !Array.isArray(raw.columns)) throw new Error("spec.columns must be an array");
+	const rowsRaw = raw.rows ?? [];
+	if (!Array.isArray(rowsRaw)) throw new Error("spec.rows must be an array");
+	if (raw.columns.length === 0) fail("a table needs at least one column");
+	if (raw.columns.length > LIMITS.columns) fail(`too many columns (${raw.columns.length}, at most ${LIMITS.columns})`);
+	if (rowsRaw.length > LIMITS.rows) fail(`too many rows (${rowsRaw.length}, at most ${LIMITS.rows})`);
+	const columns: Json[] = [];
+	raw.columns.forEach((c, i) => {
+		const key = isObject(c) ? idText(c.key ?? c.id) : idText(c);
+		if (key === undefined) return fail(`column #${i + 1} has no key`);
+		if (columns.some((other) => other.key === key)) return fail(`duplicate column key "${key}"`);
+		const given = isObject(c) ? lower(c.type) : "";
+		const type = COLUMN_TYPES.includes(given) ? given : "text";
+		const align = isObject(c) && ALIGNS.includes(lower(c.align)) ? lower(c.align) : type === "number" ? "right" : "left";
+		columns.push({ key, label: (isObject(c) && optionalText(c.label, MAX.label)) || key, type, align });
+	});
+	const rows: Json[] = [];
+	rowsRaw.slice(0, LIMITS.rows).forEach((r, i) => {
+		const id = (isObject(r) && idText(r.id)) || `row-${i + 1}`;
+		if (rows.some((other) => other.id === id)) return fail(`duplicate row id "${id}"`);
+		if (!isObject(r) || (r.cells !== undefined && !isObject(r.cells) && !Array.isArray(r.cells))) {
+			return fail(`row "${id}" must be an object whose "cells" is an object or an array`);
+		}
+		const cells: Json = {};
+		columns.forEach((column, at) => {
+			const source = Array.isArray(r.cells) ? r.cells[at] : isObject(r.cells) ? r.cells[column.key as string] : r[column.key as string];
+			const value = cleanCell(source);
+			if (value !== undefined && value !== null) cells[column.key as string] = value;
+		});
+		rows.push({ id, cells });
+	});
+	let sort: Json | undefined;
+	if (raw.sort !== undefined && raw.sort !== null) {
+		const column = isObject(raw.sort) ? idText(raw.sort.column ?? raw.sort.key) : idText(raw.sort);
+		if (column === undefined) fail(`"sort" needs a column`);
+		else if (!columns.some((c) => c.key === column)) fail(`sort column "${column}" is not a column`);
+		else sort = { column, direction: isObject(raw.sort) && lower(raw.sort.direction) === "desc" ? "desc" : "asc" };
+	}
+	check();
+	const selectable = raw.selectable !== false;
+	const wanted = new Set(list(raw.selection).flatMap((id) => idText(id) ?? []));
+	const selection = selectable ? rows.filter((r) => wanted.has(r.id as string)).map((r) => r.id) : [];
+	return clone({ columns, rows, sort, selectable, editable: raw.editable === true, selection });
+}
+
+function patchTable(spec: Json, patch: Json): Json {
+	const next = clone(spec) as { columns: Json[]; rows: Json[] } & Json;
+	const goneRows = removed(patch, "rows");
+	const goneColumns = removed(patch, "columns");
+	next.rows = next.rows.filter((r) => !goneRows.has(r.id as string));
+	next.columns = next.columns.filter((c) => !goneColumns.has(c.key as string));
+	upsert(next.columns, patch.columns, "key", "columns");
+	upsert(next.rows, patch.rows, "id", "rows", (found, item) => {
+		const cells = found.cells as Json;
+		const changes = isObject(item.cells) ? item.cells : Object.fromEntries(Object.entries(item).filter(([k]) => k !== "id"));
+		for (const [k, v] of Object.entries(changes)) v === null ? delete cells[k] : (cells[k] = v);
+	});
+	scalars(next, patch, ["sort", "selection", "editable", "selectable"]);
+	return normalizeTable(next);
+}
+
+function summaryTable(surface: Surface): string {
+	const spec = surface.spec as { columns: Json[]; rows: Json[]; sort?: Json; editable: boolean; selectable: boolean; selection: string[] };
+	const flags = [spec.editable ? "editable" : "read-only", spec.selection.length > 0 ? `${spec.selection.length} selected` : ""].filter(Boolean);
+	const lines = [
+		`Table "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user ` +
+			`(${plural(spec.columns.length, "column")}, ${plural(spec.rows.length, "row")}; ${flags.join(", ")}).`,
+		listed("Columns", spec.columns.map((c) => `${c.key} "${c.label}" (${c.type})`)),
+	];
+	for (const row of spec.rows.slice(0, LIMITS.summaryRows)) {
+		const cells = row.cells as Json;
+		lines.push(`${row.id}: ${spec.columns.map((c) => cut(cellText(cells[c.key as string]), 40) || "—").join(" | ")}`);
+	}
+	if (spec.rows.length > LIMITS.summaryRows) lines.push(`… and ${spec.rows.length - LIMITS.summaryRows} more rows`);
+	if (spec.sort) lines.push(`Sorted by ${spec.sort.column} (${spec.sort.direction}).`);
+	if (spec.selection.length > 0) lines.push(listed("Selected", spec.selection));
+	lines.push(`The user can sort and filter${spec.selectable ? ", select rows" : ""}${spec.editable ? " and edit cells" : ""}; ` +
+		`their selection and edits arrive as "${EVENT_MESSAGE}" messages.`);
+	return lines.join("\n");
+}
+
+function isDate(text: string): boolean {
+	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+	if (!match) return false;
+	const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+	return date.getUTCMonth() === Number(match[2]) - 1 && date.getUTCDate() === Number(match[3]);
+}
+
+/** `value` in `field`'s shape, or undefined when it doesn't fit (as `Field::coerce`). */
+function fieldValue(field: Json, value: unknown): unknown {
+	const type = field.type as string;
+	const min = field.min as number | string | undefined;
+	const max = field.max as number | string | undefined;
+	const options = list(field.options).map((o) => (isObject(o) ? o.value : undefined));
+	if (value === null || value === undefined || (typeof value === "string" && value.trim() === "")) {
+		return type === "checkbox" ? false : type === "multiselect" ? [] : null;
+	}
+	switch (type) {
+		case "text":
+		case "textarea": {
+			if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") return undefined;
+			const text = String(value).trim();
+			const length = Array.from(text).length;
+			if ((typeof min === "number" && length < min) || (typeof max === "number" && length > max)) return undefined;
+			return cut(text, type === "textarea" ? MAX.text * 4 : MAX.text);
+		}
+		case "number":
+		case "slider": {
+			const n = num(value);
+			if (n === undefined || (typeof min === "number" && n < min) || (typeof max === "number" && n > max)) return undefined;
+			return n;
+		}
+		case "checkbox":
+			return typeof value === "boolean" ? value : undefined;
+		case "select":
+		case "radio":
+			return typeof value === "string" && options.includes(value) ? value : undefined;
+		case "multiselect": {
+			if (!Array.isArray(value) || !value.every((v) => options.includes(v))) return undefined;
+			const chosen = options.filter((o) => value.includes(o));
+			if ((typeof min === "number" && chosen.length < min) || (typeof max === "number" && chosen.length > max)) return undefined;
+			return chosen;
+		}
+		case "date": {
+			const text = typeof value === "string" ? value.trim() : "";
+			if (!isDate(text) || (typeof min === "string" && text < min) || (typeof max === "string" && text > max)) return undefined;
+			return text;
+		}
+	}
+	return undefined;
+}
+
+function normalizeForm(raw: unknown): Json {
+	const { fail, check } = problems("form");
+	if (!isObject(raw) || !Array.isArray(raw.fields)) throw new Error("spec.fields must be an array");
+	if (raw.fields.length === 0) fail("a form needs at least one field");
+	if (raw.fields.length > LIMITS.fields) fail(`too many fields (${raw.fields.length}, at most ${LIMITS.fields})`);
+	const fields: Json[] = [];
+	raw.fields.slice(0, LIMITS.fields).forEach((f, i) => {
+		const id = isObject(f) ? idText(f.id) : undefined;
+		if (id === undefined || !isObject(f)) return fail(`field #${i + 1} has no id`);
+		if (fields.some((other) => other.id === id)) return fail(`duplicate field id "${id}"`);
+		const type = f.type === undefined || f.type === null ? "text" : lower(f.type);
+		if (!FIELD_TYPES.includes(type)) return fail(`field "${id}": unknown type ${JSON.stringify(f.type)} (one of ${FIELD_TYPES.join(", ")})`);
+		const options = list(f.options).slice(0, LIMITS.options).flatMap((o) => {
+			const value = isObject(o) ? idText(o.value) : idText(o);
+			return value === undefined ? [] : [{ value, label: (isObject(o) && optionalText(o.label, MAX.label)) || value }];
+		});
+		if (["select", "multiselect", "radio"].includes(type) && options.length === 0) fail(`field "${id}" (${type}) needs options`);
+		const isDateField = type === "date";
+		const bound = (key: "min" | "max") => {
+			if (isDateField) return typeof f[key] === "string" && isDate((f[key] as string).trim()) ? (f[key] as string).trim() : undefined;
+			return num(f[key]) ?? (type === "slider" ? (key === "min" ? 0 : 100) : undefined);
+		};
+		const min = bound("min");
+		const max = bound("max");
+		if (typeof min === "number" && typeof max === "number" && min > max) fail(`field "${id}": min is greater than max`);
+		const step = num(f.step);
+		const field: Json = {
+			id, type, label: optionalText(f.label, MAX.label) ?? id, help: optionalText(f.help, MAX.text),
+			placeholder: optionalText(f.placeholder, MAX.label), required: f.required === true ? true : undefined,
+			options: options.length > 0 ? options : undefined, min, max, step: step !== undefined && step > 0 ? step : undefined,
+		};
+		const fallback = fieldValue(field, f.default);
+		const empty = fallback === undefined || fallback === null || (Array.isArray(fallback) && fallback.length === 0) || fallback === "";
+		if (!empty || typeof fallback === "boolean") field.default = fallback;
+		fields.push(field);
+	});
+	check();
+	const values: Json = {};
+	const given = isObject(raw.values) ? raw.values : {};
+	for (const field of fields) {
+		const value = fieldValue(field, given[field.id as string]);
+		if (field.id as string in given && value !== undefined) values[field.id as string] = value;
+	}
+	return clone({
+		description: optionalText(raw.description, MAX.text),
+		submitLabel: optionalText(raw.submitLabel, 40) ?? "Submit",
+		fields, values, submitted: raw.submitted === true,
+	});
+}
+
+/** An update reopens a submitted form unless the patch says `submitted: true`. */
+function patchForm(spec: Json, patch: Json): Json {
+	const next = clone(spec) as { fields: Json[]; values: Json } & Json;
+	const gone = removed(patch, "fields");
+	next.fields = next.fields.filter((f) => !gone.has(f.id as string));
+	upsert(next.fields, patch.fields, "id", "fields");
+	if (isObject(patch.values)) for (const [k, v] of Object.entries(patch.values)) v === null ? delete next.values[k] : (next.values[k] = v);
+	scalars(next, patch, ["description", "submitLabel"]);
+	next.submitted = patch.submitted === true;
+	return normalizeForm(next);
+}
+
+function shownValue(field: Json, value: unknown): string {
+	const label = (v: unknown) => ((field.options as Json[] | undefined) ?? []).find((o) => o.value === v)?.label ?? String(v);
+	if (value === null || value === undefined || (Array.isArray(value) && value.length === 0)) return "—";
+	if (Array.isArray(value)) return value.map(label).join(", ");
+	if (typeof value === "boolean") return value ? "yes" : "no";
+	return cut(String(field.options ? label(value) : value), 80);
+}
+
+function summaryForm(surface: Surface): string {
+	const spec = surface.spec as { fields: Json[]; values: Json; submitted: boolean; description?: string };
+	const lines = [
+		`Form "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user ` +
+			`(${plural(spec.fields.length, "field")}; ${spec.submitted ? "submitted" : "waiting for the user to submit"}).`,
+		listed("Fields", spec.fields.map((f) => {
+			const options = f.options ? `: ${(f.options as Json[]).map((o) => o.value).join("|")}` : "";
+			return `${f.id} "${f.label}" (${f.type}${options}${f.required ? ", required" : ""})`;
+		})),
+	];
+	const answered = spec.fields.filter((f) => (f.id as string) in spec.values);
+	if (answered.length > 0) {
+		lines.push(listed(spec.submitted ? "Answers" : "Prefilled", answered.map((f) => `${f.id} = ${shownValue(f, spec.values[f.id as string])}`)));
+	}
+	lines.push(spec.submitted
+		? "The form is read-only now; update it to ask again (an update reopens it)."
+		: `When the user submits, the answers arrive as a "${EVENT_MESSAGE}" message (op "submit"); wait for it.`);
+	return lines.join("\n");
+}
+
+function normalizeChecklist(raw: unknown): Json {
+	const { fail, check } = problems("checklist");
+	if (!isObject(raw) || !Array.isArray(raw.items)) throw new Error("spec.items must be an array");
+	const total = raw.items.reduce((n: number, item) => n + 1 + list(isObject(item) ? item.items : undefined).length, 0);
+	if (total > LIMITS.items) fail(`too many items (${total}, at most ${LIMITS.items})`);
+	const seen = new Set<string>();
+	let counter = 0;
+	const read = (item: unknown): Json | undefined => {
+		counter += 1;
+		const label = typeof item === "string" ? optionalText(item, LIMITS.itemLabel) : isObject(item) ? optionalText(item.label ?? item.text, LIMITS.itemLabel) : undefined;
+		const given = isObject(item) ? idText(item.id) : undefined;
+		const text = label ?? given;
+		if (text === undefined) return fail(`item #${counter} has no label`);
+		const id = given ?? slugOf(text, "item", (s) => seen.has(s));
+		if (seen.has(id)) return fail(`duplicate item id "${id}"`);
+		seen.add(id);
+		return { id, label: text, done: isObject(item) && item.done === true, note: isObject(item) ? optionalText(item.note, MAX.text) : undefined };
+	};
+	const items: Json[] = [];
+	for (const top of raw.items.slice(0, LIMITS.items)) {
+		const item = read(top);
+		if (item === undefined) continue;
+		const subs: Json[] = [];
+		for (const sub of list(isObject(top) ? top.items : undefined)) {
+			if (isObject(sub) && list(sub.items).length > 0) fail(`sub-items of "${item.id}" can't have their own items (one level only)`);
+			const read_ = read(sub);
+			if (read_) subs.push(read_);
+		}
+		if (subs.length > 0) item.items = subs;
+		items.push(item);
+	}
+	check();
+	return clone({ items });
+}
+
+/** Items upsert by id at either level; new ones go to the end of the top
+ * level or of `parent`'s sub-items; `parent` on an existing item moves it. */
+function patchChecklist(spec: Json, patch: Json): Json {
+	const next = clone(spec) as { items: Json[] };
+	const gone = removed(patch, "items");
+	next.items = next.items.filter((i) => !gone.has(i.id as string));
+	for (const top of next.items) if (Array.isArray(top.items)) top.items = (top.items as Json[]).filter((s) => !gone.has(s.id as string));
+	const lists = () => [next.items, ...next.items.map((top) => (top.items ??= []) as Json[])];
+	const find = (id: string) => lists().find((l) => l.some((i) => i.id === id));
+	const changes = patch.items;
+	if (changes !== undefined && changes !== null) {
+		if (!Array.isArray(changes) || !changes.every(isObject)) throw new Error("patch.items must be an array of objects");
+		for (const item of changes) {
+			const id = idText(item.id);
+			if (id === undefined) throw new Error("every item in patch.items needs an id");
+			const home = find(id);
+			const parentGiven = "parent" in item;
+			const parent = idText(item.parent);
+			const target = parent === undefined ? next.items : next.items.find((t) => t.id === parent)?.items as Json[] | undefined;
+			if (parentGiven && target === undefined) throw new Error(`patch.items: "${parent}" is not a top-level item`);
+			let found = home?.find((i) => i.id === id);
+			if (found && parentGiven && home !== target) {
+				home!.splice(home!.indexOf(found), 1);
+				target!.push(found);
+			}
+			if (!found) {
+				found = { id };
+				(parentGiven ? target! : next.items).push(found);
+			}
+			for (const [k, v] of Object.entries(item)) if (k !== "id" && k !== "parent") v === null ? delete found[k] : (found[k] = v);
+		}
+	}
+	return normalizeChecklist(next);
+}
+
+function summaryChecklist(surface: Surface): string {
+	const items = (surface.spec as { items: Json[] }).items;
+	const all = items.flatMap((top) => [top, ...((top.items as Json[] | undefined) ?? [])]);
+	const lines = [`Checklist "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user (${all.filter((i) => i.done).length} of ${all.length} done).`];
+	const line = (item: Json, indent: string) =>
+		`${indent}- [${item.done ? "x" : " "}] ${item.id} ${quoted(item.label, 80)}${item.note ? ` — ${cut(String(item.note), 80)}` : ""}`;
+	for (const top of items) {
+		lines.push(line(top, ""));
+		for (const sub of (top.items as Json[] | undefined) ?? []) lines.push(line(sub, "  "));
+	}
+	if (lines.length > LIMITS.summaryLines) lines.splice(LIMITS.summaryLines, lines.length, `… and ${lines.length - LIMITS.summaryLines} more items`);
+	lines.push(`The user can check, add, edit, remove and reorder items; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	return lines.join("\n");
+}
+
+function normalizeKanban(raw: unknown): Json {
+	const { fail, check } = problems("kanban");
+	if (!isObject(raw) || !Array.isArray(raw.columns)) throw new Error("spec.columns must be an array");
+	const cardsRaw = raw.cards ?? [];
+	if (!Array.isArray(cardsRaw)) throw new Error("spec.cards must be an array");
+	if (raw.columns.length === 0) fail("a board needs at least one column");
+	if (raw.columns.length > LIMITS.boardColumns) fail(`too many columns (${raw.columns.length}, at most ${LIMITS.boardColumns})`);
+	if (cardsRaw.length > LIMITS.cards) fail(`too many cards (${cardsRaw.length}, at most ${LIMITS.cards})`);
+	const columns: Json[] = [];
+	raw.columns.slice(0, LIMITS.boardColumns).forEach((c, i) => {
+		const id = typeof c === "string" ? slugOf(c, "column", (s) => columns.some((o) => o.id === s)) : isObject(c) ? idText(c.id) : undefined;
+		if (id === undefined) return fail(`column #${i + 1} has no id`);
+		if (columns.some((o) => o.id === id)) return fail(`duplicate column id "${id}"`);
+		const limit = isObject(c) && Number.isInteger(c.limit) && (c.limit as number) > 0 ? Math.min(c.limit as number, 999) : undefined;
+		const label = typeof c === "string" ? optionalText(c, MAX.label) : isObject(c) ? optionalText(c.label, MAX.label) : undefined;
+		columns.push({ id, label: label ?? id, limit });
+	});
+	const cards: Json[] = [];
+	cardsRaw.slice(0, LIMITS.cards).forEach((c, i) => {
+		const given = isObject(c) ? idText(c.id) : undefined;
+		const title = (isObject(c) ? optionalText(c.title ?? c.label, LIMITS.cardTitle) : undefined) ?? given;
+		if (title === undefined || !isObject(c)) return fail(`card #${i + 1} has no title`);
+		const id = given ?? slugOf(title, "card", (s) => cards.some((o) => o.id === s));
+		if (cards.some((o) => o.id === id)) return fail(`duplicate card id "${id}"`);
+		const column = idText(c.column) ?? (columns[0]?.id as string | undefined);
+		if (column === undefined) return;
+		if (!columns.some((o) => o.id === column)) return fail(`card "${id}" is in column "${column}", which is not in columns`);
+		const tags = [...new Set(list(c.tags).flatMap((t) => (typeof t === "string" && t.trim() !== "" ? [cut(t.trim(), LIMITS.tag)] : [])))].slice(0, LIMITS.tags);
+		cards.push({
+			id, title, column, description: optionalText(c.description, MAX.text),
+			tags: tags.length > 0 ? tags : undefined, assignee: optionalText(c.assignee, MAX.label),
+		});
+	});
+	check();
+	// Grouped by column, in column order (stable within a column).
+	const order = (card: Json) => columns.findIndex((c) => c.id === card.column);
+	cards.sort((a, b) => order(a) - order(b));
+	return clone({ columns, cards });
+}
+
+function patchKanban(spec: Json, patch: Json): Json {
+	const next = clone(spec) as { columns: Json[]; cards: Json[] };
+	const goneColumns = removed(patch, "columns");
+	const goneCards = removed(patch, "cards");
+	next.columns = next.columns.filter((c) => !goneColumns.has(c.id as string));
+	next.cards = next.cards.filter((c) => !goneCards.has(c.id as string) && !goneColumns.has(c.column as string));
+	upsert(next.columns, patch.columns, "id", "columns");
+	upsert(next.cards, patch.cards, "id", "cards");
+	return normalizeKanban(next);
+}
+
+function summaryKanban(surface: Surface): string {
+	const spec = surface.spec as { columns: Json[]; cards: Json[] };
+	const lines = [`Board "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user ` +
+		`(${plural(spec.cards.length, "card")} in ${plural(spec.columns.length, "column")}).`];
+	for (const column of spec.columns) {
+		const cards = spec.cards.filter((c) => c.column === column.id);
+		const count = column.limit ? `${cards.length}/${column.limit}` : `${cards.length}`;
+		const shown = cards.map((c) =>
+			`${c.id} ${quoted(c.title, 60)}${c.assignee ? ` @${c.assignee}` : ""}${c.tags ? ` [${(c.tags as string[]).join(", ")}]` : ""}`);
+		lines.push(listed(`${column.label} (${column.id}, ${count})`, shown).replace(/: $/, ""));
+	}
+	lines.push(`The user can drag cards between and within columns, add, edit and remove them; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	return lines.join("\n");
+}
+
+function normalizeChart(raw: unknown): Json {
+	const { fail, check } = problems("chart");
+	if (!isObject(raw)) throw new Error("spec must be an object with a series array");
+	const type = raw.type === undefined || raw.type === null ? "bar" : lower(raw.type);
+	if (!CHART_TYPES.includes(type)) throw new Error(`unknown chart type ${JSON.stringify(raw.type)} (one of ${CHART_TYPES.join(", ")})`);
+	if (!Array.isArray(raw.series)) throw new Error("spec.series must be an array");
+	if (raw.series.length === 0) fail("a chart needs at least one series");
+	if (raw.series.length > LIMITS.series) fail(`too many series (${raw.series.length}, at most ${LIMITS.series})`);
+	const labelsRaw = list(raw.labels);
+	if (labelsRaw.length > LIMITS.points) fail(`too many labels (${labelsRaw.length}, at most ${LIMITS.points})`);
+	let labels = labelsRaw.slice(0, LIMITS.points).map((l) => (typeof l === "string" ? cut(l.trim(), MAX.label) : typeof l === "number" ? String(l) : ""));
+	const round = type === "pie" || type === "donut";
+	const series: Json[] = raw.series.slice(0, LIMITS.series).map((s, i) => {
+		const name = (isObject(s) && (optionalText(s.name ?? s.label, MAX.label) ?? idText(s.id))) || `Series ${i + 1}`;
+		const quote = `series “${name}”`;
+		if (type === "scatter") {
+			const points = list(isObject(s) ? s.points ?? s.values : undefined);
+			if (points.length > LIMITS.points) fail(`${quote} has too many points (${points.length}, at most ${LIMITS.points})`);
+			return {
+				name,
+				points: points.slice(0, LIMITS.points).flatMap((p, j) => {
+					const xy = Array.isArray(p) && p.length === 2 ? [num(p[0]), num(p[1])] : isObject(p) ? [num(p.x), num(p.y)] : [];
+					if (xy.length === 2 && xy[0] !== undefined && xy[1] !== undefined) return [xy];
+					fail(`${quote} point #${j + 1} must be [x, y] or {x, y} numbers`);
+					return [];
+				}),
+			};
+		}
+		const values = list(isObject(s) ? s.values ?? s.data : undefined);
+		if (values.length > LIMITS.points) fail(`${quote} has too many values (${values.length}, at most ${LIMITS.points})`);
+		return {
+			name,
+			values: values.slice(0, LIMITS.points).flatMap((v, j) => {
+				const n = num(v);
+				if (n === undefined) return fail(`${quote} value #${j + 1} is not a number`) ?? [];
+				if (round && n < 0) return fail(`${quote} value #${j + 1} is negative; a ${type} chart needs values ≥ 0`) ?? [];
+				return [n];
+			}),
+		};
+	});
+	if (type !== "scatter") {
+		if (labels.length === 0) labels = Array.from({ length: Math.max(0, ...series.map((s) => (s.values as number[]).length)) }, (_, i) => String(i + 1));
+		for (const s of series) {
+			const count = (s.values as number[]).length;
+			if (count !== labels.length) fail(`series “${s.name}” has ${plural(count, "value")} but there are ${plural(labels.length, "label")}`);
+		}
+	}
+	check();
+	return clone({
+		type, labels: type === "scatter" ? undefined : labels, series,
+		xTitle: optionalText(raw.xTitle, MAX.label), yTitle: optionalText(raw.yTitle, MAX.label), unit: optionalText(raw.unit, 16),
+		stacked: raw.stacked === true && (type === "bar" || type === "area") ? true : undefined,
+	});
+}
+
+/** Series upsert by name; top-level keys replace. */
+function patchChart(spec: Json, patch: Json): Json {
+	const next = clone(spec) as { series: Json[] } & Json;
+	const gone = removed(patch, "series");
+	next.series = next.series.filter((s) => !gone.has(s.name as string));
+	upsert(next.series, patch.series, "name", "series");
+	scalars(next, patch, ["type", "labels", "xTitle", "yTitle", "unit", "stacked"]);
+	return normalizeChart(next);
+}
+
+function summaryChart(surface: Surface): string {
+	const spec = surface.spec as { type: string; labels?: string[]; series: Json[]; xTitle?: string; yTitle?: string; unit?: string };
+	const count = spec.labels ? ` over ${plural(spec.labels.length, "label")}` : "";
+	const lines = [`Chart "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user: ` +
+		`${spec.type} chart, ${spec.series.length} series${count}` +
+		`${spec.unit ? ` in ${spec.unit}` : ""}${spec.yTitle ? `, y: ${spec.yTitle}` : ""}${spec.xTitle ? `, x: ${spec.xTitle}` : ""}.`];
+	if (spec.labels) lines.push(listed("Labels", spec.labels));
+	for (const s of spec.series) {
+		const values = s.points ? (s.points as number[][]).map(([x, y]) => `(${x}, ${y})`) : (s.values as number[]).map(String);
+		lines.push(listed(String(s.name), values));
+	}
+	lines.push("It is read-only; the user can hover values and ask about one in their next message.");
+	return lines.join("\n");
+}
+
 const EXAMPLE = JSON.stringify({
 	action: "show",
 	id: "checkout",
@@ -230,21 +780,64 @@ const EXAMPLE = JSON.stringify({
 	},
 });
 
+/** What each kind brings: its default title, spec normalizing (the readable
+ * hard errors), patch merging and the summary the model reads. */
+interface KindDef {
+	noun: string;
+	title: string;
+	normalize(raw: unknown): Json;
+	/** `spec` with `patch` merged, validated. */
+	patch(spec: Json, patch: Json): Json;
+	summary(surface: Surface): string;
+}
+
+const KINDS: Record<string, KindDef> = {
+	diagram: {
+		noun: "diagram",
+		title: "Diagram",
+		normalize: (raw) => normalize(raw) as unknown as Json,
+		patch: (spec, patch) => applyPatch(spec as unknown as Spec, patch) as unknown as Json,
+		summary,
+	},
+	table: { noun: "table", title: "Table", normalize: normalizeTable, patch: patchTable, summary: summaryTable },
+	form: { noun: "form", title: "Form", normalize: normalizeForm, patch: patchForm, summary: summaryForm },
+	checklist: { noun: "checklist", title: "Checklist", normalize: normalizeChecklist, patch: patchChecklist, summary: summaryChecklist },
+	kanban: { noun: "board", title: "Board", normalize: normalizeKanban, patch: patchKanban, summary: summaryKanban },
+	chart: { noun: "chart", title: "Chart", normalize: normalizeChart, patch: patchChart, summary: summaryChart },
+};
+
+const KIND_EXAMPLES = [
+	{ kind: "table", title: "Flaky tests", spec: { columns: [{ key: "name", label: "Test" }, { key: "fails", label: "Fails", type: "number" }, { key: "state", type: "status" }], rows: [{ id: "login", cells: { name: "login flow", fails: 4, state: "failing" } }] } },
+	{ kind: "form", title: "Deploy options", spec: { fields: [{ id: "env", type: "radio", label: "Environment", options: ["staging", "prod"], required: true }, { id: "notes", type: "textarea", label: "Notes" }] } },
+	{ kind: "checklist", title: "Migration plan", spec: { items: [{ id: "backup", label: "Back up the DB" }, { id: "migrate", label: "Run migrations", items: [{ id: "users", label: "users table" }] }] } },
+	{ kind: "kanban", title: "Sprint", spec: { columns: [{ id: "todo", label: "To do" }, { id: "doing", label: "Doing", limit: 3 }, { id: "done", label: "Done" }], cards: [{ id: "oauth", title: "OAuth login", column: "doing", tags: ["backend"] }] } },
+	{ kind: "chart", title: "p95 latency", spec: { type: "line", labels: ["Mon", "Tue", "Wed"], series: [{ name: "api", values: [120, 135, 98] }], unit: "ms" } },
+].map((example) => `gentle_ui ${example.kind} example: ${JSON.stringify({ action: "show", ...example })}`);
+
 const Params = Type.Object({
 	action: StringEnum(["show", "update", "close"] as const),
 	id: Type.Optional(Type.String({ description: "Stable slug for the UI (show) or the id to update/close" })),
-	title: Type.Optional(Type.String({ description: "Short title, default \"Diagram\"" })),
-	kind: Type.Optional(StringEnum(["diagram"] as const)),
+	title: Type.Optional(Type.String({ description: "Short title, default the kind's name (\"Diagram\", \"Table\"…)" })),
+	kind: Type.Optional(StringEnum(["diagram", "table", "form", "checklist", "kanban", "chart"] as const, { description: "For show, default diagram; an id keeps its kind" })),
 	spec: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
 		description:
-			"Full diagram: { direction?: LR|TB, groups?: [{id,label,description?}], nodes: [{id,label,kind?,group?,description?,tech?,status?}], edges?: [{id?,from,to,label?,style?}] }. " +
-			`Node kind: ${NODE_KINDS.join("|")}. Status: ${STATUSES.join("|")}. Edge style: ${EDGE_STYLES.join("|")}.`,
+			"Full spec for the kind. diagram: { direction?: LR|TB, groups?: [{id,label,description?}], nodes: [{id,label,kind?,group?,description?,tech?,status?}], edges?: [{id?,from,to,label?,style?}] }; " +
+			`node kind: ${NODE_KINDS.join("|")}, status: ${STATUSES.join("|")}, edge style: ${EDGE_STYLES.join("|")}. ` +
+			`table: { columns: [{key,label?,type?: ${COLUMN_TYPES.join("|")},align?}], rows: [{id,cells:{key:value}}], sort?: {column,direction:asc|desc}, editable?, selectable?, selection?: [row ids] }. ` +
+			`form: { fields: [{id,type: ${FIELD_TYPES.join("|")},label,help?,placeholder?,required?,options?: [value|{value,label}],min?,max?,step?,default?}], description?, submitLabel?, values? }. ` +
+			"checklist: { items: [{id,label,done?,note?,items?: [sub-items, one level]}] }. " +
+			"kanban: { columns: [{id,label,limit?}], cards: [{id,title,column,description?,tags?,assignee?}] }. " +
+			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked? }.`,
 	})),
 	patch: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
 		description:
-			"Changes for update: { nodes?: [partial nodes, upsert by id; null clears a field], edges?: [upsert by id or from+to], groups?: [upsert by id], remove?: { nodes?: [ids], edges?: [ids], groups?: [ids] }, direction? }",
+			"Changes for update; lists upsert (null clears a field) and remove: {...} deletes. diagram: { nodes?, edges? (by id or from+to), groups?, remove?: {nodes,edges,groups}, direction? }. " +
+			"table: { rows? (by id, cells merge), columns? (by key), remove?: {rows,columns}, sort?, selection?, editable? }. " +
+			"form: { fields? (by id), values?: {id: value}, remove?: {fields}, submitted? } (an update reopens a submitted form). " +
+			"checklist: { items? (by id at any level; parent: id|null places it), remove?: {items} }. " +
+			"kanban: { cards? (by id), columns? (by id), remove?: {cards,columns} }. chart: { series? (by name), remove?: {series}, labels?, type?, titles? }.",
 	})),
 });
 
@@ -292,16 +885,18 @@ export default function gentleUi(pi: ExtensionAPI) {
 		name: TOOL,
 		label: "Gentle UI",
 		description:
-			"Show an interactive diagram (architecture, data flow, dependencies) in the user's Gentle Shell app conversation, " +
-			"update it (spec replaces, patch merges) or close it. The user can edit it; the result summarizes the current diagram.",
-		promptSnippet: "Show, update or close an interactive architecture/data-flow diagram the user can edit in the app",
+			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, table, form, checklist, kanban board or chart), " +
+			"update it (spec replaces, patch merges) or close it. The user can edit it (charts are read-only); the result summarizes its current state.",
+		promptSnippet: "Show, update or close an interactive diagram, table, form, checklist, kanban board or chart the user can edit in the app",
 		promptGuidelines: [
-			"Use gentle_ui to show architecture, data flow, dependencies or plans with many interacting parts as a diagram; don't use gentle_ui for simple lists or linear steps.",
+			"Use gentle_ui when the user should see or act on structured content, picking the kind by what they will do: diagram for architecture, data flow and dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs they check off or reorder; kanban for work items across stages; chart for numbers (read-only). Don't use gentle_ui for an answer that fits in a short reply.",
 			"The user is in the Gentle Shell desktop app, where a gentle_ui diagram appears right in the conversation and they can move, connect and correct it. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
-			"To change a diagram already shown, call gentle_ui with action update and a small patch instead of a new show; ids are stable slugs (api, orders-db) reused across updates.",
+			"To change a UI already shown, call gentle_ui with action update and a small patch instead of a new show; ids are stable slugs (api, orders-db) reused across updates.",
 			"In gentle_ui specs omit x/y and let auto-layout place nodes; keep labels short and put details in description or tech.",
-			`The user's edits to a gentle_ui diagram arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them.`,
+			`The user's edits to a gentle_ui UI arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them.`,
+			"A gentle_ui form's answers arrive once, when the user submits (op submit); wait for them instead of guessing. To ask again or change the questions, update the form: an update reopens it.",
 			`gentle_ui example: ${EXAMPLE}`,
+			...KIND_EXAMPLES,
 		],
 		parameters: Params,
 		executionMode: "sequential",
@@ -323,35 +918,46 @@ export default function gentleUi(pi: ExtensionAPI) {
 			if (params.action === "close") {
 				const surface = existing(params.id);
 				surfaces.delete(surface.id);
+				const noun = (KINDS[surface.kind] ?? KINDS.diagram).noun;
 				return {
-					content: [{ type: "text", text: `Closed diagram "${surface.title}" (${surface.id}).` }],
-					details: { id: surface.id, version: surface.version, kind: "diagram", title: surface.title, spec: null, closed: true },
+					content: [{ type: "text", text: `Closed ${noun} "${surface.title}" (${surface.id}).` }],
+					details: { id: surface.id, version: surface.version, kind: surface.kind, title: surface.title, spec: null, closed: true },
 				};
 			}
+			const patch = params.patch;
+			if (patch !== undefined && !isObject(patch)) throw new Error("patch must be an object");
 			let surface: Surface;
 			if (params.action === "show") {
 				if (params.spec === undefined) throw new Error("gentle_ui show needs a spec");
-				const spec = applyPatch(normalize(params.spec), params.patch);
-				surface = { id: freshId(params.id), version: 1, kind: "diagram", title: params.title?.trim() || "Diagram", spec };
+				const kind = params.kind ?? "diagram";
+				const def = KINDS[kind];
+				const base = def.normalize(params.spec);
+				const spec = patch === undefined ? base : def.patch(base, patch);
+				surface = { id: freshId(params.id), version: 1, kind, title: params.title?.trim() || def.title, spec };
 			} else {
 				const current = existing(params.id);
-				if (params.spec === undefined && params.patch === undefined) throw new Error("gentle_ui update needs a spec (replace) or a patch (merge)");
-				const base = params.spec === undefined ? current.spec : normalize(params.spec);
+				if (params.kind !== undefined && params.kind !== current.kind) {
+					throw new Error(`gentle_ui: "${current.id}" is a ${current.kind}; show a new UI for a ${params.kind}`);
+				}
+				if (params.spec === undefined && patch === undefined) throw new Error("gentle_ui update needs a spec (replace) or a patch (merge)");
+				const def = KINDS[current.kind] ?? KINDS.diagram;
+				const base = params.spec === undefined ? current.spec : def.normalize(params.spec);
 				surface = {
 					...current,
 					version: current.version + 1,
 					title: params.title?.trim() || current.title,
-					spec: applyPatch(base, params.patch),
+					spec: patch === undefined ? base : def.patch(base, patch),
 				};
 			}
 			surfaces.set(surface.id, surface);
 			seen.add(surface.id);
-			return { content: [{ type: "text", text: summary(surface) }], details: surface };
+			const text = (KINDS[surface.kind] ?? KINDS.diagram).summary(surface);
+			return { content: [{ type: "text", text }], details: surface };
 		},
 	});
 
 	pi.registerCommand(EVENT_COMMAND, {
-		description: "Gentle Shell app: the user's edits to a gentle_ui diagram (sent by the app)",
+		description: "Gentle Shell app: the user's edits to a gentle_ui UI (sent by the app)",
 		handler: async (args, ctx) => {
 			let event: Json;
 			try {
@@ -382,9 +988,10 @@ export default function gentleUi(pi: ExtensionAPI) {
 				});
 				return;
 			}
-			let spec: Spec;
+			const def = KINDS[current.kind] ?? KINDS.diagram;
+			let spec: Json;
 			try {
-				spec = normalize(event.spec);
+				spec = def.normalize(event.spec);
 			} catch (error) {
 				answer({ ok: false, error: (error as Error).message });
 				return;
@@ -395,11 +1002,11 @@ export default function gentleUi(pi: ExtensionAPI) {
 			const said = Array.isArray(event.summary) ? event.summary.filter((s): s is string => typeof s === "string") : [];
 			const note = typeof event.note === "string" && event.note.trim() !== "" ? event.note.trim() : undefined;
 			const content = [
-				`The user edited the diagram "${surface.title}" (${surface.id}, now v${surface.version}) in the app:`,
+				`The user edited the ${def.noun} "${surface.title}" (${surface.id}, now v${surface.version}) in the app:`,
 				...said.map((line) => `- ${line}`),
 				...(note ? [`Note from the user: ${note}`] : []),
 				`Changes: ${JSON.stringify(changes)}`,
-				summary(surface),
+				def.summary(surface),
 			].join("\n");
 			pi.sendMessage(
 				{ customType: EVENT_MESSAGE, display: true, content, details: { ...surface, changes, summary: said, note, baseVersion: current.version } },

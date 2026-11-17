@@ -46,12 +46,12 @@ resvg = { version = "0.46", default-features = false, features = ["text", "raste
 # A theme image's size without decoding it, for the camera over it.
 imagesize = "0.14"
 
-# UI tests drive real views in headless windows (`#[gpui_kit::test]` and
-# GPUI's test platform): the generative UI diagram's pointer and keyboard.
-# Only GPUI's own `test-support`: the Kit's also names its optional
-# `gpui-fast` backend, which Cargo would then resolve into the lockfile.
+# UI tests drive real views in headless windows (GPUI's `TestAppContext`):
+# the generative UI diagram's and panels' pointer and keyboard. Only GPUI's
+# own `test-support`: the Kit's also names its optional `gpui-fast` backend,
+# whose pinned dependencies Cargo would then resolve into the lockfile.
 [dev-dependencies]
-gpui-pre = { version = "=0.3.11", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
 
 # The X11 window icon (GPUI's `WindowOptions::icon`), and the in-app browser
 # for the Gentle Design canvas: WebKitGTK as a child of the X11 window (GTK's

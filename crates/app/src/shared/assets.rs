@@ -120,7 +120,18 @@ gpui_kit::assets::icon_assets!(
         Group,
         Ungroup,
         SquareDashed,
-        LockOpen
+        LockOpen,
+        // Generative UI panels: tables, forms, checklists, kanban, charts.
+        Table,
+        ClipboardList,
+        ListChecks,
+        SquareKanban,
+        ChartColumn,
+        GripVertical,
+        Circle,
+        ListIndentIncrease,
+        ListIndentDecrease,
+        ArrowUpDown
     ]
 );
 

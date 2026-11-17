@@ -1,6 +1,5 @@
-//! A diagram driven like a person would, through GPUI's test harness on a
-//! real (headless) window: native pointer and key events reach the view's
-//! own listeners, and what it would send to the conversation is recorded.
+//! The diagram, driven through a real (headless) window: native pointer
+//! and key events reach the view's own listeners.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -19,15 +18,8 @@ use gpui_kit::{
 };
 use serde_json::{Value, json};
 
-use super::diagram::{DiagramEvent, DiagramView, Selection, SendState};
-
-#[derive(Debug, PartialEq)]
-enum Seen {
-    Send(String),
-    Ask(String),
-    Expand,
-    Collapse,
-}
+use super::super::diagram::{DiagramEvent, DiagramView, Selection, SendState};
+use super::{Seen, event_json, ops};
 
 /// The conversation's stand-in: shows the surface and records its events.
 struct Host {
@@ -92,12 +84,7 @@ fn open(cx: &mut TestAppContext) -> Harness {
                     surface = Some(view.clone());
                     cx.new(|cx| Host {
                         _events: cx.subscribe(&view, move |_, _, event: &DiagramEvent, _| {
-                            log.borrow_mut().push(match event {
-                                DiagramEvent::Send(command) => Seen::Send(command.clone()),
-                                DiagramEvent::Ask(text) => Seen::Ask(text.clone()),
-                                DiagramEvent::Expand => Seen::Expand,
-                                DiagramEvent::Collapse => Seen::Collapse,
-                            })
+                            log.borrow_mut().push(Seen::from(event))
                         }),
                         view,
                     })
@@ -396,14 +383,7 @@ impl Harness {
             .borrow()
             .iter()
             .filter_map(|seen| match seen {
-                Seen::Send(command) => Some(
-                    serde_json::from_str(
-                        command
-                            .strip_prefix("/gentle-ui:event ")
-                            .expect("an event command"),
-                    )
-                    .expect("one line of JSON"),
-                ),
+                Seen::Send(command) => Some(event_json(command)),
                 _ => None,
             })
             .collect()
@@ -422,16 +402,7 @@ fn pointer(window: &mut Window, event: impl gpui_kit::InputEvent, cx: &mut App) 
     draw(window, cx);
 }
 
-fn ops(event: &Value) -> Vec<&str> {
-    event["changes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|c| c["op"].as_str().unwrap())
-        .collect()
-}
-
-#[gpui_kit::test]
+#[gpui::test]
 fn dragging_the_background_pans_and_a_click_clears_the_selection(cx: &mut TestAppContext) {
     let h = open(cx);
     h.click_node(cx, "api", 1);
@@ -454,7 +425,7 @@ fn dragging_the_background_pans_and_a_click_clears_the_selection(cx: &mut TestAp
     assert_eq!(h.read(cx, |v| v.pending), 0);
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn zoom_buttons_ease_and_secondary_scroll_zooms_at_the_pointer(cx: &mut TestAppContext) {
     let h = open(cx);
     let zoom = h.read(cx, |v| v.viewport.zoom);
@@ -513,7 +484,7 @@ fn zoom_buttons_ease_and_secondary_scroll_zooms_at_the_pointer(cx: &mut TestAppC
     assert!(!h.read(cx, |v| v.viewport.touched));
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn selecting_a_node_shows_its_editable_details(cx: &mut TestAppContext) {
     let h = open(cx);
     assert!(!h.has(cx, "genui-rename"));
@@ -581,7 +552,7 @@ fn selecting_a_node_shows_its_editable_details(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn dragging_a_node_records_one_snapped_move(cx: &mut TestAppContext) {
     let h = open(cx);
     let from = h.node(cx, "mail");
@@ -608,7 +579,7 @@ fn dragging_a_node_records_one_snapped_move(cx: &mut TestAppContext) {
     assert_eq!(h.read(cx, |v| v.pending), 1);
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn double_click_renames_a_node(cx: &mut TestAppContext) {
     let h = open(cx);
     h.click_node(cx, "api", 2);
@@ -622,7 +593,7 @@ fn double_click_renames_a_node(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn dragging_from_a_handle_connects_two_nodes(cx: &mut TestAppContext) {
     let h = open(cx);
     // Web's source handle sits on its right side (left to right).
@@ -657,7 +628,7 @@ fn dragging_from_a_handle_connects_two_nodes(cx: &mut TestAppContext) {
     assert!(h.read(cx, |v| v.working.edge("mail->db").is_some()));
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn delete_add_and_discard(cx: &mut TestAppContext) {
     let h = open(cx);
     h.click_node(cx, "db", 1);
@@ -686,7 +657,7 @@ fn delete_add_and_discard(cx: &mut TestAppContext) {
     assert_eq!(h.read(cx, |v| v.pending), 2);
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn send_waits_for_the_extensions_answer(cx: &mut TestAppContext) {
     let h = open(cx);
     h.click_node(cx, "web", 1);
@@ -766,7 +737,7 @@ fn send_waits_for_the_extensions_answer(cx: &mut TestAppContext) {
     assert_eq!(h.read(cx, |v| v.pending), 1);
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn an_agent_update_keeps_unsent_edits_and_eases_in(cx: &mut TestAppContext) {
     let h = open(cx);
     h.click_node(cx, "api", 2);
@@ -800,7 +771,7 @@ fn an_agent_update_keeps_unsent_edits_and_eases_in(cx: &mut TestAppContext) {
     assert!(h.read(cx, |v| v.arrival.is_none()));
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn ask_about_this_and_expand(cx: &mut TestAppContext) {
     let h = open(cx);
     h.click_node(cx, "api", 1);
@@ -818,7 +789,7 @@ fn ask_about_this_and_expand(cx: &mut TestAppContext) {
     );
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn box_selection_groups_and_drags_nodes(cx: &mut TestAppContext) {
     let h = open(cx);
     // Shift-drag a box around Web and Mail only (the ungrouped band).
@@ -902,7 +873,7 @@ fn box_selection_groups_and_drags_nodes(cx: &mut TestAppContext) {
     });
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn direction_toggle_minimap_and_lock(cx: &mut TestAppContext) {
     let h = open(cx);
     h.button(cx, "genui-direction");
@@ -941,7 +912,7 @@ fn direction_toggle_minimap_and_lock(cx: &mut TestAppContext) {
     assert!(!h.read(cx, |v| v.locked));
 }
 
-#[gpui_kit::test]
+#[gpui::test]
 fn hovering_an_edge_highlights_it(cx: &mut TestAppContext) {
     let h = open(cx);
     // Off the label pill: a little along the curve from its middle.

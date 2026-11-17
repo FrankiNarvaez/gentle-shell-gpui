@@ -3,8 +3,14 @@
 //! sent back to it as `gentle-ui:event` commands.
 
 pub mod changes;
+pub mod chart;
+pub mod checklist;
 pub mod diagram;
+pub mod edits;
+pub mod form;
+pub mod kanban;
 pub mod layout;
+pub mod table;
 
 use serde_json::{Map, Value, json};
 
@@ -85,15 +91,25 @@ pub fn event_command(
     spec: &diagram::Diagram,
     note: Option<&str>,
 ) -> String {
+    let changes: Vec<Value> = changes.iter().map(changes::Change::to_value).collect();
+    event_command_json(id, version, &changes, summary, &spec.to_value(), note)
+}
+
+/// [`event_command`] for any kind: its changes and spec already as JSON.
+pub fn event_command_json(
+    id: &str,
+    version: u64,
+    changes: &[Value],
+    summary: &[String],
+    spec: &Value,
+    note: Option<&str>,
+) -> String {
     let mut payload = Map::new();
     payload.insert("id".into(), json!(id));
     payload.insert("version".into(), json!(version));
-    payload.insert(
-        "changes".into(),
-        Value::Array(changes.iter().map(changes::Change::to_value).collect()),
-    );
+    payload.insert("changes".into(), Value::Array(changes.to_vec()));
     payload.insert("summary".into(), json!(summary));
-    payload.insert("spec".into(), spec.to_value());
+    payload.insert("spec".into(), spec.clone());
     if let Some(note) = note.map(str::trim).filter(|n| !n.is_empty()) {
         payload.insert("note".into(), json!(note));
     }
