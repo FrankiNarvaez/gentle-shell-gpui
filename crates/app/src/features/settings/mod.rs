@@ -64,29 +64,22 @@ pub struct SettingsView {
     _settings_search: Subscription,
     compact_categories_open: bool,
     snapshot: Option<Snapshot>,
-    package_input: Entity<InputState>,
-    running: Option<String>,
-    log: Vec<String>,
+    /// Package input, progress, output and event subscription.
+    package: packages::PackageUiState,
     _load: Task<()>,
+    /// Existing shared lifecycle for package and Gentle Shell upgrade commands.
     _job: Task<()>,
-    _subscription: Subscription,
     /// Window transparency, 0–100 %.
     transparency: Entity<SliderState>,
     _transparency: Subscription,
-    /// A `/gentle:background-subagents` change sent to the shell, not yet answered.
-    background_pending: bool,
-    /// The shell's answer to the last change: `(text, failed)`.
-    background_note: Option<(String, bool)>,
-    /// `gentle-shell upgrade` running.
-    upgrading: bool,
-    /// How the last `gentle-shell upgrade` ended, with its last output lines.
-    upgrade: Option<upgrade::UpgradeResult>,
-    /// "Skip this version" couldn't be saved.
-    skip_error: Option<String>,
+    /// Pending background-helper policy command and its feedback.
+    background: background::BackgroundUiState,
+    /// Gentle Shell upgrade status and its feedback.
+    shell_update: upgrade::ShellUpdateUiState,
     /// Re-render as this app's own update moves along.
     _app_update: Subscription,
-    /// A failed notifications.json write.
-    notifications_note: Option<String>,
+    /// Notification configuration write feedback.
+    notifications: notifications::NotificationUiState,
     /// Setup & requirements: the onboarding checklist, embedded.
     setup: Entity<crate::features::onboarding::OnboardingView>,
     _setup: Subscription,
@@ -106,23 +99,7 @@ impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
     pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let package_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("npm:package-name, git:github.com/…, or a local path")
-        });
-        let subscription = cx.subscribe_in(
-            &package_input,
-            window,
-            |this, input, event: &InputEvent, window, cx| {
-                if let InputEvent::PressEnter { .. } = event {
-                    let source = input.read(cx).value().trim().to_string();
-                    if !source.is_empty() {
-                        input.update(cx, |s, cx| s.set_value("", window, cx));
-                        this.run_package("install", source, cx);
-                    }
-                }
-            },
-        );
+        let package = packages::PackageUiState::new(window, cx);
         let settings_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Find a setting…")
         });
@@ -171,21 +148,15 @@ impl SettingsView {
             _settings_search: settings_search_subscription,
             compact_categories_open: false,
             snapshot: None,
-            package_input,
-            running: None,
-            log: Vec::new(),
+            package,
             _load: Task::ready(()),
             _job: Task::ready(()),
-            _subscription: subscription,
             transparency,
             _transparency: transparency_sub,
-            background_pending: false,
-            background_note: None,
-            upgrading: false,
-            upgrade: None,
-            skip_error: None,
+            background: background::BackgroundUiState::default(),
+            shell_update: upgrade::ShellUpdateUiState::default(),
             _app_update: cx.observe_global::<app_update::AppUpdate>(|_, cx| cx.notify()),
-            notifications_note: None,
+            notifications: notifications::NotificationUiState::default(),
             setup,
             _setup: setup_sub,
             maestro: maestro::Maestro::default(),

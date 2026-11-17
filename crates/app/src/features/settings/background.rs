@@ -111,17 +111,24 @@ impl BackgroundPolicy {
     }
 }
 
+/// UI-only feedback for the shell-owned background helper policy.
+#[derive(Default)]
+pub(super) struct BackgroundUiState {
+    pub(super) pending: bool,
+    pub(super) note: Option<(String, bool)>,
+}
+
 impl SettingsView {
     /// Ask the shell itself to change the policy, as typing
     /// `/gentle:background-subagents enable|disable` would: the shell owns the
     /// file and its validation, and posts its own status report.
     fn set_background(&mut self, on: bool, cx: &mut Context<Self>) {
-        if self.background_pending {
+        if self.background.pending {
             return;
         }
         let verb = if on { "enable" } else { "disable" };
-        self.background_pending = true;
-        self.background_note = None;
+        self.background.pending = true;
+        self.background.note = None;
         cx.emit(SettingsEvent::ShellCommand(format!(
             "/gentle:background-subagents {verb}"
         )));
@@ -131,8 +138,8 @@ impl SettingsView {
     /// The shell's answer to a [`SettingsEvent::ShellCommand`]; re-reads the
     /// files so the row shows what the shell actually wrote.
     pub fn shell_done(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
-        self.background_pending = false;
-        self.background_note = Some(match result {
+        self.background.pending = false;
+        self.background.note = Some(match result {
             Ok(()) => (
                 "Gentle Shell applied it; its report is in 🔔. Helpers launched from now on use it."
                     .into(),
@@ -178,7 +185,7 @@ impl SettingsView {
                                     this.set_background(*index == 1, cx)
                                 }),
                             ))
-                            .when(self.background_pending, |d| {
+                            .when(self.background.pending, |d| {
                                 d.child(Spinner::new().xsmall())
                             }),
                     )
@@ -203,7 +210,7 @@ impl SettingsView {
                             )
                         },
                     )
-                    .when_some(self.background_note.clone(), |d, (text, failed)| {
+                    .when_some(self.background.note.clone(), |d, (text, failed)| {
                         d.child(
                             div()
                                 .text_xs()

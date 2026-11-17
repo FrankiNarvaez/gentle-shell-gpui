@@ -28,6 +28,47 @@ pub const RECOMMENDED: &[(&str, &str)] = &[
     ),
 ];
 
+
+use gpui_kit::component::input::{InputEvent, InputState};
+
+/// The Advanced / Packages page's input, status and event subscription.
+/// The subscription lives with its input so it cannot be dropped by accident.
+pub(super) struct PackageUiState {
+    pub(super) input: Entity<InputState>,
+    pub(super) running: Option<String>,
+    pub(super) log: Vec<String>,
+    _subscription: Subscription,
+}
+
+impl PackageUiState {
+    pub(super) fn new(window: &mut Window, cx: &mut Context<SettingsView>) -> Self {
+        let input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("npm:package-name, git:github.com/…, or a local path")
+        });
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this, input, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    let source = input.read(cx).value().trim().to_string();
+                    if !source.is_empty() {
+                        input.update(cx, |s, cx| s.set_value("", window, cx));
+                        this.run_package("install", source, cx);
+                    }
+                }
+            },
+        );
+
+        Self {
+            input,
+            running: None,
+            log: Vec::new(),
+            _subscription: subscription,
+        }
+    }
+}
+
 impl SettingsView {
     /// `gentle-shell install|remove <source>`: Pi's own package manager
     /// against the resolved home.
@@ -37,11 +78,11 @@ impl SettingsView {
         source: String,
         cx: &mut Context<Self>,
     ) {
-        if self.running.is_some() {
+        if self.package.running.is_some() {
             return;
         }
-        self.running = Some(format!("{verb} {source}"));
-        self.log.clear();
+        self.package.running = Some(format!("{verb} {source}"));
+        self.package.log.clear();
         let cwd = self.cwd.clone();
         self._job = cx.spawn(async move |this, cx| {
             let result = cx
@@ -51,13 +92,13 @@ impl SettingsView {
                 )
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.running = None;
+                this.package.running = None;
                 forget_claude_auth();
                 let (ok, text) = match result {
                     Ok(text) => (true, text),
                     Err(text) => (false, text),
                 };
-                this.log = text
+                this.package.log = text
                     .lines()
                     .rev()
                     .take(8)
@@ -167,25 +208,25 @@ impl SettingsView {
                             .flex_1()
                             .min_w_0()
                             .child(Icon::new(IconName::Plus).small().text_color(ui::faint()))
-                            .child(Input::new(&self.package_input).appearance(false).small()),
+                            .child(Input::new(&self.package.input).appearance(false).small()),
                     )
                     .child(
                         Button::new("install-package")
                             .primary()
                             .icon(Icon::new(IconName::ArrowDown))
                             .label("Install")
-                            .disabled(self.running.is_some())
+                            .disabled(self.package.running.is_some())
                             .on_click(cx.listener(|this, _, window, cx| {
-                                let source = this.package_input.read(cx).value().trim().to_string();
+                                let source = this.package.input.read(cx).value().trim().to_string();
                                 if !source.is_empty() {
-                                    this.package_input
+                                    this.package.input
                                         .update(cx, |s, cx| s.set_value("", window, cx));
                                     this.run_package("install", source, cx);
                                 }
                             })),
                     ),
             )
-            .when_some(self.running.clone(), |d, job| {
+            .when_some(self.package.running.clone(), |d, job| {
                 d.child(
                     h_flex()
                         .pt_2()
@@ -196,10 +237,10 @@ impl SettingsView {
                         .child(format!("gentle-shell {job}…")),
                 )
             })
-            .when(!self.log.is_empty(), |d| {
+            .when(!self.package.log.is_empty(), |d| {
                 d.child(
                     ui::well_box().mt_2().px_3().py_2().gap_0p5().children(
-                        self.log
+                        self.package.log
                             .iter()
                             .map(|l| div().text_color(ui::muted()).child(l.clone())),
                     ),

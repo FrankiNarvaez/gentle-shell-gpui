@@ -32,6 +32,6 @@ fn backend_updates_section(
         .when_some(snapshot.update.clone(), |card, offer| {
             card.child(view.render_update(offer, cx))
         })
-        .children(view.upgrade.as_ref().map(upgrade::upgrade_result))
+        .children(view.shell_update.result.as_ref().map(upgrade::upgrade_result))
         .child(view.render_engram_update(snapshot.engram_update.clone(), cx))
 }
