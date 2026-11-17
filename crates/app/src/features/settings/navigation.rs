@@ -323,6 +323,38 @@ mod tests {
     }
 
     #[test]
+    fn every_category_can_be_found_by_its_display_name() {
+        for page in SettingsPage::ALL {
+            assert!(
+                page.matches_query(page.label()),
+                "{} must remain discoverable",
+                page.label()
+            );
+            assert!(
+                page.matches_query(&page.label().to_ascii_uppercase()),
+                "{} must match case-insensitively",
+                page.label()
+            );
+        }
+    }
+
+    #[test]
+    fn search_requires_all_terms_and_ignores_whitespace_and_case() {
+        assert!(SettingsPage::Appearance.matches_query("  ThEmE   WINDOW  "));
+        assert!(SettingsPage::Agents.matches_query("HYDRATION background"));
+        assert!(SettingsPage::Models.matches_query("thinking provider"));
+        assert!(!SettingsPage::Appearance.matches_query("theme no-such-option"));
+        assert!(!SettingsPage::Advanced.matches_query("theme"));
+        assert!(!SettingsPage::General.matches_query("this-setting-does-not-exist"));
+
+        // Empty search returns all categories, so clearing it restores the rail.
+        for page in SettingsPage::ALL {
+            assert!(page.matches_query(""));
+            assert!(page.matches_query("  \t "));
+        }
+    }
+
+    #[test]
     fn search_finds_options_by_category_and_setting_name() {
         assert!(SettingsPage::Appearance.matches_query("window transparency"));
         assert!(SettingsPage::Appearance.matches_query("THEME"));
