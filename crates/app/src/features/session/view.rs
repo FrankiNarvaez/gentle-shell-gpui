@@ -49,6 +49,8 @@ const ANSWER_FADE: Duration = Duration::from_millis(500);
 const OUTPUT: usize = 0;
 const INPUT: usize = 1;
 const THINKING: usize = 2;
+/// The whole step: a finished tool (or helper) row folds to its quiet line.
+const STEP: usize = 3;
 
 fn fold_key(ix: usize, sub: usize, slot: usize) -> usize {
     (ix << 16) | (sub << 2) | slot
@@ -142,6 +144,13 @@ impl SessionView {
             self.sync_markdown(from, cx);
             self.track_live(from);
             self.list.prepare(&self.transcript.items, from);
+            // Steps fold to their quiet line by default; keep the list's
+            // estimate weights in step (a running step that fails opens).
+            let items = self.transcript.items.get(from..).unwrap_or_default();
+            for (ix, item) in (from..).zip(items) {
+                let collapsed = self.step_collapsed(ix, item);
+                self.list.set_step_collapsed(ix, collapsed);
+            }
             self.request_images(from, dirty.reset, cx);
             self.genui.set_root(&self.cwd, cx);
             self.genui
@@ -406,8 +415,26 @@ impl SessionView {
             self.expanded.insert(key);
         }
         // Fold keys carry their item index.
-        self.list.remeasure_item(key >> 16);
+        let ix = key >> 16;
+        // A whole-step fold changes the row's estimate too.
+        if key & 3 == STEP
+            && let Some(item) = self.transcript.items.get(ix)
+        {
+            let collapsed = self.step_collapsed(ix, item);
+            self.list.set_step_collapsed(ix, collapsed);
+        }
+        self.list.remeasure_item(ix);
         cx.notify();
+    }
+
+    /// Whether step `ix` shows its quiet one-line row (`Item::Shell` never
+    /// does). A failed tool starts open, every other step starts folded;
+    /// a click flips whichever it was (the key inverts the default).
+    fn step_collapsed(&self, ix: usize, item: &Item) -> bool {
+        match gentle_core::transcript::step_open_by_default(item) {
+            None => false,
+            Some(open) => open != self.expanded.contains(&fold_key(ix, 0, STEP)),
+        }
     }
 
     // ── Empty and error states ─────────────────────────────────────────────
@@ -1009,79 +1036,26 @@ impl SessionView {
         let show_output =
             has_output && (spec.always_output || open || spec.status != ToolStatus::Done);
         let foldable = has_output && !spec.always_output;
+        // A finished tool step shows its quiet line first; a click unfolds
+        // the whole card. What you ran yourself (`Shell`) always shows it.
+        let step_key = fold_key(ix, 0, STEP);
+        let step_open = !self.step_collapsed(ix, item);
+        if !step_open {
+            return self
+                .step_line(ix, spec, duration, step_key, false, cx)
+                .into_any_element();
+        }
+        let header = if matches!(item, Item::Shell { .. }) {
+            self.card_header(ix, spec, out_key, foldable, cx)
+                .into_any_element()
+        } else {
+            self.step_line(ix, spec, duration, step_key, true, cx)
+                .into_any_element()
+        };
         ui::card()
             .w_full()
             .overflow_hidden()
-            .child(
-                h_flex()
-                    .id(("tool", ix))
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .when(foldable, |this| {
-                        this.cursor_pointer()
-                            .hover(|s| s.bg(ui::surface_hover()))
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(out_key, cx)))
-                    })
-                    .child(Icon::new(spec.icon).small().text_color(ui::muted()))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_shrink(1.)
-                            .max_w(rems(420. / 16.))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(rems(13. / 16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(ui::champagne())
-                            .child(spec.title.clone()),
-                    )
-                    .when_some(spec.chip.clone(), |this, chip| {
-                        this.child(ui::chip(chip, ui::info()).flex_shrink_0())
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .font_family(ui::MONO)
-                            .text_size(rems(12. / 16.))
-                            .text_color(ui::muted())
-                            .child(spec.subject.clone()),
-                    )
-                    .when_some(spec.added, |this, n| {
-                        this.child(
-                            div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(12. / 16.))
-                                .text_color(ui::success())
-                                .child(format!("+{n}")),
-                        )
-                    })
-                    .when_some(spec.removed, |this, n| {
-                        this.child(
-                            div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(12. / 16.))
-                                .text_color(ui::danger())
-                                .child(format!("−{n}")),
-                        )
-                    })
-                    .when(foldable, |this| {
-                        this.child(
-                            Icon::new(if open {
-                                IconName::ChevronUp
-                            } else {
-                                IconName::ChevronDown
-                            })
-                            .xsmall()
-                            .text_color(ui::faint()),
-                        )
-                    }),
-            )
+            .child(header)
             .when_some(
                 input.zip(spec.input_lines),
                 |this, ((text, diff), lines)| {
@@ -1106,6 +1080,188 @@ impl SessionView {
             })
             .child(status_footer(spec.status, duration))
             .into_any_element()
+    }
+
+    /// A collapsed step: one quiet line, no card around it. The icon is
+    /// faint (danger's cross when the step failed, pulsing while it runs),
+    /// the rest is today's header restyled: title, subject, +n/−n, duration
+    /// and a chevron. Clicking it unfolds the whole step.
+    fn step_line(
+        &self,
+        ix: usize,
+        spec: &CardSpec,
+        duration: Option<Duration>,
+        key: usize,
+        up: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let failed = spec.status == ToolStatus::Failed;
+        let running = spec.status == ToolStatus::Running;
+        let icon = if failed { IconName::CircleX } else { spec.icon };
+        let icon_color = if failed { ui::danger() } else { ui::faint() };
+        h_flex()
+            .id(("step", ix))
+            .w_full()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .min_w_0()
+            .cursor_pointer()
+            .hover(|s| s.bg(ui::surface_hover()))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key, cx)))
+            .child(if running {
+                ui::pulse(div().child(Icon::new(icon).small().text_color(icon_color)))
+                    .into_any_element()
+            } else {
+                Icon::new(icon)
+                    .small()
+                    .text_color(icon_color)
+                    .into_any_element()
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .max_w(rems(420. / 16.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(rems(13. / 16.))
+                    .text_color(ui::muted())
+                    .child(spec.title.clone()),
+            )
+            .when_some(spec.chip.clone(), |this, chip| {
+                this.child(ui::chip(chip, ui::info()).flex_shrink_0())
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .font_family(ui::MONO)
+                    .text_size(rems(12. / 16.))
+                    .text_color(ui::faint())
+                    .child(spec.subject.clone()),
+            )
+            .when_some(spec.added, |this, n| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(12. / 16.))
+                        .text_color(ui::success())
+                        .child(format!("+{n}")),
+                )
+            })
+            .when_some(spec.removed, |this, n| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(12. / 16.))
+                        .text_color(ui::danger())
+                        .child(format!("−{n}")),
+                )
+            })
+            .when_some(duration, |this, d| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(11. / 16.))
+                        .text_color(ui::faint())
+                        .child(ui::format_duration(d.as_millis() as u64)),
+                )
+            })
+            .child(
+                Icon::new(if up {
+                    IconName::ChevronUp
+                } else {
+                    IconName::ChevronDown
+                })
+                .xsmall()
+                .text_color(ui::faint()),
+            )
+    }
+
+    /// Today's tool card header: icon, title, subject, +n/−n and a chevron
+    /// when the output folds. Kept for `Item::Shell`, which never folds as
+    /// a whole step.
+    fn card_header(
+        &self,
+        ix: usize,
+        spec: &CardSpec,
+        out_key: usize,
+        foldable: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        h_flex()
+            .id(("tool", ix))
+            .px_3()
+            .py_2()
+            .gap_2()
+            .when(foldable, |this| {
+                this.cursor_pointer()
+                    .hover(|s| s.bg(ui::surface_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(out_key, cx)))
+            })
+            .child(Icon::new(spec.icon).small().text_color(ui::muted()))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .max_w(rems(420. / 16.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(rems(13. / 16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(ui::champagne())
+                    .child(spec.title.clone()),
+            )
+            .when_some(spec.chip.clone(), |this, chip| {
+                this.child(ui::chip(chip, ui::info()).flex_shrink_0())
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .font_family(ui::MONO)
+                    .text_size(rems(12. / 16.))
+                    .text_color(ui::muted())
+                    .child(spec.subject.clone()),
+            )
+            .when_some(spec.added, |this, n| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(12. / 16.))
+                        .text_color(ui::success())
+                        .child(format!("+{n}")),
+                )
+            })
+            .when_some(spec.removed, |this, n| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(12. / 16.))
+                        .text_color(ui::danger())
+                        .child(format!("−{n}")),
+                )
+            })
+            .when(foldable, |this| {
+                this.child(
+                    Icon::new(if self.expanded.contains(&out_key) {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    })
+                    .xsmall()
+                    .text_color(ui::faint()),
+                )
+            })
     }
 
     /// A command, file body or diff (`lines` long), clipped from the bottom with a fade.

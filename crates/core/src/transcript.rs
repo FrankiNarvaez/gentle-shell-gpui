@@ -64,6 +64,11 @@ pub fn image_key(data: &str) -> u64 {
     hasher.finish()
 }
 
+/// Whether a step starts open, from its kind and status: a failed tool
+/// step does (its error is why you'd look at it), every other collapsible
+/// step starts folded to its quiet one-line row. `None` for items that
+/// never fold this way — `Shell` (what you ran yourself) keeps its output
+/// visible, and the other items are not steps.
 #[derive(Debug, Clone)]
 pub enum Item {
     User {
@@ -108,6 +113,23 @@ pub enum Item {
         command: String,
         notices: Vec<(NoticeLevel, String)>,
     },
+}
+
+/// Whether a step starts open, from its kind and status: a failed tool
+/// step does (its error is why you'd look at it), every other collapsible
+/// step starts folded to its quiet one-line row. `None` for items that
+/// never fold this way — `Shell` (what you ran yourself) keeps its output
+/// visible, the generative-UI tool and its event cards are rendered by the
+/// genui views as their own live cards (content, not collapsible steps),
+/// and the other items are not steps.
+pub fn step_open_by_default(item: &Item) -> Option<bool> {
+    match item {
+        Item::Tool { name, status, .. } if name == crate::genui::TOOL => None,
+        Item::Tool { status, .. } => Some(*status == ToolStatus::Failed),
+        Item::Custom { kind, .. } if kind == crate::genui::EVENT_MESSAGE => None,
+        Item::Custom { .. } => Some(false),
+        _ => None,
+    }
 }
 
 /// Token usage reported while the latest assistant message streams.
@@ -693,6 +715,80 @@ pub fn format_tokens(tokens: u64) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn steps_open_by_default_only_when_failed() {
+        let tool = |status| Item::Tool {
+            call_id: "a".into(),
+            name: "bash".into(),
+            args: json!({}),
+            status,
+            output: String::new(),
+            details: json!({}),
+            duration_ms: None,
+        };
+        // Running and done steps fold to their quiet line.
+        assert_eq!(
+            step_open_by_default(&tool(ToolStatus::Running)),
+            Some(false)
+        );
+        assert_eq!(step_open_by_default(&tool(ToolStatus::Done)), Some(false));
+        // A failed one starts open, so you see why it broke.
+        assert_eq!(step_open_by_default(&tool(ToolStatus::Failed)), Some(true));
+        // Helper cards fold; what you ran yourself keeps its output, and
+        // the generative-UI cards stay as their own live views.
+        assert_eq!(
+            step_open_by_default(&Item::Custom {
+                kind: "gentle-agents.result".into(),
+                text: "done".into(),
+                details: json!({}),
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Tool {
+                call_id: "g".into(),
+                name: crate::genui::TOOL.into(),
+                args: json!({}),
+                status: ToolStatus::Done,
+                output: String::new(),
+                details: json!({}),
+                duration_ms: None,
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Custom {
+                kind: crate::genui::EVENT_MESSAGE.into(),
+                text: String::new(),
+                details: json!({}),
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Shell {
+                command: "ls".into(),
+                output: String::new(),
+                exit_code: Some(0),
+                running: false,
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Notice {
+                level: NoticeLevel::Info,
+                text: "hi".into(),
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::User {
+                text: "hi".into(),
+                images: vec![],
+            }),
+            None
+        );
+    }
 
     fn apply_all(t: &mut Transcript, events: &[Value]) -> Vec<Effects> {
         events.iter().map(|e| t.apply(e)).collect()

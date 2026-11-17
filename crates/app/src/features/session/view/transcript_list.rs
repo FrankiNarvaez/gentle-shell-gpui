@@ -1,7 +1,7 @@
 //! Filas, mediciones y cachés de presentación de la lista virtualizada.
 
 use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -130,6 +130,9 @@ pub(in crate::features::session) struct TranscriptList {
     /// Each item's size from its content (`gentle_core::scroll::item_weight`),
     /// by transcript index: how the rail sizes rows it hasn't seen.
     weights: Vec<f32>,
+    /// Items folded to their quiet one-line step row, by transcript index:
+    /// they estimate as [`STEP_LINE_WEIGHT`] instead of their full weight.
+    step_collapsed: HashSet<usize>,
     /// Every row's weight, in row order: the estimate's input.
     row_weights: Vec<f32>,
     /// Where the pane is along the whole conversation; its row tops are
@@ -150,6 +153,10 @@ pub(in crate::features::session) struct TranscriptList {
 const HEADER_WEIGHT: f32 = 4.;
 const TAIL_WEIGHT: f32 = 2.5;
 const FOOTER_WEIGHT: f32 = 1.4;
+/// A step folded to its quiet one-line row (`Item::Tool`, `Item::Custom`):
+/// the line's padding and text. The full weight stays in `weights`, so
+/// unfolding restores the estimate without re-reading the item.
+const STEP_LINE_WEIGHT: f32 = 2.;
 
 impl TranscriptList {
     pub(in crate::features::session) fn new() -> Self {
@@ -162,6 +169,7 @@ impl TranscriptList {
             born: HashMap::new(),
             heights: HashMap::new(),
             weights: Vec::new(),
+            step_collapsed: HashSet::new(),
             row_weights: Vec::new(),
             estimate: Estimate::default(),
             stale: true,
@@ -178,6 +186,7 @@ impl TranscriptList {
         self.born.clear();
         self.heights.clear();
         self.weights.clear();
+        self.step_collapsed.clear();
         self.marks.clear();
         self.stale = true;
     }
@@ -227,10 +236,13 @@ impl TranscriptList {
             self.rail_for = None;
             self.row_weights.clear();
             self.row_weights.push(HEADER_WEIGHT);
-            self.row_weights.extend(
-                (0..self.shape.items)
-                    .map(|ix| self.weights.get(ix).copied().unwrap_or(TAIL_WEIGHT)),
-            );
+            self.row_weights.extend((0..self.shape.items).map(|ix| {
+                if self.step_collapsed.contains(&ix) {
+                    STEP_LINE_WEIGHT
+                } else {
+                    self.weights.get(ix).copied().unwrap_or(TAIL_WEIGHT)
+                }
+            }));
             self.row_weights
                 .extend(self.shape.tail.iter().map(|_| TAIL_WEIGHT));
             self.row_weights.push(FOOTER_WEIGHT);
@@ -279,6 +291,8 @@ impl TranscriptList {
     pub(super) fn prepare(&mut self, items: &[Item], from: usize) {
         self.stale = true;
         self.weights.resize(from.min(items.len()), TAIL_WEIGHT);
+        // Items from `from` on are re-derived; the view re-states their fold.
+        self.step_collapsed.retain(|&ix| ix < from);
         let kept = self.marks.partition_point(|(ix, _)| *ix < from);
         self.marks.truncate(kept);
         let changed = items.get(from..).unwrap_or_default();
@@ -359,6 +373,17 @@ impl TranscriptList {
             self.stale |= self.heights.remove(&row).is_some();
             self.state.remeasure_items(row..row + 1);
         }
+    }
+
+    /// Whether item `ix` sits folded to its quiet one-line step row; a
+    /// change re-lays the estimate (the row's weight moved).
+    pub(super) fn set_step_collapsed(&mut self, ix: usize, collapsed: bool) {
+        let changed = if collapsed {
+            self.step_collapsed.insert(ix)
+        } else {
+            self.step_collapsed.remove(&ix)
+        };
+        self.stale |= changed;
     }
 
     pub(super) fn prepared(&self, ix: usize) -> Option<&Prepared> {
