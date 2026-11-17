@@ -16,7 +16,7 @@ use super::super::panel::PanelView;
 use super::{Seen, event_json, ops};
 
 /// Stands in for the conversation: shows one surface and keeps what it asks for.
-struct Host {
+pub(super) struct Host {
     view: Entity<PanelView>,
     seen: Vec<Seen>,
     _subscription: Subscription,
@@ -31,7 +31,7 @@ impl Render for Host {
     }
 }
 
-fn open<'a>(
+pub(super) fn open<'a>(
     cx: &'a mut TestAppContext,
     kind: &str,
     spec: Value,
@@ -64,19 +64,19 @@ fn open<'a>(
     (host, cx)
 }
 
-fn bounds(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+pub(super) fn bounds(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
     cx.run_until_parked();
     cx.debug_bounds(selector)
         .unwrap_or_else(|| panic!("nothing drawn as {selector}"))
 }
 
-fn click(cx: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn click(cx: &mut VisualTestContext, selector: &'static str) {
     let at = bounds(cx, selector).center();
     cx.simulate_click(at, Modifiers::none());
     cx.run_until_parked();
 }
 
-fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
+pub(super) fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
     let position = bounds(cx, selector).center();
     for click_count in [1, 2] {
         cx.simulate_event(MouseDownEvent {
@@ -96,7 +96,7 @@ fn double_click(cx: &mut VisualTestContext, selector: &'static str) {
     cx.run_until_parked();
 }
 
-fn drag(cx: &mut VisualTestContext, from: Point<Pixels>, to: Point<Pixels>) {
+pub(super) fn drag(cx: &mut VisualTestContext, from: Point<Pixels>, to: Point<Pixels>) {
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
     // In steps, as a hand would.
     for step in 1..=6 {
@@ -109,7 +109,7 @@ fn drag(cx: &mut VisualTestContext, from: Point<Pixels>, to: Point<Pixels>) {
     cx.run_until_parked();
 }
 
-fn pending(host: &Entity<Host>, cx: &mut VisualTestContext) -> usize {
+pub(super) fn pending(host: &Entity<Host>, cx: &mut VisualTestContext) -> usize {
     cx.update(|_, cx| {
         host.read(cx)
             .view
@@ -135,7 +135,7 @@ fn sent(host: &Entity<Host>, cx: &mut VisualTestContext) -> Vec<String> {
 }
 
 /// The last command sent, as the event's JSON.
-fn last_event(host: &Entity<Host>, cx: &mut VisualTestContext) -> Value {
+pub(super) fn last_event(host: &Entity<Host>, cx: &mut VisualTestContext) -> Value {
     let command = sent(host, cx).pop().expect("Send produced a command");
     event_json(&command)
 }

@@ -22,10 +22,12 @@ use gentle_core::genui::{self, Snapshot};
 use gentle_core::transcript::{Item, ToolStatus};
 use gpui_kit::*;
 
+mod canvas;
 mod chart;
 mod checklist;
 mod details;
 mod diagram;
+mod erd;
 mod extension;
 mod form;
 mod html;
@@ -38,12 +40,15 @@ mod pinned;
 mod pointer;
 mod refs;
 mod review;
+mod sequence;
 mod share;
+mod states;
 mod store;
 mod table;
 mod templates;
 #[cfg(test)]
 mod tests;
+mod timeline;
 mod view;
 
 pub use diagram::{DiagramEvent, DiagramView};

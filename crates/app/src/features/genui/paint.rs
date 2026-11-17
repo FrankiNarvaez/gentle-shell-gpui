@@ -72,7 +72,7 @@ impl Frame {
         let origin = bounds.origin;
         let visible = self.visible(bounds);
         let s = self.scale;
-        self.grid(bounds, window);
+        grid(bounds, self.scale, self.pan, window);
         for (rect, selected) in &self.groups {
             if !rect.intersects(&visible) {
                 continue;
@@ -125,33 +125,6 @@ impl Frame {
                 ui::accent().opacity(0.6),
                 BorderStyle::Dashed,
             ));
-        }
-    }
-
-    /// React Flow's dotted background: one dot per grid crossing, moving
-    /// and scaling with the view.
-    fn grid(&self, bounds: Bounds<Pixels>, window: &mut Window) {
-        let mut gap = GRID * self.scale;
-        while gap < MIN_DOT_GAP {
-            gap *= 2.;
-        }
-        let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-        let dot = (1.6 * self.scale.min(1.)).max(1.);
-        let color = ui::border_strong();
-        let mut y = self.pan.y.rem_euclid(gap);
-        while y < h {
-            let mut x = self.pan.x.rem_euclid(gap);
-            while x < w {
-                window.paint_quad(fill(
-                    Bounds::new(
-                        bounds.origin + point(px(x - dot / 2.), px(y - dot / 2.)),
-                        size(px(dot), px(dot)),
-                    ),
-                    color,
-                ));
-                x += gap;
-            }
-            y += gap;
         }
     }
 
@@ -235,9 +208,42 @@ impl Frame {
     }
 }
 
+/// React Flow's dotted background: one dot per grid crossing, moving and
+/// scaling with the view (`scale` px per diagram unit, `pan` px).
+pub(super) fn grid(bounds: Bounds<Pixels>, scale: f32, pan: Point<f32>, window: &mut Window) {
+    let mut gap = GRID * scale;
+    while gap < MIN_DOT_GAP {
+        gap *= 2.;
+    }
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let dot = (1.6 * scale.min(1.)).max(1.);
+    let color = ui::border_strong();
+    let mut y = pan.y.rem_euclid(gap);
+    while y < h {
+        let mut x = pan.x.rem_euclid(gap);
+        while x < w {
+            window.paint_quad(fill(
+                Bounds::new(
+                    bounds.origin + point(px(x - dot / 2.), px(y - dot / 2.)),
+                    size(px(dot), px(dot)),
+                ),
+                color,
+            ));
+            x += gap;
+        }
+        y += gap;
+    }
+}
+
 /// Dashes `on` long every `on + off` along `points`, the pattern shifted
 /// forward by `shift` (px).
-fn dash_polyline(path: &mut PathBuilder, points: &[Point<Pixels>], on: f32, off: f32, shift: f32) {
+pub(super) fn dash_polyline(
+    path: &mut PathBuilder,
+    points: &[Point<Pixels>],
+    on: f32,
+    off: f32,
+    shift: f32,
+) {
     let period = on + off;
     if period <= 0. || points.len() < 2 {
         return;

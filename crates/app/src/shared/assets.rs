@@ -131,7 +131,12 @@ gpui_kit::assets::icon_assets!(
         Circle,
         ListIndentIncrease,
         ListIndentDecrease,
-        ArrowUpDown
+        ArrowUpDown,
+        // Generative UI canvas kinds: sequence, state machine, timeline.
+        ArrowLeftRight,
+        CircleDot,
+        ChartGantt,
+        Flag
     ]
 );
 

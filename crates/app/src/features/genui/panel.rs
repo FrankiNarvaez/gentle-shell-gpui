@@ -14,6 +14,7 @@ use gentle_core::genui::live::Live;
 use gentle_core::genui::review::{Decision, Review};
 use gentle_core::genui::table::Table;
 use gentle_core::genui::{self, Outcome, Snapshot};
+use gentle_core::genui::{erd, sequence, states, timeline};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -25,12 +26,16 @@ use serde_json::Value;
 use super::chart::ChartState;
 use super::checklist::ChecklistState;
 use super::diagram::{DiagramEvent, SendState};
+use super::erd::ErdState;
 use super::form::FormState;
 use super::kanban::KanbanState;
 use super::live::{AgentStatus, LiveState, SharedEnv};
 use super::motion::Glides;
 use super::review::ReviewState;
+use super::sequence::SequenceState;
+use super::states::MachineState;
 use super::table::TableState;
+use super::timeline::TimelineState;
 use crate::shared::ui;
 
 /// Header and footer heights (px at 100 %), for the card's height.
@@ -40,13 +45,17 @@ pub(super) const CHROME: f32 = 38. + 38.;
 pub(super) const MAX_HEIGHT: f32 = 480.;
 
 /// Wire kind, default title, header icon.
-const KINDS: [(&str, &str, IconName); 6] = [
+const KINDS: [(&str, &str, IconName); 10] = [
     ("table", "Table", IconName::Table),
     ("form", "Form", IconName::ClipboardList),
     ("checklist", "Checklist", IconName::ListChecks),
     ("kanban", "Board", IconName::SquareKanban),
     ("chart", "Chart", IconName::ChartColumn),
     ("review", "Review", IconName::GitCompare),
+    ("sequence", "Sequence", IconName::ArrowLeftRight),
+    ("erd", "Data model", IconName::Database),
+    ("state", "State machine", IconName::CircleDot),
+    ("timeline", "Timeline", IconName::ChartGantt),
 ];
 
 /// Whether `kind` is drawn by a [`PanelView`].
@@ -78,6 +87,10 @@ pub(super) enum Body {
     Kanban(KanbanState),
     Chart(ChartState),
     Review(ReviewState),
+    Sequence(SequenceState),
+    Erd(ErdState),
+    State(MachineState),
+    Timeline(TimelineState),
 }
 
 /// `$e` bound to the kind's edits (`mut`: mutably); charts have none.
@@ -101,6 +114,22 @@ macro_rules! edits {
                 $then
             }
             Body::Review(s) => {
+                let $e = &s.edits;
+                $then
+            }
+            Body::Sequence(s) => {
+                let $e = &s.edits;
+                $then
+            }
+            Body::Erd(s) => {
+                let $e = &s.edits;
+                $then
+            }
+            Body::State(s) => {
+                let $e = &s.edits;
+                $then
+            }
+            Body::Timeline(s) => {
                 let $e = &s.edits;
                 $then
             }
@@ -129,6 +158,22 @@ macro_rules! edits {
                 let $e = &mut s.edits;
                 $then
             }
+            Body::Sequence(s) => {
+                let $e = &mut s.edits;
+                $then
+            }
+            Body::Erd(s) => {
+                let $e = &mut s.edits;
+                $then
+            }
+            Body::State(s) => {
+                let $e = &mut s.edits;
+                $then
+            }
+            Body::Timeline(s) => {
+                let $e = &mut s.edits;
+                $then
+            }
             Body::Chart(_) => $chart,
         }
     };
@@ -143,6 +188,10 @@ impl Body {
             "kanban" => Body::Kanban(KanbanState::new(Board::parse(spec)?)),
             "chart" => Body::Chart(ChartState::new(Chart::parse(spec)?)),
             "review" => Body::Review(ReviewState::new(Review::parse(spec)?)),
+            "sequence" => Body::Sequence(SequenceState::new(sequence::Sequence::parse(spec)?)),
+            "erd" => Body::Erd(ErdState::new(erd::Erd::parse(spec)?)),
+            "state" => Body::State(MachineState::new(states::Machine::parse(spec)?)),
+            "timeline" => Body::Timeline(TimelineState::new(timeline::Timeline::parse(spec)?)),
             other => return Err(vec![format!("unknown kind \"{other}\"")]),
         })
     }
@@ -157,6 +206,10 @@ impl Body {
             Body::Kanban(s) => s.rebase(Board::parse(spec)?),
             Body::Chart(s) => s.rebase(Chart::parse(spec)?),
             Body::Review(s) => s.rebase(Review::parse(spec)?),
+            Body::Sequence(s) => s.rebase(sequence::Sequence::parse(spec)?),
+            Body::Erd(s) => s.rebase(erd::Erd::parse(spec)?),
+            Body::State(s) => s.rebase(states::Machine::parse(spec)?),
+            Body::Timeline(s) => s.rebase(timeline::Timeline::parse(spec)?),
         }
         Ok(())
     }
@@ -170,6 +223,14 @@ impl Body {
             Body::Kanban(s) => Board::parse(spec).is_ok_and(|b| &b == s.edits.base()),
             Body::Chart(s) => Chart::parse(spec).is_ok_and(|c| c == s.chart),
             Body::Review(s) => Review::parse(spec).is_ok_and(|r| &r == s.edits.base()),
+            Body::Sequence(s) => {
+                sequence::Sequence::parse(spec).is_ok_and(|q| &q == s.edits.base())
+            }
+            Body::Erd(s) => erd::Erd::parse(spec).is_ok_and(|e| &e == s.edits.base()),
+            Body::State(s) => states::Machine::parse(spec).is_ok_and(|m| &m == s.edits.base()),
+            Body::Timeline(s) => {
+                timeline::Timeline::parse(spec).is_ok_and(|t| &t == s.edits.base())
+            }
         }
     }
 
@@ -182,6 +243,10 @@ impl Body {
             Body::Kanban(s) => s.edits.base().to_value(),
             Body::Chart(s) => s.chart.to_value(),
             Body::Review(s) => s.edits.base().to_value(),
+            Body::Sequence(s) => s.edits.base().to_value(),
+            Body::Erd(s) => s.edits.base().to_value(),
+            Body::State(s) => s.edits.base().to_value(),
+            Body::Timeline(s) => s.edits.base().to_value(),
         }
     }
 
@@ -191,7 +256,7 @@ impl Body {
             Body::Table(s) => s.edits.base().live.as_deref(),
             Body::Checklist(s) => s.edits.base().live.as_deref(),
             Body::Chart(s) => s.chart.live.as_deref(),
-            Body::Form(_) | Body::Kanban(_) | Body::Review(_) => None,
+            _ => None,
         }
     }
 
@@ -252,6 +317,10 @@ impl Body {
             Body::Kanban(s) => s.edits.working().to_value(),
             Body::Chart(s) => s.chart.to_value(),
             Body::Review(s) => s.edits.working().to_value(),
+            Body::Sequence(s) => s.edits.working().to_value(),
+            Body::Erd(s) => s.edits.working().to_value(),
+            Body::State(s) => s.edits.working().to_value(),
+            Body::Timeline(s) => s.edits.working().to_value(),
         }
     }
 
@@ -278,6 +347,10 @@ impl Body {
             Body::Kanban(s) => card_count(s.edits.working()),
             Body::Chart(s) => format!("{} · {} series", s.chart.kind.name(), s.chart.series.len()),
             Body::Review(s) => s.edits.working().stats(),
+            Body::Sequence(s) => sequence::counts(s.edits.working()),
+            Body::Erd(s) => erd::counts(s.edits.working()),
+            Body::State(s) => states::counts(s.edits.working()),
+            Body::Timeline(s) => timeline::counts(s.edits.working()),
         }
     }
 
@@ -297,6 +370,18 @@ impl Body {
             Body::Review(_) => {
                 "j/k to move · a accept · r reject · c comment · Shift-A/R the whole file"
             }
+            Body::Sequence(_) => {
+                "Drag a lifeline to another to add a message · drag messages and participants to reorder · double-click to rename"
+            }
+            Body::Erd(_) => {
+                "Drag tables to move · drag ● from a column to another to relate them · double-click to rename"
+            }
+            Body::State(_) => {
+                "Drag states to move · drag ● to add a transition · double-click to rename"
+            }
+            Body::Timeline(_) => {
+                "Drag a bar to move it, its ends to resize · drag ● to another task to link · double-click to rename"
+            }
         }
     }
 
@@ -309,6 +394,9 @@ impl Body {
             Body::Kanban(s) => s.height(),
             Body::Chart(_) => 300.,
             Body::Review(s) => s.height(),
+            Body::Sequence(_) | Body::Erd(_) | Body::State(_) | Body::Timeline(_) => {
+                super::canvas::CANVAS_HEIGHT
+            }
         }
     }
 }
@@ -569,6 +657,9 @@ impl PanelView {
     pub(super) fn ask(&mut self, subject: &str, cx: &mut Context<Self>) {
         let noun = match self.kind.as_str() {
             "kanban" => "board",
+            "sequence" => "sequence diagram",
+            "erd" => "data model",
+            "state" => "state machine",
             other => other,
         };
         cx.emit(DiagramEvent::Ask(format!(
@@ -598,6 +689,10 @@ impl PanelView {
             Some(Body::Table(_)) => self.table_key(keystroke, window, cx),
             Some(Body::Chart(_)) => self.chart_key(keystroke, cx),
             Some(Body::Review(_)) => self.review_key(keystroke, window, cx),
+            Some(Body::Sequence(_)) => self.sequence_key(keystroke, window, cx),
+            Some(Body::Erd(_)) => self.erd_key(keystroke, window, cx),
+            Some(Body::State(_)) => self.state_key(keystroke, window, cx),
+            Some(Body::Timeline(_)) => self.timeline_key(keystroke, window, cx),
             _ => false,
         };
         if handled {
@@ -631,6 +726,10 @@ impl PanelView {
         let add = match &self.body {
             Some(Body::Checklist(_)) if !locked => Some("Add item"),
             Some(Body::Kanban(_)) => Some("Add card"),
+            Some(Body::Sequence(_)) => Some("Add participant"),
+            Some(Body::Erd(_)) => Some("Add table"),
+            Some(Body::State(_)) => Some("Add state"),
+            Some(Body::Timeline(_)) => Some("Add task"),
             _ => None,
         };
         // A checklist the agent wrote can become a plan the user runs.
@@ -772,6 +871,10 @@ impl PanelView {
         match &self.body {
             Some(Body::Checklist(_)) => self.start_add_item(window, cx),
             Some(Body::Kanban(_)) => self.start_add_card(None, window, cx),
+            Some(Body::Sequence(_)) => self.add_participant(window, cx),
+            Some(Body::Erd(_)) => self.add_table(window, cx),
+            Some(Body::State(_)) => self.add_state(window, cx),
+            Some(Body::Timeline(_)) => self.add_task(window, cx),
             _ => {}
         }
     }
@@ -784,6 +887,10 @@ impl PanelView {
             Some(Body::Kanban(_)) => self.render_kanban(window, cx),
             Some(Body::Chart(_)) => self.render_chart(window, cx),
             Some(Body::Review(_)) => self.render_review(window, cx),
+            Some(Body::Sequence(_)) => self.render_sequence(window, cx),
+            Some(Body::Erd(_)) => self.render_erd(window, cx),
+            Some(Body::State(_)) => self.render_states(window, cx),
+            Some(Body::Timeline(_)) => self.render_timeline(window, cx),
             None => div().into_any_element(),
         }
     }
