@@ -60,7 +60,7 @@ impl SettingsView {
                     .pt_2()
                     .text_xs()
                     .text_color(ui::faint())
-                    .child("Show tabs in the top bar or the left sidebar. Saved across restarts."),
+                    .child("Tabs appear at the top or on the left. Files always opens on the right."),
             )
     }
 
