@@ -6,7 +6,7 @@ The app does not reimplement Gentle Shell. Each tab starts `gentle-shell --mode 
 
 ## Optional vertical tab navigator
 
-Click the list icon in the title bar, or run **Toggle vertical tabs** from the command palette, to move tabs into the left sidebar. The layout choice is remembered across launches. In vertical mode, **Tabs** and **Files** share the sidebar: Files retains its own Files / Changes / Branches views, and the workspace buttons let you switch projects. Search filters open tabs in the current workspace. Drag a tab onto another to reorder, or use its ⋯ menu to pin/unpin, move up/down, rename, or close it; pinned tabs stay at the top. Agent state is shown by a colored indicator. Click the layout icon again to return to the original horizontal tabs. The pane arrangements within each tab are unchanged.
+Click the list icon in the title bar, or run **Toggle vertical tabs** from the command palette, to move tabs into the left sidebar. The layout choice is remembered across launches. In vertical mode, **Tabs** and **Files** share the sidebar: Files retains its own Files / Changes / Branches views, and the workspace buttons let you switch projects. Search filters open tabs in the current workspace. Drag a tab's grip onto another tab to reorder, or use its ⋯ menu to pin/unpin, move up/down, rename, or close it; pinned tabs stay at the top. Agent state is shown by a colored indicator. Click the layout icon again to return to the original horizontal tabs. The pane arrangements within each tab are unchanged.
 
 ## Features
 
