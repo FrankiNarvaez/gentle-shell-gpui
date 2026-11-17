@@ -275,8 +275,13 @@ impl Render for SettingsView {
             panel
                 .w_full()
                 .max_w(rems(960. / 16.))
+                // A definite, viewport-clamped height is required for nested
+                // flex children to shrink and for settings-body to scroll.
+                // ui::screen already applies max_h_full() to the panel.
+                .h(rems(720. / 16.))
                 .child(
                     ui::screen_header()
+                        .flex_shrink_0()
                         .child(
                             Icon::new(IconName::Settings)
                                 .small()
@@ -337,6 +342,7 @@ impl Render for SettingsView {
                                 })
                                 .child(
                                     v_flex()
+                                        .flex_shrink_0()
                                         .px_4()
                                         .py_3()
                                         .gap_1()
