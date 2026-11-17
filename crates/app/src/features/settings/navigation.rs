@@ -114,10 +114,29 @@ pub(super) fn sidebar(selected: SettingsPage, cx: &mut Context<SettingsView>) ->
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     if this.page != page {
                                         this.page = page;
+                                        this.body_scroll.scroll_to_item(0);
                                         cx.notify();
                                     }
                                 })),
                         )
                 })),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SettingsPage;
+
+    #[test]
+    fn categories_have_unique_ids_and_user_facing_labels() {
+        let mut ids = std::collections::HashSet::new();
+
+        for page in SettingsPage::ALL {
+            assert!(ids.insert(page.id()), "duplicate settings page id");
+            assert!(!page.label().is_empty(), "settings page without label");
+            assert!(!page.description().is_empty(), "settings page without description");
+        }
+
+        assert_eq!(ids.len(), 9);
+    }
 }
