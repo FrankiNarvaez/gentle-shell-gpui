@@ -375,14 +375,15 @@ impl SettingsView {
     }
 }
 
-/// Interface size: smaller and bigger a step at a time (the same steps as
-/// ⌘- and ⌘=), back to 100 %, and the size now. It applies to every window.
+/// Interface size: smaller and bigger a step at a time (also via the
+/// platform's shortcut keys), back to 100 %, and the size now.
 fn interface_size_row(size: u16) -> Div {
-    let keys = if cfg!(target_os = "macos") {
-        "⌘= bigger · ⌘- smaller · ⌘0 resets"
-    } else {
-        "Ctrl+= bigger · Ctrl+- smaller · Ctrl+0 resets"
-    };
+    let keys = format!(
+        "{} bigger · {} smaller · {} resets",
+        ui::shortcut("="),
+        ui::shortcut("-"),
+        ui::shortcut("0")
+    );
     h_flex()
         .pb_2()
         .gap_3()

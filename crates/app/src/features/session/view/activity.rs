@@ -437,7 +437,7 @@ impl SessionView {
                                 .ghost()
                                 .xsmall()
                                 .icon(Icon::new(IconName::Users))
-                                .label("Open Agents (⌘⇧A)")
+                                .label(format!("Open Agents ({})", ui::shortcut_shift("A")))
                                 .on_click(move |_, _, cx| {
                                     let _ = weak.update(cx, |this, cx| this.open_agents(None, cx));
                                 }),

@@ -35,11 +35,7 @@ actions!(file_view, [Save]);
 /// Key context of a file pane, where ⌘S saves.
 const CONTEXT: &str = "GentleFileView";
 /// The save shortcut as the header shows it.
-const SAVE_HINT: &str = if cfg!(target_os = "macos") {
-    "⌘S"
-} else {
-    "Ctrl+S"
-};
+const SAVE_HINT: &str = ui::platform_shortcut("⌘S", "Ctrl+S");
 /// How often an open file is checked for outside writes while it has focus.
 const POLL: Duration = Duration::from_millis(800);
 /// The same for an unfocused pane, which may be in a hidden tab or

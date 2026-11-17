@@ -121,7 +121,6 @@ impl Render for Workspace {
                                     // panes carry no header; these act on the
                                     // focused pane.
                                     .when(self.tab().is_some(), |d| {
-                                        let mac = cfg!(target_os = "macos");
                                         d.child(
                                             Button::new("title-tile-pane")
                                                 .ghost()
@@ -129,7 +128,7 @@ impl Render for Workspace {
                                                 .icon(Icon::new(IconName::LayoutDashboard))
                                                 .tooltip(format!(
                                                     "New pane, tiled ({})",
-                                                    if mac { "⌘D" } else { "Ctrl+Shift+D" }
+                                                    ui::platform_shortcut("⌘D", "Ctrl+Shift+D")
                                                 ))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.on_tile_pane(&TilePane, window, cx)
@@ -142,7 +141,7 @@ impl Render for Workspace {
                                                 .icon(Icon::new(IconName::Rows2))
                                                 .tooltip(format!(
                                                     "Split down ({})",
-                                                    if mac { "⌘⇧D" } else { "Ctrl+Shift+E" }
+                                                    ui::platform_shortcut("⌘⇧D", "Ctrl+Shift+E")
                                                 ))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.on_split_down(&SplitDown, window, cx)
@@ -178,7 +177,7 @@ impl Render for Workspace {
                                                         .tooltip(format!(
                                                             "Close \u{201c}{}\u{201d} ({})",
                                                             target.trim_end_matches(" •"),
-                                                            if mac { "⌘W" } else { "Ctrl+W" }
+                                                            ui::shortcut("W")
                                                         ))
                                                         .on_click(cx.listener(
                                                             |this, _, window, cx| {
@@ -243,11 +242,7 @@ impl Render for Workspace {
                                             .ghost()
                                             .xsmall()
                                             .icon(Icon::new(IconName::Command))
-                                            .tooltip(if cfg!(target_os = "macos") {
-                                                "Commands (⌘K)"
-                                            } else {
-                                                "Commands (Ctrl+K)"
-                                            })
+                                            .tooltip(format!("Commands ({})", ui::shortcut("K")))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.on_open_palette(&OpenPalette, window, cx)
                                             })),
@@ -418,11 +413,10 @@ impl Render for Workspace {
                                                 } else {
                                                     IconName::PanelLeftOpen
                                                 }))
-                                                .tooltip(if cfg!(target_os = "macos") {
-                                                    "Toggle sidebar (⌘B)"
-                                                } else {
-                                                    "Toggle sidebar (Ctrl+B)"
-                                                })
+                                                .tooltip(format!(
+                                                    "Toggle sidebar ({})",
+                                                    ui::shortcut("B")
+                                                ))
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_sidebar(cx)
                                                 })),

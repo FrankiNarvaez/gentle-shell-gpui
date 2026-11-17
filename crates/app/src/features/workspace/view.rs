@@ -309,11 +309,7 @@ impl Workspace {
                                         IconName::Bot,
                                         "Agent tab",
                                         "Gentle Shell in this folder",
-                                        if cfg!(target_os = "macos") {
-                                            "⌘T"
-                                        } else {
-                                            "Ctrl+T"
-                                        },
+                                        ui::platform_shortcut("⌘T", "Ctrl+T"),
                                     )
                                     .on_click(
                                         move |_, window, cx| {
@@ -328,11 +324,7 @@ impl Workspace {
                                         IconName::SquareTerminal,
                                         "Terminal tab",
                                         "A shell in this folder",
-                                        if cfg!(target_os = "macos") {
-                                            "⌘⇧T"
-                                        } else {
-                                            "Ctrl+Shift+T"
-                                        },
+                                        ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T"),
                                     )
                                     .on_click(
                                         move |_, window, cx| {

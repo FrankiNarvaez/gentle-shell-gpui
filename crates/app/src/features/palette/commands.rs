@@ -5,6 +5,8 @@ use gpui_kit::assets::IconName;
 
 use gentle_core::commands;
 
+use crate::shared::ui;
+
 use super::{PaletteAction, Row};
 
 pub(super) fn screen_rows() -> Vec<Row> {
@@ -18,16 +20,11 @@ pub(super) fn screen_rows() -> Vec<Row> {
         workspace: None,
         current: false,
     };
-    let cmd = if cfg!(target_os = "macos") {
-        "⌘"
-    } else {
-        "Ctrl+"
-    };
     vec![
         row(
             IconName::Users,
             "Agents",
-            &format!("Helpers working for this session ({cmd}⇧A)"),
+            &format!("Helpers working for this session ({})", ui::shortcut_shift("A")),
             PaletteAction::Agents,
         ),
         row(
@@ -99,13 +96,13 @@ pub(super) fn screen_rows() -> Vec<Row> {
         row(
             IconName::Plus,
             "New session",
-            &format!("Start a fresh conversation in this pane ({cmd}N)"),
+            &format!("Start a fresh conversation in this pane ({})", ui::shortcut("N")),
             PaletteAction::NewSession,
         ),
         row(
             IconName::Bot,
             "New agent tab",
-            &format!("Another agent in the same folder ({cmd}T)"),
+            &format!("Another agent in the same folder ({})", ui::shortcut("T")),
             PaletteAction::NewTab,
         ),
         row(
@@ -117,7 +114,10 @@ pub(super) fn screen_rows() -> Vec<Row> {
         row(
             IconName::LayoutDashboard,
             "New pane (tiled)",
-            &format!("Same kind of pane, tiled beside the focused one ({cmd}D)"),
+            &format!(
+                "Same kind of pane, tiled beside the focused one ({})",
+                ui::platform_shortcut("⌘D", "Ctrl+Shift+D")
+            ),
             PaletteAction::TilePane,
         ),
         row(
@@ -129,7 +129,10 @@ pub(super) fn screen_rows() -> Vec<Row> {
         row(
             IconName::Rows2,
             "Split down",
-            &format!("Same kind of pane below this one ({cmd}⇧D)"),
+            &format!(
+                "Same kind of pane below this one ({})",
+                ui::platform_shortcut("⌘⇧D", "Ctrl+Shift+E")
+            ),
             PaletteAction::SplitDown,
         ),
         row(
@@ -147,7 +150,7 @@ pub(super) fn screen_rows() -> Vec<Row> {
         row(
             IconName::X,
             "Close pane",
-            &format!("The last pane closes its tab ({cmd}W)"),
+            &format!("The last pane closes its tab ({})", ui::shortcut("W")),
             PaletteAction::ClosePane,
         ),
         row(
@@ -155,18 +158,14 @@ pub(super) fn screen_rows() -> Vec<Row> {
             "Reopen closed pane",
             &format!(
                 "The last pane or tab closed, where it was ({})",
-                if cfg!(target_os = "macos") {
-                    "⌥⌘T"
-                } else {
-                    "Ctrl+Alt+Shift+T"
-                }
+                ui::platform_shortcut("⌥⌘T", "Ctrl+Alt+Shift+T")
             ),
             PaletteAction::ReopenClosed,
         ),
         row(
             IconName::PanelLeft,
             "Toggle sidebar",
-            &format!("Files and the left panel ({cmd}B)"),
+            &format!("Files and the left panel ({})", ui::shortcut("B")),
             PaletteAction::ToggleSidebar,
         ),
     ]
