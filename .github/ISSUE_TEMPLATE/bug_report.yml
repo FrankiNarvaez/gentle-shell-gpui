@@ -45,17 +45,22 @@ body:
       options:
         - Session (chat, tabs, the composer)
         - Sessions and history
+        - Agents and jobs
         - Workspace (windows, folders, layout)
         - Providers and sign-in
         - Profiles and models
         - Files and Git
         - Terminal and browser
+        - Command palette
+        - Music
+        - Notifications and alerts
         - Settings
         - Setup and onboarding
         - App updates
         - Memory and usage
         - Devices
         - Themes and appearance
+        - Animated themes
         - Other
     validations:
       required: true
@@ -87,7 +92,7 @@ body:
     id: app_version
     attributes:
       label: Gentle Shell GPUI version
-      description: Shown in Settings. If you run from source, give the commit.
+      description: Shown in Configuration › App. If you run from source, give the commit.
       placeholder: "0.1.21"
     validations:
       required: true
@@ -105,9 +110,10 @@ body:
     id: install
     attributes:
       label: How Gentle Shell was installed
-      description: The way you installed Gentle Shell, not this app.
+      description: The way you installed Gentle Shell, not this app. The self-contained install lives in `~/.gentle-shell/bin` (macOS and Linux) or `%LOCALAPPDATA%\gentle-shell\bin` (Windows).
       multiple: false
       options:
+        - Self-contained install (gentle-shell upgrade)
         - Web installer, release channel
         - Web installer, main channel
         - Installed by the gentle-ai TUI

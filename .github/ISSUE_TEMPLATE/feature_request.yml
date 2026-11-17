@@ -52,17 +52,22 @@ body:
       options:
         - Session (chat, tabs, the composer)
         - Sessions and history
+        - Agents and jobs
         - Workspace (windows, folders, layout)
         - Providers and sign-in
         - Profiles and models
         - Files and Git
         - Terminal and browser
+        - Command palette
+        - Music
+        - Notifications and alerts
         - Settings
         - Setup and onboarding
         - App updates
         - Memory and usage
         - Devices
         - Themes and appearance
+        - Animated themes
         - Other
     validations:
       required: true
