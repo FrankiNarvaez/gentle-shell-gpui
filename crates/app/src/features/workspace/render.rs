@@ -243,7 +243,11 @@ impl Render for Workspace {
                                             .ghost()
                                             .xsmall()
                                             .icon(Icon::new(IconName::Command))
-                                            .tooltip("Commands (⌘K)")
+                                            .tooltip(if cfg!(target_os = "macos") {
+                                                "Commands (⌘K)"
+                                            } else {
+                                                "Commands (Ctrl+K)"
+                                            })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.on_open_palette(&OpenPalette, window, cx)
                                             })),
@@ -414,7 +418,11 @@ impl Render for Workspace {
                                                 } else {
                                                     IconName::PanelLeftOpen
                                                 }))
-                                                .tooltip("Toggle sidebar (⌘B)")
+                                                .tooltip(if cfg!(target_os = "macos") {
+                                                    "Toggle sidebar (⌘B)"
+                                                } else {
+                                                    "Toggle sidebar (Ctrl+B)"
+                                                })
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_sidebar(cx)
                                                 })),
