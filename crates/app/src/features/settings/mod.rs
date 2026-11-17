@@ -238,6 +238,7 @@ impl Render for SettingsView {
                 v_flex()
                     .gap_3()
                     .p_4()
+                    .child(self.interface_section(cx))
                     .child(
                         section(IconName::SquareTerminal, "Gentle Shell")
                             .child(row(
@@ -312,7 +313,6 @@ impl Render for SettingsView {
                             }))
                             .child(self.theme_section(cx)),
                     )
-                    .child(self.interface_section(cx))
                     .child(models::models_section(s))
                     .child(self.gentle_ai_section(s, cx))
                     .child(self.notifications_section(cx))
