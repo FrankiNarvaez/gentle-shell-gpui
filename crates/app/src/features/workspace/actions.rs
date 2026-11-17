@@ -196,11 +196,10 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The file tree only polls while the Files section is really visible.
+    /// The right Files sidebar polls only while it is visible, regardless
+    /// of whether tabs are arranged horizontally or vertically.
     pub fn files_sidebar_visible(&self) -> bool {
         self.sidebar_visible
-            && (self.tab_layout == TabLayout::Horizontal
-                || self.sidebar_section == SidebarSection::Files)
     }
 
     pub(super) fn on_open_providers(
