@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use super::store::{load_from, save_to};
-use super::{SavedPane, SavedState, SavedTab, SavedWorkspace, VERSION};
+use super::{SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout, VERSION};
 use crate::shared::pane::{PaneKind, PaneTree, SplitAxis};
 
 fn sample() -> SavedState {
@@ -32,6 +32,7 @@ fn sample() -> SavedState {
                 root: PathBuf::from("/tmp"),
                 tabs: vec![SavedTab {
                     layout: PaneTree::Leaf(agent.clone()),
+                    pinned: true,
                     focused: 0,
                 }],
                 active_tab: 0,
@@ -41,6 +42,7 @@ fn sample() -> SavedState {
                 name: "project".into(),
                 root: PathBuf::from("/tmp/project"),
                 tabs: vec![SavedTab {
+                    pinned: false,
                     layout: PaneTree::Split {
                         axis: SplitAxis::Horizontal,
                         ratio: 0.4,
@@ -59,6 +61,7 @@ fn sample() -> SavedState {
             },
         ],
         sidebar: false,
+        tab_layout: TabLayout::Vertical,
     }
 }
 
@@ -76,6 +79,9 @@ fn json_round_trip() {
     assert_eq!(minimal.current, 0);
     // A file from before the sidebar was saved keeps it showing.
     assert!(minimal.sidebar);
+    assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
+    assert!(minimal.workspaces[0].tabs.is_empty());
+    assert!(back.workspaces[0].tabs[0].pinned);
     assert_eq!(SavedState::default().sidebar, minimal.sidebar);
 }
 
