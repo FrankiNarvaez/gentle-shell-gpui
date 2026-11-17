@@ -5,9 +5,9 @@ use gpui_kit::assets::IconName;
 
 use gentle_core::commands;
 
-use super::{PaletteAction, Row};
+use super::{PaletteAction, Row, TabLayout};
 
-pub(super) fn screen_rows() -> Vec<Row> {
+pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
     let row = |icon, title: &str, detail: &str, action| Row {
         icon,
         title: title.into(),
@@ -163,12 +163,20 @@ pub(super) fn screen_rows() -> Vec<Row> {
             ),
             PaletteAction::ReopenClosed,
         ),
-        row(
-            IconName::List,
-            "Toggle vertical tabs",
-            "Switch between horizontal tabs and the vertical tab navigator",
-            PaletteAction::ToggleTabLayout,
-        ),
+        match tab_layout {
+            TabLayout::Horizontal => row(
+                IconName::PanelLeft,
+                "View: Show tabs vertically",
+                "Move tabs from the top bar into the left sidebar",
+                PaletteAction::SetTabLayout(TabLayout::Vertical),
+            ),
+            TabLayout::Vertical => row(
+                IconName::List,
+                "View: Show tabs horizontally",
+                "Move tabs from the sidebar back into the top bar",
+                PaletteAction::SetTabLayout(TabLayout::Horizontal),
+            ),
+        },
         row(
             IconName::PanelLeft,
             "Toggle sidebar",
