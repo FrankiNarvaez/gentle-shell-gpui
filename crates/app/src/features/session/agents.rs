@@ -260,6 +260,65 @@ impl SessionView {
             self.activity.jobs.iter().map(JobRow::from_legacy).collect()
         }
     }
+
+    /// Hand the generative UI's live panels the data they show: jobs,
+    /// subagents (also kanban cards with an `agentId`) and the todo list,
+    /// built only while a panel shows them (the panel ignores repeats).
+    pub(super) fn sync_genui_live(&mut self, cx: &mut Context<Self>) {
+        use crate::features::genui::todo_records;
+        use gentle_core::genui::live::Source;
+        use serde_json::json;
+
+        if self.genui.wants(Source::Jobs, cx) {
+            let jobs = self
+                .job_rows()
+                .iter()
+                .map(|row| {
+                    let status = match row.outcome {
+                        JobOutcome::Running => "running",
+                        JobOutcome::Succeeded => "done",
+                        JobOutcome::Failed => "failed",
+                    };
+                    json!({"id": row.id, "label": row.label, "status": status, "state": row.state})
+                })
+                .collect();
+            self.genui
+                .feed(Source::Jobs, serde_json::Value::Array(jobs), cx);
+        }
+        if self.genui.wants(Source::Subagents, cx) {
+            let agents = self
+                .helpers()
+                .iter()
+                .map(|helper| {
+                    let (model, cost, tokens) = match helper {
+                        Helper::Structured(agent, _) => (
+                            agent.model.clone(),
+                            Some(agent.usage.cost),
+                            Some(agent.usage.total),
+                        ),
+                        Helper::Legacy(_) => (None, None, None),
+                    };
+                    json!({
+                        "id": helper.id(),
+                        "agent": helper.agent(),
+                        "label": helper.label(),
+                        "status": helper.status(),
+                        "step": helper.last_step(),
+                        "active": helper.is_active(),
+                        "model": model,
+                        "cost": cost,
+                        "tokens": tokens,
+                    })
+                })
+                .collect();
+            self.genui
+                .feed(Source::Subagents, serde_json::Value::Array(agents), cx);
+        }
+        if self.genui.wants(Source::Todo, cx) {
+            let todo = todo_records(&self.todo.tasks);
+            self.genui.feed(Source::Todo, todo, cx);
+        }
+    }
 }
 
 /// One background job: status marker, label, exit code and, while it runs
@@ -413,7 +472,7 @@ impl SessionView {
 
     /// Stop one helper over `cancel_subagent`; the legacy prompt stays only for
     /// a peer that genuinely does not offer the method.
-    fn stop_agent(&mut self, id: &str, cx: &mut Context<Self>) {
+    pub(super) fn stop_agent(&mut self, id: &str, cx: &mut Context<Self>) {
         let applied = self.desktop.cancel_subagent(id.to_string());
         match applied.report.as_ref() {
             Some(desktop::supervision::Report::Unsupported) => self.ask_to_stop_agent(id, cx),

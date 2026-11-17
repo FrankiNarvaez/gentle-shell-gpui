@@ -150,6 +150,7 @@ impl SessionView {
             self.genui.restore_pins(session.as_deref(), cx);
         }
         self.sync_live(cx);
+        self.sync_genui_live(cx);
         let tail = self.tail_rows();
         let header = HeaderKey {
             hero: self.hero_shown(),

@@ -19,6 +19,17 @@ pub struct Column {
     pub label: String,
     /// Work-in-progress limit: more cards are allowed but flagged.
     pub limit: Option<u32>,
+    /// A card dropped here asks the agent to dispatch a subagent for it.
+    pub starts: bool,
+}
+
+/// Who works a card: the subagent the agent should dispatch for it.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CardAgent {
+    /// The subagent to use (the agent picks one when absent).
+    pub name: Option<String>,
+    /// What to tell it (default: the card's title and description).
+    pub task: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +42,10 @@ pub struct Card {
     pub assignee: Option<String>,
     /// The code this card is about (`ref`).
     pub code_ref: Option<CodeRef>,
+    pub agent: Option<CardAgent>,
+    /// The dispatched subagent's id, as the agent reported it: the card
+    /// follows that subagent's live status.
+    pub agent_id: Option<String>,
 }
 
 impl Card {
@@ -51,6 +66,19 @@ impl Card {
         if let Some(code_ref) = &self.code_ref {
             map.insert("ref".into(), code_ref.to_value());
         }
+        if let Some(agent) = &self.agent {
+            let mut a = Map::new();
+            if let Some(name) = &agent.name {
+                a.insert("name".into(), json!(name));
+            }
+            if let Some(task) = &agent.task {
+                a.insert("task".into(), json!(task));
+            }
+            map.insert("agent".into(), Value::Object(a));
+        }
+        if let Some(id) = &self.agent_id {
+            map.insert("agentId".into(), json!(id));
+        }
         Value::Object(map)
     }
 }
@@ -61,6 +89,22 @@ impl Card {
 pub struct Board {
     pub columns: Vec<Column>,
     pub cards: Vec<Card>,
+}
+
+/// `agent: {name?, task?}` (a string is the name); `None` when it names nothing.
+fn card_agent(raw: Option<&Value>) -> Option<CardAgent> {
+    let agent = match raw? {
+        Value::String(_) => CardAgent {
+            name: text(raw, MAX_LABEL),
+            task: None,
+        },
+        Value::Object(o) => CardAgent {
+            name: text(o.get("name"), MAX_LABEL),
+            task: text(o.get("task"), MAX_TEXT),
+        },
+        _ => return None,
+    };
+    (agent != CardAgent::default()).then_some(agent)
 }
 
 fn clean_tags(tags: &[String]) -> Vec<String> {
@@ -133,6 +177,7 @@ impl Board {
                     .and_then(Value::as_u64)
                     .filter(|l| *l > 0)
                     .map(|l| l.min(999) as u32),
+                starts: raw.get("starts").and_then(Value::as_bool) == Some(true),
                 id,
             });
         }
@@ -180,6 +225,8 @@ impl Board {
                 tags: clean_tags(&tags),
                 assignee: text(raw.get("assignee"), MAX_LABEL),
                 code_ref,
+                agent: card_agent(raw.get("agent")),
+                agent_id: raw.get("agentId").and_then(id_of),
             });
         }
         if !errors.0.is_empty() {
@@ -195,6 +242,23 @@ impl Board {
         let columns = &self.columns;
         self.cards
             .sort_by_key(|card| columns.iter().position(|c| c.id == card.column));
+    }
+
+    /// Cards `working` has in a `starts` column that `base` had elsewhere
+    /// (or didn't have) and that have no subagent yet: what dropping them
+    /// there asks the agent to dispatch.
+    pub fn dispatches(base: &Board, working: &Board) -> Vec<String> {
+        let starts = |board: &Board, column: &str| board.column(column).is_some_and(|c| c.starts);
+        working
+            .cards
+            .iter()
+            .filter(|card| card.agent_id.is_none() && starts(working, &card.column))
+            .filter(|card| {
+                base.card(&card.id)
+                    .is_none_or(|before| !starts(base, &before.column))
+            })
+            .map(|card| card.id.clone())
+            .collect()
     }
 
     pub fn column(&self, id: &str) -> Option<&Column> {
@@ -532,6 +596,9 @@ impl Editable for Board {
                 if let Some(limit) = c.limit {
                     map.insert("limit".into(), json!(limit));
                 }
+                if c.starts {
+                    map.insert("starts".into(), json!(true));
+                }
                 Value::Object(map)
             }).collect::<Vec<_>>(),
             "cards": self.cards.iter().map(Card::to_value).collect::<Vec<_>>(),
@@ -546,6 +613,34 @@ pub fn card_count(board: &Board) -> String {
         plural(board.cards.len(), "card"),
         plural(board.columns.len(), "column")
     )
+}
+
+/// `{op: "dispatch", card, column, agent?}` and its sentence: the change
+/// an event adds for each card dropped into a `starts` column (the agent
+/// dispatches a subagent with its own tool; the app can't start one).
+pub fn dispatch(board: &Board, card: &str) -> Option<(Value, String)> {
+    let c = board.card(card)?;
+    let mut map = Map::new();
+    map.insert("op".into(), json!("dispatch"));
+    map.insert("card".into(), json!(c.id));
+    map.insert("column".into(), json!(c.column));
+    if c.agent.is_some() {
+        map.insert("agent".into(), c.to_value()["agent"].clone());
+    }
+    let who = c
+        .agent
+        .as_ref()
+        .and_then(|a| a.name.as_deref())
+        .map_or_else(
+            || "a subagent".to_string(),
+            |name| format!("the {name} subagent"),
+        );
+    let line = format!(
+        "asked the agent to dispatch {who} for “{}” ({})",
+        truncate(&c.title, 60),
+        board.label_of(&c.column)
+    );
+    Some((Value::Object(map), line))
 }
 
 #[cfg(test)]
@@ -634,6 +729,8 @@ mod tests {
             tags: vec![],
             assignee: None,
             code_ref: None,
+            agent: None,
+            agent_id: None,
         };
         edits.edit(&Change::AddCard { card }).unwrap();
         edits
@@ -693,5 +790,68 @@ mod tests {
             Board::parse(&json!({"columns": ["A"], "cards": [{"title": "x", "ref": "../../y"}]}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn a_drop_into_a_starts_column_asks_for_a_subagent() {
+        let base = Board::parse(&json!({
+            "columns": [
+                {"id": "todo", "label": "To do"},
+                {"id": "doing", "label": "In progress", "starts": true},
+                {"id": "review", "label": "Review", "starts": true}
+            ],
+            "cards": [
+                {"id": "a", "title": "Login", "agent": {"name": "worker", "task": "Build the login form"}},
+                {"id": "b", "title": "Signup", "agent": "worker"},
+                {"id": "c", "title": "Docs", "column": "doing", "agentId": "sa-1"},
+                {"id": "d", "title": "Tests", "agent": {}}
+            ]
+        }))
+        .unwrap();
+        assert!(base.columns[1].starts && !base.columns[0].starts);
+        assert_eq!(
+            base.card("b")
+                .unwrap()
+                .agent
+                .as_ref()
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("worker")
+        );
+        assert_eq!(base.card("c").unwrap().agent_id.as_deref(), Some("sa-1"));
+        assert_eq!(
+            base.card("d").unwrap().agent,
+            None,
+            "an empty agent names nothing"
+        );
+        assert_eq!(Board::parse(&base.to_value()).unwrap(), base, "round trip");
+
+        let mut working = base.clone();
+        for (card, column) in [("a", "doing"), ("c", "review"), ("d", "doing")] {
+            let cards = working.dropped(card, column, 0);
+            working
+                .apply(&Change::Order {
+                    column: column.into(),
+                    cards,
+                })
+                .unwrap();
+        }
+        // "c" already has a subagent; a move between starts columns isn't a start.
+        assert_eq!(Board::dispatches(&base, &working), vec!["d", "a"]);
+        let (value, line) = dispatch(&working, "a").unwrap();
+        assert_eq!(
+            value,
+            json!({"op": "dispatch", "card": "a", "column": "doing", "agent": {"name": "worker", "task": "Build the login form"}})
+        );
+        assert_eq!(
+            line,
+            "asked the agent to dispatch the worker subagent for “Login” (In progress)"
+        );
+        assert_eq!(
+            dispatch(&working, "d").unwrap().1,
+            "asked the agent to dispatch a subagent for “Tests” (In progress)"
+        );
+        assert!(Board::dispatches(&working, &working).is_empty());
     }
 }

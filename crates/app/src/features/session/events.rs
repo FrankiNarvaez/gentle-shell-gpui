@@ -674,6 +674,8 @@ impl SessionView {
                 window.push_notification(Notification::success(text.clone()), cx)
             }
             DiagramEvent::Notice(Err(error)) => self.warn(error.clone(), window, cx),
+            // A kanban card's Stop: the same `cancel_subagent` as the agents panel.
+            DiagramEvent::CancelSubagent(id) => self.stop_agent(id, cx),
         }
     }
 

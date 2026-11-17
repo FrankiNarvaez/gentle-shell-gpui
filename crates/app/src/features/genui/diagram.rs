@@ -47,6 +47,8 @@ pub enum DiagramEvent {
     OpenRef(gentle_core::genui::refs::CodeRef),
     /// Tell the user how an export went (`Err`: it failed).
     Notice(Result<String, String>),
+    /// Stop this subagent (`cancel_subagent`): a kanban card's Stop.
+    CancelSubagent(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]

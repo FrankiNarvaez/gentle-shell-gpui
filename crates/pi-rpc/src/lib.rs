@@ -311,12 +311,13 @@ fn wait_child(child: &Mutex<Child>) -> Option<i32> {
     }
 }
 
-/// Kill what is left of a backend and reap it: on Unix its whole process
-/// group (the launcher, Pi and the tool processes still in it; a leader
-/// that exited moments ago keeps its group id while members remain), on
-/// Windows its process tree while it runs (an exited one's pid is not
-/// looked up). Then the child itself, in case that failed.
-fn kill_tree(child: &mut Child) {
+/// Kill what is left of a backend (or any child started in its own process
+/// group) and reap it: on Unix its whole process group (the launcher, Pi
+/// and the tool processes still in it; a leader that exited moments ago
+/// keeps its group id while members remain), on Windows its process tree
+/// while it runs (an exited one's pid is not looked up). Then the child
+/// itself, in case that failed.
+pub fn kill_tree(child: &mut Child) {
     let pid = child.id().to_string();
     #[cfg(unix)]
     if let Some(mut kill) = signal("-KILL", &format!("-{pid}")) {

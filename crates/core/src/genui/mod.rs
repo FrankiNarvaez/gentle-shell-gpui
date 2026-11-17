@@ -13,6 +13,7 @@ pub mod form;
 pub mod html;
 pub mod kanban;
 pub mod layout;
+pub mod live;
 pub mod refs;
 pub mod table;
 pub mod template;

@@ -24,6 +24,7 @@ enum Seen {
     /// The ref as `path:line`.
     OpenRef(String),
     Notice(Result<String, String>),
+    CancelSubagent(String),
 }
 
 impl From<&DiagramEvent> for Seen {
@@ -38,6 +39,7 @@ impl From<&DiagramEvent> for Seen {
             DiagramEvent::Request(command) => Seen::Request(command.clone()),
             DiagramEvent::OpenRef(code_ref) => Seen::OpenRef(code_ref.text()),
             DiagramEvent::Notice(result) => Seen::Notice(result.clone()),
+            DiagramEvent::CancelSubagent(id) => Seen::CancelSubagent(id.clone()),
         }
     }
 }

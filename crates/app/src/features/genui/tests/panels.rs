@@ -396,3 +396,273 @@ fn chart_hover_select_and_ask(cx: &mut TestAppContext) {
     // Read-only: nothing to send.
     assert_eq!(pending(&host, cx), 0);
 }
+
+// ── Driving the agent and live data ─────────────────────────────────────────
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use gentle_core::genui::live::Source;
+
+use super::super::live::{LiveEnv, SharedEnv};
+
+/// The view `open` shows.
+fn view(host: &Entity<Host>, cx: &mut VisualTestContext) -> Entity<PanelView> {
+    cx.update(|_, cx| host.read(cx).view.clone())
+}
+
+/// Join a conversation's live data, as `GenUi` does for every panel.
+fn attach(host: &Entity<Host>, env: &SharedEnv, cx: &mut VisualTestContext) {
+    let view = view(host, cx);
+    let env = env.clone();
+    cx.update(|_, cx| view.update(cx, |view, cx| view.attach(env, cx)));
+    cx.run_until_parked();
+}
+
+/// The conversation hands over `source`'s data, as `GenUi::feed` does.
+fn feed(
+    host: &Entity<Host>,
+    env: &SharedEnv,
+    source: Source,
+    data: Value,
+    cx: &mut VisualTestContext,
+) {
+    env.borrow_mut().feeds.insert(source, data);
+    let view = view(host, cx);
+    cx.update(|_, cx| view.update(cx, |view, cx| view.feed(source, cx)));
+    cx.run_until_parked();
+}
+
+fn reads(host: &Entity<Host>, cx: &mut VisualTestContext) -> usize {
+    cx.update(|_, cx| {
+        host.read(cx)
+            .view
+            .read(cx)
+            .live
+            .as_ref()
+            .map_or(0, |l| l.reads)
+    })
+}
+
+#[gpui::test]
+fn run_plan_skips_and_sends_the_next_step(cx: &mut TestAppContext) {
+    let (host, cx) = open(
+        cx,
+        "checklist",
+        json!({"run": true, "items": [
+            {"id": "backup", "label": "Back up", "done": true},
+            {"id": "migrate", "label": "Migrate"},
+            {"id": "verify", "label": "Verify"}
+        ]}),
+    );
+    // Skipping is an edit like any other; Run next sends it with the request.
+    click(cx, "genui-item-skip-migrate");
+    assert_eq!(pending(&host, cx), 1);
+    assert!(sent(&host, cx).is_empty(), "skipping alone sends nothing");
+    click(cx, "genui-run-next");
+    let event = last_event(&host, cx);
+    assert_eq!(ops(&event), vec!["status", "run"]);
+    assert_eq!(
+        event["changes"][1],
+        json!({"op": "run", "mode": "step", "item": "verify"})
+    );
+    assert_eq!(
+        event["summary"],
+        json!([
+            "skipped “Migrate”",
+            "asked the agent to do step 3 “Verify” next"
+        ])
+    );
+    assert_eq!(event["spec"]["run"], "step");
+    assert_eq!(event["spec"]["items"][2]["status"], "running");
+    // While a step runs, the bar offers Stop, which goes out at once too.
+    answer(&host, 1, Ok(2), cx);
+    click(cx, "genui-run-stop");
+    let event = last_event(&host, cx);
+    assert_eq!(ops(&event), vec!["stop"]);
+    assert_eq!(event["spec"]["run"], "idle");
+}
+
+#[gpui::test]
+fn run_plan_toggle_then_run_sends_the_whole_plan(cx: &mut TestAppContext) {
+    let (host, cx) = open(
+        cx,
+        "checklist",
+        json!({"items": [{"id": "plan", "label": "Plan"}, {"id": "ship", "label": "Ship"}]}),
+    );
+    assert!(
+        cx.debug_bounds("genui-run-all").is_none(),
+        "a plain checklist"
+    );
+    click(cx, "genui-run-plan");
+    click(cx, "genui-run-all");
+    let event = last_event(&host, cx);
+    assert_eq!(ops(&event), vec!["run"]);
+    assert_eq!(
+        event["changes"][0],
+        json!({"op": "run", "mode": "all", "item": "plan"})
+    );
+    assert_eq!(event["summary"], json!(["ran the plan from step 1 “Plan”"]));
+}
+
+#[gpui::test]
+fn kanban_drop_into_a_starts_column_dispatches_and_follows_the_subagent(cx: &mut TestAppContext) {
+    let (host, cx) = open(
+        cx,
+        "kanban",
+        json!({
+            "columns": [
+                {"id": "todo", "label": "To do"},
+                {"id": "doing", "label": "In progress", "starts": true},
+                {"id": "done", "label": "Done"}
+            ],
+            "cards": [{"id": "a", "title": "Login", "column": "todo", "agent": {"name": "worker", "task": "Build the login form"}}]
+        }),
+    );
+    let env = SharedEnv::default();
+    attach(&host, &env, cx);
+    let card = bounds(cx, "genui-card-a").center();
+    let doing = bounds(cx, "genui-column-doing");
+    drag(cx, card, point(doing.center().x, doing.origin.y + px(50.)));
+    // Sent at once, without Send: the agent dispatches the subagent.
+    let event = last_event(&host, cx);
+    assert_eq!(ops(&event), vec!["order", "dispatch"]);
+    assert_eq!(
+        event["changes"][1],
+        json!({"op": "dispatch", "card": "a", "column": "doing", "agent": {"name": "worker", "task": "Build the login form"}})
+    );
+    assert_eq!(
+        event["summary"][1],
+        "asked the agent to dispatch the worker subagent for “Login” (In progress)"
+    );
+    answer(&host, 1, Ok(2), cx);
+
+    // The agent reports the subagent's id; the card follows its live status.
+    let view = view(&host, cx);
+    let snapshot = Snapshot {
+        id: "ui-kanban".into(),
+        version: 3,
+        kind: "kanban".into(),
+        title: "Test kanban".into(),
+        spec: json!({
+            "columns": [
+                {"id": "todo", "label": "To do"},
+                {"id": "doing", "label": "In progress", "starts": true},
+                {"id": "done", "label": "Done"}
+            ],
+            "cards": [{"id": "a", "title": "Login", "column": "doing", "agent": {"name": "worker"}, "agentId": "sa-1"}]
+        }),
+        closed: false,
+    };
+    cx.update(|_, cx| view.update(cx, |view, cx| view.set_snapshot(&snapshot, false, cx)));
+    assert!(cx.update(|_, cx| view.read(cx).wants(Source::Subagents)));
+    feed(
+        &host,
+        &env,
+        Source::Subagents,
+        json!([{"id": "sa-1", "agent": "worker", "status": "running", "step": "writing", "cost": 0.12, "active": true}]),
+        cx,
+    );
+    assert!(cx.debug_bounds("genui-card-agent-a").is_some());
+    click(cx, "genui-card-a");
+    click(cx, "genui-card-stop");
+    let stopped =
+        cx.update(|_, cx| host.read(cx).seen.last() == Some(&Seen::CancelSubagent("sa-1".into())));
+    assert!(stopped, "Stop subagent asks for cancel_subagent");
+    assert_eq!(
+        sent(&host, cx).len(),
+        1,
+        "a move within it dispatches nothing more"
+    );
+}
+
+#[gpui::test]
+fn live_jobs_fill_a_table(cx: &mut TestAppContext) {
+    let (host, cx) = open(
+        cx,
+        "table",
+        json!({
+            "columns": [{"key": "label", "label": "Job"}, {"key": "status", "type": "status"}],
+            "rows": [],
+            "live": {"source": "jobs"}
+        }),
+    );
+    let env = SharedEnv::default();
+    attach(&host, &env, cx);
+    assert!(cx.debug_bounds("genui-live").is_some(), "the Live chip");
+    feed(
+        &host,
+        &env,
+        Source::Jobs,
+        json!([{"id": "7", "label": "npm run dev", "status": "running"}]),
+        cx,
+    );
+    assert!(cx.debug_bounds("genui-row-7").is_some());
+    feed(
+        &host,
+        &env,
+        Source::Jobs,
+        json!([
+            {"id": "7", "label": "npm run dev", "status": "done"},
+            {"id": "8", "label": "cargo test", "status": "running"}
+        ]),
+        cx,
+    );
+    assert!(cx.debug_bounds("genui-row-8").is_some());
+    let status = cx.update(|_, cx| match &host.read(cx).view.read(cx).body {
+        Some(super::super::panel::Body::Table(s)) => s.edits.base().cell("7", "status").clone(),
+        _ => Value::Null,
+    });
+    assert_eq!(status, json!("done"));
+    assert_eq!(pending(&host, cx), 0, "live rows aren't the user's edits");
+
+    // Paused, new data waits; resumed, it shows.
+    click(cx, "genui-live-pause");
+    feed(&host, &env, Source::Jobs, json!([]), cx);
+    assert!(cx.debug_bounds("genui-row-8").is_some());
+    click(cx, "genui-live-pause");
+    assert!(cx.debug_bounds("genui-row-8").is_none());
+}
+
+#[gpui::test]
+fn a_command_source_runs_nothing_until_the_user_allows_it(cx: &mut TestAppContext) {
+    let (host, cx) = open(
+        cx,
+        "table",
+        json!({
+            "columns": [{"key": "line", "label": "Output"}],
+            "live": {"command": {"cmd": "echo hi", "parse": "lines"}, "interval": 5, "map": {"columns": {"line": "$"}}}
+        }),
+    );
+    let env: SharedEnv = Rc::new(RefCell::new(LiveEnv {
+        workspace: Some(std::env::temp_dir()),
+        ..LiveEnv::default()
+    }));
+    attach(&host, &env, cx);
+    assert!(
+        cx.debug_bounds("genui-live-consent").is_some(),
+        "the card asks"
+    );
+    cx.executor().advance_clock(Duration::from_secs(60));
+    cx.run_until_parked();
+    assert_eq!(reads(&host, cx), 0, "nothing runs while it asks");
+
+    click(cx, "genui-live-deny");
+    cx.executor().advance_clock(Duration::from_secs(60));
+    cx.run_until_parked();
+    assert_eq!(reads(&host, cx), 0, "nor once denied");
+    assert!(cx.debug_bounds("genui-live-consent").is_none());
+
+    click(cx, "genui-live-ask-again");
+    click(cx, "genui-live-allow-once");
+    assert_eq!(reads(&host, cx), 1, "allowed: it runs at once");
+    assert!(
+        cx.debug_bounds("genui-row-row-1").is_some(),
+        "its output fills the table"
+    );
+    assert!(
+        env.borrow().allowed.is_empty(),
+        "once is for this card only"
+    );
+}

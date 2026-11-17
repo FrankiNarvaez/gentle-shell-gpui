@@ -9,9 +9,10 @@ use gentle_core::genui::chart::Chart;
 use gentle_core::genui::checklist::Checklist;
 use gentle_core::genui::edits::{Editable as _, plural};
 use gentle_core::genui::form::Form;
-use gentle_core::genui::kanban::{Board, card_count};
+use gentle_core::genui::kanban::{self, Board, card_count};
+use gentle_core::genui::live::Live;
 use gentle_core::genui::table::Table;
-use gentle_core::genui::{Outcome, Snapshot};
+use gentle_core::genui::{self, Outcome, Snapshot};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -25,6 +26,7 @@ use super::checklist::ChecklistState;
 use super::diagram::{DiagramEvent, SendState};
 use super::form::FormState;
 use super::kanban::KanbanState;
+use super::live::{AgentStatus, LiveState, SharedEnv};
 use super::motion::Glides;
 use super::table::TableState;
 use crate::shared::ui;
@@ -132,8 +134,9 @@ impl Body {
         })
     }
 
-    /// A newer version from the agent; the unsent edits are replayed on it.
-    fn rebase(&mut self, spec: &Value) -> Result<(), Vec<String>> {
+    /// A newer version from the agent (or live data); the unsent edits
+    /// are replayed on it.
+    pub(super) fn rebase(&mut self, spec: &Value) -> Result<(), Vec<String>> {
         match self {
             Body::Table(s) => s.rebase(Table::parse(spec)?),
             Body::Form(s) => s.rebase(Form::parse(spec)?),
@@ -145,13 +148,34 @@ impl Body {
     }
 
     /// Whether `spec` parses to what this already holds.
-    fn holds(&self, spec: &Value) -> bool {
+    pub(super) fn holds(&self, spec: &Value) -> bool {
         match self {
             Body::Table(s) => Table::parse(spec).is_ok_and(|t| &t == s.edits.base()),
             Body::Form(s) => Form::parse(spec).is_ok_and(|f| &f == s.edits.base()),
             Body::Checklist(s) => Checklist::parse(spec).is_ok_and(|c| &c == s.edits.base()),
             Body::Kanban(s) => Board::parse(spec).is_ok_and(|b| &b == s.edits.base()),
             Body::Chart(s) => Chart::parse(spec).is_ok_and(|c| c == s.chart),
+        }
+    }
+
+    /// The agent's version as its wire JSON (what live data fills).
+    pub(super) fn base_value(&self) -> Value {
+        match self {
+            Body::Table(s) => s.edits.base().to_value(),
+            Body::Form(s) => s.edits.base().to_value(),
+            Body::Checklist(s) => s.edits.base().to_value(),
+            Body::Kanban(s) => s.edits.base().to_value(),
+            Body::Chart(s) => s.chart.to_value(),
+        }
+    }
+
+    /// The spec's `live` (tables, charts and checklists).
+    pub(super) fn live(&self) -> Option<&Live> {
+        match self {
+            Body::Table(s) => s.edits.base().live.as_deref(),
+            Body::Checklist(s) => s.edits.base().live.as_deref(),
+            Body::Chart(s) => s.chart.live.as_deref(),
+            Body::Form(_) | Body::Kanban(_) => None,
         }
     }
 
@@ -179,7 +203,27 @@ impl Body {
         edits!(mut self, e => e.accept_sent(), ())
     }
 
+    /// The event for the pending edits; a board adds a `dispatch` change
+    /// for each card the edits drop into a `starts` column.
     fn event_command(&self, id: &str, version: u64, note: Option<&str>) -> Option<String> {
+        if let Body::Kanban(s) = self {
+            let (base, working) = (s.edits.base(), s.edits.working());
+            let (mut changes, mut summary) = s.edits.summarize();
+            for card in Board::dispatches(base, working) {
+                if let Some((change, line)) = kanban::dispatch(working, &card) {
+                    changes.push(change);
+                    summary.push(line);
+                }
+            }
+            return Some(genui::event_command_json(
+                id,
+                version,
+                &changes,
+                &summary,
+                &working.to_value(),
+                note,
+            ));
+        }
         edits!(self, e => Some(e.event_command(id, version, note)), None)
     }
 
@@ -249,7 +293,7 @@ impl Body {
 
 pub struct PanelView {
     pub(super) id: String,
-    kind: String,
+    pub(super) kind: String,
     pub(super) title: String,
     pub(super) version: u64,
     /// `None` when the first version couldn't be read (see `error`).
@@ -264,6 +308,14 @@ pub struct PanelView {
     pub(super) focus: FocusHandle,
     pub(super) glides: Glides,
     pub(super) env: super::share::Env,
+    /// The spec's live source, its consent and latest data.
+    pub(super) live: Option<LiveState>,
+    /// The conversation's live data and allowed commands.
+    pub(super) live_env: Option<SharedEnv>,
+    /// The session's subagents, for kanban cards with an `agentId`.
+    pub(super) agents: Vec<AgentStatus>,
+    /// Shown by the app, not the agent (the todo list): nothing to edit or send.
+    pub(super) read_only: bool,
 }
 
 impl EventEmitter<DiagramEvent> for PanelView {}
@@ -288,6 +340,27 @@ impl PanelView {
             focus: cx.focus_handle(),
             glides: Glides::default(),
             env: Default::default(),
+            live: None,
+            live_env: None,
+            agents: Vec::new(),
+            read_only: false,
+        }
+    }
+
+    /// The agent's todo list as a read-only checklist (no tool call: the
+    /// app shows it from the `todo` data it already has).
+    pub fn todo_list(id: &str, cx: &mut Context<Self>) -> Self {
+        let snapshot = Snapshot {
+            id: id.to_string(),
+            version: 0,
+            kind: "checklist".into(),
+            title: "Todos".into(),
+            spec: serde_json::json!({"items": [], "live": "todo"}),
+            closed: false,
+        };
+        Self {
+            read_only: true,
+            ..Self::new(&snapshot, cx)
         }
     }
 
@@ -326,6 +399,7 @@ impl PanelView {
             None => Body::parse(&self.kind, &snapshot.spec).map(|body| self.body = Some(body)),
         };
         self.error = result.err().map(|errors| errors.join("\n"));
+        self.sync_live(cx);
         cx.notify();
     }
 
@@ -350,6 +424,7 @@ impl PanelView {
             }
             Err(error) => SendState::Failed(error),
         };
+        self.apply_live(cx);
         cx.notify();
     }
 
@@ -374,6 +449,7 @@ impl PanelView {
             }
             Err(error) => self.send = SendState::Failed(error.clone()),
         }
+        self.apply_live(cx);
         cx.notify();
     }
 
@@ -392,6 +468,9 @@ impl PanelView {
         cx: &mut Context<Self>,
         apply: impl FnOnce(&mut Body) -> Option<Result<(), String>>,
     ) -> bool {
+        if self.locked() {
+            return false;
+        }
         let Some(result) = self.body.as_mut().and_then(apply) else {
             return false;
         };
@@ -431,6 +510,13 @@ impl PanelView {
         }
     }
 
+    /// Nothing to edit: the app's own list (the todo list), or a checklist
+    /// whose items come from live data.
+    pub(super) fn locked(&self) -> bool {
+        self.read_only
+            || matches!(&self.body, Some(Body::Checklist(s)) if s.edits.base().live.is_some())
+    }
+
     fn pending(&self) -> usize {
         self.body.as_ref().map_or(0, Body::pending)
     }
@@ -438,7 +524,7 @@ impl PanelView {
     /// Send the unsent edits (and the note, if any) to the agent, or again
     /// after a failure.
     pub(super) fn send(&mut self, cx: &mut Context<Self>) {
-        if self.pending() == 0 || matches!(self.send, SendState::Sending { .. }) {
+        if self.locked() || self.pending() == 0 || matches!(self.send, SendState::Sending { .. }) {
             return;
         }
         let note = self.note.as_ref().map(|n| n.read(cx).value().to_string());
@@ -517,10 +603,16 @@ impl PanelView {
                 .icon(Icon::new(icon))
                 .tooltip(tip)
         };
-        let editable = !matches!(self.body, Some(Body::Chart(_)) | None);
+        let locked = self.locked();
+        let editable = !locked && !matches!(self.body, Some(Body::Chart(_)) | None);
         let add = match &self.body {
-            Some(Body::Checklist(_)) => Some("Add item"),
+            Some(Body::Checklist(_)) if !locked => Some("Add item"),
             Some(Body::Kanban(_)) => Some("Add card"),
+            _ => None,
+        };
+        // A checklist the agent wrote can become a plan the user runs.
+        let run_mode = match &self.body {
+            Some(Body::Checklist(s)) if !locked => Some(s.edits.working().run.is_some()),
             _ => None,
         };
         h_flex()
@@ -554,10 +646,28 @@ impl PanelView {
                     .text_color(ui::muted())
                     .children(self.body.as_ref().map(Body::stats)),
             )
+            .children(self.render_live_chip(cx))
             .child(
                 h_flex()
                     .flex_shrink_0()
                     .gap_0p5()
+                    .when_some(run_mode, |d, on| {
+                        d.child(
+                            div().debug_selector(|| "genui-run-plan".into()).child(
+                                tool(
+                                    "genui-run-plan",
+                                    IconName::ListChecks,
+                                    if on {
+                                        "Turn off Run plan"
+                                    } else {
+                                        "Run plan: drive the agent through these steps"
+                                    },
+                                )
+                                .when(on, |b| b.text_color(ui::accent()))
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_run_mode(cx))),
+                            ),
+                        )
+                    })
                     .when_some(add, |d, tip| {
                         d.child(
                             div().debug_selector(|| "genui-panel-add".into()).child(
@@ -574,12 +684,16 @@ impl PanelView {
                                 .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
                         )
                     })
-                    .child(super::share::tools(
-                        &self.env,
-                        &self.kind,
-                        PanelView::source,
-                        cx,
-                    ))
+                    // The app's own todo list isn't the agent's: nothing to
+                    // pin, template or hand back.
+                    .when(!self.read_only, |d| {
+                        d.child(super::share::tools(
+                            &self.env,
+                            &self.kind,
+                            PanelView::source,
+                            cx,
+                        ))
+                    })
                     .child(
                         tool(
                             "genui-panel-expand",
@@ -699,13 +813,7 @@ impl PanelView {
                 .into_any_element(),
             _ => footer
                 .text_color(ui::faint())
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .children(self.body.as_ref().map(Body::hint)),
-                )
+                .child(div().flex_1().min_w_0().truncate().child(self.hint()))
                 .into_any_element(),
         }
     }
@@ -788,11 +896,30 @@ impl PanelView {
                 ),
             )
     }
+
+    /// The footer's hint while nothing is pending.
+    fn hint(&self) -> &'static str {
+        match &self.body {
+            Some(Body::Checklist(_)) if self.read_only => {
+                "The agent's todo list, live · read-only · Ask about an item from its row"
+            }
+            Some(Body::Checklist(_)) if self.locked() => "Live items · read-only",
+            Some(Body::Checklist(s)) if s.edits.working().run.is_some() => {
+                "Skip or reorder steps, then Run (all) or Run next · the agent reports each step"
+            }
+            Some(Body::Kanban(s)) if s.edits.working().columns.iter().any(|c| c.starts) => {
+                "Drag a card into a column marked with a bot: the agent starts a subagent on it"
+            }
+            Some(body) => body.hint(),
+            None => "",
+        }
+    }
 }
 
 impl Render for PanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.glides.tick(window, cx);
+        self.live_drawn(window, cx);
         let body = self.render_body(window, cx);
         v_flex()
             .track_focus(&self.focus)
@@ -812,7 +939,8 @@ impl Render for PanelView {
                     .flex()
                     .flex_col()
                     .child(body)
-                    .children(self.render_error()),
+                    .children(self.render_error())
+                    .children(self.render_consent(cx)),
             )
             .child(self.render_footer(cx))
     }

@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+use gentle_core::genui::live::Source;
 use gentle_core::genui::{self, Snapshot};
 use gentle_core::transcript::{Item, ToolStatus};
 use gpui_kit::*;
@@ -29,6 +30,7 @@ mod extension;
 mod form;
 mod html;
 mod kanban;
+mod live;
 mod motion;
 mod paint;
 mod panel;
@@ -46,8 +48,14 @@ mod view;
 pub use diagram::{DiagramEvent, DiagramView};
 pub use extension::install;
 pub use html::HtmlView;
+use live::SharedEnv;
+pub use live::todo_records;
 pub use panel::PanelView;
 pub use templates::{TemplatesEvent, TemplatesView};
+
+/// The id of the app's own todo checklist (never a `gentle_ui` id: those
+/// are slugs without ":").
+pub const TODO_SURFACE: &str = "app:todo";
 
 /// One surface's live view, of any kind. Every kind emits [`DiagramEvent`].
 #[derive(Clone)]
@@ -226,6 +234,11 @@ pub struct GenUi {
     inserting: HashSet<String>,
     /// The templates manager, while open.
     templates: Option<(Entity<TemplatesView>, Subscription)>,
+    /// The live data, workspace and allowed commands every live panel shares.
+    live: SharedEnv,
+    /// The agent's todo list as a checklist ("Show as checklist"), the
+    /// app's own surface: no tool call, never in the transcript.
+    todo: Option<Surface>,
 }
 
 /// Whether `item` carries a surface version (or will).
@@ -321,6 +334,10 @@ impl GenUi {
                     }
                     let surface = Surface::new(&snapshot, cx);
                     surface.set_env(self.root.as_deref(), self.pins.contains(&id), cx);
+                    if let Surface::Panel(view) = &surface {
+                        let env = self.live.clone();
+                        view.update(cx, |view, cx| view.attach(env, cx));
+                    }
                     self.fresh.push(surface.clone());
                     self.surfaces.insert(id, surface);
                 }
@@ -329,10 +346,59 @@ impl GenUi {
         if self
             .expanded
             .as_ref()
-            .is_some_and(|id| !self.surfaces.contains_key(id))
+            .is_some_and(|id| !self.surfaces.contains_key(id) && id != TODO_SURFACE)
         {
             self.expanded = None;
         }
+    }
+
+    fn panels(&self) -> impl Iterator<Item = &Entity<PanelView>> {
+        self.surfaces
+            .values()
+            .chain(&self.todo)
+            .filter_map(|surface| match surface {
+                Surface::Panel(view) => Some(view),
+                _ => None,
+            })
+    }
+
+    /// Whether a live panel (or a kanban card's subagent) shows `source`:
+    /// the conversation builds its data only then.
+    pub fn wants(&self, source: Source, cx: &App) -> bool {
+        self.panels().any(|view| view.read(cx).wants(source))
+    }
+
+    /// `source`'s latest data; the panels showing it follow when it changed.
+    pub fn feed(&mut self, source: Source, data: serde_json::Value, cx: &mut App) {
+        {
+            let mut env = self.live.borrow_mut();
+            if env.feeds.get(&source) == Some(&data) {
+                return;
+            }
+            env.feeds.insert(source, data);
+        }
+        let views: Vec<Entity<PanelView>> = self.panels().cloned().collect();
+        for view in views {
+            view.update(cx, |view, cx| {
+                if view.wants(source) {
+                    view.feed(source, cx);
+                }
+            });
+        }
+    }
+
+    /// The Todos island's "Show as checklist": the agent's todo list,
+    /// live and read-only, in place of the conversation.
+    pub fn show_todo(&mut self, cx: &mut App) {
+        if self.todo.is_none() {
+            let view = cx.new(|cx| PanelView::todo_list(TODO_SURFACE, cx));
+            let env = self.live.clone();
+            view.update(cx, |view, cx| view.attach(env, cx));
+            let surface = Surface::Panel(view);
+            self.fresh.push(surface.clone());
+            self.todo = Some(surface);
+        }
+        self.set_expanded(Some(TODO_SURFACE.to_string()), cx);
     }
 
     /// The extension's answer to a surface's sent edits (its
@@ -350,12 +416,14 @@ impl GenUi {
     }
 
     /// The conversation's folder (it can change when the tab moves to a
-    /// worktree): code refs resolve and files save against it.
+    /// worktree): code refs resolve, files save, and live git sources and
+    /// commands run against it.
     pub fn set_root(&mut self, root: &Path, cx: &mut App) {
         if self.root.as_deref() == Some(root) {
             return;
         }
         self.root = Some(root.to_path_buf());
+        self.live.borrow_mut().workspace = Some(root.to_path_buf());
         for (id, surface) in &self.surfaces {
             surface.set_env(self.root.as_deref(), self.pins.contains(id), cx);
         }
@@ -505,11 +573,22 @@ impl GenUi {
             surface.set_obscured(self.obscured, cx);
             surface.set_expanded(on, cx);
         }
-        self.expanded = id.filter(|id| self.surfaces.contains_key(id));
+        if let Some(todo) = &self.todo {
+            todo.set_obscured(self.obscured, cx);
+            todo.set_expanded(id.as_deref() == Some(TODO_SURFACE), cx);
+        }
+        self.expanded = id.filter(|id| {
+            self.surfaces.contains_key(id) || (id == TODO_SURFACE && self.todo.is_some())
+        });
     }
 
     pub fn expanded(&self) -> Option<Surface> {
-        self.surfaces.get(self.expanded.as_ref()?).cloned()
+        let id = self.expanded.as_ref()?;
+        match self.surfaces.get(id) {
+            Some(surface) => Some(surface.clone()),
+            None if id == TODO_SURFACE => self.todo.clone(),
+            None => None,
+        }
     }
 
     /// Something is drawn over the conversation (a menu over the expanded

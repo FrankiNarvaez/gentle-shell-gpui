@@ -1,17 +1,20 @@
 //! The checklist panel: rows the user checks off, renames, adds, removes,
 //! indents and reorders (dragging the grip, or Alt-↑/↓). Rows have one
-//! height, so a reorder glides each row by whole rows.
+//! height, so a reorder glides each row by whole rows. With Run plan on,
+//! a bar runs the steps (Run, Run next, Stop: sent at once) and rows show
+//! each step's status and a Skip action.
 
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gentle_core::genui::checklist::{Change, Checklist, Item};
+use gentle_core::genui::checklist::{Change, Checklist, Item, Run, Status};
 use gentle_core::genui::edits::{Editable as _, Edits};
 use gentle_core::genui::kanban::drop_index;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -23,6 +26,8 @@ use crate::shared::ui;
 const ROW_H: f32 = 32.;
 const INDENT: f32 = 26.;
 const ADD_H: f32 = 36.;
+/// The run bar over a run plan's rows.
+const RUN_H: f32 = 36.;
 /// A press that moves less than this (px) is a click, not a drag.
 const DRAG_SLOP: f32 = 3.;
 
@@ -85,8 +90,10 @@ impl ChecklistState {
     }
 
     pub fn height(&self) -> f32 {
-        let rows = self.edits.working().count().max(1) as f32;
-        (rows * ROW_H + ADD_H + 12.).clamp(120., MAX_HEIGHT - CHROME)
+        let working = self.edits.working();
+        let rows = working.count().max(1) as f32;
+        let bar = if working.run.is_some() { RUN_H } else { 0. };
+        (rows * ROW_H + ADD_H + bar + 12.).clamp(120., MAX_HEIGHT - CHROME)
     }
 
     /// What the rows show: the working list, or the drop preview while a
@@ -164,6 +171,67 @@ impl PanelView {
             Change::Toggle {
                 item: id.to_string(),
                 done,
+            },
+            cx,
+        );
+    }
+
+    /// The header's Run plan: turns the plan on or off (sent with the rest).
+    pub(super) fn toggle_run_mode(&mut self, cx: &mut Context<Self>) {
+        let Some(on) = self.checklist().map(|s| s.edits.working().run.is_some()) else {
+            return;
+        };
+        self.checklist_edit(Change::RunMode { on: !on }, cx);
+    }
+
+    /// Run / Run next: the next pending step runs and the request goes to
+    /// the agent at once, with any skips and reorders made before it.
+    fn run_plan(&mut self, mode: Run, cx: &mut Context<Self>) {
+        let next = self
+            .checklist()
+            .and_then(|s| s.edits.working().next_step())
+            .map(|item| item.id.clone());
+        let Some(next) = next else {
+            self.refused = Some("Nothing pending to run".into());
+            cx.notify();
+            return;
+        };
+        if self.checklist_edit(
+            Change::Run {
+                mode,
+                item: Some(next),
+            },
+            cx,
+        ) {
+            self.send(cx);
+        }
+    }
+
+    /// Stop: the agent starts no further step; sent at once.
+    fn stop_plan(&mut self, cx: &mut Context<Self>) {
+        if self.checklist_edit(Change::Stop, cx) {
+            self.send(cx);
+        }
+    }
+
+    /// Skip a step, or take it back.
+    fn skip_item(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(status) = self
+            .checklist()
+            .and_then(|s| s.edits.working().item(id))
+            .map(|i| i.status)
+        else {
+            return;
+        };
+        let status = if status == Status::Skipped {
+            Status::Pending
+        } else {
+            Status::Skipped
+        };
+        self.checklist_edit(
+            Change::Status {
+                item: id.to_string(),
+                status,
             },
             cx,
         );
@@ -271,6 +339,9 @@ impl PanelView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.locked() {
+            return;
+        }
         let Some(label) = self
             .checklist()
             .and_then(|s| s.edits.working().item(id))
@@ -391,6 +462,9 @@ impl PanelView {
         let Some(id) = s.selected.clone() else {
             return false;
         };
+        if self.locked() && !matches!(keystroke.key.as_str(), "up" | "down" | "escape") {
+            return false;
+        }
         let alt = keystroke.modifiers.alt;
         match keystroke.key.as_str() {
             "space" => self.toggle_item(&id, cx),
@@ -563,6 +637,8 @@ impl PanelView {
         }
         let empty = rows.is_empty();
         let cell = s.bounds.clone();
+        let locked = self.locked();
+        let run_bar = self.render_run_bar(cx);
         let add = match &s.adding {
             Some(edit) if edit.target.is_none() => ui::field()
                 .h(rems(28. / 16.))
@@ -600,6 +676,7 @@ impl PanelView {
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| this.drop_row(window, cx)),
             )
+            .children(run_bar)
             .child(
                 v_flex()
                     .relative()
@@ -620,8 +697,98 @@ impl PanelView {
                         .child("Nothing here yet."),
                 )
             })
-            .child(add)
+            .when(!locked, |d| d.child(add))
             .into_any_element()
+    }
+
+    /// Progress and Run / Run next / Stop over a run plan's rows.
+    fn render_run_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if self.locked() {
+            return None;
+        }
+        let list = self.checklist()?.edits.working();
+        let run = list.run?;
+        let steps = list.steps();
+        let done = steps
+            .iter()
+            .filter(|i| matches!(i.status, Status::Done | Status::Skipped))
+            .count();
+        let running = list.running();
+        let busy = running.is_some() || matches!(run, Run::All | Run::Step);
+        let sending = matches!(self.send, super::diagram::SendState::Sending { .. });
+        let next = list.next_step();
+        let status = match running {
+            Some(item) => format!(
+                "Running step {} · {}",
+                list.step_number(&item.id).unwrap_or(0),
+                item.label
+            ),
+            None if next.is_none() => "Every step is through".to_string(),
+            None => format!(
+                "Next: step {} · {}",
+                next.and_then(|i| list.step_number(&i.id)).unwrap_or(0),
+                next.map_or("", |i| i.label.as_str())
+            ),
+        };
+        let button = |id: &'static str, icon: IconName, label: &'static str| {
+            Button::new(id)
+                .xsmall()
+                .icon(Icon::new(icon))
+                .label(label)
+                .disabled(sending)
+        };
+        let controls = if busy {
+            h_flex().child(
+                div().debug_selector(|| "genui-run-stop".into()).child(
+                    button("genui-run-stop", IconName::Square, "Stop")
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_plan(cx))),
+                ),
+            )
+        } else {
+            h_flex()
+                .gap_1()
+                .child(
+                    div().debug_selector(|| "genui-run-next".into()).child(
+                        button("genui-run-next", IconName::SkipForward, "Run next")
+                            .ghost()
+                            .disabled(sending || next.is_none())
+                            .on_click(cx.listener(|this, _, _, cx| this.run_plan(Run::Step, cx))),
+                    ),
+                )
+                .child(
+                    div().debug_selector(|| "genui-run-all".into()).child(
+                        button("genui-run-all", IconName::Play, "Run")
+                            .primary()
+                            .disabled(sending || next.is_none())
+                            .on_click(cx.listener(|this, _, _, cx| this.run_plan(Run::All, cx))),
+                    ),
+                )
+        };
+        Some(
+            h_flex()
+                .h(rems(RUN_H / 16.))
+                .flex_shrink_0()
+                .px_3()
+                .gap_2()
+                .border_b_1()
+                .border_color(ui::border())
+                .text_size(rems(12. / 16.))
+                .child(ui::chip(
+                    format!("{done}/{}", steps.len()),
+                    if busy { ui::accent() } else { ui::muted() },
+                ))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(ui::muted())
+                        .child(status),
+                )
+                .child(controls)
+                .into_any_element(),
+        )
     }
 
     fn render_item_row(
@@ -654,9 +821,18 @@ impl PanelView {
             item.id.clone(),
         );
         let label = item.label.clone();
+        let locked = self.locked();
+        let run_mode = s.edits.working().run.is_some();
+        let skip_id = item.id.clone();
         let check_selector = format!("genui-item-check-{}", item.id);
         let row_selector = format!("genui-item-{}", item.id);
-        let done_color = ui::success();
+        let (icon, color) = match item.status {
+            Status::Done => (IconName::CircleCheck, ui::success()),
+            Status::Running => (IconName::LoaderCircle, ui::accent()),
+            Status::Failed => (IconName::CircleX, ui::danger()),
+            Status::Skipped => (IconName::Ban, ui::faint()),
+            Status::Pending => (IconName::Circle, ui::faint()),
+        };
         let check = div()
             .id(SharedString::from(format!("genui-item-check-{}", item.id)))
             .debug_selector(move || check_selector)
@@ -665,16 +841,8 @@ impl PanelView {
             .flex()
             .items_center()
             .justify_center()
-            .cursor_pointer()
-            .child(
-                Icon::new(if item.done {
-                    IconName::CircleCheck
-                } else {
-                    IconName::Circle
-                })
-                .small()
-                .text_color(if item.done { done_color } else { ui::faint() }),
-            )
+            .when(!locked, |d| d.cursor_pointer())
+            .child(Icon::new(icon).small().text_color(color))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, _, cx| this.toggle_item(&toggle_id, cx)));
         // A fresh check pops in.
@@ -713,8 +881,14 @@ impl PanelView {
                         .min_w_0()
                         .flex_shrink(1.)
                         .truncate()
-                        .text_color(if item.done { ui::faint() } else { ui::fg() })
-                        .when(item.done, |d| d.line_through())
+                        .text_color(if item.done || item.status == Status::Skipped {
+                            ui::faint()
+                        } else {
+                            ui::fg()
+                        })
+                        .when(item.done || item.status == Status::Skipped, |d| {
+                            d.line_through()
+                        })
                         .child(item.label.clone()),
                 )
                 .children(item.code_ref.as_ref().map(|code_ref| {
@@ -758,7 +932,25 @@ impl PanelView {
             .gap_0p5()
             .opacity(0.)
             .group_hover("genui-item", |d| d.opacity(1.))
-            .when(parent.is_none(), |d| {
+            .when(run_mode && !locked && item.items.is_empty(), |d| {
+                d.child(
+                    action(
+                        SharedString::from(format!("genui-item-skip-{}", item.id)),
+                        IconName::Ban,
+                        if item.status == Status::Skipped {
+                            "Don't skip"
+                        } else {
+                            "Skip this step"
+                        },
+                    )
+                    .debug_selector({
+                        let selector = format!("genui-item-skip-{}", item.id);
+                        move || selector
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.skip_item(&skip_id, cx))),
+                )
+            })
+            .when(parent.is_none() && !locked, |d| {
                 d.child(
                     action(
                         SharedString::from(format!("genui-item-sub-{}", item.id)),
@@ -780,14 +972,16 @@ impl PanelView {
                     this.ask(&format!("the item “{label}” ({ask_id})"), cx)
                 })),
             )
-            .child(
-                action(
-                    SharedString::from(format!("genui-item-remove-{}", item.id)),
-                    IconName::Trash,
-                    "Remove",
+            .when(!locked, |d| {
+                d.child(
+                    action(
+                        SharedString::from(format!("genui-item-remove-{}", item.id)),
+                        IconName::Trash,
+                        "Remove",
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.remove_item(&remove_id, cx))),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| this.remove_item(&remove_id, cx))),
-            );
+            });
         let row = h_flex()
             .id(SharedString::from(format!("genui-item-{}", item.id)))
             .debug_selector(move || row_selector)
@@ -803,27 +997,29 @@ impl PanelView {
             .bg(ui::surface())
             .when(selected, |d| d.bg(ui::accent().opacity(0.08)))
             .hover(|d| d.bg(ui::surface_hover()))
-            .child(
-                div()
-                    .id(SharedString::from(format!("genui-item-grip-{}", item.id)))
-                    .debug_selector({
-                        let selector = format!("genui-item-grip-{}", item.id);
-                        move || selector
-                    })
-                    .flex_shrink_0()
-                    .cursor(CursorStyle::OpenHand)
-                    .text_color(ui::faint())
-                    .opacity(0.)
-                    .group_hover("genui-item", |d| d.opacity(1.))
-                    .when(selected, |d| d.opacity(1.))
-                    .child(Icon::new(IconName::GripVertical).xsmall())
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            this.press_grip(&grip_id, event, window, cx)
-                        }),
-                    ),
-            )
+            .when(!locked, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("genui-item-grip-{}", item.id)))
+                        .debug_selector({
+                            let selector = format!("genui-item-grip-{}", item.id);
+                            move || selector
+                        })
+                        .flex_shrink_0()
+                        .cursor(CursorStyle::OpenHand)
+                        .text_color(ui::faint())
+                        .opacity(0.)
+                        .group_hover("genui-item", |d| d.opacity(1.))
+                        .when(selected, |d| d.opacity(1.))
+                        .child(Icon::new(IconName::GripVertical).xsmall())
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                this.press_grip(&grip_id, event, window, cx)
+                            }),
+                        ),
+                )
+            })
             .child(check)
             .child(title)
             .children(progress.map(|p| {
