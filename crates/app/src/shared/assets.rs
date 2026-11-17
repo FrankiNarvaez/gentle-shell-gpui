@@ -105,7 +105,17 @@ gpui_kit::assets::icon_assets!(
         PictureInPicture2,
         // Configuration → Theme: share a theme, import one from a link.
         Share2,
-        Link
+        Link,
+        // Generative UI diagrams: node kinds and the toolbar.
+        Server,
+        Database,
+        Monitor,
+        SquareFunction,
+        StickyNote,
+        ZoomIn,
+        ZoomOut,
+        Scan,
+        Send
     ]
 );
 

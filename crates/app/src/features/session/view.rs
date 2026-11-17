@@ -18,6 +18,7 @@ use gpui_kit::*;
 use super::attachments;
 use super::state::BackendStatus;
 use super::{CONTEXT, SessionView};
+use crate::features::genui::GenUi;
 use crate::shared::ui;
 use gentle_core::tools;
 use gentle_core::transcript::{Block, Item, NoticeLevel, ToolStatus};
@@ -122,8 +123,9 @@ impl SessionView {
     }
 
     /// Bring everything derived from the transcript up to date: Markdown,
-    /// live spans, decoded images, card data and the list's measurements.
-    /// Only items from the first changed one on are revisited.
+    /// live spans, decoded images, card data, generative UI surfaces and
+    /// the list's measurements. Only items from the first changed one on
+    /// are revisited.
     pub(super) fn sync_view(&mut self, cx: &mut Context<Self>) {
         let dirty = self.transcript.take_dirty();
         if let Some(dirty) = dirty {
@@ -142,6 +144,8 @@ impl SessionView {
             self.track_live(from);
             self.list.prepare(&self.transcript.items, from);
             self.request_images(from, dirty.reset, cx);
+            self.genui
+                .sync(&self.transcript.items, from, dirty.reset, cx);
         }
         self.sync_live(cx);
         let tail = self.tail_rows();
@@ -646,6 +650,12 @@ impl SessionView {
                         .into_any_element(),
                     None => column.into_any_element(),
                 }
+            }
+            Item::Tool { name, .. } if name == gentle_core::genui::TOOL => {
+                self.genui.render_tool(ix, item)
+            }
+            Item::Custom { kind, details, .. } if kind == gentle_core::genui::EVENT_MESSAGE => {
+                GenUi::render_event(details)
             }
             Item::Tool { .. } | Item::Shell { .. } => {
                 let computed;
@@ -1384,6 +1394,7 @@ impl Render for SessionView {
         // A tab starts its backend once shown.
         self.ensure_started(window, cx);
         self.sync_view(cx);
+        self.watch_surfaces(window, cx);
         self.step_glide(window);
         // Timed effects (the composer's, answers fading) ask for each next
         // frame only while they play.
@@ -1397,6 +1408,9 @@ impl Render for SessionView {
         let width = self.pane_width.clone();
         let view = cx.entity_id();
         let narrow = self.pane_width.get() < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
+        // An expanded generative UI surface takes the conversation's place;
+        // the composer stays, to talk about it.
+        let expanded = self.genui.expanded();
         let main = v_flex()
             .relative()
             .flex_1()
@@ -1420,25 +1434,39 @@ impl Render for SessionView {
                 .absolute()
                 .size_full(),
             )
-            .child(
-                div()
-                    .id("transcript")
-                    .relative()
-                    .flex_1()
-                    .min_h_0()
-                    // A wheel or trackpad scroll takes over from a glide and
-                    // shows the rail's thumb.
-                    .on_scroll(cx.listener(|this, _, _, cx| this.on_user_scroll(cx)))
-                    .child(
-                        list(
-                            self.list.state(),
-                            cx.processor(|this, ix, window, cx| this.render_row(ix, window, cx)),
+            .map(|main| match expanded {
+                Some(surface) => main.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .map(|d| if narrow { d.px_3() } else { d.px_6() })
+                        .pt_4()
+                        .pb_2()
+                        .child(surface.cached(StyleRefinement::default().size_full())),
+                ),
+                None => main.child(
+                    div()
+                        .id("transcript")
+                        .relative()
+                        .flex_1()
+                        .min_h_0()
+                        // A wheel or trackpad scroll takes over from a glide and
+                        // shows the rail's thumb.
+                        .on_scroll(cx.listener(|this, _, _, cx| this.on_user_scroll(cx)))
+                        .child(
+                            list(
+                                self.list.state(),
+                                cx.processor(|this, ix, window, cx| {
+                                    this.render_row(ix, window, cx)
+                                }),
+                            )
+                            .size_full(),
                         )
-                        .size_full(),
-                    )
-                    .children(self.render_rail(&scroll, cx))
-                    .children(self.render_jump_down(cx)),
-            )
+                        .children(self.render_rail(&scroll, cx))
+                        .children(self.render_jump_down(cx)),
+                ),
+            })
             .child(
                 h_flex()
                     .w_full()

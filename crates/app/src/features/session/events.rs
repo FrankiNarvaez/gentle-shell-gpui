@@ -14,6 +14,7 @@ use super::state::desktop;
 use super::state::{BackendStatus, Dialog, TurnActivity};
 use super::{SessionEvent, SessionView, view};
 use crate::features::browser::CanvasNotice;
+use crate::features::genui::{DiagramEvent, DiagramView};
 use crate::features::git;
 use gentle_core::tools;
 use gentle_core::transcript::{self, NoticeLevel};
@@ -570,6 +571,46 @@ impl SessionView {
             });
         })
         .detach();
+    }
+
+    /// Listen to generative UI surfaces created since the last frame.
+    pub(super) fn watch_surfaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for surface in self.genui.take_fresh() {
+            let subscription = cx.subscribe_in(&surface, window, Self::on_surface_event);
+            self.genui.keep(surface.entity_id(), subscription);
+        }
+    }
+
+    fn on_surface_event(
+        &mut self,
+        surface: &Entity<DiagramView>,
+        event: &DiagramEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // The user's edits go to the extension, which records them in
+            // the conversation for the agent.
+            DiagramEvent::Send(command) => {
+                let surface = surface.clone();
+                self.run_extension_command(command.clone(), cx, move |result, cx| {
+                    surface.update(cx, |surface, cx| surface.sent(result, cx));
+                });
+            }
+            DiagramEvent::Ask(text) => self.composer.update(cx, |state, cx| {
+                state.insert(text.clone(), window, cx);
+                state.focus(window, cx);
+            }),
+            DiagramEvent::Expand => {
+                let id = surface.read(cx).id().to_string();
+                self.genui.set_expanded(Some(id), cx);
+                cx.notify();
+            }
+            DiagramEvent::Collapse => {
+                self.genui.set_expanded(None, cx);
+                cx.notify();
+            }
+        }
     }
 }
 

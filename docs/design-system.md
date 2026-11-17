@@ -324,6 +324,15 @@ Tool cards (`render_card` in `features/session/view.rs`) and extension message c
 - Body `px_3 pb_2`: 13 px text in `muted`; outputs in `MONO` 12 px (`CustomBody::Tail`); Markdown with `TextView` in `fg`. Long content is cut and offers "N more lines" / "Show less".
 - The tone (`Tone::{Success, Danger, Warning, Info, Muted}`) is decided by a pure function from the type and the `details` (`custom_look`), with tests.
 
+### Generative UI diagram card
+
+A `gentle_ui` diagram (`features/genui/view.rs`) is a conversation card with a canvas in the middle: the same header (`Workflow` icon in `info`, `champagne` title, `v<n>` chip, node and edge counts in `MONO`) with `ghost().xsmall()` icon tools on the right (add node, undo, zoom out/in, fit, expand); a `well` canvas; and a `border_t_1` footer like the tool cards' status footer: the hint line in `faint`, or the pending edits (`N changes` chip in `accent`, "Add a note…", `ghost` Discard, `primary` Send to agent), "Sent to the agent" in `success`, or a refused edit in `danger`. In the conversation it is `CARD_HEIGHT` (460 px at 100 %) tall, a fixed size so the surface is a cached view that only redraws when it changes; expanded, it fills the conversation's place over the composer.
+
+- Canvas: group boxes are `surface().opacity(0.55)` with a `border()` hairline, 14 px corners; edges are painted with `PathBuilder` (sync `muted` solid, async `warning` dashed, data `info` thicker, dependency `faint` dotted; the selected one in `accent`) and end in a filled arrowhead. Everything painted or laid out in the canvas is diagram geometry: px × zoom × interface size, not rems.
+- Nodes are elements (text, hover, clicks): `surface` box, 10 px corners, a 26 px icon tile in the kind's tone at 0.14 (service and function `info`, database and storage `success`, queue `warning`, cache `champagne`, client `accent`, external `muted`, note `faint`), label 13 px `SEMIBOLD` `fg`, tech or kind 11 px `muted`, a status dot. The border is the kind's tone at 0.45; `accent` 2 px when selected; dashed when planned, `danger` for risk, the whole node at 0.55 when deprecated. The connection handle (an `accent` dot on the right edge) shows on hover and on the selected node.
+- The selection's details float over the canvas' top-right corner in a `ui::island` (kind/status/group chips, tech in `MONO`, description, Rename / Ask about this / Delete). Rename edits in place with a `field` over the node.
+- The rows around it reuse the card header shape: drawing (spinner), failed (`danger` border, the error in `MONO`), superseded or closed (`faint`, at 0.7), shown expanded (with "Back here"), and the user's sent edits ("You edited …", the summary as bullets and the note).
+
 ### Buttons and footers
 
 | Rule | Example |

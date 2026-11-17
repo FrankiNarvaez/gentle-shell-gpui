@@ -58,6 +58,7 @@ flowchart TD
 | `version`: stable versions, comparison and Gentle Shell update offer | `updates/`: launcher cache, npm query, clock. |
 | `engram`: observation model and query encoding | `memory/`: HTTP requests to Engram. |
 | `workspaces`: unique workspace names | `workspaces/`: saved model (uses `PaneTree`), reading and writing `workspaces.json`. |
+| `genui`: the `gentle_ui` diagram spec (parsing, limits, normalization), its layered auto-layout and hit testing, the change list between two versions (diff, apply, human-readable sentences) and the `/gentle-ui:event` command line | `genui/`: the Pi extension it ships (`gentle-ui.ts`, written by `extension.rs`), surfaces rebuilt from the transcript (`GenUi`), the diagram view (`DiagramView`: viewport, pointer and keyboard edits, undo, send) and its painting. |
 
 ## Layout
 
@@ -71,7 +72,7 @@ crates/
 │       ├── features/            # one folder per feature; its entry point is mod.rs
 │       │   ├── session/  workspace/  workspaces/  sessions/  palette/  profiles/  settings/  usage/  setup/
 │       │   ├── browser/  devices/  music/  files/  terminal/  git/  history/  providers/  memory/  onboarding/  notices/  alerts/  hydration/  docs/
-│       │   └── app_update/  updates/  welcome/
+│       │   └── app_update/  updates/  welcome/  genui/
 │       ├── platform/            # OS integration: single instance, agent command shims, Dock and window icons, installed editors, power state
 │       └── shared/              # pieces used by several features, with no logic of their own:
 │                                # ui, floating, themes, backdrop (theme scenes), assets, banner, surge, pane, gentle_state
@@ -106,7 +107,7 @@ This shape is a guideline, not a mandatory template. A small feature should stay
 session/
 ├── mod.rs          # SessionView, constructor, public API, actions and window utilities
 ├── state.rs        # groups of fields that change together and their pure transitions
-├── events.rs       # RPC events, extension UI requests, stderr/output and Git refreshes
+├── events.rs       # RPC events, extension UI requests, stderr/output, Git refreshes and generative UI surface requests (send, ask, expand)
 ├── rpc.rs          # request/response, state read from the backend and commands (model, compact, export, sessions, prompts)
 ├── lifecycle.rs    # startup, restart (now or at end of turn), resume and conversation reset
 ├── submit.rs       # composer submission: `!` shell, built-ins, native screens and attachments
@@ -214,6 +215,9 @@ git/
 └── log.rs          # Commit History: a branch's commits, total, local branches, dirty work tree
 
 history/            # mod.rs: HistoryView (a `PaneKind::History` pane), paging, selection; graph.rs (paints a row's lanes), view.rs (rows, hover card)
+
+genui/              # mod.rs: GenUi (surfaces rebuilt from the transcript, live card vs superseded rows, expanded); extension.rs + gentle-ui.ts (the Pi extension);
+                    # diagram.rs: DiagramView (versions, local edits, undo, viewport, pointer and keys, send); view.rs (card, nodes, details, footer, conversation rows); paint.rs (groups, edges, arrowheads)
 
 app_update/mod.rs    # AppUpdate (Global), Status, Problem; check, install, skip, restart
 app_update/

@@ -23,6 +23,7 @@ How Gentle Shell GPUI connects to Gentle Shell (the `gentle-shell --mode rpc` ba
 | Profiles config stores | `features/profiles/`, `state::desktop::config` | Gentle Desktop RPC (`get_config`, `set_config`, `config_changed`) when the backend advertises both methods; direct files (legacy) otherwise. Make default and Use in this session go through `apply_profile` (`profile_applied`) when the backend also advertises it; otherwise Make default stays on files and Use in this session sends `set_model` |
 | Web apps (`gentle-open`, `/web`, dev-server URLs) | `features/browser/`, `gentle_core::web` | Single-instance request, system web view |
 | Devices (Android emulators, iOS simulators) | `features/devices/`, `features/settings/devices.rs`, `features/setup/devices.rs`, `gentle_core::devices` | Expo's device hub (Node child, loopback HTTP and its web viewer), `agent-device`, `gentle-device` |
+| Generative UI (`gentle_ui` diagrams) | `features/genui/` (`extension.rs`, `gentle-ui.ts`), `gentle_core::genui` | Pi extension the app writes and passes with `--extension`; `gentle_ui` tool results and `gentle-ui.event` custom messages in; `/gentle-ui:event` prompt out |
 
 Common rule: every child process is created with `pi_rpc::command` (never `std::process::Command::new` directly) and, if it needs to find the user's tools, it gets `pi_rpc::child_path()` as `PATH`.
 
@@ -42,7 +43,7 @@ If nothing is found, the error asks for `npm i -g gentle-pi` or `GENTLE_SHELL_BI
 
 | Field | Value |
 | --- | --- |
-| `args` | `GENTLE_SHELL_ARGS` split by `split_args()` (spaces separate; `"…"`/`'…'` keep spaces; backslashes literal), then `--mode rpc`. Managed install: its `gentle-shell.mjs` instead of `GENTLE_SHELL_ARGS`. |
+| `args` | `GENTLE_SHELL_ARGS` split by `split_args()` (spaces separate; `"…"`/`'…'` keep spaces; backslashes literal), then `--mode rpc`, then `--append-system-prompt <file>` (`set_system_prompt`) and `--extension <file>` for each of `set_extensions` (the generative UI extension). Managed install: its `gentle-shell.mjs` instead of `GENTLE_SHELL_ARGS`. |
 | `env` | `GENTLE_SHELL_INTERACTIVE_HOST=1` (enables `ask_user_question` dialogs and live helper activity) and `PATH` = combined PATH. Managed install: also its own environment (see below). |
 | `cwd` | The tab's folder |
 | `launcher` | The `gentle-shell` command a person runs: what Settings shows and messages name. `program`, except for the managed install (its `bin\gentle-shell.cmd`). |
@@ -254,6 +255,7 @@ When the backend's `capabilities` advertise both `get_config` and `set_config`, 
 | --- | --- | --- | --- |
 | `prompt` | `message`, `images?`, `streamingBehavior: "steer"?` | `attachments::prompt_command`, `rpc.rs` `send_prompt_with` | Send; in the middle of a turn it is sent as steer |
 | `prompt` | `message` (`/gentle:…`) | `rpc.rs` `run_extension_command` | Extension command without a turn; success only if `disposition == "handled"` |
+| `prompt` | `message` (`/gentle-ui:event {json}`) | Generative UI | The user's edits to a `gentle_ui` diagram (see Generative UI); extension commands run at once, even mid-turn, and answer `disposition: "handled"` |
 | `clear_queue`, `abort` | — | `rpc.rs` `stop` | Stop the turn (⌘. / Ctrl+. or the Stop button): clear the queue, then abort. Esc does not stop turns; it closes panels and dialogs |
 | `abort_bash` | — | `rpc.rs` `stop` | Stop a running `!cmd` (same Stop button / ⌘.; shown while one runs, `Transcript::shells_running`). Its `bash` response then settles the card. Sent alongside `abort` when a turn runs too |
 | `bash` | `command`, `excludeFromContext` | `submit.rs` `run_shell` | `!cmd` / `!!cmd`; output arrives via `bash_execution_update` |
@@ -328,6 +330,19 @@ One `DevicePanel` per window: a tab per device, docked as a 400 px column at the
 
 The Android SDK's `emulator` and `platform-tools` are on the agents' PATH (`devices::android_tool_dirs`): Android Studio doesn't put them there.
 
+## Generative UI: `gentle_ui` diagrams
+
+The agent shows interactive diagrams (architecture, data flow, dependencies) in the conversation; the user edits them natively and the edits go back to the agent. The protocol is a Pi extension the app ships, `features/genui/gentle-ui.ts`, embedded with `include_str!`.
+
+- **Installation** (`genui/extension.rs` `install`): at startup the app writes it to `<data>/gentle-shell-gpui/extensions/gentle-ui.ts` (only when the content differs) and `main.rs` passes the path to `pi_rpc::set_extensions`, so every new RPC session starts with `--extension <file>`. The gentle-shell launcher doesn't parse `--extension`: `parseLauncherArgs` puts unknown arguments in `passthrough` and `buildPiInvocation` appends them after its own `-e` injection, so Pi loads it in every home mode (a take-over's `--no-extensions` still loads explicit `-e`/`--extension` paths). It imports only host-provided modules (`@earendil-works/pi-coding-agent` types, `typebox`, `@earendil-works/pi-ai`); no `npm install`.
+- **Tool `gentle_ui`** (`executionMode: "sequential"`): `{ action: "show" | "update" | "close", id?, title?, kind?: "diagram", spec?, patch? }`. `show` takes a full spec and uses `id` when it is a free slug (`^[a-z0-9][a-z0-9-_]{0,63}$`), else `ui-<n>` (1 + the highest number seen on the branch); version 1, title `Diagram` by default. `update` takes `spec` (replace) and/or `patch` (merge: upsert `nodes`/`groups` by id and `edges` by id or `from`+`to`, `null` clears a field, `remove: { nodes, edges, groups }` with a removed node's edges and a removed group's memberships going too, `direction`); version + 1. `close` forgets the id. Invalid input throws a readable error (at most 10 problems) that the model sees as a tool error.
+- **Spec** (`kind: "diagram"`): `{ direction: LR | TB, groups: [{id, label, description?}], nodes: [{id, label, kind, group?, description?, tech?, status?, x?, y?}], edges: [{id, from, to, label?, style}] }`, stored normalized: unknown node kinds become `service`, unknown edge styles `sync`, unknown statuses are dropped, `x`/`y` only as a pair (rounded), missing edge ids become `<from>-><to>` (`#2`, `#3`… when taken), long text is cut with `…` (label and tech 80, description 1000). Hard errors: missing `nodes` array (or `groups`/`edges` that aren't arrays), nodes without id, ids over 64 characters, duplicate ids, edges to unknown nodes, groups not in `groups`, more than 200 nodes, 400 edges or 50 groups. `gentle_core::genui::diagram` applies the same rules.
+- **Result**: `content` is a compact summary the model reads (counts, groups, nodes with kind/group/status, edges with label/style; 60 entries per list at most); `details` is `{ id, version, kind, title, spec }` with the full normalized spec, or `{ …, spec: null, closed: true }` on close.
+- **User edits**: the app sends the prompt `/gentle-ui:event {"id","version","changes","summary","spec","note"?}` (one line, `gentle_core::genui::event_command`; `version` is the one the user edited, `changes` and `summary` come from `genui::changes::summarize`). The command (`gentle-ui:event`, hidden by `gentle_core::commands::hidden`) adopts `spec` as authoritative with version + 1 and calls `pi.sendMessage({ customType: "gentle-ui.event", display: true, content, details })`; `details` is `{ id, version, kind, title, spec, changes, summary, note, baseVersion }`, `content` lists the summary lines, the note, the changes as JSON and the new summary. Delivery: idle → `triggerTurn: true` (a new turn answers the edit); mid-turn → `deliverAs: "steer"` (after the current tool calls, before the next model call). An unknown id or an invalid spec only answers with an error `notify`.
+- **State**: nothing is stored outside the session. On `session_start` and `session_tree` the extension walks `sessionManager.getBranch()`: `gentle_ui` tool results and `gentle-ui.event` custom messages with `details.id` set or close the surfaces; later entries win. The app rebuilds the same state from the transcript (tool items and custom messages).
+- **In the app** (`features/genui/`): `GenUi::sync` runs from `SessionView::sync_view` whenever a changed transcript item is a `gentle_ui` tool item or a `gentle-ui.event` message (or the transcript was replaced: `get_messages`, a new or opened session), and keeps one `DiagramView` per id. Its live card is drawn at the id's latest tool item; earlier tool items show as superseded rows, a running call as "Drawing…" and a failed one with the extension's error. A newer version replaces the view's base and replays the user's unsent edits on top; the viewport stays unless the user never moved it. Edits are `genui::changes::apply` on a local copy (undo keeps 100 steps), counted against the base in the footer, and Send runs `run_extension_command` with the command line above; Expand shows the same view in place of the conversation (the composer stays), and "Ask about this" puts a reference to the selection in the composer.
+- **Limits**: the extension reports a rejected event (unknown id, invalid spec) only with an error `notify`, which the app toasts; the card still says it was sent. `tool_execution_start` carries the final arguments and the result follows at once, so there is no streaming preview of a diagram being written.
+
 ## Web apps and the in-app browser
 
 `features/browser/` is a general system web view now, not only Gentle Design's canvas. It shows any `http(s)` page in its own floating card; the design canvas, web apps and device cards all live in the same tileable stage list, and the ones an agent opened wait in the instance tray (see Stages and the instance tray).
@@ -373,7 +388,7 @@ Gentle Shell screens are TUI components (`ctx.ui.custom()` returns nothing over 
 2. `Submit::Open(Screen)`: `gentle_core::commands::route` (`gentle:usage`, `gentle:stats`, `gentle:agents`, `gentle:jobs`, `gentle:profiles` without arguments, `gentle:commands`, `gentle:changes`). The tab emits `SessionEvent::OpenScreen` and `workspace/overlays.rs` `open_screen` opens the screen.
 3. `Submit::Prompt`: sent as is.
 
-`gentle_core::commands::hidden` hides from the `/` menu and the palette the commands that have no effect over RPC (`gentle:customize`, `gentle:guide`, `gentle:voice`, `gentle:music`, `gentle:panel`, `history`). The palette applies the same rules in `palette/commands.rs` `command_row`.
+`gentle_core::commands::hidden` hides from the `/` menu and the palette the commands that have no effect over RPC (`gentle:customize`, `gentle:guide`, `gentle:voice`, `gentle:music`, `gentle:panel`, `history`) and `gentle-ui:event`, the app's channel to its generative UI extension. The palette applies the same rules in `palette/commands.rs` `command_row`.
 
 Native screens that act on the backend through the shell's own commands: Profiles (`ProfilesEvent::RunCommand`, e.g. `/gentle:profiles publish <name>`), Background subagents (`SettingsEvent::ShellCommand` → `run_extension_command("/gentle:background-subagents enable|disable")`).
 
@@ -389,6 +404,7 @@ App paths: `dirs::data_dir()/gentle-shell-gpui/` (on macOS, `~/Library/Applicati
 | `<data>/gentle-shell-gpui/engram-update.json` (`checkedAt`, `latest`, `skipped`) | App | R/W | `features/updates/engram.rs` |
 | `<data>/gentle-shell-gpui/instance.json` (port and token, 0600) | App | R/W | `platform/instance.rs` |
 | `<data>/gentle-shell-gpui/toolchain/` | App | W | `features/setup/` |
+| `<data>/gentle-shell-gpui/extensions/gentle-ui.ts` (the generative UI Pi extension, loaded with `--extension`) | App | W | `features/genui/extension.rs` |
 | Launcher `config.json` (`mode`, `dir`): `pi_rpc::launcher_config_path()`, `GENTLE_SHELL_CONFIG` or `~/.gentle-shell/config.json` | Launcher | R | `pi-rpc/home.rs` |
 | Launcher `config.json` (`startupReleaseCheck`, `skippedStartupRelease`) | Launcher, shared | R/W | `features/updates/` (same `launcher_config_path()`) |
 | `<agent>/auth.json` | Pi | R (Pi writes it via `login-helper.mjs`) | `usage/credentials.rs`, `settings/snapshot.rs`, `setup/extras.rs` |

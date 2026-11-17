@@ -89,6 +89,9 @@ pub struct SessionView {
     /// Rendered Markdown per (item, block), with the byte length already pushed.
     markdown: HashMap<(usize, usize), (Entity<TextViewState>, usize)>,
     expanded: HashSet<usize>,
+    /// Generative UI surfaces the agent showed (`gentle_ui`), rebuilt
+    /// from the transcript.
+    genui: crate::features::genui::GenUi,
     composer: Entity<TextareaState>,
     /// The composer has the keyboard: its border takes the accent.
     composer_focused: bool,
@@ -254,6 +257,7 @@ impl SessionView {
             transcript: Transcript::default(),
             markdown: HashMap::new(),
             expanded: HashSet::new(),
+            genui: Default::default(),
             composer,
             composer_focused: false,
             composer_pulse: None,

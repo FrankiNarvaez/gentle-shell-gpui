@@ -42,7 +42,8 @@ pub fn route(text: &str) -> Option<Screen> {
     })
 }
 
-/// Commands that do nothing useful over RPC and have no native screen yet:
+/// Commands that do nothing useful over RPC and have no native screen yet,
+/// plus `gentle-ui:event`, the app's channel to its generative UI extension:
 /// hidden from the palette and the composer's `/` menu. `name` may carry a
 /// leading `/`; arguments are ignored.
 pub fn hidden(name: &str) -> bool {
@@ -56,6 +57,7 @@ pub fn hidden(name: &str) -> bool {
             | "gentle:music"
             | "gentle:panel"
             | "history"
+            | "gentle-ui:event"
     )
 }
 
@@ -121,6 +123,8 @@ mod tests {
             "gentle:music next",
             "gentle:panel",
             "history",
+            "gentle-ui:event",
+            "/gentle-ui:event {\"id\":\"ui-1\"}",
         ] {
             assert!(hidden(name), "{name}");
         }
@@ -129,6 +133,7 @@ mod tests {
             "gentle:doctor",
             "gentle:history",
             "historyx",
+            "gentle-ui",
             "",
         ] {
             assert!(!hidden(name), "{name}");
