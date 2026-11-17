@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use serde_json::{Map, Value, json};
 
 use super::diagram::{
-    Diagram, Edge, EdgeStyle, MAX_EDGES, MAX_LABEL, MAX_NODES, MAX_TEXT, Node, NodeKind, Status,
-    truncate,
+    Diagram, Direction, Edge, EdgeStyle, Group, MAX_EDGES, MAX_GROUPS, MAX_LABEL, MAX_NODES,
+    MAX_TEXT, Node, NodeKind, Status, truncate,
 };
 use super::layout::{self, Layout};
 
@@ -56,6 +56,21 @@ pub enum Change {
     },
     RemoveEdge {
         edge: String,
+    },
+    AddGroup {
+        group: Group,
+    },
+    UpdateGroup {
+        group: String,
+        label: Option<String>,
+        description: Option<Option<String>>,
+    },
+    /// Its members become ungrouped.
+    RemoveGroup {
+        group: String,
+    },
+    SetDirection {
+        direction: Direction,
     },
 }
 
@@ -108,19 +123,46 @@ impl Change {
                 Value::Object(map)
             }
             Change::RemoveEdge { edge } => json!({"op": "remove_edge", "edge": edge}),
+            Change::AddGroup { group } => json!({"op": "add_group", "group": group.to_value()}),
+            Change::UpdateGroup {
+                group,
+                label,
+                description,
+            } => {
+                let mut map = Map::new();
+                map.insert("op".into(), json!("update_group"));
+                map.insert("group".into(), json!(group));
+                if let Some(label) = label {
+                    map.insert("label".into(), json!(label));
+                }
+                if let Some(description) = description {
+                    map.insert("description".into(), json!(description));
+                }
+                Value::Object(map)
+            }
+            Change::RemoveGroup { group } => json!({"op": "remove_group", "group": group}),
+            Change::SetDirection { direction } => {
+                json!({"op": "set_direction", "direction": direction.name()})
+            }
         }
     }
 }
 
-/// Changes turning `old` into `new`, in apply order: remove_edge, remove_node,
-/// add_node, update_node, move, add_edge, update_edge. Groups and direction
-/// are not diffed (the UI doesn't edit them).
+/// Changes turning `old` into `new`, in apply order: remove_edge,
+/// remove_node, remove_group, add_group, update_group, set_direction,
+/// add_node, update_node, move, add_edge, update_edge.
 pub fn diff(old: &Diagram, new: &Diagram) -> Vec<Change> {
     let removed_nodes: HashSet<&str> = old
         .nodes
         .iter()
         .filter(|n| new.node(&n.id).is_none())
         .map(|n| n.id.as_str())
+        .collect();
+    let removed_groups: HashSet<&str> = old
+        .groups
+        .iter()
+        .filter(|g| new.group(&g.id).is_none())
+        .map(|g| g.id.as_str())
         .collect();
     // An edge whose endpoints changed is a different connection: remove + add.
     let same_ends = |a: &Edge, b: &Edge| a.from == b.from && a.to == b.to;
@@ -139,6 +181,33 @@ pub fn diff(old: &Diagram, new: &Diagram) -> Vec<Change> {
             changes.push(Change::RemoveNode { node: n.id.clone() });
         }
     }
+    for g in &old.groups {
+        if removed_groups.contains(g.id.as_str()) {
+            changes.push(Change::RemoveGroup {
+                group: g.id.clone(),
+            });
+        }
+    }
+    for g in &new.groups {
+        if old.group(&g.id).is_none() {
+            changes.push(Change::AddGroup { group: g.clone() });
+        }
+    }
+    for g in &new.groups {
+        let Some(o) = old.group(&g.id) else { continue };
+        if o.label != g.label || o.description != g.description {
+            changes.push(Change::UpdateGroup {
+                group: g.id.clone(),
+                label: (o.label != g.label).then(|| g.label.clone()),
+                description: (o.description != g.description).then(|| g.description.clone()),
+            });
+        }
+    }
+    if old.direction != new.direction {
+        changes.push(Change::SetDirection {
+            direction: new.direction,
+        });
+    }
     for n in &new.nodes {
         if old.node(&n.id).is_none() {
             changes.push(Change::AddNode { node: n.clone() });
@@ -147,10 +216,15 @@ pub fn diff(old: &Diagram, new: &Diagram) -> Vec<Change> {
     let mut moves = Vec::new();
     for n in &new.nodes {
         let Some(o) = old.node(&n.id) else { continue };
+        // Removing a group already took its members out.
+        let old_group = o
+            .group
+            .clone()
+            .filter(|g| !removed_groups.contains(g.as_str()));
         let patch = NodePatch {
             label: (o.label != n.label).then(|| n.label.clone()),
             kind: (o.kind != n.kind).then_some(n.kind),
-            group: (o.group != n.group).then(|| n.group.clone()),
+            group: (old_group != n.group).then(|| n.group.clone()),
             description: (o.description != n.description).then(|| n.description.clone()),
             tech: (o.tech != n.tech).then(|| n.tech.clone()),
             status: (o.status != n.status).then_some(n.status),
@@ -285,6 +359,49 @@ pub fn apply(d: &mut Diagram, change: &Change) -> Result<(), String> {
                 .ok_or_else(|| format!("unknown edge \"{edge}\""))?;
             d.edges.remove(i);
         }
+        Change::AddGroup { group } => {
+            if group.id.trim().is_empty() {
+                return Err("a new group needs an id".into());
+            }
+            if d.group(&group.id).is_some() {
+                return Err(format!("group \"{}\" already exists", group.id));
+            }
+            if d.groups.len() >= MAX_GROUPS {
+                return Err(format!("too many groups (at most {MAX_GROUPS})"));
+            }
+            d.groups.push(group.clone());
+        }
+        Change::UpdateGroup {
+            group,
+            label,
+            description,
+        } => {
+            let g = d
+                .groups
+                .iter_mut()
+                .find(|g| &g.id == group)
+                .ok_or_else(|| format!("unknown group \"{group}\""))?;
+            if let Some(label) = label {
+                g.label = clean(label, MAX_LABEL).unwrap_or_else(|| g.id.clone());
+            }
+            if let Some(description) = description {
+                g.description = description.as_deref().and_then(|s| clean(s, MAX_TEXT));
+            }
+        }
+        Change::RemoveGroup { group } => {
+            let i = d
+                .groups
+                .iter()
+                .position(|g| &g.id == group)
+                .ok_or_else(|| format!("unknown group \"{group}\""))?;
+            d.groups.remove(i);
+            for n in &mut d.nodes {
+                if n.group.as_ref() == Some(group) {
+                    n.group = None;
+                }
+            }
+        }
+        Change::SetDirection { direction } => d.direction = *direction,
     }
     Ok(())
 }
@@ -411,6 +528,46 @@ pub fn describe(
             }
         }
         Change::RemoveEdge { edge } => format!("disconnected {}", connection(edge)),
+        Change::AddGroup { group } => format!("created the group {}", group.label),
+        Change::UpdateGroup {
+            group,
+            label: new_label,
+            description,
+        } => {
+            let old = group_label(before, group);
+            let name = new_label.clone().unwrap_or_else(|| old.clone());
+            let mut parts = Vec::new();
+            if let Some(new) = new_label {
+                parts.push(format!("renamed the group {old} to {new}"));
+            }
+            match description {
+                Some(Some(_)) => parts.push(format!("updated the description of {name}")),
+                Some(None) => parts.push(format!("cleared the description of {name}")),
+                None => {}
+            }
+            if parts.is_empty() {
+                format!("updated the group {name}")
+            } else {
+                parts.join(", ")
+            }
+        }
+        Change::RemoveGroup { group } => {
+            let name = group_label(before, group);
+            let members = before
+                .nodes
+                .iter()
+                .filter(|n| n.group.as_ref() == Some(group))
+                .count();
+            match members {
+                0 => format!("removed the group {name}"),
+                1 => format!("removed the group {name} (its 1 node is now ungrouped)"),
+                n => format!("removed the group {name} (its {n} nodes are now ungrouped)"),
+            }
+        }
+        Change::SetDirection { direction } => match direction {
+            Direction::LeftRight => "laid the diagram out left to right".into(),
+            Direction::TopBottom => "laid the diagram out top to bottom".into(),
+        },
     }
 }
 
@@ -423,6 +580,44 @@ pub fn summarize(old: &Diagram, new: &Diagram) -> (Vec<Change>, Vec<String>) {
         .map(|c| describe(c, old, new, &after_layout))
         .collect();
     (changes, sentences)
+}
+
+/// The group `node` joins when dropped where `after` has it, judged by
+/// the group boxes `before` the drag: `Some(group)` when that differs from
+/// its current one (`Some(None)`: out of every group). Another group's box
+/// wins over its own; a node that alone fills its group stays in it.
+pub fn group_on_drop(
+    d: &Diagram,
+    before: &Layout,
+    after: &Layout,
+    node: &str,
+) -> Option<Option<String>> {
+    let i = d.node_index(node)?;
+    let center = after.nodes.get(i)?.center();
+    let current = d.nodes[i].group.as_deref();
+    let inside = |g: &&Group| {
+        let ix = d.groups.iter().position(|x| x.id == g.id);
+        ix.and_then(|ix| before.groups.get(ix).copied().flatten())
+            .is_some_and(|r| r.contains(center))
+    };
+    let target = d
+        .groups
+        .iter()
+        .rev()
+        .filter(inside)
+        .map(|g| g.id.as_str())
+        .find(|g| Some(*g) != current)
+        .or_else(|| current.filter(|c| d.group(c).as_ref().is_some_and(inside)));
+    let alone = current.is_some_and(|c| {
+        !d.nodes
+            .iter()
+            .enumerate()
+            .any(|(j, n)| j != i && n.group.as_deref() == Some(c))
+    });
+    if target == current || (target.is_none() && alone) {
+        return None;
+    }
+    Some(target.map(str::to_string))
 }
 
 /// The other node whose center is nearest to `id`'s.
@@ -708,5 +903,153 @@ mod tests {
             node: Node::new("cache", "Cache", NodeKind::Cache),
         };
         assert_eq!(describe(&add, &old, &gone, &l), "added Cache (cache)");
+    }
+
+    #[test]
+    fn groups_and_direction_round_trip() {
+        let old = base();
+        let mut new = old.clone();
+        // Remove Backend (API leaves it), create Data with the DB and Queue
+        // in it, flip the direction and edit the node's other fields.
+        new.groups.clear();
+        new.groups.push(Group {
+            id: "data".into(),
+            label: "Data".into(),
+            description: Some("stores".into()),
+        });
+        new.nodes[0].group = None;
+        new.nodes[1].group = Some("data".into());
+        new.nodes[2].group = Some("data".into());
+        new.nodes[1].kind = NodeKind::Storage;
+        new.nodes[1].status = Some(Status::Deprecated);
+        new.nodes[1].tech = Some("Postgres".into());
+        new.nodes[1].description = None;
+        new.direction = Direction::TopBottom;
+        let changes = assert_round_trip(&old, &new);
+        let ops: Vec<Value> = changes.iter().map(|c| c.to_value()["op"].clone()).collect();
+        assert_eq!(
+            ops,
+            [
+                json!("remove_group"),
+                json!("add_group"),
+                json!("set_direction"),
+                json!("update_node"),
+                json!("update_node"),
+            ]
+        );
+        // API's group went with Backend: no separate update for it.
+        assert!(changes.iter().all(|c| !matches!(
+            c,
+            Change::UpdateNode { node, .. } if node == "api"
+        )));
+
+        let mut renamed = new.clone();
+        renamed.groups[0].label = "Storage".into();
+        renamed.groups[0].description = None;
+        let changes = assert_round_trip(&new, &renamed);
+        assert_eq!(
+            changes[0].to_value(),
+            json!({"op": "update_group", "group": "data", "label": "Storage", "description": null})
+        );
+        assert_eq!(
+            Change::AddGroup {
+                group: new.groups[0].clone()
+            }
+            .to_value(),
+            json!({"op": "add_group", "group": {"id": "data", "label": "Data", "description": "stores"}})
+        );
+        assert_eq!(
+            Change::SetDirection {
+                direction: Direction::TopBottom
+            }
+            .to_value(),
+            json!({"op": "set_direction", "direction": "TB"})
+        );
+
+        let (_, sentences) = summarize(&old, &new);
+        assert_eq!(
+            sentences,
+            [
+                "removed the group Backend (its 1 node is now ungrouped)".to_string(),
+                "created the group Data".into(),
+                "laid the diagram out top to bottom".into(),
+                "changed Orders DB's kind to storage, set Orders DB's status to deprecated, \
+                 cleared Orders DB's description, updated Orders DB's tech to Postgres, \
+                 moved Orders DB into Data"
+                    .into(),
+                "moved Queue into Data".into(),
+            ]
+        );
+        let (_, sentences) = summarize(&new, &renamed);
+        assert_eq!(
+            sentences,
+            ["renamed the group Data to Storage, cleared the description of Storage"]
+        );
+    }
+
+    #[test]
+    fn bad_group_changes_are_refused() {
+        let d = base();
+        let bad = [
+            Change::AddGroup {
+                group: d.groups[0].clone(),
+            },
+            Change::UpdateGroup {
+                group: "nope".into(),
+                label: Some("x".into()),
+                description: None,
+            },
+            Change::RemoveGroup {
+                group: "nope".into(),
+            },
+        ];
+        for change in &bad {
+            let mut copy = d.clone();
+            assert!(apply(&mut copy, change).is_err(), "{change:?}");
+            assert_eq!(copy, d);
+        }
+        let mut copy = d.clone();
+        apply(
+            &mut copy,
+            &Change::UpdateGroup {
+                group: "backend".into(),
+                label: Some("  ".into()),
+                description: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(copy.groups[0].label, "backend");
+    }
+
+    #[test]
+    fn dropping_a_node_moves_it_between_groups() {
+        let d = Diagram::parse(&json!({
+            "groups": [{"id": "back"}, {"id": "solo"}],
+            "nodes": [
+                {"id": "api", "group": "back"},
+                {"id": "db", "group": "back"},
+                {"id": "web"},
+                {"id": "lone", "group": "solo"},
+            ],
+            "edges": [{"from": "web", "to": "api"}, {"from": "api", "to": "db"}],
+        }))
+        .unwrap();
+        let before = layout::layout(&d);
+        let at = |node: &str, x: f32, y: f32| {
+            let mut moved = d.clone();
+            let i = moved.node_index(node).unwrap();
+            moved.nodes[i].x = Some(x);
+            moved.nodes[i].y = Some(y);
+            group_on_drop(&moved, &before, &layout::layout(&moved), node)
+        };
+        let (api, db) = (before.nodes[0], before.nodes[1]);
+        // Onto the API: into Back; a little off its place: still in Back.
+        assert_eq!(at("web", api.x, api.y), Some(Some("back".into())));
+        assert_eq!(at("db", db.x + 8., db.y + 8.), None);
+        // Far away: out of Back; Lone fills Solo alone, so it stays.
+        assert_eq!(at("db", -2000., -2000.), Some(None));
+        assert_eq!(at("lone", -2000., -2000.), None);
+        assert_eq!(at("web", -2000., -2000.), None);
+        assert_eq!(group_on_drop(&d, &before, &before, "ghost"), None);
     }
 }

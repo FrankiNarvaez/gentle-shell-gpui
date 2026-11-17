@@ -1,8 +1,13 @@
-//! Drawing a diagram surface (header, canvas with its nodes and labels,
-//! details, footer) and the conversation rows around it: a surface being
+//! Drawing a diagram surface, React Flow style: a header with the editing
+//! tools, a dotted canvas with group boxes, edges, node cards and edge label
+//! pills, floating controls (bottom-left), a minimap (bottom-right) and the
+//! selection's details (top-right, `details.rs`), and a footer with the
+//! pending edits; and the conversation rows around it: a surface being
 //! drawn, one that failed, older versions and the user's sent edits.
 
-use gentle_core::genui::diagram::{Diagram, EdgeStyle, NodeKind, Status};
+use std::time::Instant;
+
+use gentle_core::genui::diagram::{Direction, EdgeStyle, NodeKind, Status};
 use gentle_core::genui::layout::{self, GROUP_PAD, Rect};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -11,17 +16,20 @@ use gpui_kit::component::{Disableable as _, Icon, Sizable as _, Size, h_flex, v_
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::diagram::{
-    DiagramEvent, DiagramView, Drag, MIN_ZOOM, READABLE_ZOOM, Selection, SendState,
-};
-use super::paint::Frame;
-use crate::shared::ui;
+use super::diagram::{DiagramEvent, DiagramView, Drag, READABLE_ZOOM, Selection, SendState};
+use super::motion::{self, MARCH_SPEED};
+use super::paint::{self, EdgeDraw, EdgeLook, Frame, MiniMap};
+use super::pointer::ZOOM_STEP;
+use crate::shared::{backdrop, ui};
 
 /// The card's height in the conversation (px at 100 %): a fixed size, so
 /// the surface can be a cached view that only redraws when it changes.
 pub(super) const CARD_HEIGHT: f32 = 460.;
+/// The minimap's size (px at 100 %).
+const MINIMAP_W: f32 = 168.;
+const MINIMAP_H: f32 = 108.;
 
-fn kind_icon(kind: NodeKind) -> IconName {
+pub(super) fn kind_icon(kind: NodeKind) -> IconName {
     match kind {
         NodeKind::Service => IconName::Server,
         NodeKind::Database => IconName::Database,
@@ -35,7 +43,7 @@ fn kind_icon(kind: NodeKind) -> IconName {
     }
 }
 
-fn kind_color(kind: NodeKind) -> Hsla {
+pub(super) fn kind_color(kind: NodeKind) -> Hsla {
     match kind {
         NodeKind::Service | NodeKind::Function => ui::info(),
         NodeKind::Database | NodeKind::Storage => ui::success(),
@@ -47,7 +55,7 @@ fn kind_color(kind: NodeKind) -> Hsla {
     }
 }
 
-fn status_color(status: Status) -> Hsla {
+pub(super) fn status_color(status: Status) -> Hsla {
     match status {
         Status::Planned => ui::info(),
         Status::Existing => ui::success(),
@@ -56,7 +64,7 @@ fn status_color(status: Status) -> Hsla {
     }
 }
 
-fn style_name(style: EdgeStyle) -> &'static str {
+pub(super) fn style_name(style: EdgeStyle) -> &'static str {
     match style {
         EdgeStyle::Sync => "sync call",
         EdgeStyle::Async => "async",
@@ -65,19 +73,54 @@ fn style_name(style: EdgeStyle) -> &'static str {
     }
 }
 
-fn label_of<'a>(diagram: &'a Diagram, id: &'a str) -> &'a str {
-    diagram.node(id).map_or(id, |n| n.label.as_str())
+/// Where nodes and edges show this frame: the layout, or on their way to
+/// it while the agent's update eases in.
+struct Shown {
+    nodes: Vec<(Rect, f32)>,
+    edges: Vec<(layout::EdgePath, f32)>,
+    /// Removed by the update, fading out: (index into the arrival's lists).
+    leaving: f32,
 }
 
 impl Render for DiagramView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let rem = window.rem_size();
+        let now = Instant::now();
+        let mut tweening = self.advance_view(now);
         let size = self.bounds.get().size;
         let refit = self.viewport.fitted_for.is_none()
-            || (!self.viewport.touched && self.viewport.fitted_for != Some(size));
+            || (!self.viewport.touched
+                && self.view_tween.is_none()
+                && self.viewport.fitted_for != Some(size));
         if refit && size.width > px(1.) && size.height > px(1.) {
             self.fit(READABLE_ZOOM, rem);
         }
+        if self.arrival.as_ref().is_some_and(|a| a.done(now)) {
+            self.arrival = None;
+        }
+        tweening |= self.arrival.is_some();
+        self.sync_fields(window, cx);
+        let shown = self.shown(now);
+
+        // Ask for the next frame only while something moves.
+        let reduce = cx.reduce_motion();
+        let motion_now = backdrop::motion_now(cx);
+        let active = window.is_window_active();
+        let marches = motion::marches(active, reduce, motion_now);
+        let visible = self.visible(rem);
+        let marching_on_screen = self
+            .working
+            .edges
+            .iter()
+            .zip(&shown.edges)
+            .any(|(e, (p, _))| paint::animated(e.style) && p.bounds().intersects(&visible));
+        if let Some(delay) =
+            motion::frame_delay(tweening, marching_on_screen, active, reduce, motion_now)
+        {
+            ui::request_frame_in(delay, window, cx);
+        }
+        let march = marches.then(|| ui::live_clock() * MARCH_SPEED);
+
         v_flex()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::key_down))
@@ -88,15 +131,44 @@ impl Render for DiagramView {
             .border_color(ui::border())
             .overflow_hidden()
             .child(self.render_header(cx))
-            .child(self.render_canvas(rem, cx))
+            .child(self.render_canvas(rem, &shown, march, cx))
             .child(self.render_footer(cx))
     }
 }
 
 impl DiagramView {
+    fn shown(&self, now: Instant) -> Shown {
+        let Some(arrival) = &self.arrival else {
+            return Shown {
+                nodes: self.layout.nodes.iter().map(|r| (*r, 1.)).collect(),
+                edges: self.layout.edges.iter().map(|p| (p.clone(), 1.)).collect(),
+                leaving: 0.,
+            };
+        };
+        let p = arrival.progress(now);
+        Shown {
+            nodes: self
+                .working
+                .nodes
+                .iter()
+                .zip(&self.layout.nodes)
+                .map(|(n, r)| arrival.node(&n.id, *r, p))
+                .collect(),
+            edges: self
+                .working
+                .edges
+                .iter()
+                .zip(&self.layout.edges)
+                .map(|(e, path)| arrival.edge(&e.id, path, p))
+                .collect(),
+            leaving: 1. - p,
+        }
+    }
+
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let tool = |id: &'static str, icon: IconName, tip: &'static str| {
             Button::new(id)
+                .debug_selector(|| id.into())
                 .ghost()
                 .xsmall()
                 .text_color(ui::muted())
@@ -105,6 +177,20 @@ impl DiagramView {
         };
         let nodes = self.working.nodes.len();
         let edges = self.working.edges.len();
+        let has_nodes = self
+            .selection
+            .as_ref()
+            .is_some_and(|s| !s.nodes().is_empty());
+        let (direction_icon, direction_tip) = match self.working.direction {
+            Direction::LeftRight => (
+                IconName::ArrowRight,
+                "Left to right (switch to top to bottom)",
+            ),
+            Direction::TopBottom => (
+                IconName::ArrowDown,
+                "Top to bottom (switch to left to right)",
+            ),
+        };
         h_flex()
             .px_3()
             .py_1p5()
@@ -146,7 +232,20 @@ impl DiagramView {
                     .gap_0p5()
                     .child(
                         tool("genui-add", IconName::Plus, "Add node")
+                            .disabled(self.locked)
                             .on_click(cx.listener(|this, _, window, cx| this.add_node(window, cx))),
+                    )
+                    .child(
+                        tool("genui-group", IconName::Group, "Group the selected nodes")
+                            .disabled(self.locked || !has_nodes)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.group_selection(window, cx)),
+                            ),
+                    )
+                    .child(
+                        tool("genui-direction", direction_icon, direction_tip)
+                            .disabled(self.locked)
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_direction(cx))),
                     )
                     .child(
                         tool("genui-undo", IconName::Undo2, "Undo")
@@ -154,27 +253,9 @@ impl DiagramView {
                             .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
                     )
                     .child(
-                        tool("genui-zoom-out", IconName::ZoomOut, "Zoom out").on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.zoom_center(1. / 1.25, window.rem_size());
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(tool("genui-zoom-in", IconName::ZoomIn, "Zoom in").on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.zoom_center(1.25, window.rem_size());
-                            cx.notify();
-                        }),
-                    ))
-                    .child(
-                        tool("genui-fit", IconName::Scan, "Fit the whole diagram").on_click(
-                            cx.listener(|this, _, window, cx| {
-                                this.viewport.touched = false;
-                                this.fit(MIN_ZOOM, window.rem_size());
-                                cx.notify();
-                            }),
-                        ),
+                        tool("genui-redo", IconName::Redo2, "Redo")
+                            .disabled(!self.can_redo())
+                            .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                     )
                     .child(
                         tool(
@@ -201,36 +282,110 @@ impl DiagramView {
             )
     }
 
-    fn render_canvas(&self, rem: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_canvas(
+        &self,
+        rem: Pixels,
+        shown: &Shown,
+        march: Option<f32>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let s = self.scale(rem);
         let pan = self.viewport.pan;
-        let bounds = self.bounds.get();
-        let visible = Rect {
-            x: -pan.x / s,
-            y: -pan.y / s,
-            w: f32::from(bounds.size.width) / s,
-            h: f32::from(bounds.size.height) / s,
-        }
-        .inflate(40.);
+        let visible = self.visible(rem).inflate(40.);
         let at = |x: f32, y: f32| (px(x * s + pan.x), px(y * s + pan.y));
         let selected_edge = match &self.selection {
             Some(Selection::Edge(id)) => self.working.edges.iter().position(|e| &e.id == id),
             _ => None,
         };
+        let selected_group = match &self.selection {
+            Some(Selection::Group(id)) => self.working.groups.iter().position(|g| &g.id == id),
+            _ => None,
+        };
         let connect = match &self.drag {
-            Some(Drag::Connect { from, to }) => self
+            Some(Drag::Connect { node, to, .. }) => self
                 .working
-                .node_index(from)
+                .node_index(node)
                 .map(|ix| (self.layout.nodes[ix].center(), *to)),
             _ => None,
         };
+        let select = match &self.drag {
+            Some(Drag::Select { from, to }) => Some(Rect {
+                x: from.x.min(to.x),
+                y: from.y.min(to.y),
+                w: (to.x - from.x).abs(),
+                h: (to.y - from.y).abs(),
+            }),
+            _ => None,
+        };
+        // Group boxes follow their members while they ease in.
+        let groups: Vec<(Rect, bool)> = self
+            .working
+            .groups
+            .iter()
+            .enumerate()
+            .filter_map(|(gi, g)| {
+                let target = self.layout.groups.get(gi).copied().flatten()?;
+                let members = self
+                    .working
+                    .nodes
+                    .iter()
+                    .zip(&shown.nodes)
+                    .filter(|(n, _)| n.group.as_deref() == Some(g.id.as_str()))
+                    .map(|(_, (r, _))| *r)
+                    .reduce(|a, b| a.union(&b));
+                let rect = match (self.arrival.is_some(), members) {
+                    (true, Some(union)) => {
+                        let mut r = union.inflate(GROUP_PAD);
+                        r.y -= layout::GROUP_HEADER;
+                        r.h += layout::GROUP_HEADER;
+                        r
+                    }
+                    _ => target,
+                };
+                Some((rect, selected_group == Some(gi)))
+            })
+            .collect();
+        let group_rects: Vec<Option<Rect>> = {
+            let mut it = groups.iter();
+            self.layout
+                .groups
+                .iter()
+                .map(|g| g.and_then(|_| it.next().map(|(r, _)| *r)))
+                .collect()
+        };
+        let mut edges: Vec<EdgeDraw> = self
+            .arrival
+            .iter()
+            .flat_map(|a| a.leaving_edges.iter())
+            .map(|(path, style)| EdgeDraw {
+                path: path.clone(),
+                style: *style,
+                alpha: shown.leaving,
+                look: EdgeLook::Normal,
+            })
+            .collect();
+        edges.extend(self.working.edges.iter().zip(&shown.edges).enumerate().map(
+            |(ix, (e, (path, alpha)))| EdgeDraw {
+                path: path.clone(),
+                style: e.style,
+                alpha: *alpha,
+                look: if selected_edge == Some(ix) {
+                    EdgeLook::Selected
+                } else if self.hover_edge == Some(ix) {
+                    EdgeLook::Hovered
+                } else {
+                    EdgeLook::Normal
+                },
+            },
+        ));
         let frame = Frame {
-            layout: self.layout.clone(),
-            styles: self.working.edges.iter().map(|e| e.style).collect(),
+            groups,
+            edges,
             scale: s,
             pan,
-            selected_edge,
+            march,
             connect,
+            select,
         };
         let cell = self.bounds.clone();
         let entity = cx.entity_id();
@@ -258,7 +413,8 @@ impl DiagramView {
             .bg(ui::well())
             .cursor(match self.drag {
                 Some(Drag::Pan { .. }) => CursorStyle::ClosedHand,
-                Some(Drag::Connect { .. }) => CursorStyle::Crosshair,
+                Some(Drag::Connect { .. } | Drag::Select { .. }) => CursorStyle::Crosshair,
+                _ if self.hover_edge.is_some() => CursorStyle::PointingHand,
                 _ => CursorStyle::OpenHand,
             })
             .on_mouse_down(
@@ -280,34 +436,44 @@ impl DiagramView {
             .on_pinch(cx.listener(Self::pinched))
             .child(painter);
 
-        // Group titles, above their boxes' top padding.
-        for (group, rect) in self.working.groups.iter().zip(&self.layout.groups) {
+        // Group titles, in their boxes' top padding: press to select and
+        // drag the group, double-click to rename.
+        for (gi, (group, rect)) in self.working.groups.iter().zip(&group_rects).enumerate() {
             let Some(rect) = rect.filter(|r| r.intersects(&visible)) else {
                 continue;
             };
-            let (x, y) = at(rect.x + GROUP_PAD * 0.75, rect.y + 6.);
+            let (x, y) = at(rect.x + GROUP_PAD * 0.75, rect.y + 5.);
+            let id = group.id.clone();
+            let selected = selected_group == Some(gi);
             body = body.child(
                 div()
+                    .id(("genui-group", gi))
                     .absolute()
                     .left(x)
                     .top(y)
                     .max_w(px((rect.w - GROUP_PAD) * s))
+                    .px(px(4. * s))
+                    .rounded(px(4. * s))
                     .truncate()
+                    .cursor(CursorStyle::PointingHand)
                     .text_size(px(11. * s))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(ui::muted())
+                    .text_color(if selected { ui::accent() } else { ui::muted() })
+                    .hover(|d| d.text_color(ui::fg()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.press_group(&id, event, window, cx)
+                        }),
+                    )
                     .child(group.label.clone()),
             );
         }
 
-        // Edge labels, centered on the curve.
+        // Edge labels: small pills on the curve.
         if s >= 0.35 {
-            for (ix, (edge, path)) in self
-                .working
-                .edges
-                .iter()
-                .zip(&self.layout.edges)
-                .enumerate()
+            for (ix, (edge, (path, alpha))) in
+                self.working.edges.iter().zip(&shown.edges).enumerate()
             {
                 let Some(label) = edge.label.as_ref().filter(|l| !l.is_empty()) else {
                     continue;
@@ -317,8 +483,8 @@ impl DiagramView {
                     continue;
                 }
                 let width = 140.;
-                let (x, y) = at(p.x - width / 2., p.y - 9.);
-                let selected = selected_edge == Some(ix);
+                let (x, y) = at(p.x - width / 2., p.y - 10.);
+                let highlighted = selected_edge == Some(ix) || self.hover_edge == Some(ix);
                 body = body.child(
                     h_flex()
                         .absolute()
@@ -326,33 +492,59 @@ impl DiagramView {
                         .top(y)
                         .w(px(width * s))
                         .justify_center()
+                        .opacity(*alpha)
                         .child(
                             div()
-                                .px(px(5. * s))
-                                .rounded(px(5. * s))
+                                .px(px(6. * s))
+                                .py(px(1. * s))
+                                .rounded_full()
                                 .bg(ui::surface())
+                                .border_1()
+                                .border_color(if highlighted {
+                                    ui::accent().opacity(0.6)
+                                } else {
+                                    ui::border()
+                                })
                                 .max_w_full()
                                 .truncate()
                                 .text_size(px(10.5 * s))
-                                .text_color(if selected { ui::accent() } else { ui::muted() })
+                                .text_color(if highlighted {
+                                    ui::accent()
+                                } else {
+                                    ui::muted()
+                                })
                                 .child(label.clone()),
                         ),
                 );
             }
         }
 
-        let selected_node = match &self.selection {
-            Some(Selection::Node(id)) => Some(id.as_str()),
-            _ => None,
-        };
+        // Nodes the update removed, fading out where they were.
+        if let Some(arrival) = &self.arrival {
+            for (node, rect) in &arrival.leaving_nodes {
+                if !rect.intersects(&visible) {
+                    continue;
+                }
+                let (x, y) = at(rect.x, rect.y);
+                body = body.child(
+                    node_card(node, *rect, s)
+                        .absolute()
+                        .left(x)
+                        .top(y)
+                        .opacity(shown.leaving),
+                );
+            }
+        }
+
+        let selected_nodes = self.selection.as_ref().map(|s| s.nodes()).unwrap_or(&[]);
         for (ix, node) in self.working.nodes.iter().enumerate() {
-            let rect = self.layout.nodes[ix];
+            let (rect, alpha) = shown.nodes[ix];
             if !rect.intersects(&visible) {
                 continue;
             }
             let (x, y) = at(rect.x, rect.y);
-            let selected = selected_node == Some(node.id.as_str());
-            body = body.child(self.render_node(ix, x, y, rect, s, selected, cx));
+            let selected = selected_nodes.contains(&node.id);
+            body = body.child(self.render_node(ix, x, y, rect, alpha, s, selected, cx));
         }
 
         if let Some(rename) = &self.rename {
@@ -373,6 +565,19 @@ impl DiagramView {
                             }
                         })
                 }
+                Selection::Group(id) => self
+                    .working
+                    .groups
+                    .iter()
+                    .position(|g| &g.id == id)
+                    .and_then(|gi| self.layout.groups[gi])
+                    .map(|r| Rect {
+                        x: r.x + GROUP_PAD / 2.,
+                        y: r.y,
+                        w: layout::NODE_W,
+                        h: layout::GROUP_HEADER,
+                    }),
+                Selection::Nodes(_) => None,
             };
             if let Some(rect) = place {
                 let (x, y) = at(rect.x, rect.y + rect.h / 2.);
@@ -439,7 +644,9 @@ impl DiagramView {
                 ),
             );
         }
-        body.children(self.render_details(cx))
+        body.child(self.render_controls(cx))
+            .children(self.render_minimap(rem, shown, cx))
+            .children(self.render_details(cx))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -449,46 +656,67 @@ impl DiagramView {
         x: Pixels,
         y: Pixels,
         rect: Rect,
+        alpha: f32,
         s: f32,
         selected: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let node = &self.working.nodes[ix];
-        let color = kind_color(node.kind);
-        let border = match (selected, node.status) {
-            (true, _) => ui::accent(),
-            (false, Some(Status::Risk)) => ui::danger().opacity(0.7),
-            _ => color.opacity(0.45),
-        };
-        let subtitle = node
-            .tech
-            .clone()
-            .unwrap_or_else(|| node.kind.name().to_string());
         let id = node.id.clone();
-        let handle_id = node.id.clone();
-        let dragging =
-            matches!(&self.drag, Some(Drag::Node { id, moved: true, .. }) if *id == node.id);
-        div()
+        let dragging = selected && matches!(&self.drag, Some(Drag::Nodes { moved: true, .. }));
+        let lr = self.working.direction == Direction::LeftRight;
+        let handle = |outgoing: bool| {
+            let id = node.id.clone();
+            let size = 10. * s;
+            let along = if lr { rect.h } else { rect.w } * s / 2. - size / 2.;
+            div()
+                .id((
+                    if outgoing {
+                        "genui-handle-out"
+                    } else {
+                        "genui-handle-in"
+                    },
+                    ix,
+                ))
+                .absolute()
+                .size(px(size))
+                .rounded_full()
+                .bg(ui::surface())
+                .border_2()
+                .border_color(ui::accent())
+                .cursor(CursorStyle::Crosshair)
+                .map(|d| match (lr, outgoing) {
+                    (true, true) => d.right(px(-size / 2.)).top(px(along)),
+                    (true, false) => d.left(px(-size / 2.)).top(px(along)),
+                    (false, true) => d.bottom(px(-size / 2.)).left(px(along)),
+                    (false, false) => d.top(px(-size / 2.)).left(px(along)),
+                })
+                .when(!selected || self.locked, |d| {
+                    d.opacity(0.).when(!self.locked, |d| {
+                        d.group_hover("genui-node", |d| d.opacity(1.))
+                    })
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        this.press_handle(&id, outgoing, event, window, cx)
+                    }),
+                )
+        };
+        let card = node_card(node, rect, s)
             .id(("genui-node", ix))
             .group("genui-node")
             .absolute()
             .left(x)
             .top(y)
-            .w(px(rect.w * s))
-            .h(px(rect.h * s))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8. * s))
-            .px(px(10. * s))
-            .rounded(px(10. * s))
-            .bg(ui::surface())
-            .border(px(if selected { 2. } else { 1. }))
-            .border_color(border)
-            .when(node.status == Some(Status::Planned), |d| d.border_dashed())
-            .when(node.status == Some(Status::Deprecated), |d| d.opacity(0.55))
+            .opacity(alpha)
+            .when(selected, |d| d.border_color(ui::accent()))
             .when(dragging, |d| d.shadow_lg())
-            .cursor(CursorStyle::PointingHand)
+            .cursor(if self.locked {
+                CursorStyle::PointingHand
+            } else {
+                CursorStyle::OpenHand
+            })
             .hover(|d| d.bg(ui::surface_hover()))
             .on_mouse_down(
                 MouseButton::Left,
@@ -496,221 +724,143 @@ impl DiagramView {
                     this.press_node(&id, event, window, cx)
                 }),
             )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .size(px(26. * s))
-                    .rounded(px(7. * s))
-                    .bg(color.opacity(0.14))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        Icon::new(kind_icon(node.kind))
-                            .size(px(15. * s))
-                            .text_color(color),
-                    ),
-            )
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .child(
-                        div()
-                            .truncate()
-                            .text_size(px(13. * s))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(ui::fg())
-                            .child(node.label.clone()),
-                    )
-                    .when(s >= 0.5, |d| {
-                        d.child(
-                            div()
-                                .truncate()
-                                .text_size(px(11. * s))
-                                .text_color(ui::muted())
-                                .child(subtitle),
-                        )
-                    }),
-            )
-            .when_some(node.status.filter(|_| s >= 0.6), |d, status| {
-                d.child(
+            // The selection ring fades in around the card.
+            .when(selected, |d| {
+                d.child(ui::popover_in(
+                    ("genui-ring", ix),
                     div()
-                        .flex_shrink_0()
-                        .size(px(7. * s))
-                        .rounded_full()
-                        .bg(status_color(status)),
-                )
+                        .absolute()
+                        .inset(px(-4. * s))
+                        .rounded(px(12. * s))
+                        .border_2()
+                        .border_color(ui::accent().opacity(0.35)),
+                ))
             })
-            // The handle a connection is dragged from.
-            .child(
-                div()
-                    .id(("genui-handle", ix))
-                    .absolute()
-                    .right(px(-6. * s))
-                    .top(px((rect.h / 2. - 6.) * s))
-                    .size(px(12. * s))
-                    .rounded_full()
-                    .bg(ui::accent())
-                    .border_2()
-                    .border_color(ui::well())
-                    .cursor(CursorStyle::Crosshair)
-                    .when(!selected, |d| {
-                        d.opacity(0.).group_hover("genui-node", |d| d.opacity(1.))
-                    })
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                            this.press_handle(&handle_id, event, window, cx)
-                        }),
-                    ),
-            )
-            .into_any_element()
+            .child(handle(false))
+            .child(handle(true));
+        card.into_any_element()
     }
 
-    /// The selection's details, over the canvas' top-right corner.
-    fn render_details(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.drag.is_some() {
-            return None;
-        }
-        let selection = self.selection.as_ref()?;
-        let action = |id: &'static str, icon: IconName, label: &'static str| {
+    /// React Flow's controls: zoom, fit and lock, floating bottom-left.
+    fn render_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let control = |id: &'static str, icon: IconName, tip: &'static str| {
             Button::new(id)
+                .debug_selector(|| id.into())
                 .ghost()
                 .xsmall()
                 .text_color(ui::muted())
                 .icon(Icon::new(icon))
-                .label(label)
+                .tooltip(tip)
         };
-        let actions = h_flex()
-            .gap_1()
-            .flex_wrap()
+        v_flex()
+            .absolute()
+            .left_2()
+            .bottom_2()
+            .p_0p5()
+            .gap_0p5()
+            .rounded_lg()
+            .bg(ui::popover_bg())
+            .border_1()
+            .border_color(ui::border())
+            .shadow_sm()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                action("genui-rename", IconName::Pencil, "Rename").on_click(cx.listener(
+                control("genui-zoom-in", IconName::ZoomIn, "Zoom in").on_click(cx.listener(
                     |this, _, window, cx| {
-                        if let Some(selection) = this.selection.clone() {
-                            this.start_rename(selection, window, cx);
-                        }
+                        this.zoom_center(ZOOM_STEP, window.rem_size(), cx);
+                        cx.notify();
                     },
                 )),
             )
             .child(
-                action("genui-ask", IconName::MessageSquare, "Ask about this")
-                    .on_click(cx.listener(|this, _, _, cx| this.ask(cx))),
+                control("genui-zoom-out", IconName::ZoomOut, "Zoom out").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.zoom_center(1. / ZOOM_STEP, window.rem_size(), cx);
+                        cx.notify();
+                    },
+                )),
             )
             .child(
-                action("genui-delete", IconName::Trash, "Delete")
-                    .on_click(cx.listener(|this, _, _, cx| this.delete_selection(cx))),
-            );
-        let text = |text: String| {
-            div()
-                .text_size(rems(12. / 16.))
-                .text_color(ui::muted())
-                .whitespace_normal()
-                .child(text)
-        };
-        let mut panel = ui::island(cx)
-            .absolute()
-            .top_2()
-            .right_2()
-            .w(rems(260. / 16.))
-            .max_h(rems(300. / 16.))
-            .p_3()
-            .gap_2()
-            .flex()
-            .flex_col()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_scroll(|_, _, cx| cx.stop_propagation());
-        match selection {
-            Selection::Node(id) => {
-                let node = self.working.node(id)?;
-                let group = node
-                    .group
-                    .as_deref()
-                    .map(|g| self.working.group(g).map_or(g, |g| g.label.as_str()));
-                panel = panel
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(
-                                Icon::new(kind_icon(node.kind))
-                                    .small()
-                                    .text_color(kind_color(node.kind)),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_sm()
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(ui::fg())
-                                    .child(node.label.clone()),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .flex_wrap()
-                            .child(ui::chip(node.kind.name(), kind_color(node.kind)))
-                            .when_some(node.status, |d, status| {
-                                d.child(ui::chip(status.name(), status_color(status)))
-                            })
-                            .when_some(group, |d, group| {
-                                d.child(ui::chip(group.to_string(), ui::muted()))
-                            }),
-                    )
-                    .when_some(node.tech.clone(), |d, tech| {
-                        d.child(
-                            div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(11. / 16.))
-                                .text_color(ui::muted())
-                                .child(tech),
-                        )
-                    })
-                    .when_some(node.description.clone(), |d, description| {
-                        d.child(
-                            div()
-                                .id("genui-description")
-                                .min_h_0()
-                                .flex_shrink(1.)
-                                .overflow_y_scroll()
-                                .child(text(description)),
-                        )
-                    })
-                    .child(
-                        div()
-                            .font_family(ui::MONO)
-                            .text_size(rems(10.5 / 16.))
-                            .text_color(ui::faint())
-                            .child(node.id.clone()),
-                    );
-            }
-            Selection::Edge(id) => {
-                let edge = self.working.edge(id)?;
-                panel = panel
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(ui::fg())
-                            .whitespace_normal()
-                            .child(format!(
-                                "{} → {}",
-                                label_of(&self.working, &edge.from),
-                                label_of(&self.working, &edge.to)
-                            )),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .child(ui::chip(style_name(edge.style), ui::info())),
-                    )
-                    .when_some(edge.label.clone(), |d, label| d.child(text(label)));
-            }
+                control("genui-fit", IconName::Scan, "Fit the whole diagram").on_click(
+                    cx.listener(|this, _, window, cx| {
+                        this.fit_animated(window.rem_size(), cx);
+                        cx.notify();
+                    }),
+                ),
+            )
+            .child(
+                control(
+                    "genui-lock",
+                    if self.locked {
+                        IconName::Lock
+                    } else {
+                        IconName::LockOpen
+                    },
+                    if self.locked {
+                        "Unlock editing"
+                    } else {
+                        "Lock: view only"
+                    },
+                )
+                .when(self.locked, |b| b.text_color(ui::accent()))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_lock(cx))),
+            )
+    }
+
+    /// The minimap, bottom-right: press or drag to move the view there.
+    fn render_minimap(
+        &self,
+        rem: Pixels,
+        shown: &Shown,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if self.working.nodes.is_empty() {
+            return None;
         }
-        Some(panel.child(actions).into_any_element())
+        let view = self.visible(rem);
+        let map = MiniMap {
+            nodes: self
+                .working
+                .nodes
+                .iter()
+                .zip(&shown.nodes)
+                .map(|(n, (r, _))| (*r, kind_color(n.kind).opacity(0.7)))
+                .collect(),
+            content: self.layout.bounds.union(&view),
+            view,
+        };
+        let cell = self.minimap.clone();
+        Some(
+            div()
+                .id("genui-minimap")
+                .absolute()
+                .right_2()
+                .bottom_2()
+                .w(rems(MINIMAP_W / 16.))
+                .h(rems(MINIMAP_H / 16.))
+                .rounded_lg()
+                .bg(ui::popover_bg())
+                .border_1()
+                .border_color(ui::border())
+                .shadow_sm()
+                .overflow_hidden()
+                .cursor(CursorStyle::PointingHand)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        this.press_minimap(event, window, cx)
+                    }),
+                )
+                .on_scroll(|_, _, cx| cx.stop_propagation())
+                .child(
+                    canvas(
+                        move |bounds, _, _| cell.set(bounds),
+                        move |bounds, _, window, _| map.paint(bounds, window),
+                    )
+                    .size_full(),
+                )
+                .into_any_element(),
+        )
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -729,7 +879,12 @@ impl DiagramView {
                 .child(div().flex_1().min_w_0().truncate().child(refused.clone()));
         }
         if self.pending > 0 {
-            let sending = matches!(self.send, SendState::Sending);
+            let sending = matches!(self.send, SendState::Sending { .. });
+            let failed = match &self.send {
+                SendState::Failed(error) => Some(error.clone()),
+                _ => None,
+            };
+            let retry = failed.is_some();
             return footer
                 .child(ui::chip(
                     format!(
@@ -739,14 +894,31 @@ impl DiagramView {
                     ),
                     ui::accent(),
                 ))
-                .child(match &self.note {
-                    Some(note) => ui::field()
+                .child(match (&failed, &self.note) {
+                    (Some(error), _) => h_flex()
+                        .id("genui-send-error")
+                        .debug_selector(|| "genui-send-error".into())
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1p5()
+                        .text_color(ui::danger())
+                        .child(Icon::new(IconName::CircleAlert).xsmall().flex_shrink_0())
+                        .child(div().min_w_0().truncate().child(error.clone()))
+                        .tooltip({
+                            let error = error.clone();
+                            move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(error.clone())
+                                    .build(window, cx)
+                            }
+                        })
+                        .into_any_element(),
+                    (None, Some(note)) => ui::field()
                         .flex_1()
                         .min_w_0()
                         .h(rems(26. / 16.))
                         .child(Input::new(note).appearance(false).xsmall())
                         .into_any_element(),
-                    None => div()
+                    (None, None) => div()
                         .id("genui-add-note")
                         .flex_1()
                         .min_w_0()
@@ -764,23 +936,9 @@ impl DiagramView {
                         }))
                         .into_any_element(),
                 })
-                .when_some(
-                    match &self.send {
-                        SendState::Failed(error) => Some(error.clone()),
-                        _ => None,
-                    },
-                    |d, error| {
-                        d.child(
-                            div()
-                                .max_w(rems(220. / 16.))
-                                .truncate()
-                                .text_color(ui::danger())
-                                .child(error),
-                        )
-                    },
-                )
                 .child(
                     Button::new("genui-discard")
+                        .debug_selector(|| "genui-discard".into())
                         .ghost()
                         .xsmall()
                         .label("Discard")
@@ -789,10 +947,15 @@ impl DiagramView {
                 )
                 .child(
                     Button::new("genui-send")
+                        .debug_selector(|| "genui-send".into())
                         .primary()
                         .xsmall()
-                        .icon(Icon::new(IconName::Send))
-                        .label("Send to agent")
+                        .icon(Icon::new(if retry {
+                            IconName::RefreshCw
+                        } else {
+                            IconName::Send
+                        }))
+                        .label(if retry { "Retry" } else { "Send to agent" })
                         .loading(sending)
                         .on_click(cx.listener(|this, _, _, cx| this.send(cx))),
                 );
@@ -802,13 +965,91 @@ impl DiagramView {
                 .text_color(ui::success())
                 .child(Icon::new(IconName::CircleCheck).xsmall())
                 .child("Sent to the agent"),
-            _ => footer
-                .text_color(ui::faint())
-                .child(div().flex_1().min_w_0().truncate().child(
-                "Drag to move · double-click to rename · drag ● to connect · ⌘/Ctrl-scroll to zoom",
-            )),
+            _ => footer.text_color(ui::faint()).child(
+                div().flex_1().min_w_0().truncate().child(if self.locked {
+                    "View only · unlock to edit"
+                } else {
+                    "Drag to move · double-click to rename · drag ● to connect · shift-drag to select · ⌘/Ctrl-scroll to zoom"
+                }),
+            ),
         }
     }
+}
+
+/// A node's card: kind tile, title and subtitle (tech, or the kind), the
+/// status dot; status changes its border (risk), dashes it (planned) or
+/// dims it (deprecated).
+fn node_card(node: &gentle_core::genui::diagram::Node, rect: Rect, s: f32) -> Div {
+    let color = kind_color(node.kind);
+    let border = match node.status {
+        Some(Status::Risk) => ui::danger().opacity(0.7),
+        _ => ui::border_strong(),
+    };
+    let subtitle = node
+        .tech
+        .clone()
+        .unwrap_or_else(|| node.kind.name().to_string());
+    div()
+        .w(px(rect.w * s))
+        .h(px(rect.h * s))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(8. * s))
+        .px(px(10. * s))
+        .rounded(px(10. * s))
+        .bg(ui::surface())
+        .border_1()
+        .border_color(border)
+        .shadow_sm()
+        .when(node.status == Some(Status::Planned), |d| d.border_dashed())
+        .when(node.status == Some(Status::Deprecated), |d| d.opacity(0.55))
+        .child(
+            div()
+                .flex_shrink_0()
+                .size(px(26. * s))
+                .rounded(px(7. * s))
+                .bg(color.opacity(0.14))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Icon::new(kind_icon(node.kind))
+                        .size(px(15. * s))
+                        .text_color(color),
+                ),
+        )
+        .child(
+            v_flex()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(px(13. * s))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(ui::fg())
+                        .child(node.label.clone()),
+                )
+                .when(s >= 0.5, |d| {
+                    d.child(
+                        div()
+                            .truncate()
+                            .text_size(px(11. * s))
+                            .text_color(ui::muted())
+                            .child(subtitle),
+                    )
+                }),
+        )
+        .when_some(node.status.filter(|_| s >= 0.6), |d, status| {
+            d.child(
+                div()
+                    .flex_shrink_0()
+                    .size(px(7. * s))
+                    .rounded_full()
+                    .bg(status_color(status)),
+            )
+        })
 }
 
 // ── Conversation rows ──────────────────────────────────────────────────────

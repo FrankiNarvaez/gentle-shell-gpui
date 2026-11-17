@@ -14,9 +14,14 @@ use gentle_core::genui::{self, Snapshot};
 use gentle_core::transcript::{Item, ToolStatus};
 use gpui_kit::*;
 
+mod details;
 mod diagram;
 mod extension;
+mod motion;
 mod paint;
+mod pointer;
+#[cfg(test)]
+mod tests;
 mod view;
 
 pub use diagram::{DiagramEvent, DiagramView};
@@ -128,6 +133,17 @@ impl GenUi {
             .is_some_and(|id| !self.surfaces.contains_key(id))
         {
             self.expanded = None;
+        }
+    }
+
+    /// The extension's answer to a surface's sent edits (its
+    /// [`genui::OUTCOME_WIDGET`] line).
+    pub fn outcome(&self, line: &str, cx: &mut App) {
+        let Some(outcome) = genui::outcome(line) else {
+            return;
+        };
+        if let Some(view) = self.surfaces.get(&outcome.id) {
+            view.update(cx, |view, cx| view.outcome(&outcome, cx));
         }
     }
 

@@ -115,7 +115,12 @@ gpui_kit::assets::icon_assets!(
         ZoomIn,
         ZoomOut,
         Scan,
-        Send
+        Send,
+        // Generative UI diagrams: groups, box selection and the lock.
+        Group,
+        Ungroup,
+        SquareDashed,
+        LockOpen
     ]
 );
 

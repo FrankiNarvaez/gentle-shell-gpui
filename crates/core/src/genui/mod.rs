@@ -11,6 +11,44 @@ use serde_json::{Map, Value, json};
 pub const TOOL: &str = "gentle_ui";
 pub const EVENT_MESSAGE: &str = "gentle-ui.event";
 pub const EVENT_COMMAND: &str = "gentle-ui:event";
+/// The widget key the extension answers each `/gentle-ui:event` with: one
+/// line of JSON, `{id, version, ok, error?, current?}`, cleared right after.
+pub const OUTCOME_WIDGET: &str = "gentle-ui.outcome";
+
+/// The extension's answer to one `/gentle-ui:event`: `version` is the one
+/// the event was based on; `result` the surface's new version, or why the
+/// edits were rejected.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    pub id: String,
+    pub version: u64,
+    pub result: Result<u64, String>,
+}
+
+/// None unless the line is an object with a non-empty `id` and a boolean `ok`.
+pub fn outcome(line: &str) -> Option<Outcome> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let id = value.get("id")?.as_str().filter(|id| !id.is_empty())?;
+    let version = value.get("version").and_then(Value::as_u64).unwrap_or(0);
+    let result = if value.get("ok")?.as_bool()? {
+        Ok(value
+            .get("current")
+            .and_then(Value::as_u64)
+            .unwrap_or(version + 1))
+    } else {
+        Err(value
+            .get("error")
+            .and_then(Value::as_str)
+            .filter(|e| !e.trim().is_empty())
+            .unwrap_or("the extension rejected the edits")
+            .to_string())
+    };
+    Some(Outcome {
+        id: id.to_string(),
+        version,
+        result,
+    })
+}
 
 /// One version of a surface: a gentle_ui tool result's details or a gentle-ui.event message's details.
 #[derive(Debug, Clone, PartialEq)]
@@ -113,5 +151,32 @@ mod tests {
 
         let with_note = event_command("ui-1", 3, &[], &[], &d, Some("keep it small"));
         assert!(with_note.ends_with(r#""note":"keep it small"}"#));
+    }
+
+    #[test]
+    fn outcome_reads_acceptance_and_rejection() {
+        assert_eq!(
+            outcome(r#"{"id":"ui-1","version":3,"ok":true,"current":4}"#),
+            Some(Outcome {
+                id: "ui-1".into(),
+                version: 3,
+                result: Ok(4)
+            })
+        );
+        assert_eq!(
+            outcome(r#"{"id":"ui-1","version":3,"ok":false,"error":"stale"}"#)
+                .unwrap()
+                .result,
+            Err("stale".into())
+        );
+        assert_eq!(
+            outcome(r#"{"id":"ui-1","version":3,"ok":false}"#)
+                .unwrap()
+                .result,
+            Err("the extension rejected the edits".into())
+        );
+        assert_eq!(outcome(r#"{"id":"ui-1","version":3}"#), None);
+        assert_eq!(outcome(r#"{"id":"","ok":true}"#), None);
+        assert_eq!(outcome("not json"), None);
     }
 }

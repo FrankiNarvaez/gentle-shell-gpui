@@ -180,7 +180,7 @@ impl Edge {
 }
 
 impl Group {
-    fn to_value(&self) -> Value {
+    pub fn to_value(&self) -> Value {
         let mut map = Map::new();
         map.insert("id".into(), json!(self.id));
         map.insert("label".into(), json!(self.label));
@@ -367,28 +367,12 @@ impl Diagram {
 
     /// Slug of `base` ("New node" → "new-node"), then "-2", "-3"… until unused.
     pub fn fresh_node_id(&self, base: &str) -> String {
-        let mut slug = String::new();
-        for c in base.chars().flat_map(char::to_lowercase) {
-            if c.is_alphanumeric() || c == '_' {
-                slug.push(c);
-            } else if !slug.is_empty() && !slug.ends_with('-') {
-                slug.push('-');
-            }
-        }
-        let slug = slug.trim_end_matches('-');
-        // Leave room for a "-N" suffix within MAX_ID.
-        let slug: String = if slug.is_empty() {
-            "node".into()
-        } else {
-            slug.chars().take(MAX_ID - 4).collect()
-        };
-        if self.node(&slug).is_none() {
-            return slug;
-        }
-        (2..)
-            .map(|n| format!("{slug}-{n}"))
-            .find(|id| self.node(id).is_none())
-            .expect("an unused suffix exists")
+        fresh_slug(base, "node", |id| self.node(id).is_some())
+    }
+
+    /// Like [`Self::fresh_node_id`], among the group ids.
+    pub fn fresh_group_id(&self, base: &str) -> String {
+        fresh_slug(base, "group", |id| self.group(id).is_some())
     }
 
     /// `"<from>-><to>"`, or `"#2"`, `"#3"`… appended when taken.
@@ -404,6 +388,31 @@ fn first_free_edge_id(from: &str, to: &str, taken: impl Fn(&str) -> bool) -> Str
     }
     (2..)
         .map(|n| format!("{base}#{n}"))
+        .find(|id| !taken(id))
+        .expect("an unused suffix exists")
+}
+
+fn fresh_slug(base: &str, fallback: &str, taken: impl Fn(&str) -> bool) -> String {
+    let mut slug = String::new();
+    for c in base.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() || c == '_' {
+            slug.push(c);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    // Leave room for a "-N" suffix within MAX_ID.
+    let slug: String = if slug.is_empty() {
+        fallback.into()
+    } else {
+        slug.chars().take(MAX_ID - 4).collect()
+    };
+    if !taken(&slug) {
+        return slug;
+    }
+    (2..)
+        .map(|n| format!("{slug}-{n}"))
         .find(|id| !taken(id))
         .expect("an unused suffix exists")
 }
@@ -595,5 +604,13 @@ mod tests {
         assert_eq!(d.fresh_node_id("!!"), "node");
         assert_eq!(d.fresh_edge_id("new-node", "b"), "new-node->b#2");
         assert_eq!(d.fresh_edge_id("b", "new-node"), "b->new-node");
+        let mut grouped = d.clone();
+        grouped.groups.push(Group {
+            id: "group".into(),
+            label: "Group".into(),
+            description: None,
+        });
+        assert_eq!(grouped.fresh_group_id("Back end"), "back-end");
+        assert_eq!(grouped.fresh_group_id(""), "group-2");
     }
 }
