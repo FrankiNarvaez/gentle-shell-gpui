@@ -94,12 +94,26 @@ pub fn resolve_backend(cwd: &Path) -> Result<LaunchSpec> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    Ok(launch_spec(launcher, cwd, path, prompt.as_deref()))
+    let extensions = EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(launch_spec(
+        launcher,
+        cwd,
+        path,
+        prompt.as_deref(),
+        &extensions,
+    ))
 }
 
-/// The RPC launch through `launcher`, with `path` as the child's PATH and
-/// `prompt` as the host's instructions file.
-fn launch_spec(launcher: PathBuf, cwd: &Path, path: OsString, prompt: Option<&Path>) -> LaunchSpec {
+/// The RPC launch through `launcher`, with `path` as the child's PATH,
+/// `prompt` as the host's instructions file and `extensions` as the host's
+/// Pi extensions.
+fn launch_spec(
+    launcher: PathBuf,
+    cwd: &Path,
+    path: OsString,
+    prompt: Option<&Path>,
+    extensions: &[PathBuf],
+) -> LaunchSpec {
     let managed = managed_install(&launcher);
     // Launcher options such as `--link` or `--home <dir>` go before the Pi
     // args. A managed install takes none: its supervisor refuses them too.
@@ -113,6 +127,12 @@ fn launch_spec(launcher: PathBuf, cwd: &Path, path: OsString, prompt: Option<&Pa
     // quotes, `%` and newlines.
     if let Some(file) = prompt {
         args.push("--append-system-prompt".to_string());
+        args.push(file.to_string_lossy().into_owned());
+    }
+    // The host's Pi extensions (the generative UI tool); the launcher passes
+    // `--extension` through to Pi.
+    for file in extensions {
+        args.push("--extension".to_string());
         args.push(file.to_string_lossy().into_owned());
     }
     // Turns on ask_user_question dialogs and live helper activity for
@@ -569,6 +589,14 @@ static SYSTEM_PROMPT: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// what they started with.
 pub fn set_system_prompt(file: Option<PathBuf>) {
     *SYSTEM_PROMPT.lock().unwrap_or_else(|e| e.into_inner()) = file;
+}
+
+static EXTENSIONS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Pi extension files loaded into every new RPC session (`--extension`).
+/// Replaces the previous list; sessions already running keep theirs.
+pub fn set_extensions(files: Vec<PathBuf>) {
+    *EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()) = files;
 }
 
 /// Forget everything resolved from the environment: cached `--version`
@@ -1151,7 +1179,7 @@ mod managed_tests {
             layout.shim.clone(),
             root.join("bin").join("gentle-shell.cmd"),
         ] {
-            let spec = launch_spec(launcher, root, inherited.clone(), None);
+            let spec = launch_spec(launcher, root, inherited.clone(), None, &[]);
             assert_eq!(spec.program, root.join("runtime/node/node.exe"));
             assert_eq!(spec.args, [&*cli.to_string_lossy(), "--mode", "rpc"]);
             assert_eq!(spec.launcher, root.join("bin").join("gentle-shell.cmd"));
@@ -1195,6 +1223,31 @@ mod managed_tests {
     }
 
     #[test]
+    fn host_extensions_follow_the_system_prompt() {
+        let layout = layout("extensions");
+        let prompt = layout.dir.join("agent-instructions.md");
+        let extension = layout.dir.join("gentle-ui.ts");
+        let spec = launch_spec(
+            layout.shim.clone(),
+            &layout.root,
+            OsString::new(),
+            Some(&prompt),
+            std::slice::from_ref(&extension),
+        );
+        assert_eq!(
+            spec.args[1..],
+            [
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--append-system-prompt".to_string(),
+                prompt.to_string_lossy().into_owned(),
+                "--extension".to_string(),
+                extension.to_string_lossy().into_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn only_a_complete_managed_install_is_recognized() {
         let layout = layout("partial");
         assert!(managed_install(&layout.shim).is_some());
@@ -1204,7 +1257,7 @@ mod managed_tests {
         let npm = layout.dir.join("npm-gentle-shell");
         std::fs::write(&npm, "#!/usr/bin/env node\n").unwrap();
         assert!(managed_install(&npm).is_none());
-        let spec = launch_spec(npm.clone(), &layout.dir, OsString::new(), None);
+        let spec = launch_spec(npm.clone(), &layout.dir, OsString::new(), None, &[]);
         assert_eq!(spec.program, npm);
         assert!(!spec.managed_by_gentle_ai());
         // Another product of the supervisor is not Gentle Shell.

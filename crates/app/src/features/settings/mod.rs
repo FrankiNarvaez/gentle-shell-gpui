@@ -15,6 +15,7 @@ use gpui_kit::*;
 
 use crate::{features::app_update, shared::themes, shared::ui};
 
+mod agent_ui;
 mod app;
 mod background;
 mod claude;
@@ -303,6 +304,7 @@ impl Render for SettingsView {
                     )
                     .child(models::models_section(s))
                     .child(self.gentle_ai_section(s, cx))
+                    .child(self.agent_ui_section(cx))
                     .child(self.notifications_section(cx))
                     .child(self.bridge_section(s, cx))
                     .child(self.packages_section(s, cx)),

@@ -63,6 +63,12 @@ pub enum SessionEvent {
     /// A tool printed a local web app's URL: the window keeps it in its
     /// instance tray until the user looks.
     AgentWeb(String),
+    /// Show this file in the file viewer, at this line (a code reference
+    /// in a generative UI surface).
+    OpenFile {
+        path: std::path::PathBuf,
+        line: Option<u32>,
+    },
 }
 
 /// What the window reads from a tab, to emit [`SessionEvent::ChromeChanged`]
@@ -89,6 +95,15 @@ pub struct SessionView {
     /// Rendered Markdown per (item, block), with the byte length already pushed.
     markdown: HashMap<(usize, usize), (Entity<TextViewState>, usize)>,
     expanded: HashSet<usize>,
+    /// Generative UI surfaces the agent showed (`gentle_ui`), rebuilt
+    /// from the transcript.
+    genui: crate::features::genui::GenUi,
+    /// The Agent UI mode this tab's backend was last given (at launch or
+    /// by command); a different choice in Configuration gets sent to it.
+    genui_mode: gentle_core::genui::mode::Mode,
+    /// This conversation is on screen with nothing over the window (the
+    /// workspace says so): its web views may show.
+    web_shown: bool,
     composer: Entity<TextareaState>,
     /// The composer has the keyboard: its border takes the accent.
     composer_focused: bool,
@@ -245,6 +260,8 @@ impl SessionView {
                     cx.stop_propagation();
                 }
             }),
+            // Configuration › Agent UI changed: tell this tab's extension.
+            crate::features::genui::mode::follow(cx, |this, _, cx| this.sync_genui_mode(cx)),
         ];
         let mut this = Self {
             cwd,
@@ -254,6 +271,9 @@ impl SessionView {
             transcript: Transcript::default(),
             markdown: HashMap::new(),
             expanded: HashSet::new(),
+            genui: Default::default(),
+            genui_mode: crate::features::genui::mode::mode(cx),
+            web_shown: false,
             composer,
             composer_focused: false,
             composer_pulse: None,
@@ -321,6 +341,16 @@ impl SessionView {
     /// A dialog (a question, a confirmation) waits for an answer.
     pub fn needs_you(&self) -> bool {
         !self.extension.dialogs.is_empty()
+    }
+
+    /// Whether this conversation is on screen with nothing over the window;
+    /// an expanded HTML surface's web view hides otherwise.
+    pub fn set_web_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.web_shown != shown {
+            self.web_shown = shown;
+            self.genui.set_obscured(!shown, cx);
+            cx.notify();
+        }
     }
 
     pub fn composer(&self) -> Entity<TextareaState> {

@@ -933,6 +933,22 @@ impl SessionView {
             done(outcome, cx);
         });
     }
+
+    /// Give the backend the app's Agent UI mode when it differs from the
+    /// one it has. A tab still starting gets it once ready; one not started
+    /// yet starts in it.
+    pub(super) fn sync_genui_mode(&mut self, cx: &mut Context<Self>) {
+        let mode = crate::features::genui::mode::mode(cx);
+        if mode == self.genui_mode || self.process().is_none() {
+            return;
+        }
+        self.genui_mode = mode;
+        self.run_extension_command(mode.command(), cx, |result, _| {
+            if let Err(error) = result {
+                eprintln!("gentle-shell-gpui: could not apply Agent UI: {error}");
+            }
+        });
+    }
 }
 
 /// `~/x` → under the home folder; other paths as given.

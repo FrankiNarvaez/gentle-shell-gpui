@@ -92,6 +92,13 @@ impl SessionView {
         true
     }
 
+    /// Whether the `/` menu is up (it opens over what is above the composer).
+    pub(in crate::features::session) fn slash_menu_open(&self, cx: &App) -> bool {
+        let text = self.composer.read(cx).value().to_string();
+        self.live.slash_dismissed.as_deref() != Some(text.as_str())
+            && !self.slash_matches(&text).is_empty()
+    }
+
     pub(super) fn render_slash_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let text = self.composer.read(cx).value().to_string();
         if self.live.slash_dismissed.as_deref() == Some(text.as_str()) {

@@ -181,6 +181,9 @@ impl Workspace {
                 SessionEvent::OpenWeb(url) => {
                     this.open_web(url.clone(), Some(id), true, window, cx)
                 }
+                SessionEvent::OpenFile { path, line } => {
+                    this.open_file_at(path.clone(), *line, window, cx)
+                }
                 SessionEvent::AgentWeb(url) => {
                     this.open_web(url.clone(), Some(id), false, window, cx)
                 }

@@ -111,6 +111,29 @@ impl SessionView {
             )
             .child(div().flex_1().min_w_0())
             .child(todo_bars(done, total, color))
+            // The same list as a live, read-only checklist in place of the
+            // conversation (the app's own surface; no tool call).
+            .child(
+                div()
+                    .id("todo-island-checklist")
+                    .debug_selector(|| "todo-island-checklist".into())
+                    .size(rems(22. / 16.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_md()
+                    .text_color(ui::faint())
+                    .hover(|d| d.text_color(ui::fg()).bg(ui::surface_hover()))
+                    .child(Icon::new(IconName::ListChecks).xsmall())
+                    .tooltip(|window, cx| Tooltip::new("Show as checklist").build(window, cx))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.genui.show_todo(cx);
+                        cx.notify();
+                    })),
+            )
             .child(
                 Icon::new(IconName::ChevronDown)
                     .xsmall()

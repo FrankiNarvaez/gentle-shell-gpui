@@ -24,9 +24,12 @@ impl Render for Workspace {
         let has_sidebar = self.sidebar.is_some();
         // Below this the screen buttons fold into one overflow menu.
         let narrow = window.viewport_size().width < rems(900. / 16.).to_pixels(window.rem_size());
-        // Native web views would cover a screen opened over them; device
-        // cards stop capturing while covered.
-        self.set_stages_covered(self.overlay.is_some(), cx);
+        // Native web views would cover a screen or a dialog opened over
+        // them; device cards stop capturing while covered.
+        let covered =
+            self.overlay.is_some() || window.has_active_dialog(cx) || window.has_active_sheet(cx);
+        self.set_stages_covered(covered, cx);
+        self.sync_web_views(covered, cx);
         let (devices_docked, devices_floating) = {
             let panel = self.devices.read(cx);
             let docked = panel.mode() == crate::features::devices::Mode::Docked;
