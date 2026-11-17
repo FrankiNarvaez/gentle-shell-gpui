@@ -1,34 +1,36 @@
 //! One diagram surface: the agent's latest spec, the user's local edits on
-//! top of it, the viewport and the pointer interactions. Edits go through
+//! top of it, and sending them. Edits go through
 //! `gentle_core::genui::changes::apply`, so what the user does is exactly
-//! what the change list sent to the agent describes.
+//! what the change list sent to the agent describes. Pointer, keyboard and
+//! viewport handling live in `pointer.rs`, animation in `motion.rs`.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
 use gentle_core::genui::changes::{self, Change, NodePatch};
-use gentle_core::genui::diagram::{Diagram, Edge, EdgeStyle, Node, NodeKind};
+use gentle_core::genui::diagram::{Diagram, Direction, Edge, EdgeStyle, Group, Node, NodeKind};
 use gentle_core::genui::layout::{self, Layout};
-use gentle_core::genui::{self, Snapshot};
+use gentle_core::genui::{self, Outcome, Snapshot};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
+
+use super::motion::{Arrival, ViewTween};
 
 /// Zoom limits, as a factor of the interface size.
 pub(super) const MIN_ZOOM: f32 = 0.2;
 pub(super) const MAX_ZOOM: f32 = 2.5;
 /// The automatic fit doesn't go below this: labels stay readable.
 pub(super) const READABLE_ZOOM: f32 = 0.6;
+/// Dragged and added nodes snap to this grid (diagram units); the
+/// background's dots mark it.
+pub(super) const GRID: f32 = 20.;
 /// Undo keeps this many steps.
 const UNDO_DEPTH: usize = 100;
-/// A press that moves less than this (px) is a click, not a drag.
-const CLICK_SLOP: f32 = 3.;
-/// How close (px) a click must be to an edge to pick it.
-const EDGE_PICK: f32 = 6.;
 
 /// What a surface asks of the conversation that shows it.
 pub enum DiagramEvent {
     /// Run this `/gentle-ui:event …` command line; answer with
-    /// [`DiagramView::sent`].
+    /// [`DiagramView::sent`] (and the extension with [`DiagramView::outcome`]).
     Send(String),
     /// Put this reference in the composer.
     Ask(String),
@@ -39,7 +41,30 @@ pub enum DiagramEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Selection {
     Node(String),
+    /// Two or more nodes (box selection, shift-click).
+    Nodes(Vec<String>),
     Edge(String),
+    Group(String),
+}
+
+impl Selection {
+    /// One node, several, or nothing.
+    pub fn of_nodes(mut ids: Vec<String>) -> Option<Self> {
+        match ids.len() {
+            0 => None,
+            1 => ids.pop().map(Selection::Node),
+            _ => Some(Selection::Nodes(ids)),
+        }
+    }
+
+    /// The selected nodes (none when an edge or a group is selected).
+    pub fn nodes(&self) -> &[String] {
+        match self {
+            Selection::Node(id) => std::slice::from_ref(id),
+            Selection::Nodes(ids) => ids,
+            Selection::Edge(_) | Selection::Group(_) => &[],
+        }
+    }
 }
 
 pub(super) enum Drag {
@@ -49,22 +74,43 @@ pub(super) enum Drag {
         pan: Point<f32>,
         moved: bool,
     },
-    /// Moving a node: the press point inside it (world units).
-    Node {
-        id: String,
+    /// Moving the selected nodes: where each one was and the press point
+    /// (diagram units).
+    Nodes {
+        starts: Vec<(String, layout::Point)>,
+        /// The layout when the drag started: its group boxes decide
+        /// whether a dropped node changes group.
+        before: Rc<Layout>,
         grab: layout::Point,
         from: Point<Pixels>,
         moved: bool,
     },
-    /// Drawing a connection from a node's handle to the pointer.
-    Connect { from: String, to: layout::Point },
+    /// Drawing a connection from a node's handle to the pointer:
+    /// `outgoing` from its source side, else into its target side.
+    Connect {
+        node: String,
+        outgoing: bool,
+        to: layout::Point,
+    },
+    /// Shift-dragging a selection box (diagram units).
+    Select {
+        from: layout::Point,
+        to: layout::Point,
+    },
+    /// Navigating with the minimap.
+    MiniMap,
 }
 
 pub(super) enum SendState {
     Idle,
-    Sending,
+    /// Waiting for the extension's answer about the edits made on `version`.
+    Sending {
+        version: u64,
+        spec: Diagram,
+    },
     /// The extension took the edits; says so until the next edit.
     Sent,
+    /// Not delivered, or rejected by the extension: the edits are kept.
     Failed(String),
 }
 
@@ -72,6 +118,15 @@ pub(super) struct Rename {
     pub target: Selection,
     pub input: Entity<InputState>,
     _subscription: Subscription,
+}
+
+/// The details panel's text fields for the selected node or group.
+pub(super) struct Fields {
+    pub target: Selection,
+    /// Nodes only.
+    pub tech: Option<Entity<InputState>>,
+    pub description: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// Pan (px, from the canvas' top-left) and zoom (× interface size).
@@ -88,8 +143,8 @@ pub struct DiagramView {
     pub(super) id: String,
     pub(super) title: String,
     pub(super) version: u64,
-    /// The agent's latest spec (tool result or the extension's echo of the
-    /// user's last sent edits).
+    /// The agent's latest spec (tool result, or the user's edits the
+    /// extension accepted).
     pub(super) base: Diagram,
     /// `base` plus the edits not sent yet.
     pub(super) working: Diagram,
@@ -97,20 +152,31 @@ pub struct DiagramView {
     /// Changes between `base` and `working`.
     pub(super) pending: usize,
     undo: Vec<Diagram>,
+    redo: Vec<Diagram>,
     /// Why the latest spec could not be drawn (the previous one stays).
     pub(super) error: Option<String>,
     /// Why the last edit was refused.
     pub(super) refused: Option<String>,
     pub(super) viewport: Viewport,
+    /// A fit or zoom button easing the viewport to a target.
+    pub(super) view_tween: Option<ViewTween>,
+    /// The agent's new version easing in over the previous one.
+    pub(super) arrival: Option<Arrival>,
     pub(super) selection: Option<Selection>,
     pub(super) drag: Option<Drag>,
+    /// The edge under the pointer (index into `working.edges`).
+    pub(super) hover_edge: Option<usize>,
     pub(super) rename: Option<Rename>,
+    pub(super) fields: Option<Fields>,
     pub(super) note: Option<Entity<InputState>>,
     pub(super) send: SendState,
-    /// The canvas' bounds last frame, written while painting.
+    /// The canvas' and the minimap's bounds last frame, written while painting.
     pub(super) bounds: Rc<Cell<Bounds<Pixels>>>,
+    pub(super) minimap: Rc<Cell<Bounds<Pixels>>>,
     /// Shown in place of the conversation instead of in its card.
     pub(super) expanded: bool,
+    /// Viewing only: no moving, connecting or editing.
+    pub(super) locked: bool,
     pub(super) focus: FocusHandle,
 }
 
@@ -131,6 +197,7 @@ impl DiagramView {
             base,
             pending: 0,
             undo: Vec::new(),
+            redo: Vec::new(),
             error,
             refused: None,
             viewport: Viewport {
@@ -139,21 +206,28 @@ impl DiagramView {
                 fitted_for: None,
                 touched: false,
             },
+            view_tween: None,
+            arrival: None,
             selection: None,
             drag: None,
+            hover_edge: None,
             rename: None,
+            fields: None,
             note: None,
             send: SendState::Idle,
             bounds: Rc::new(Cell::new(Bounds::default())),
+            minimap: Rc::new(Cell::new(Bounds::default())),
             expanded: false,
+            locked: false,
             focus: cx.focus_handle(),
         }
     }
 
     /// A newer version from the transcript. Unsent edits are replayed on
-    /// top of it (those that still apply); the viewport stays. `replaced`:
-    /// the conversation was reloaded or replaced, so the same id may now
-    /// carry another (or an older) version; an identical one changes nothing.
+    /// top of it (those that still apply) and the change eases in; the
+    /// viewport stays. `replaced`: the conversation was reloaded or
+    /// replaced, so the same id may now carry another (or an older)
+    /// version; an identical one changes nothing.
     pub fn set_snapshot(&mut self, snapshot: &Snapshot, replaced: bool, cx: &mut Context<Self>) {
         let same = snapshot.version == self.version && snapshot.title == self.title;
         if !replaced && (same || snapshot.version < self.version) {
@@ -165,9 +239,18 @@ impl DiagramView {
         }
         self.version = snapshot.version;
         self.title = snapshot.title.clone();
+        let before = (self.working.clone(), self.layout.clone());
         match parsed {
             Ok(diagram) => {
                 self.error = None;
+                // The extension's echo of edits it took without answering
+                // (an extension from before outcomes): they were sent.
+                if let SendState::Sending { spec, .. } = &self.send
+                    && *spec == diagram
+                {
+                    self.send = SendState::Sent;
+                    self.note = None;
+                }
                 let pending = changes::diff(&self.base, &self.working);
                 let mut working = diagram.clone();
                 for change in &pending {
@@ -177,6 +260,7 @@ impl DiagramView {
                 self.base = diagram;
                 self.working = working;
                 self.undo.clear();
+                self.redo.clear();
             }
             Err(errors) => self.error = Some(errors.join("\n")),
         }
@@ -186,6 +270,9 @@ impl DiagramView {
         }
         self.forget_missing();
         self.relayout();
+        if !cx.reduce_motion() && before.0 != self.working {
+            self.arrival = Arrival::between(&before.0, &before.1, &self.working, &self.layout);
+        }
         cx.notify();
     }
 
@@ -200,8 +287,13 @@ impl DiagramView {
         }
     }
 
-    /// The extension's answer to [`DiagramEvent::Send`].
+    /// Whether Gentle Shell ran the `/gentle-ui:event` command. The
+    /// extension answers first ([`Self::outcome`]); `Ok` while still
+    /// sending means an extension that doesn't answer, which took them.
     pub fn sent(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        if !matches!(self.send, SendState::Sending { .. }) {
+            return;
+        }
         self.send = match result {
             Ok(()) => {
                 self.note = None;
@@ -212,99 +304,184 @@ impl DiagramView {
         cx.notify();
     }
 
+    /// The extension's answer to the edits being sent: accepted ones
+    /// become the base (the edits made since stay pending); rejected ones
+    /// stay pending with the reason, to retry or discard.
+    pub fn outcome(&mut self, outcome: &Outcome, cx: &mut Context<Self>) {
+        let SendState::Sending { version, spec } = &self.send else {
+            return;
+        };
+        if *version != outcome.version {
+            return;
+        }
+        match &outcome.result {
+            Ok(current) => {
+                self.base = spec.clone();
+                self.version = *current;
+                self.note = None;
+                self.send = SendState::Sent;
+                self.relayout();
+            }
+            Err(error) => self.send = SendState::Failed(error.clone()),
+        }
+        cx.notify();
+    }
+
     // ── Edits ──────────────────────────────────────────────────────────────
 
     pub(super) fn relayout(&mut self) {
         self.layout = Rc::new(layout::layout(&self.working));
         self.pending = changes::diff(&self.base, &self.working).len();
+        if self
+            .hover_edge
+            .is_some_and(|ix| ix >= self.working.edges.len())
+        {
+            self.hover_edge = None;
+        }
     }
 
-    /// Drop a selection or rename whose target no longer exists.
+    /// Drop a selection, rename or details fields whose target no longer exists.
     fn forget_missing(&mut self) {
+        let working = &self.working;
         let exists = |selection: &Selection| match selection {
-            Selection::Node(id) => self.working.node(id).is_some(),
-            Selection::Edge(id) => self.working.edge(id).is_some(),
+            Selection::Node(id) => working.node(id).is_some(),
+            Selection::Nodes(ids) => ids.iter().all(|id| working.node(id).is_some()),
+            Selection::Edge(id) => working.edge(id).is_some(),
+            Selection::Group(id) => working.group(id).is_some(),
         };
+        if let Some(Selection::Nodes(ids)) = &self.selection
+            && !exists(&Selection::Nodes(ids.clone()))
+        {
+            let kept = ids
+                .iter()
+                .filter(|id| working.node(id).is_some())
+                .cloned()
+                .collect();
+            self.selection = Selection::of_nodes(kept);
+        }
         if self.selection.as_ref().is_some_and(|s| !exists(s)) {
             self.selection = None;
         }
         if self.rename.as_ref().is_some_and(|r| !exists(&r.target)) {
             self.rename = None;
         }
+        if self.fields.as_ref().is_some_and(|f| !exists(&f.target)) {
+            self.fields = None;
+        }
     }
 
-    fn remember(&mut self, before: Diagram) {
+    pub(super) fn remember(&mut self, before: Diagram) {
         self.undo.push(before);
         if self.undo.len() > UNDO_DEPTH {
             self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    /// The working copy changed: a new edit clears a refusal and the last
+    /// send's result.
+    pub(super) fn edited(&mut self) {
+        self.refused = None;
+        if matches!(self.send, SendState::Failed(_) | SendState::Sent) {
+            self.send = SendState::Idle;
         }
     }
 
     /// Apply one user edit; a refused one leaves everything as it was.
     pub(super) fn edit(&mut self, change: Change, cx: &mut Context<Self>) -> bool {
-        let before = self.working.clone();
-        let applied = match changes::apply(&mut self.working, &change) {
-            Ok(()) => {
-                self.remember(before);
-                self.refused = None;
-                if matches!(self.send, SendState::Failed(_) | SendState::Sent) {
-                    self.send = SendState::Idle;
-                }
-                self.forget_missing();
-                self.relayout();
-                true
-            }
-            Err(error) => {
-                self.refused = Some(error);
-                false
-            }
-        };
+        self.edit_all(&[change], cx)
+    }
+
+    /// Apply edits as one undo step, all or none.
+    pub(super) fn edit_all(&mut self, edits: &[Change], cx: &mut Context<Self>) -> bool {
+        let mut next = self.working.clone();
+        let result = edits
+            .iter()
+            .try_for_each(|change| changes::apply(&mut next, change));
         cx.notify();
-        applied
+        if let Err(error) = result {
+            self.refused = Some(error);
+            return false;
+        }
+        let before = std::mem::replace(&mut self.working, next);
+        self.remember(before);
+        self.edited();
+        self.forget_missing();
+        self.relayout();
+        true
     }
 
     pub(super) fn undo(&mut self, cx: &mut Context<Self>) {
         if let Some(previous) = self.undo.pop() {
-            self.working = previous;
-            self.rename = None;
-            self.refused = None;
-            self.forget_missing();
-            self.relayout();
-            cx.notify();
+            let current = std::mem::replace(&mut self.working, previous);
+            self.redo.push(current);
+            self.after_history(cx);
         }
+    }
+
+    pub(super) fn redo(&mut self, cx: &mut Context<Self>) {
+        if let Some(next) = self.redo.pop() {
+            let current = std::mem::replace(&mut self.working, next);
+            self.undo.push(current);
+            self.after_history(cx);
+        }
+    }
+
+    fn after_history(&mut self, cx: &mut Context<Self>) {
+        self.rename = None;
+        self.edited();
+        self.forget_missing();
+        self.relayout();
+        cx.notify();
     }
 
     pub(super) fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
 
+    pub(super) fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
+    }
+
     pub(super) fn discard(&mut self, cx: &mut Context<Self>) {
-        if self.pending == 0 {
+        if self.pending == 0 || matches!(self.send, SendState::Sending { .. }) {
             return;
         }
-        let before = self.working.clone();
+        let before = std::mem::replace(&mut self.working, self.base.clone());
         self.remember(before);
-        self.working = self.base.clone();
         self.rename = None;
         self.refused = None;
+        self.send = SendState::Idle;
         self.forget_missing();
         self.relayout();
         cx.notify();
     }
 
     pub(super) fn delete_selection(&mut self, cx: &mut Context<Self>) {
-        let change = match self.selection.clone() {
-            Some(Selection::Node(node)) => Change::RemoveNode { node },
-            Some(Selection::Edge(edge)) => Change::RemoveEdge { edge },
+        if self.locked {
+            return;
+        }
+        let edits: Vec<Change> = match self.selection.clone() {
+            Some(Selection::Node(node)) => vec![Change::RemoveNode { node }],
+            Some(Selection::Nodes(nodes)) => nodes
+                .into_iter()
+                .map(|node| Change::RemoveNode { node })
+                .collect(),
+            Some(Selection::Edge(edge)) => vec![Change::RemoveEdge { edge }],
+            Some(Selection::Group(group)) => vec![Change::RemoveGroup { group }],
             None => return,
         };
-        if self.edit(change, cx) {
+        if self.edit_all(&edits, cx) {
             self.selection = None;
         }
     }
 
-    /// A new node in the middle of the view, selected and being named.
+    /// A new node in the middle of the view (in the selected group, if
+    /// one is), selected and being named.
     pub(super) fn add_node(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked {
+            return;
+        }
         let bounds = self.bounds.get();
         let center = self.to_world(
             point(bounds.size.width / 2., bounds.size.height / 2.),
@@ -312,16 +489,118 @@ impl DiagramView {
         );
         let id = self.working.fresh_node_id("new-node");
         let mut node = Node::new(id.clone(), "New node", NodeKind::Service);
-        node.x = Some((center.x - layout::NODE_W / 2.).round());
-        node.y = Some((center.y - layout::NODE_H / 2.).round());
+        node.x = Some(snap(center.x - layout::NODE_W / 2.));
+        node.y = Some(snap(center.y - layout::NODE_H / 2.));
+        if let Some(Selection::Group(group)) = &self.selection {
+            node.group = Some(group.clone());
+        }
         if self.edit(Change::AddNode { node }, cx) {
             self.selection = Some(Selection::Node(id.clone()));
             self.start_rename(Selection::Node(id), window, cx);
         }
     }
 
+    /// A new group holding the selected nodes, selected and being named.
+    pub(super) fn group_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let nodes = self
+            .selection
+            .as_ref()
+            .map(|s| s.nodes().to_vec())
+            .unwrap_or_default();
+        if self.locked || nodes.is_empty() {
+            return;
+        }
+        let id = self.working.fresh_group_id("group");
+        let mut edits = vec![Change::AddGroup {
+            group: Group {
+                id: id.clone(),
+                label: "New group".into(),
+                description: None,
+            },
+        }];
+        edits.extend(nodes.into_iter().map(|node| Change::UpdateNode {
+            node,
+            patch: NodePatch {
+                group: Some(Some(id.clone())),
+                ..NodePatch::default()
+            },
+        }));
+        if self.edit_all(&edits, cx) {
+            self.selection = Some(Selection::Group(id.clone()));
+            self.start_rename(Selection::Group(id), window, cx);
+        }
+    }
+
+    pub(super) fn toggle_direction(&mut self, cx: &mut Context<Self>) {
+        if self.locked {
+            return;
+        }
+        let direction = match self.working.direction {
+            Direction::LeftRight => Direction::TopBottom,
+            Direction::TopBottom => Direction::LeftRight,
+        };
+        if self.edit(Change::SetDirection { direction }, cx) && !self.viewport.touched {
+            self.viewport.fitted_for = None;
+        }
+    }
+
+    /// One field of a node, from the details panel.
+    pub(super) fn patch_node(&mut self, node: &str, patch: NodePatch, cx: &mut Context<Self>) {
+        if self.locked {
+            return;
+        }
+        // An unchanged value is not an edit.
+        let Some(current) = self.working.node(node) else {
+            return;
+        };
+        let changed = patch.label.as_ref().is_some_and(|l| *l != current.label)
+            || patch.kind.is_some_and(|k| k != current.kind)
+            || patch.group.as_ref().is_some_and(|g| *g != current.group)
+            || patch
+                .description
+                .as_ref()
+                .is_some_and(|d| *d != current.description)
+            || patch.tech.as_ref().is_some_and(|t| *t != current.tech)
+            || patch.status.is_some_and(|s| s != current.status);
+        if changed {
+            self.edit(
+                Change::UpdateNode {
+                    node: node.to_string(),
+                    patch,
+                },
+                cx,
+            );
+        }
+    }
+
+    pub(super) fn set_edge_style(&mut self, edge: &str, style: EdgeStyle, cx: &mut Context<Self>) {
+        if self.locked || self.working.edge(edge).is_none_or(|e| e.style == style) {
+            return;
+        }
+        self.edit(
+            Change::UpdateEdge {
+                edge: edge.to_string(),
+                label: None,
+                style: Some(style),
+            },
+            cx,
+        );
+    }
+
+    /// The selected node into a new group named after it.
+    pub(super) fn new_group_for(
+        &mut self,
+        node: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selection = Some(Selection::Node(node.to_string()));
+        self.group_selection(window, cx);
+    }
+
+    /// `node` → `other` when `outgoing`, else `other` → `node`.
     pub(super) fn connect(&mut self, from: &str, to: &str, cx: &mut Context<Self>) {
-        if from == to {
+        if from == to || self.locked {
             return;
         }
         let id = self.working.fresh_edge_id(from, to);
@@ -343,12 +622,17 @@ impl DiagramView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.locked {
+            return;
+        }
         let current = match &target {
             Selection::Node(id) => self.working.node(id).map(|n| n.label.clone()),
             Selection::Edge(id) => self
                 .working
                 .edge(id)
                 .map(|e| e.label.clone().unwrap_or_default()),
+            Selection::Group(id) => self.working.group(id).map(|g| g.label.clone()),
+            Selection::Nodes(_) => None,
         };
         let Some(current) = current else { return };
         let input = cx.new(|cx| InputState::new(window, cx).default_value(current));
@@ -410,13 +694,131 @@ impl DiagramView {
                     style: None,
                 }
             }
+            Selection::Group(group) => {
+                let unchanged = self.working.group(&group).is_none_or(|g| g.label == text);
+                if text.is_empty() || unchanged {
+                    return;
+                }
+                Change::UpdateGroup {
+                    group,
+                    label: Some(text),
+                    description: None,
+                }
+            }
+            Selection::Nodes(_) => return,
         };
         self.edit(change, cx);
     }
 
-    /// Send the unsent edits (and the note, if any) to the agent.
+    /// The details panel's text fields follow the selected node or group.
+    pub(super) fn sync_fields(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = match &self.selection {
+            Some(s @ (Selection::Node(_) | Selection::Group(_))) if !self.locked => s.clone(),
+            _ => {
+                self.fields = None;
+                return;
+            }
+        };
+        if self.fields.as_ref().is_some_and(|f| f.target == target) {
+            return;
+        }
+        let (tech, description) = match &target {
+            Selection::Node(id) => {
+                let Some(node) = self.working.node(id) else {
+                    return;
+                };
+                (
+                    Some(node.tech.clone().unwrap_or_default()),
+                    node.description.clone(),
+                )
+            }
+            Selection::Group(id) => {
+                let Some(group) = self.working.group(id) else {
+                    return;
+                };
+                (None, group.description.clone())
+            }
+            _ => return,
+        };
+        let field = |value: String,
+                     placeholder: &'static str,
+                     window: &mut Window,
+                     cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholder)
+                    .default_value(value)
+            })
+        };
+        let tech = tech.map(|t| field(t, "Tech (e.g. Postgres)", window, cx));
+        let description = field(description.unwrap_or_default(), "Description", window, cx);
+        let mut subscriptions = Vec::new();
+        for input in tech.iter().chain([&description]) {
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::PressEnter { .. } => {
+                        this.commit_fields(cx);
+                        window.focus(&this.focus, cx);
+                    }
+                    InputEvent::Blur => this.commit_fields(cx),
+                    _ => {}
+                },
+            ));
+        }
+        self.fields = Some(Fields {
+            target,
+            tech,
+            description,
+            _subscriptions: subscriptions,
+        });
+    }
+
+    /// The details fields' values as edits (nothing when unchanged).
+    pub(super) fn commit_fields(&mut self, cx: &mut Context<Self>) {
+        let Some(fields) = &self.fields else { return };
+        let text = |input: &Entity<InputState>| {
+            let value = input.read(cx).value().trim().to_string();
+            (!value.is_empty()).then_some(value)
+        };
+        let description = text(&fields.description);
+        match fields.target.clone() {
+            Selection::Node(node) => {
+                let tech = fields.tech.as_ref().and_then(text);
+                self.patch_node(
+                    &node,
+                    NodePatch {
+                        tech: Some(tech),
+                        description: Some(description),
+                        ..NodePatch::default()
+                    },
+                    cx,
+                );
+            }
+            Selection::Group(group)
+                if self
+                    .working
+                    .group(&group)
+                    .is_some_and(|g| g.description != description) =>
+            {
+                self.edit(
+                    Change::UpdateGroup {
+                        group,
+                        label: None,
+                        description: Some(description),
+                    },
+                    cx,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// Send the unsent edits (and the note, if any) to the agent, or again
+    /// after a failure.
     pub(super) fn send(&mut self, cx: &mut Context<Self>) {
-        if self.pending == 0 || matches!(self.send, SendState::Sending) {
+        if self.pending == 0 || matches!(self.send, SendState::Sending { .. }) {
             return;
         }
         let (changes, summary) = changes::summarize(&self.base, &self.working);
@@ -429,26 +831,40 @@ impl DiagramView {
             &self.working,
             note.as_deref(),
         );
-        self.send = SendState::Sending;
+        self.send = SendState::Sending {
+            version: self.version,
+            spec: self.working.clone(),
+        };
         cx.emit(DiagramEvent::Send(command));
         cx.notify();
     }
 
     /// "Ask about this": a reference to the selection for the composer.
     pub(super) fn ask(&mut self, cx: &mut Context<Self>) {
+        let name = |node: &str| {
+            self.working
+                .node(node)
+                .map_or(node.to_string(), |n| n.label.clone())
+        };
         let subject = match &self.selection {
             Some(Selection::Node(id)) => self
                 .working
                 .node(id)
                 .map(|n| format!("“{}” ({id})", n.label)),
-            Some(Selection::Edge(id)) => self.working.edge(id).map(|e| {
-                let name = |node: &str| {
-                    self.working
-                        .node(node)
-                        .map_or(node.to_string(), |n| n.label.clone())
-                };
-                format!("the connection {} → {} ({id})", name(&e.from), name(&e.to))
-            }),
+            Some(Selection::Nodes(ids)) => Some(
+                ids.iter()
+                    .map(|id| format!("“{}” ({id})", name(id)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            Some(Selection::Edge(id)) => self
+                .working
+                .edge(id)
+                .map(|e| format!("the connection {} → {} ({id})", name(&e.from), name(&e.to))),
+            Some(Selection::Group(id)) => self
+                .working
+                .group(id)
+                .map(|g| format!("the group “{}” ({id})", g.label)),
             None => None,
         };
         let Some(subject) = subject else { return };
@@ -466,305 +882,19 @@ impl DiagramView {
         }
     }
 
-    // ── Viewport ───────────────────────────────────────────────────────────
-
-    /// Pixels per diagram unit: the zoom times the interface size.
-    pub(super) fn scale(&self, rem: Pixels) -> f32 {
-        self.viewport.zoom * f32::from(rem) / 16.
-    }
-
-    /// A point on the canvas (relative to its top-left) in diagram units.
-    pub(super) fn to_world(&self, local: Point<Pixels>, rem: Pixels) -> layout::Point {
-        let s = self.scale(rem);
-        layout::Point {
-            x: (f32::from(local.x) - self.viewport.pan.x) / s,
-            y: (f32::from(local.y) - self.viewport.pan.y) / s,
-        }
-    }
-
-    pub(super) fn local(&self, window_position: Point<Pixels>) -> Point<Pixels> {
-        window_position - self.bounds.get().origin
-    }
-
-    /// Fit the diagram in the canvas, at most 100 % and at least `floor`.
-    /// Below the floor text is too small to read: the view keeps the floor
-    /// and starts at the diagram's top-left on the axes that don't fit.
-    pub(super) fn fit(&mut self, floor: f32, rem: Pixels) {
-        let size = self.bounds.get().size;
-        let (w, h) = (f32::from(size.width), f32::from(size.height));
-        if w < 1. || h < 1. {
-            return;
-        }
-        let content = self.layout.bounds.inflate(24.);
-        let unit = f32::from(rem) / 16.;
-        let zoom = if content.w <= 0. || content.h <= 0. {
-            1.
-        } else {
-            (w / content.w).min(h / content.h) / unit
-        }
-        .clamp(floor, 1.);
-        let s = zoom * unit;
-        let axis = |view: f32, start: f32, length: f32| {
-            if length * s <= view {
-                view / 2. - (start + length / 2.) * s
-            } else {
-                -start * s
-            }
-        };
-        self.viewport.zoom = zoom;
-        self.viewport.pan = point(axis(w, content.x, content.w), axis(h, content.y, content.h));
-        self.viewport.fitted_for = Some(size);
-    }
-
-    /// Zoom by `factor` keeping the diagram point under `anchor` (canvas px) still.
-    pub(super) fn zoom_at(&mut self, factor: f32, anchor: Point<Pixels>, rem: Pixels) {
-        let before = self.to_world(anchor, rem);
-        self.viewport.zoom = (self.viewport.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
-        let s = self.scale(rem);
-        self.viewport.pan = point(
-            f32::from(anchor.x) - before.x * s,
-            f32::from(anchor.y) - before.y * s,
-        );
-        self.viewport.touched = true;
-    }
-
-    pub(super) fn zoom_center(&mut self, factor: f32, rem: Pixels) {
-        let size = self.bounds.get().size;
-        self.zoom_at(factor, point(size.width / 2., size.height / 2.), rem);
-    }
-
-    // ── Pointer ────────────────────────────────────────────────────────────
-
-    /// A press on the canvas background: an edge near it is selected,
-    /// otherwise the view starts panning.
-    pub(super) fn press_background(
-        &mut self,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        window.focus(&self.focus, cx);
-        self.finish_rename(true, cx);
-        let rem = window.rem_size();
-        let local = self.local(event.position);
-        let world = self.to_world(local, rem);
-        let tolerance = EDGE_PICK / self.scale(rem);
-        if let Some(ix) = self.layout.edge_at(world, tolerance)
-            && let Some(edge) = self.working.edges.get(ix)
-        {
-            let selection = Selection::Edge(edge.id.clone());
-            if event.click_count >= 2 {
-                self.start_rename(selection.clone(), window, cx);
-            }
-            self.selection = Some(selection);
-            cx.notify();
-            return;
-        }
-        self.drag = Some(Drag::Pan {
-            from: event.position,
-            pan: self.viewport.pan,
-            moved: false,
-        });
-        cx.notify();
-    }
-
-    pub(super) fn press_node(
-        &mut self,
-        id: &str,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.stop_propagation();
-        window.focus(&self.focus, cx);
-        let rem = window.rem_size();
-        let selection = Selection::Node(id.to_string());
-        if event.click_count >= 2 {
-            self.selection = Some(selection.clone());
-            self.start_rename(selection, window, cx);
-            return;
-        }
-        self.finish_rename(true, cx);
-        let Some(ix) = self.working.node_index(id) else {
-            return;
-        };
-        let world = self.to_world(self.local(event.position), rem);
-        let rect = self.layout.nodes[ix];
-        self.drag = Some(Drag::Node {
-            id: id.to_string(),
-            grab: layout::Point {
-                x: world.x - rect.x,
-                y: world.y - rect.y,
-            },
-            from: event.position,
-            moved: false,
-        });
-        self.selection = Some(selection);
-        cx.notify();
-    }
-
-    pub(super) fn press_handle(
-        &mut self,
-        id: &str,
-        event: &MouseDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        cx.stop_propagation();
-        window.focus(&self.focus, cx);
-        self.finish_rename(true, cx);
-        let to = self.to_world(self.local(event.position), window.rem_size());
-        self.drag = Some(Drag::Connect {
-            from: id.to_string(),
-            to,
-        });
-        cx.notify();
-    }
-
-    pub(super) fn pointer_moved(
-        &mut self,
-        event: &MouseMoveEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let rem = window.rem_size();
-        let world = self.to_world(self.local(event.position), rem);
-        let far = |from: Point<Pixels>| {
-            let d = event.position - from;
-            f32::from(d.x).hypot(f32::from(d.y)) >= CLICK_SLOP
-        };
-        let mut node_move = None;
-        match &mut self.drag {
-            Some(Drag::Pan { from, pan, moved }) => {
-                *moved |= far(*from);
-                let d = event.position - *from;
-                self.viewport.pan = point(pan.x + f32::from(d.x), pan.y + f32::from(d.y));
-                self.viewport.touched = true;
-            }
-            Some(Drag::Node {
-                id,
-                grab,
-                from,
-                moved,
-            }) => {
-                if !*moved && !far(*from) {
-                    return;
-                }
-                let first = !*moved;
-                *moved = true;
-                let change = Change::Move {
-                    node: id.clone(),
-                    x: (world.x - grab.x).round(),
-                    y: (world.y - grab.y).round(),
-                };
-                node_move = Some((first, change));
-            }
-            Some(Drag::Connect { to, .. }) => *to = world,
-            None => return,
-        }
-        if let Some((first, change)) = node_move {
-            // The whole drag is one undo step.
-            if first {
-                let before = self.working.clone();
-                self.remember(before);
-                self.refused = None;
-                if matches!(self.send, SendState::Failed(_) | SendState::Sent) {
-                    self.send = SendState::Idle;
-                }
-            }
-            if changes::apply(&mut self.working, &change).is_ok() {
-                self.relayout();
-            }
+    pub(super) fn toggle_lock(&mut self, cx: &mut Context<Self>) {
+        self.locked = !self.locked;
+        if self.locked {
+            self.finish_rename(true, cx);
+            self.commit_fields(cx);
+            self.fields = None;
+            self.drag = None;
         }
         cx.notify();
     }
+}
 
-    pub(super) fn released(&mut self, cx: &mut Context<Self>) {
-        match self.drag.take() {
-            Some(Drag::Pan { moved: false, .. }) => self.selection = None,
-            Some(Drag::Connect { from, to }) => {
-                if let Some(ix) = self.layout.node_at(to)
-                    && let Some(target) = self.working.nodes.get(ix).map(|n| n.id.clone())
-                {
-                    self.connect(&from, &target, cx);
-                }
-            }
-            _ => {}
-        }
-        cx.notify();
-    }
-
-    pub(super) fn scrolled(
-        &mut self,
-        event: &ScrollEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let rem = window.rem_size();
-        let delta = event.delta.pixel_delta(rem);
-        if event.modifiers.secondary(cx) {
-            // ⌘ / Ctrl + wheel zooms around the pointer.
-            let factor = (1. + f32::from(delta.y) / 300.).clamp(0.5, 2.);
-            self.zoom_at(factor, self.local(event.position), rem);
-        } else if self.expanded {
-            self.viewport.pan.x += f32::from(delta.x);
-            self.viewport.pan.y += f32::from(delta.y);
-            self.viewport.touched = true;
-        } else {
-            // In the conversation a plain wheel scrolls the conversation.
-            return;
-        }
-        cx.stop_propagation();
-        cx.notify();
-    }
-
-    pub(super) fn pinched(
-        &mut self,
-        event: &PinchEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let rem = window.rem_size();
-        self.zoom_at(1. + event.delta, self.local(event.position), rem);
-        cx.stop_propagation();
-        cx.notify();
-    }
-
-    pub(super) fn key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let keystroke = &event.keystroke;
-        let command = keystroke.modifiers.secondary(cx);
-        match keystroke.key.as_str() {
-            "escape" if self.rename.is_some() => {
-                self.finish_rename(false, cx);
-                window.focus(&self.focus, cx);
-            }
-            // Keys typed into the rename or note field are theirs.
-            _ if self.rename.is_some() || self.note_focused(window, cx) => return,
-            "backspace" | "delete" if self.selection.is_some() => self.delete_selection(cx),
-            "z" if command && !keystroke.modifiers.shift => self.undo(cx),
-            "enter" if matches!(self.selection, Some(Selection::Node(_))) => {
-                if let Some(selection) = self.selection.clone() {
-                    self.start_rename(selection, window, cx);
-                }
-            }
-            "escape" if self.selection.is_some() => {
-                self.selection = None;
-                cx.notify();
-            }
-            "escape" if self.expanded => cx.emit(DiagramEvent::Collapse),
-            _ => return,
-        }
-        cx.stop_propagation();
-    }
-
-    fn note_focused(&self, window: &Window, cx: &App) -> bool {
-        self.note
-            .as_ref()
-            .is_some_and(|note| note.read(cx).focus_handle(cx).is_focused(window))
-    }
+/// The nearest grid line.
+pub(super) fn snap(v: f32) -> f32 {
+    (v / GRID).round() * GRID
 }

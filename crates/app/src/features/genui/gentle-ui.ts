@@ -10,6 +10,7 @@ import { Type } from "typebox";
 const TOOL = "gentle_ui";
 const EVENT_MESSAGE = "gentle-ui.event";
 const EVENT_COMMAND = "gentle-ui:event";
+const OUTCOME_WIDGET = "gentle-ui.outcome";
 
 const NODE_KINDS = ["service", "database", "queue", "cache", "client", "external", "storage", "function", "note"];
 const STATUSES = ["planned", "existing", "deprecated", "risk"];
@@ -208,7 +209,9 @@ function summary(surface: Surface): string {
 		lines.push(listed("Edges", spec.edges.map((e) =>
 			`${e.from} → ${e.to}${e.label ? ` "${e.label}"` : ""}${e.style === "sync" ? "" : ` [${e.style}]`}`)));
 	}
-	lines.push(`The user can move, rename, connect and delete parts; their edits arrive as "${EVENT_MESSAGE}" messages.`);
+	lines.push(
+		`The user can move, rename, connect, group and delete parts, change a node's kind, status, tech and description, and flip the direction; their edits arrive as "${EVENT_MESSAGE}" messages.`,
+	);
 	return lines.join("\n");
 }
 
@@ -359,16 +362,31 @@ export default function gentleUi(pi: ExtensionAPI) {
 				ctx.ui.notify(`gentle_ui: unreadable event (${(error as Error).message})`, "error");
 				return;
 			}
-			const current = typeof event.id === "string" ? surfaces.get(event.id) : undefined;
+			const id = typeof event.id === "string" ? event.id : "";
+			const baseVersion = typeof event.version === "number" ? event.version : undefined;
+			// The app's card waits for this answer: Sent, or the error with Retry.
+			const answer = (outcome: { ok: true; current: number } | { ok: false; error: string }) => {
+				ctx.ui.setWidget(OUTCOME_WIDGET, [JSON.stringify({ id, version: baseVersion ?? 0, ...outcome })]);
+				ctx.ui.setWidget(OUTCOME_WIDGET, undefined);
+			};
+			const current = surfaces.get(id);
 			if (!current) {
-				ctx.ui.notify(`gentle_ui: no UI with id ${JSON.stringify(event.id ?? null)}`, "error");
+				const open = [...surfaces.keys()].join(", ") || "none";
+				answer({ ok: false, error: `The agent no longer has a diagram "${id}" open (open: ${open}).` });
+				return;
+			}
+			if (baseVersion !== undefined && baseVersion !== current.version) {
+				answer({
+					ok: false,
+					error: `The agent changed this diagram meanwhile (now v${current.version}); review your edits on it and send again.`,
+				});
 				return;
 			}
 			let spec: Spec;
 			try {
 				spec = normalize(event.spec);
 			} catch (error) {
-				ctx.ui.notify(`gentle_ui: ${(error as Error).message}`, "error");
+				answer({ ok: false, error: (error as Error).message });
 				return;
 			}
 			const surface: Surface = { ...current, version: current.version + 1, spec };
@@ -376,7 +394,6 @@ export default function gentleUi(pi: ExtensionAPI) {
 			const changes = Array.isArray(event.changes) ? event.changes : [];
 			const said = Array.isArray(event.summary) ? event.summary.filter((s): s is string => typeof s === "string") : [];
 			const note = typeof event.note === "string" && event.note.trim() !== "" ? event.note.trim() : undefined;
-			const baseVersion = typeof event.version === "number" ? event.version : current.version;
 			const content = [
 				`The user edited the diagram "${surface.title}" (${surface.id}, now v${surface.version}) in the app:`,
 				...said.map((line) => `- ${line}`),
@@ -385,9 +402,10 @@ export default function gentleUi(pi: ExtensionAPI) {
 				summary(surface),
 			].join("\n");
 			pi.sendMessage(
-				{ customType: EVENT_MESSAGE, display: true, content, details: { ...surface, changes, summary: said, note, baseVersion } },
+				{ customType: EVENT_MESSAGE, display: true, content, details: { ...surface, changes, summary: said, note, baseVersion: current.version } },
 				ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "steer" },
 			);
+			answer({ ok: true, current: surface.version });
 		},
 	});
 }

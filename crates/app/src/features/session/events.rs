@@ -260,7 +260,13 @@ impl SessionView {
             },
             UiMethod::SetWidget { key, lines, .. } => {
                 let lines = lines.filter(|l| !l.is_empty());
-                if key == "gentle-agents" {
+                if key == gentle_core::genui::OUTCOME_WIDGET {
+                    // The generative UI extension's answer to sent edits;
+                    // its clearing record carries no lines.
+                    if let Some(line) = lines.as_ref().and_then(|l| l.first()) {
+                        self.genui.outcome(line, cx);
+                    }
+                } else if key == "gentle-agents" {
                     let next = lines.and_then(|l| gentle_core::activity::parse(&l));
                     self.activity.agents = Some(gentle_core::activity::retain_finished(
                         self.activity.agents.take(),
