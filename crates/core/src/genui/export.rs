@@ -283,8 +283,8 @@ pub fn mermaid(d: &Diagram, title: &str) -> String {
         }
         let _ = writeln!(out, "  end");
     }
-    for i in 0..d.nodes.len() {
-        if d.nodes[i].group.is_none() {
+    for (i, node) in d.nodes.iter().enumerate() {
+        if node.group.is_none() {
             node_line(&mut out, i, "  ");
         }
     }
