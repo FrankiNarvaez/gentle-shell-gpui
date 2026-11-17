@@ -1,7 +1,7 @@
 //! The window, after Tern: named workspaces (one shown at a time), each with
 //! its own tabs; every tab tiles panes (agents, terminals, files) in a split
-//! tree with draggable dividers. A left sidebar slot, the screens drawn over
-//! everything, and the layout saved to disk as it changes.
+//! tree with draggable dividers. Vertical tabs live on the left, Files / Changes /
+//! Branches on the right, and the layout is saved to disk as it changes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -155,13 +155,6 @@ struct Tab {
     pinned: bool,
 }
 
-/// Which content the vertical sidebar displays.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum SidebarSection {
-    Tabs,
-    Files,
-}
-
 /// A tab dragged onto another tab in the vertical navigator.
 #[derive(Clone)]
 struct TabDrag {
@@ -266,7 +259,6 @@ pub struct Workspace {
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     tab_layout: TabLayout,
-    sidebar_section: SidebarSection,
     tab_search: Entity<InputState>,
     save_task: Option<Task<()>>,
     /// Re-reads every pane's title and busy state once a second (non-agent
@@ -391,7 +383,6 @@ impl Workspace {
             sidebar: None,
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
-            sidebar_section: SidebarSection::Tabs,
             tab_search,
             save_task: None,
             notices: cx.new(|_| Notices::default()),
@@ -511,7 +502,7 @@ impl Workspace {
         });
     }
 
-    /// Put `view` in the left sidebar slot (cmd-b toggles it).
+    /// Put `view` in the right Files sidebar (Cmd/Ctrl+B toggles it).
     pub fn set_sidebar(&mut self, view: AnyView, cx: &mut Context<Self>) {
         self.sidebar = Some(view);
         cx.notify();
