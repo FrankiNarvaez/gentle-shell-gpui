@@ -359,7 +359,7 @@ pub fn check_setup(launcher: &Result<Launcher, String>) -> (Status, Fix) {
         };
     }
     let config = read_json(&pi_rpc::launcher_config_path()).unwrap_or(Value::Null);
-    let root = crate::features::profiles::gentle_pi_root(&launcher.spec);
+    let root = pi_rpc::gentle_pi_root(&launcher.spec);
     let pin = gentle_ai_pin(root.as_deref());
     match marker_state(
         &config,

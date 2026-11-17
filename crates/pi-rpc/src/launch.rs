@@ -428,6 +428,74 @@ fn supervisor_root(script: &str) -> Option<PathBuf> {
     })
 }
 
+/// The Node script `launcher` runs, by its real path: the launcher itself
+/// when it is (a link to) one, as npm and yarn link `<prefix>/bin/gentle-shell`
+/// on macOS and Linux, else the script a package manager's shim starts
+/// ([`shim_script`]): npm's, pnpm's or yarn's `gentle-shell.cmd` on Windows,
+/// pnpm's `gentle-shell` everywhere. Links are followed to the end, so a pnpm
+/// global install lands in its store (`…/links/@/gentle-pi/<v>/<hash>/
+/// node_modules/gentle-pi/bin/gentle-shell.mjs`). `None` when the launcher
+/// is neither.
+pub(crate) fn launcher_script(launcher: &Path) -> Option<PathBuf> {
+    let real = dunce::canonicalize(launcher).ok()?;
+    if is_node_script(&real.to_string_lossy()) {
+        return Some(real);
+    }
+    let shim = std::fs::read_to_string(&real).ok()?;
+    dunce::canonicalize(shim_script(&shim, real.parent()?)?).ok()
+}
+
+/// `path` names a Node script (`.mjs`, `.cjs`, `.js`), whatever its separators.
+fn is_node_script(path: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, ext)| {
+        ["mjs", "cjs", "js"]
+            .iter()
+            .any(|js| ext.eq_ignore_ascii_case(js))
+    })
+}
+
+/// The script a package manager's shim for a Node bin starts, from the shim's
+/// text and the folder it is in (`@zkochan/cmd-shim`, which pnpm and yarn
+/// use, and npm's `cmd-shim`):
+/// - the POSIX shim pnpm writes records it: `# cmd-shim-target=<absolute path>`;
+/// - the `.cmd`, `.ps1` and older POSIX shims quote it relative to their own
+///   folder: `"%~dp0\<path>"` (pnpm, which doubles `%` since 11, and yarn),
+///   `"%dp0%\<path>"` (npm), `"$basedir/<path>"`, `"$basedir_win/<path>"`,
+///   or absolute when it is on another drive.
+fn shim_script(text: &str, dir: &Path) -> Option<PathBuf> {
+    if let Some(target) = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# cmd-shim-target="))
+    {
+        return Some(PathBuf::from(target.trim()));
+    }
+    text.lines()
+        .flat_map(|line| line.split('"').skip(1).step_by(2))
+        .filter(|quoted| is_node_script(quoted))
+        .find_map(|quoted| {
+            if let Some(path) = quoted.strip_prefix("%~dp0") {
+                return Some(join_relative(dir, &path.replace("%%", "%")));
+            }
+            let relative = ["%dp0%", "$basedir_win", "$basedir"]
+                .iter()
+                .find_map(|base| quoted.strip_prefix(base));
+            match relative {
+                Some(path) => Some(join_relative(dir, path)),
+                None => Path::new(quoted)
+                    .is_absolute()
+                    .then(|| PathBuf::from(quoted)),
+            }
+        })
+}
+
+/// `dir` joined with `relative`, a path with `\` or `/` separators.
+fn join_relative(dir: &Path, relative: &str) -> PathBuf {
+    relative
+        .split(['\\', '/'])
+        .filter(|part| !part.is_empty() && *part != ".")
+        .fold(dir.to_path_buf(), |path, part| path.join(part))
+}
+
 /// Launcher options from `GENTLE_SHELL_ARGS`.
 pub(crate) fn extra_args() -> Vec<String> {
     std::env::var("GENTLE_SHELL_ARGS")

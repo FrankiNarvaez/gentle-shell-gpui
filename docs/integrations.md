@@ -46,7 +46,7 @@ If nothing is found, the error asks for `npm i -g gentle-pi` or `GENTLE_SHELL_BI
 | `env` | `GENTLE_SHELL_INTERACTIVE_HOST=1` (enables `ask_user_question` dialogs and live helper activity) and `PATH` = combined PATH. Managed install: also its own environment (see below). |
 | `cwd` | The tab's folder |
 | `launcher` | The `gentle-shell` command a person runs: what Settings shows and messages name. `program`, except for the managed install (its `bin\gentle-shell.cmd`). |
-| `bundled` | `BundledInstall { node, package, managed }` of a self-contained or managed install; `None` for npm/pnpm. `managed_by_gentle_ai()` reads `managed`. |
+| `bundled` | `BundledInstall { node, package, managed }` of a self-contained or managed install; `None` for npm/pnpm/yarn (see [The `gentle-pi` and Pi packages](#the-gentle-pi-and-pi-packages)). `managed_by_gentle_ai()` reads `managed`. |
 
 Launcher subcommands go through `spec.launcher_command(sub)`: the same program, the arguments before `--mode`, then `sub`, in `cwd` with `env`. Used by `--version` (`run_version`), `upgrade` (`settings/upgrade.rs`, `setup/gentle.rs`), `install`/`remove` (`setup::run_gentle_shell`), `setup` (`setup/gentle.rs`), `mcp` (`setup/maestro.rs`) and the commit message (`files/changes.rs`, `--print`).
 
@@ -70,7 +70,7 @@ Launcher subcommands go through `spec.launcher_command(sub)`: the same program, 
 └── config/gentle-ai              # config folder (see Homes)
 ```
 
-`resolve_backend` stores it in `spec.bundled`, which `pi_package` (to find `@earendil-works/pi-coding-agent`), `profiles::gentle_pi_root`, `version_output` and `LoginHelper::spawn` (to use the install's own Node) read.
+`resolve_backend` stores it in `spec.bundled`, which `gentle_pi_root` and `pi_package` (see [The `gentle-pi` and Pi packages](#the-gentle-pi-and-pi-packages)), `version_output` and `LoginHelper::spawn` (to use the install's own Node) read.
 
 ### gentle-ai's managed install (Windows)
 
@@ -139,6 +139,20 @@ Otherwise, `agent` (the Pi directory: `auth.json`, `models.json`, `settings.json
 `adopt_standalone_config()` is called once in `main.rs` before the window opens. The 4.7 install no longer reads `~/.gentle-shell/gentle-ai`; this function copies the missing files into the new folder (recursively, skipping `.lock` and `.tmp`, never overwriting) and leaves the `.adopted-standalone-config` marker so it does not run again. The old folder is left untouched.
 
 Any feature that reads Gentle Shell configuration starts from `pi_rpc::resolve_homes()`; paths are never rebuilt by hand.
+
+### The `gentle-pi` and Pi packages
+
+`gentle_pi_root(spec)` is the `gentle-pi` package a launch runs; the profiles screen (built-in agents), the themes (`themes/`) and the Companion setup check (`.gentle-ai/v<pin>`) read it. A self-contained or managed install names it (`spec.bundled.package`). Otherwise `launch::launcher_script(spec.launcher)` finds the script the launcher runs, by its real path (links and junctions followed to the end):
+
+| Launcher | How |
+| --- | --- |
+| npm or yarn on macOS and Linux: `<prefix>/bin/gentle-shell`, a link to `gentle-pi/bin/gentle-shell.mjs` | The launcher's real path is the script. |
+| pnpm's POSIX shim (every OS) | Its `# cmd-shim-target=<absolute path>` line. |
+| `.cmd` shims on Windows: pnpm and yarn (`@zkochan/cmd-shim`, pnpm 11's own copy), npm (`cmd-shim`); `.ps1` and older POSIX shims | The quoted Node script (`.mjs`, `.cjs`, `.js`) relative to the shim's folder: `"%~dp0\<path>"` (pnpm 11 writes `%` as `%%`), `"%dp0%\<path>"`, `"$basedir/<path>"`, `"$basedir_win/<path>"`, or absolute. |
+
+`shim_script` is the pure parser of those formats. The package is the nearest folder above the script with a `package.json`, when its `name` is `gentle-pi`. A pnpm global install (the web installer's `main` channel: `pnpm add -g gentle-pi-<v>.tgz`) lands in pnpm's store, `…\store\v11\links\@\gentle-pi\<v>\<hash>\node_modules\gentle-pi`, with its dependencies as siblings in that `node_modules`.
+
+`pi_package(spec)` finds `@earendil-works/pi-coding-agent` (with `dist/index.js`) from that root as Node does (`pi_candidates`): `node_modules` in the package and in every folder above it that is not itself a `node_modules`. That covers nested (npm), hoisted (npm, the self-contained and managed installs) and pnpm's siblings. Its error names the launcher and, depending on where the lookup stopped, the script it runs or every folder tried; Providers shows it.
 
 ## RPC protocol
 

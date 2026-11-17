@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::file_cache::Stamp;
-use crate::launch::{LaunchSpec, extra_args};
+use crate::launch::{LaunchSpec, extra_args, launcher_script};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Homes {
@@ -222,45 +222,95 @@ fn read_config_mode() -> Option<ConfigMode> {
     }
 }
 
-/// The `@earendil-works/pi-coding-agent` package next to the resolved
-/// launcher (`<gentle-pi>/bin/gentle-shell.mjs`), nested or hoisted.
-pub fn pi_package(spec: &LaunchSpec) -> Option<PathBuf> {
-    let launcher = dunce::canonicalize(&spec.program).unwrap_or_else(|_| spec.program.clone());
-    let mut roots: Vec<PathBuf> = Vec::new();
-    // A self-contained or managed install names its package.
+/// The `gentle-pi` package a launch runs: a self-contained or managed
+/// install's, else the one the script its launcher runs belongs to
+/// ([`launcher_script`]), through any link or package manager shim (npm,
+/// pnpm, yarn).
+pub fn gentle_pi_root(spec: &LaunchSpec) -> Option<PathBuf> {
+    locate(spec).root
+}
+
+/// How far [`gentle_pi_root`] got: the script the launcher runs (`None` for
+/// a self-contained or managed install, which names its package) and the
+/// package.
+struct Located {
+    script: Option<PathBuf>,
+    root: Option<PathBuf>,
+}
+
+fn locate(spec: &LaunchSpec) -> Located {
     if let Some(bundled) = &spec.bundled {
-        roots.push(bundled.package.clone());
+        return Located {
+            script: None,
+            root: Some(bundled.package.clone()),
+        };
     }
-    // Unix: the npm bin is a symlink into <gentle-pi>/bin/.
-    if let Some(root) = launcher.parent().and_then(Path::parent) {
-        roots.push(root.to_path_buf());
-    }
-    // Windows: `<prefix>/gentle-shell.cmd` beside `<prefix>/node_modules/gentle-pi`.
-    if let Some(dir) = spec.program.parent() {
-        roots.push(dir.join("node_modules").join("gentle-pi"));
-        roots.push(
-            dir.join("..")
-                .join("lib")
-                .join("node_modules")
-                .join("gentle-pi"),
-        );
-    }
-    for root in roots {
-        let nested = root
-            .join("node_modules")
-            .join("@earendil-works")
-            .join("pi-coding-agent");
-        let hoisted = root
-            .join("..")
-            .join("@earendil-works")
-            .join("pi-coding-agent");
-        for candidate in [nested, hoisted] {
-            if candidate.join("dist").join("index.js").is_file() {
-                return Some(candidate);
-            }
+    let script = launcher_script(&spec.launcher);
+    let root = script.as_deref().and_then(gentle_pi_package_of);
+    Located { script, root }
+}
+
+/// The package `script` belongs to, the nearest folder above it with a
+/// `package.json` (as Node scopes it), when that package is `gentle-pi`.
+fn gentle_pi_package_of(script: &Path) -> Option<PathBuf> {
+    let root = script
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join("package.json").is_file())?;
+    let manifest = std::fs::read(root.join("package.json")).ok()?;
+    let manifest: serde_json::Value = serde_json::from_slice(&manifest).ok()?;
+    (manifest.get("name").and_then(serde_json::Value::as_str) == Some("gentle-pi"))
+        .then(|| root.to_path_buf())
+}
+
+/// Where Node looks for `@earendil-works/pi-coding-agent` from `gentle-pi`:
+/// `node_modules` in the package and in each folder above it that is not a
+/// `node_modules` itself. That covers nested (npm), hoisted (npm, the
+/// self-contained install) and pnpm's store, where a package's dependencies
+/// are its siblings (`links/@/gentle-pi/<v>/<hash>/node_modules/`).
+fn pi_candidates(root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
+    root.ancestors()
+        .filter(|dir| dir.file_name().is_none_or(|name| name != "node_modules"))
+        .map(|dir| {
+            dir.join("node_modules")
+                .join("@earendil-works")
+                .join("pi-coding-agent")
+        })
+}
+
+/// The `@earendil-works/pi-coding-agent` package `gentle-pi` runs
+/// ([`gentle_pi_root`], [`pi_candidates`]). The error names the launcher and
+/// what was tried.
+pub fn pi_package(spec: &LaunchSpec) -> anyhow::Result<PathBuf> {
+    let launcher = spec.launcher.display();
+    let located = locate(spec);
+    let Some(root) = located.root else {
+        return Err(match located.script {
+            Some(script) => anyhow::anyhow!(
+                "could not locate the Pi package: the launcher {launcher} runs {}, \
+                 which is not in a gentle-pi package",
+                script.display()
+            ),
+            None => anyhow::anyhow!(
+                "could not locate the Pi package: the launcher {launcher} is neither a \
+                 link to gentle-pi's bin/gentle-shell.mjs nor an npm, pnpm or yarn shim \
+                 that runs it"
+            ),
+        });
+    };
+    let mut tried = String::new();
+    for candidate in pi_candidates(&root) {
+        if candidate.join("dist").join("index.js").is_file() {
+            return Ok(candidate);
         }
+        tried.push_str("\n  ");
+        tried.push_str(&candidate.to_string_lossy());
     }
-    None
+    Err(anyhow::anyhow!(
+        "could not locate the Pi package (@earendil-works/pi-coding-agent) for the \
+         launcher {launcher}, gentle-pi at {}; looked in:{tried}",
+        root.display()
+    ))
 }
 
 #[cfg(test)]
@@ -429,8 +479,8 @@ mod tests {
             let pi = prefix
                 .join(version)
                 .join("node_modules/@earendil-works/pi-coding-agent");
-            let found = pi_package(&spec).map(|p| dunce::canonicalize(p).unwrap());
-            assert_eq!(found, Some(dunce::canonicalize(&pi).unwrap()));
+            assert_eq!(found_pi(&spec), dunce::canonicalize(&pi).unwrap());
+            assert_eq!(gentle_pi_root(&spec), spec.bundled.map(|b| b.package));
             std::fs::remove_dir_all(&prefix).unwrap();
         }
         // An npm launcher (no generated mark) is not a self-contained install.
@@ -438,5 +488,245 @@ mod tests {
         std::fs::write(&npm, "#!/usr/bin/env node\n").unwrap();
         assert!(crate::launch::bundled_install(&npm).is_none());
         std::fs::remove_file(&npm).unwrap();
+    }
+
+    /// `@earendil-works/pi-coding-agent` for `spec`, by its real path.
+    fn found_pi(spec: &LaunchSpec) -> PathBuf {
+        dunce::canonicalize(pi_package(spec).unwrap()).unwrap()
+    }
+
+    /// A launch through `launcher` found on the PATH (npm, pnpm, yarn).
+    fn path_spec(launcher: PathBuf) -> LaunchSpec {
+        LaunchSpec {
+            program: launcher.clone(),
+            launcher,
+            args: Vec::new(),
+            cwd: std::env::temp_dir(),
+            env: Vec::new(),
+            bundled: None,
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pi-rpc-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(path: &Path, text: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// A `gentle-pi` package at `dir`: its manifest and launcher script.
+    fn gentle_pi_at(dir: &Path) {
+        write(
+            &dir.join("package.json"),
+            r#"{"name":"gentle-pi","bin":{"gentle-shell":"bin/gentle-shell.mjs"}}"#,
+        );
+        write(
+            &dir.join("bin").join("gentle-shell.mjs"),
+            "#!/usr/bin/env node\n",
+        );
+    }
+
+    /// A built `@earendil-works/pi-coding-agent` at `dir`.
+    fn pi_at(dir: &Path) {
+        write(&dir.join("dist").join("index.js"), "");
+    }
+
+    /// Issue #74: the web installer's main channel runs `pnpm add -g`. On
+    /// Windows the PATH has pnpm's shims (`.CMD`, `.ps1` and the POSIX one,
+    /// as pnpm 11 writes them), which start `gentle-shell.mjs` in pnpm's
+    /// store, where Pi is a sibling of `gentle-pi`.
+    #[test]
+    fn pnpm_global_shims_run_pi_from_the_store() {
+        let root = scratch("pnpm-shims");
+        let pnpm = root.join("pnpm");
+        let slot =
+            r"store\v11\links\@\gentle-pi\4.8.0-main.3dc902975591\b5d0c1b6e2f1a3d4\node_modules";
+        let modules = slot
+            .split('\\')
+            .fold(pnpm.clone(), |path, part| path.join(part));
+        gentle_pi_at(&modules.join("gentle-pi"));
+        let pi = modules.join("@earendil-works").join("pi-coding-agent");
+        pi_at(&pi);
+        let script = format!(r"..\{slot}\gentle-pi\bin\gentle-shell.mjs");
+        // `@pnpm/cmd-shim` `generateCmdShim` for a `node` script.
+        let cmd = format!(
+            "@SETLOCAL\r\n\
+             @IF NOT DEFINED NODE_PATH (\r\n  @SET \"NODE_PATH=C:\\Users\\Ana\\AppData\\Local\\pnpm\\{slot}\"\r\n\
+             ) ELSE (\r\n  @SET \"NODE_PATH=C:\\Users\\Ana\\AppData\\Local\\pnpm\\{slot};%NODE_PATH%\"\r\n)\r\n\
+             @IF EXIST \"%~dp0\\node.exe\" (\r\n  \"%~dp0\\node.exe\"  \"%~dp0\\{script}\" %*\r\n\
+             ) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  \"%~dp0\\{script}\" %*\r\n)\r\n"
+        );
+        // `generatePwshShim`.
+        let pwsh = format!(
+            "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n\
+             $exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {{\n  $exe=\".exe\"\n}}\n\
+             $ret=0\nif (Test-Path \"$basedir/node$exe\") {{\n  & \"$basedir/node$exe\"  \"$basedir/{0}\" $args\n\
+             }} else {{\n  & \"node$exe\"  \"$basedir/{0}\" $args\n}}\nexit $ret\n",
+            script.replace('\\', "/")
+        );
+        // `generateShShim`: the target quoted relative to the shim, and recorded.
+        let target = modules
+            .join("gentle-pi")
+            .join("bin")
+            .join("gentle-shell.mjs");
+        let sh = format!(
+            "#!/bin/sh\nbasedir_abs=$(CDPATH= cd -P -- \"$basedir\" && pwd -P) || exit $?\n\
+             basedir=\"$basedir_abs\"\n\
+             if [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir_abs\"/'{0}' \"$@\"\n\
+             else\n  exec node  \"$basedir_abs\"/'{0}' \"$@\"\nfi\n# cmd-shim-target={1}\n",
+            script.replace('\\', "/"),
+            target.to_string_lossy().replace('\\', "/")
+        );
+        let bin = pnpm.join("bin");
+        for (name, text) in [
+            ("gentle-shell.CMD", cmd),
+            ("gentle-shell.ps1", pwsh),
+            ("gentle-shell", sh),
+        ] {
+            write(&bin.join(name), &text);
+            let spec = path_spec(bin.join(name));
+            assert_eq!(found_pi(&spec), dunce::canonicalize(&pi).unwrap(), "{name}");
+            assert_eq!(
+                gentle_pi_root(&spec),
+                Some(dunce::canonicalize(modules.join("gentle-pi")).unwrap()),
+                "{name}"
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// npm on Windows: `<prefix>\gentle-shell.cmd` (npm's `cmd-shim`) beside
+    /// `<prefix>\node_modules\gentle-pi`, Pi nested in it.
+    #[test]
+    fn npm_global_shim_runs_its_nested_pi() {
+        let prefix = scratch("npm-shim");
+        let package = prefix.join("node_modules").join("gentle-pi");
+        gentle_pi_at(&package);
+        let pi = package
+            .join("node_modules")
+            .join("@earendil-works")
+            .join("pi-coding-agent");
+        pi_at(&pi);
+        let cmd = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\n\
+                   SETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST \"%dp0%\\node.exe\" (\r\n  \
+                   SET \"_prog=%dp0%\\node.exe\"\r\n) ELSE (\r\n  SET \"_prog=node\"\r\n  \
+                   SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\n\
+                   endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \
+                   \"%dp0%\\node_modules\\gentle-pi\\bin\\gentle-shell.mjs\" %*\r\n";
+        write(&prefix.join("gentle-shell.cmd"), cmd);
+        let spec = path_spec(prefix.join("gentle-shell.cmd"));
+        assert_eq!(found_pi(&spec), dunce::canonicalize(&pi).unwrap());
+        std::fs::remove_dir_all(&prefix).unwrap();
+    }
+
+    /// macOS and Linux: npm links `<prefix>/bin/gentle-shell` to the script;
+    /// pnpm's global folder links `gentle-pi` into its store, whose Pi is a
+    /// link to Pi's own store entry.
+    #[cfg(unix)]
+    #[test]
+    fn links_lead_into_the_npm_prefix_and_the_pnpm_store() {
+        use std::os::unix::fs::symlink;
+        let root = scratch("links");
+
+        let lib = root.join("npm").join("lib").join("node_modules");
+        gentle_pi_at(&lib.join("gentle-pi"));
+        let npm_pi = lib.join("@earendil-works").join("pi-coding-agent");
+        pi_at(&npm_pi);
+        let npm_bin = root.join("npm").join("bin");
+        std::fs::create_dir_all(&npm_bin).unwrap();
+        symlink(
+            "../lib/node_modules/gentle-pi/bin/gentle-shell.mjs",
+            npm_bin.join("gentle-shell"),
+        )
+        .unwrap();
+        let spec = path_spec(npm_bin.join("gentle-shell"));
+        assert_eq!(found_pi(&spec), dunce::canonicalize(&npm_pi).unwrap());
+
+        let links = root.join("pnpm").join("store").join("v11").join("links");
+        let modules = links.join("@/gentle-pi/4.8.0/b5d0/node_modules");
+        gentle_pi_at(&modules.join("gentle-pi"));
+        let pi = links.join("@earendil-works/pi-coding-agent/1.5.2/9e1f/node_modules/@earendil-works/pi-coding-agent");
+        pi_at(&pi);
+        std::fs::create_dir_all(modules.join("@earendil-works")).unwrap();
+        symlink(&pi, modules.join("@earendil-works").join("pi-coding-agent")).unwrap();
+        let global = root.join("pnpm").join("global/v11/7c3a/node_modules");
+        std::fs::create_dir_all(&global).unwrap();
+        symlink(modules.join("gentle-pi"), global.join("gentle-pi")).unwrap();
+        let target = global.join("gentle-pi/bin/gentle-shell.mjs");
+        write(
+            &root.join("pnpm").join("gentle-shell"),
+            &format!(
+                "#!/bin/sh\nexec node  \"$basedir_abs\"/'global/v11/7c3a/node_modules/gentle-pi/bin/gentle-shell.mjs' \"$@\"\n\
+                 # cmd-shim-target={}\n",
+                target.display()
+            ),
+        );
+        // The shim itself reached through a link, as `~/.local/bin` might.
+        symlink(
+            root.join("pnpm").join("gentle-shell"),
+            root.join("gentle-shell"),
+        )
+        .unwrap();
+        for launcher in [
+            root.join("pnpm").join("gentle-shell"),
+            root.join("gentle-shell"),
+        ] {
+            let spec = path_spec(launcher);
+            assert_eq!(found_pi(&spec), dunce::canonicalize(&pi).unwrap());
+            assert_eq!(
+                gentle_pi_root(&spec),
+                Some(dunce::canonicalize(modules.join("gentle-pi")).unwrap())
+            );
+        }
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_missing_pi_names_the_launcher_and_what_was_tried() {
+        let root = scratch("missing");
+        // Not a link nor a shim.
+        let other = root.join("gentle-shell.cmd");
+        write(&other, "@echo off\r\necho hi\r\n");
+        let error = pi_package(&path_spec(other.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&other.display().to_string()), "{error}");
+        assert!(error.contains("nor an npm, pnpm or yarn shim"), "{error}");
+        // A shim into another package.
+        let elsewhere = root.join("other");
+        write(&elsewhere.join("package.json"), r#"{"name":"other"}"#);
+        write(&elsewhere.join("cli.js"), "");
+        let shim = root.join("other.cmd");
+        write(&shim, "@node \"%~dp0\\other\\cli.js\" %*\r\n");
+        let error = pi_package(&path_spec(shim)).unwrap_err().to_string();
+        assert!(error.contains("not in a gentle-pi package"), "{error}");
+        // gentle-pi without Pi: every folder Node would look in is listed.
+        let package = root.join("node_modules").join("gentle-pi");
+        gentle_pi_at(&package);
+        let shim = root.join("gentle-shell.ps1");
+        write(
+            &shim,
+            "& \"node$exe\"  \"$basedir/node_modules/gentle-pi/bin/gentle-shell.mjs\" $args\n",
+        );
+        let error = pi_package(&path_spec(shim.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(&shim.display().to_string()), "{error}");
+        let real = dunce::canonicalize(&root).unwrap();
+        for tried in [
+            "node_modules/gentle-pi/node_modules/@earendil-works/pi-coding-agent",
+            "node_modules/@earendil-works/pi-coding-agent",
+        ] {
+            let tried = tried
+                .split('/')
+                .fold(real.clone(), |path, part| path.join(part));
+            assert!(error.contains(&tried.display().to_string()), "{error}");
+        }
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

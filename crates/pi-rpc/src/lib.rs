@@ -12,7 +12,9 @@ mod launch;
 mod login;
 mod record;
 
-pub use home::{Homes, adopt_standalone_config, launcher_config_path, pi_package, resolve_homes};
+pub use home::{
+    Homes, adopt_standalone_config, gentle_pi_root, launcher_config_path, pi_package, resolve_homes,
+};
 pub use login::{AuthEvent, AuthPrompt, LoginHelper, LoginMessage, PromptOption, ProviderInfo};
 
 pub use launch::{

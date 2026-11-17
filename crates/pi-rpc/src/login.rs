@@ -134,8 +134,7 @@ impl LoginHelper {
         spec: &LaunchSpec,
         homes: &Homes,
     ) -> Result<(Self, async_channel::Receiver<LoginMessage>)> {
-        let package =
-            pi_package(spec).context("could not locate the Pi package next to gentle-shell")?;
+        let package = pi_package(spec)?;
         // A self-contained or managed install runs its own Node; the PATH may have none.
         let node = match &spec.bundled {
             Some(bundled) => bundled.node.clone(),
