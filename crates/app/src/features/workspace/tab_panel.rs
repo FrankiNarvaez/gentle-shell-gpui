@@ -17,12 +17,14 @@ impl Workspace {
                 cx.emit(WorkspaceEvent::SidebarToggled(true));
             }
         }
+        cx.emit(WorkspaceEvent::FilesVisibilityChanged(self.files_sidebar_visible()));
         self.schedule_save(cx);
         cx.notify();
     }
 
     fn select_sidebar_section(&mut self, section: SidebarSection, cx: &mut Context<Self>) {
         self.sidebar_section = section;
+        cx.emit(WorkspaceEvent::FilesVisibilityChanged(self.files_sidebar_visible()));
         cx.notify();
     }
 
