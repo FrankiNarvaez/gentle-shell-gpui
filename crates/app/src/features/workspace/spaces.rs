@@ -46,7 +46,12 @@ impl Workspace {
                     .or_else(|| tree.leaves().first().copied())
                     .unwrap_or_default();
                 let id = self.alloc_id();
-                self.spaces[index].tabs.push(Tab { id, tree, focused });
+                self.spaces[index].tabs.push(Tab {
+                    id,
+                    tree,
+                    focused,
+                    pinned: saved.pinned,
+                });
             }
             let space = &mut self.spaces[index];
             space.active = active.min(space.tabs.len().saturating_sub(1));
