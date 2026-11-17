@@ -59,6 +59,9 @@ pub struct SettingsView {
     cwd: PathBuf,
     page: SettingsPage,
     body_scroll: ScrollHandle,
+    settings_search: Entity<InputState>,
+    _settings_search: Subscription,
+    compact_categories_open: bool,
     snapshot: Option<Snapshot>,
     package_input: Entity<InputState>,
     running: Option<String>,
@@ -119,6 +122,27 @@ impl SettingsView {
                 }
             },
         );
+        let settings_search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Find a setting…")
+        });
+        let settings_search_subscription =
+            cx.subscribe(&settings_search, |this, input, event: &InputEvent, cx| {
+                match event {
+                    InputEvent::Change => cx.notify(),
+                    InputEvent::PressEnter { .. } => {
+                        let query = input.read(cx).value().to_string();
+                        if !query.trim().is_empty() {
+                            if let Some(page) = SettingsPage::ALL
+                                .into_iter()
+                                .find(|page| page.matches_query(&query))
+                            {
+                                this.navigate_to(page, cx);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            });
         let percent = (cx.global::<themes::Themes>().transparency * 100.).round();
         let transparency = cx.new(|_| {
             SliderState::new()
@@ -143,6 +167,9 @@ impl SettingsView {
             cwd,
             page: SettingsPage::default(),
             body_scroll: ScrollHandle::new(),
+            settings_search,
+            _settings_search: settings_search_subscription,
+            compact_categories_open: false,
             snapshot: None,
             package_input,
             running: None,
@@ -177,6 +204,16 @@ impl SettingsView {
     /// gentle-shell can start, as of the Setup & requirements checklist.
     pub fn setup_usable(&self, cx: &App) -> bool {
         self.setup.read(cx).usable()
+    }
+
+    /// Reuse a single navigation path for the sidebar, compact picker and search.
+    pub(super) fn navigate_to(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
+        self.compact_categories_open = false;
+        if self.page != page {
+            self.page = page;
+            self.body_scroll.scroll_to_item(0);
+        }
+        cx.notify();
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -216,7 +253,10 @@ impl SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Keep settings usable when there is not enough horizontal space
+        // for both a category rail and the existing settings controls.
+        let compact = window.viewport_size().width < rems(820. / 16.).to_pixels(window.rem_size());
         let page = self.page;
         let body: AnyElement = match &self.snapshot {
             Some(snapshot) => self.render_page(page, snapshot, cx),
@@ -280,12 +320,22 @@ impl Render for SettingsView {
                     h_flex()
                         .flex_1()
                         .min_h_0()
-                        .child(navigation::sidebar(page, cx))
+                        .when(!compact, |container| {
+                            container.child(navigation::sidebar(page, &self.settings_search, cx))
+                        })
                         .child(
                             v_flex()
                                 .flex_1()
                                 .min_w_0()
                                 .min_h_0()
+                                .when(compact, |content| {
+                                    content.child(navigation::compact(
+                                        page,
+                                        &self.settings_search,
+                                        self.compact_categories_open,
+                                        cx,
+                                    ))
+                                })
                                 .child(
                                     v_flex()
                                         .px_4()
