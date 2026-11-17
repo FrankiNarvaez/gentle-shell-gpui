@@ -2,6 +2,7 @@
 //! panes and persisted workspaces; no second tab model is created.
 
 use super::*;
+use gpui_kit::component::Selectable as _;
 
 impl Workspace {
     pub(super) fn toggle_tab_layout(&mut self, cx: &mut Context<Self>) {
