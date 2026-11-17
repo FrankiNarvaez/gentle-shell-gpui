@@ -294,6 +294,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 		promptSnippet: "Show, update or close an interactive architecture/data-flow diagram the user can edit in the app",
 		promptGuidelines: [
 			"Use gentle_ui to show architecture, data flow, dependencies or plans with many interacting parts as a diagram; don't use gentle_ui for simple lists or linear steps.",
+			"The user is in the Gentle Shell desktop app, where a gentle_ui diagram appears right in the conversation and they can move, connect and correct it. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
 			"To change a diagram already shown, call gentle_ui with action update and a small patch instead of a new show; ids are stable slugs (api, orders-db) reused across updates.",
 			"In gentle_ui specs omit x/y and let auto-layout place nodes; keep labels short and put details in description or tech.",
 			`The user's edits to a gentle_ui diagram arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them.`,
