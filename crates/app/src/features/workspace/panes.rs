@@ -80,7 +80,9 @@ impl Workspace {
     pub(super) fn pane_sizes(&self, window: &Window) -> Vec<(PaneId, f32, f32)> {
         let viewport = window.viewport_size();
         let rem = |n: f32| f32::from(rems(n / 16.).to_pixels(window.rem_size()));
-        let sidebar = if self.sidebar.is_some() && self.sidebar_visible {
+        let sidebar = if self.sidebar_visible
+            && (self.sidebar.is_some() || self.tab_layout == TabLayout::Vertical)
+        {
             rem(SIDEBAR_WIDTH) + 6.
         } else {
             0.
