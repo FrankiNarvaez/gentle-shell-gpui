@@ -70,6 +70,7 @@ impl Workspace {
             id,
             tree: PaneTree::Leaf(pane),
             focused: pane,
+            pinned: false,
         });
         let index = space.tabs.len() - 1;
         self.activate(index, window, cx);
