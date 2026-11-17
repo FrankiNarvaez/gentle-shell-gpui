@@ -100,7 +100,7 @@ impl SettingsPage {
         match self {
             Self::General => "home setup requirements agent directory configuration launcher path",
             Self::Appearance => "theme color dark light import share transparency window opacity interface zoom size fonts",
-            Self::Agents => "background subagents gentle ai hydration water reminders permissions",
+            Self::Agents => "background subagents gentle ai hydration water reminders permissions generative ui proactive when asked",
             Self::Models => "model provider thinking effort profile default scoped",
             Self::Devices => "devices device discovery phone android emulator switches",
             Self::Integrations => "claude bridge maestro music gentle stream external tools integrations",

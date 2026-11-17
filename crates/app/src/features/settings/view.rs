@@ -71,8 +71,8 @@ impl Render for SettingsView {
                                 .ghost()
                                 .xsmall()
                                 .icon(Icon::new(IconName::RefreshCw))
-                                .tooltip("Reload")
-                                .on_click(cx.listener(|this, _, _, cx| this.reload(cx))),
+                                .tooltip("Reload and check for updates")
+                                .on_click(cx.listener(|this, _, _, cx| this.reload_with(true, cx))),
                         )
                         .child(
                             Button::new("settings-close")

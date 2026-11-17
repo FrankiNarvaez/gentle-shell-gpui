@@ -306,6 +306,9 @@ impl SessionView {
         // one starts in Normal.
         let resume = self.backend.pending_session.take();
         let launched = resume.clone();
+        // Agent UI: the extension loads in the app's mode (a change made
+        // while it starts is sent once it is ready).
+        let genui_mode = crate::features::genui::mode::mode(cx);
         self._io = cx.spawn_in(window, async move |this, cx| {
             let spawned = cx
                 .background_executor()
@@ -315,6 +318,8 @@ impl SessionView {
                         spec.args.push("--session".into());
                         spec.args.push(path.display().to_string());
                     }
+                    spec.env
+                        .push(crate::features::genui::mode::launch_env(genui_mode));
                     let version = pi_rpc::backend_version(&spec);
                     let (process, rx) = PiProcess::spawn(&spec)?;
                     anyhow::Ok((process, rx, version))
@@ -325,6 +330,8 @@ impl SessionView {
                     let ok = this.update(cx, |this, cx| {
                         this.backend.status = BackendStatus::Ready(process);
                         this.backend.version = version;
+                        this.genui_mode = genui_mode;
+                        this.sync_genui_mode(cx);
                         if let Some(path) = launched {
                             this.session_file = Some(path);
                         }

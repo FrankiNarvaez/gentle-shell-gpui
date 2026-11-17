@@ -47,15 +47,20 @@ impl NativeView {
         url: &str,
         background: (u8, u8, u8, u8),
         script: Option<&str>,
+        sandbox: Option<&super::Sandbox>,
     ) -> Result<Self, String> {
-        let webview = wry::WebViewBuilder::new()
+        let builder = wry::WebViewBuilder::new()
             .with_url(url)
             // Runs before the page's own scripts (a device panel names its device).
             .with_initialization_script(script.unwrap_or_default())
             .with_background_color(background)
-            .with_visible(false)
-            .build_as_child(&host)
-            .map_err(|error| format!("The browser could not start: {error}"))?;
+            .with_visible(false);
+        let webview = match sandbox {
+            Some(sandbox) => super::isolate(builder, sandbox),
+            None => builder,
+        }
+        .build_as_child(&host)
+        .map_err(|error| format!("The browser could not start: {error}"))?;
         round_corners(&webview);
         Ok(Self {
             webview,
@@ -82,6 +87,17 @@ impl NativeView {
 
     pub(super) fn reload(&self) {
         let _ = self.webview.reload();
+    }
+
+    pub(super) fn evaluate(&self, script: &str) {
+        let _ = self.webview.evaluate_script(script);
+    }
+
+    /// Hide the view now; the next `place` shows it again.
+    pub(super) fn conceal(&mut self) {
+        let _ = self.webview.set_visible(false);
+        give_keyboard_to(self.host);
+        self.placed = None;
     }
 }
 

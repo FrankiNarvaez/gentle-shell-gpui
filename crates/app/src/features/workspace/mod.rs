@@ -244,6 +244,9 @@ pub struct Workspace {
     panes: HashMap<PaneId, Pane>,
     next_id: usize,
     overlay: Option<(Overlay, Subscription)>,
+    /// Agent panes last told their web views may show (see
+    /// `sync_web_views`).
+    web_shown: std::collections::HashSet<PaneId>,
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     save_task: Option<Task<()>>,
@@ -357,6 +360,7 @@ impl Workspace {
             panes: HashMap::new(),
             next_id: 0,
             overlay: None,
+            web_shown: Default::default(),
             sidebar: None,
             sidebar_visible: saved.sidebar,
             save_task: None,
@@ -496,6 +500,33 @@ impl Workspace {
         }
         if let Some(pane) = self.new_pane(PaneKind::File, path, None, None, window, cx) {
             self.place_preview(pane, window, cx);
+        }
+    }
+
+    /// [`Self::open_file`], then put its cursor at `line` (1-based).
+    pub fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_file(path.clone(), window, cx);
+        let Some(line) = line else { return };
+        let view = self
+            .panes
+            .iter()
+            .filter(|(_, pane)| pane.path.as_ref() == Some(&path))
+            .max_by_key(|(id, _)| **id)
+            .and_then(|(_, pane)| {
+                pane.item
+                    .view
+                    .clone()
+                    .downcast::<crate::features::files::FileView>()
+                    .ok()
+            });
+        if let Some(view) = view {
+            view.update(cx, |view, cx| view.go_to_line(line, window, cx));
         }
     }
 

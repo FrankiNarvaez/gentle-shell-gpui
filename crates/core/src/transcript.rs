@@ -248,10 +248,27 @@ impl Transcript {
             }
             "tool_execution_update" => {
                 let id = str_field(event, "toolCallId");
-                if let Some((ix, Item::Tool { output, .. })) = self.tool_mut(&id) {
+                if let Some((
+                    ix,
+                    Item::Tool {
+                        name,
+                        output,
+                        details,
+                        ..
+                    },
+                )) = self.tool_mut(&id)
+                {
                     let partial = content_text(&event["partialResult"]["content"]);
-                    if *output != partial {
-                        *output = partial;
+                    let mut changed = *output != partial;
+                    *output = partial;
+                    // A gentle_ui review waiting for the user's decisions
+                    // shows its surface while the call runs.
+                    let shown = &event["partialResult"]["details"];
+                    if name == crate::genui::TOOL && !shown.is_null() && *details != *shown {
+                        *details = shown.clone();
+                        changed = true;
+                    }
+                    if changed {
                         self.touch(ix);
                     }
                 }
@@ -762,6 +779,33 @@ mod tests {
             panic!()
         };
         assert_eq!(*status, ToolStatus::Running);
+    }
+
+    #[test]
+    fn a_waiting_gentle_ui_call_shows_its_partial_details() {
+        let mut t = Transcript::default();
+        let surface = json!({"id": "r", "version": 1, "kind": "review", "title": "Review", "spec": {"files": []}});
+        apply_all(
+            &mut t,
+            &[
+                json!({"type":"tool_execution_start","toolCallId":"a","toolName":"gentle_ui","args":{"action":"show"}}),
+                json!({"type":"tool_execution_start","toolCallId":"b","toolName":"bash","args":{"command":"ls"}}),
+                json!({"type":"tool_execution_update","toolCallId":"a","partialResult":{"content":[{"type":"text","text":"waiting"}],"details":surface}}),
+                json!({"type":"tool_execution_update","toolCallId":"b","partialResult":{"content":[],"details":{"x":1}}}),
+            ],
+        );
+        let Item::Tool {
+            status, details, ..
+        } = &t.items[0]
+        else {
+            panic!()
+        };
+        assert_eq!((*status, details), (ToolStatus::Running, &surface));
+        // Other tools keep their details for the end.
+        let Item::Tool { details, .. } = &t.items[1] else {
+            panic!()
+        };
+        assert!(details.is_null());
     }
 
     #[test]

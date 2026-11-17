@@ -29,7 +29,16 @@ fn backend_updates_section(
 ) -> Div {
     section(IconName::RefreshCw, "Gentle Shell and Engram")
         .child(row("Versions", snapshot.versions.join(" · ")))
-        .when_some(snapshot.update.clone(), |card, offer| {
+        .children(
+            view.shell_updates
+                .status
+                .iter()
+                .flat_map(|status| {
+                    crate::features::updates::status::status_notes(status, snapshot.managed)
+                })
+                .map(|(label, text)| row(label, text)),
+        )
+        .when_some(view.update_offer(snapshot), |card, offer| {
             card.child(view.render_update(offer, cx))
         })
         .children(view.shell_update.result.as_ref().map(upgrade::upgrade_result))

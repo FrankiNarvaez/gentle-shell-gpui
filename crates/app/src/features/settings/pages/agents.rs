@@ -14,4 +14,5 @@ pub(super) fn render(
         .gap_3()
         .child(view.hydration_section(cx))
         .child(view.gentle_ai_section(snapshot, cx))
+        .child(view.agent_ui_section(cx))
 }

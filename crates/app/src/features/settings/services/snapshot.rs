@@ -8,19 +8,20 @@ use std::path::Path;
 
 use super::super::snapshot::{Snapshot, probe, read_snapshot};
 
-pub(in crate::features::settings) fn load(cwd: &Path) -> Snapshot {
+pub(in crate::features::settings) fn load(cwd: &Path, shell_updates: bool) -> Snapshot {
     let homes = pi_rpc::resolve_homes();
     let mut snapshot = read_snapshot(&homes.agent, &homes.config, cwd);
     let spec = pi_rpc::resolve_backend(cwd).ok();
     if let Some(spec) = &spec {
         probe(spec, &mut snapshot);
     }
-    // Cached for a day in the launcher config, so reopening Configuration
-    // stays off the network. gentle-ai updates managed installs itself.
-    if !spec
+    // gentle-ai owns updates of installs it manages; a responding Shell
+    // supplies update status in preference to the launcher registry check.
+    snapshot.managed = spec
         .as_ref()
-        .is_some_and(pi_rpc::LaunchSpec::managed_by_gentle_ai)
-    {
+        .is_some_and(pi_rpc::LaunchSpec::managed_by_gentle_ai);
+    snapshot.skipped_release = crate::features::updates::skipped();
+    if !snapshot.managed && !shell_updates {
         snapshot.update =
             crate::features::updates::current_from_versions(&snapshot.versions)
                 .and_then(crate::features::updates::check);

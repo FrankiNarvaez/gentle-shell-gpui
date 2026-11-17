@@ -31,9 +31,19 @@ pub fn detect() -> Vec<Installed> {
 /// Open `folder` in `ide`, without waiting for it.
 pub fn open(ide: &Installed, folder: &Path) -> std::io::Result<()> {
     let (program, args) = ides::launch(Os::CURRENT, &ide.path, folder);
+    spawn(program, args, folder)
+}
+
+/// Open `file` in `ide`, at `line` where the editor can be told one.
+pub fn open_file(ide: &Installed, file: &Path, line: Option<u32>) -> std::io::Result<()> {
+    let (program, args) = ides::launch_file(Os::CURRENT, ide.name, &ide.path, file, line);
+    spawn(program, args, file.parent().unwrap_or(file))
+}
+
+fn spawn(program: PathBuf, args: Vec<std::ffi::OsString>, dir: &Path) -> std::io::Result<()> {
     let mut child = pi_rpc::command(program)
         .args(args)
-        .current_dir(folder)
+        .current_dir(dir)
         .env("PATH", pi_rpc::child_path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())

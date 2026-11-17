@@ -13,6 +13,8 @@
 //! while a screen covers the window. It stays up while the card is dragged:
 //! AppKit keeps sending the drag to the view the mouse went down in.
 
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
@@ -26,6 +28,82 @@ use crate::shared::ui;
 
 mod surface;
 pub use surface::WebSurface;
+
+/// The scheme the app serves its own isolated pages from (generative UI's
+/// HTML), so they get an origin of their own and nothing from the web.
+const SANDBOX_SCHEME: &str = "gentleui";
+
+/// Answers a [`Sandbox`]'s requests by path; `None` is a 404. Called on the
+/// web view's threads.
+pub type ServePage = dyn Fn(&str) -> Option<SandboxPage> + Send + Sync;
+
+/// A page the app serves itself, cut off from the network, the files and
+/// the app: every request outside its own scheme is refused unless its
+/// policy allows it, no popups, downloads or device permissions, no stored
+/// data, no devtools in release builds. Its scripts reach the app only
+/// through `window.ipc.postMessage`.
+#[derive(Clone)]
+pub struct Sandbox {
+    pub serve: Arc<ServePage>,
+    /// Every `window.ipc.postMessage` string, in order.
+    pub ipc: async_channel::Sender<String>,
+    /// Other URLs a frame may navigate to (the page's declared frame
+    /// origins).
+    pub frames: Rc<dyn Fn(&str) -> bool>,
+}
+
+/// One response of a [`Sandbox`]: an HTML document and its
+/// Content-Security-Policy.
+pub struct SandboxPage {
+    pub html: String,
+    pub csp: String,
+}
+
+/// `path` on the sandbox's origin. WebView2 maps custom schemes to
+/// `http://<scheme>.localhost`.
+pub fn sandbox_url(path: &str) -> String {
+    if cfg!(windows) {
+        format!("http://{SANDBOX_SCHEME}.localhost/{path}")
+    } else {
+        format!("{SANDBOX_SCHEME}://localhost/{path}")
+    }
+}
+
+/// `builder` locked down for `sandbox` (see [`Sandbox`]).
+fn isolate<'a>(builder: wry::WebViewBuilder<'a>, sandbox: &Sandbox) -> wry::WebViewBuilder<'a> {
+    let serve = sandbox.serve.clone();
+    let ipc = sandbox.ipc.clone();
+    let frames = sandbox.frames.clone();
+    let origin = sandbox_url("");
+    builder
+        .with_custom_protocol(SANDBOX_SCHEME.into(), move |_, request| {
+            let path = request.uri().path().trim_start_matches('/');
+            let response = wry::http::Response::builder().header("Cache-Control", "no-store");
+            match serve(path) {
+                Some(page) => response
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("Content-Security-Policy", page.csp)
+                    .header("X-Content-Type-Options", "nosniff")
+                    .body(page.html.into_bytes().into()),
+                None => response.status(404).body(Vec::new().into()),
+            }
+            .unwrap_or_else(|_| wry::http::Response::new(Vec::new().into()))
+        })
+        .with_ipc_handler(move |request| {
+            let _ = ipc.try_send(request.into_body());
+        })
+        .with_navigation_handler(move |url| {
+            url.starts_with(&origin)
+                || url == "about:blank"
+                || url == "about:srcdoc"
+                || frames(&url)
+        })
+        .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
+        .with_download_started_handler(|_, _| false)
+        .with_permission_handler(|_| wry::PermissionResponse::Deny)
+        .with_incognito(true)
+        .with_devtools(cfg!(debug_assertions))
+}
 
 /// A mouse-down reached GPUI rather than a page: give GPUI the keyboard
 /// back if a page had taken it (see `macos::give_keyboard_to`).

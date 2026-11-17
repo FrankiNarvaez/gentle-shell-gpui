@@ -10,6 +10,7 @@ use gpui_kit::*;
 
 use crate::{features::app_update, shared::themes};
 
+mod agent_ui;
 mod app;
 mod background;
 mod claude;
@@ -74,12 +75,22 @@ pub struct SettingsView {
     engram: upgrade::EngramUpdate,
     /// Theme: importing and sharing themes.
     theme_share: theme::ThemeShare,
+    /// Active agent tab, if available, for the new Desktop RPC update status.
+    session: Option<Entity<crate::features::session::SessionView>>,
+    _session_sub: Option<Subscription>,
+    /// RPC status and its in-flight ticket; separate from upgrade UI state.
+    shell_updates: upgrade::ShellUpdates,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
-    pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        cwd: PathBuf,
+        session: Option<Entity<crate::features::session::SessionView>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let package = packages::PackageUiState::new(window, cx);
         let settings_search = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Find a setting…")
@@ -145,6 +156,11 @@ impl SettingsView {
             devices: devices::Devices::default(),
             engram: upgrade::EngramUpdate::default(),
             theme_share: theme::ThemeShare::new(window, cx),
+            _session_sub: session
+                .as_ref()
+                .map(|session| cx.observe(session, |this, _, cx| this.update_status_changed(cx))),
+            session,
+            shell_updates: upgrade::ShellUpdates::default(),
         };
         this.reload(cx);
         this.refresh_maestro(cx);
@@ -169,11 +185,21 @@ impl SettingsView {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        self.reload_with(false, cx);
+    }
+
+    /// Prefer update information from the active agent's Desktop RPC.
+    /// Fall back to the existing launcher/registry path when unavailable.
+    fn reload_with(&mut self, refresh_updates: bool, cx: &mut Context<Self>) {
+        let shell_updates = self.ask_update_status(refresh_updates, cx);
+        if !shell_updates {
+            self.shell_updates.status = None;
+        }
         let cwd = self.cwd.clone();
         self._load = cx.spawn(async move |this, cx| {
             let snapshot = cx
                 .background_executor()
-                .spawn(async move { services::snapshot::load(&cwd) })
+                .spawn(async move { services::snapshot::load(&cwd, shell_updates) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.snapshot = Some(snapshot);
