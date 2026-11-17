@@ -284,7 +284,7 @@ pub(super) fn compact(
             Button::new("settings-compact-picker")
                 .ghost()
                 .small()
-                .icon(Icon::new(IconName::Menu))
+                .icon(Icon::new(IconName::ChevronDown))
                 .label(format!("Category: {}", selected.label()))
                 .tooltip("Choose a configuration category")
                 .on_click(cx.listener(|this, _, _, cx| {
