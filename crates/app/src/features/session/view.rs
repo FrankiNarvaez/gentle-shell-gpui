@@ -424,7 +424,7 @@ impl SessionView {
             .overflow_hidden()
             .items_center()
             .gap_1()
-            .pt(rems(96. / 16.))
+.pt(rems(80. / 16.))
             .child(crate::shared::banner::banner(self.banner, scale, self.banner_reveal))
             .child(
                 div()
@@ -585,7 +585,7 @@ impl SessionView {
                 streaming,
                 error,
             } => {
-                let mut column = v_flex().w_full().gap_2();
+                let mut column = v_flex().w_full().gap_3();
                 let has_text = blocks
                     .iter()
                     .any(|b| matches!(b, Block::Text(t) if !t.is_empty()));
@@ -821,8 +821,6 @@ impl SessionView {
                     div()
                         .ml(rems(5. / 16.))
                         .pl_3()
-                        .border_l_2()
-                        .border_color(ui::border_strong())
                         .text_size(rems(13. / 16.))
                         .italic()
                         .text_color(ui::muted())
@@ -1215,9 +1213,8 @@ impl SessionView {
         let more = lines.saturating_sub(OUTPUT_LINES);
         v_flex()
             .w_full()
-            .border_t_1()
-            .border_color(ui::border())
-            .py_1()
+            .pt_1p5()
+            .pb_1()
             .when(more > 0, |this| {
                 this.child(self.fold_toggle(
                     key,
@@ -1372,10 +1369,10 @@ impl SessionView {
                     .appear(("between", count), now, div().w_full().child(indicator))
             }
             // The column's bottom padding.
-            Row::Footer => return div().h(rems(24. / 16.)).into_any_element(),
+            // The column's top padding before each row.
+            Row::Footer => return div().h(rems(32. / 16.)).into_any_element(),
         };
-        // The column's top padding before the first row, its gap after.
-        let first = matches!(row, Row::Header) || (ix == 1 && !header);
+        let narrow = self.pane_width.get() < NARROW;
         h_flex()
             .w_full()
             .justify_center()
@@ -1385,7 +1382,7 @@ impl SessionView {
                     .min_w_0()
                     .max_w(rems(760. / 16.))
                     .map(|d| if narrow { d.px_3() } else { d.px_6() })
-                    .pt(rems((if first { 24. } else { 16. }) / 16.))
+                    .pt(rems(24. / 16.))
                     .child(content),
             )
             .into_any_element()
@@ -1931,8 +1928,6 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         .px_3()
         .py_1p5()
         .gap_1p5()
-        .border_t_1()
-        .border_color(ui::border())
         .text_size(rems(12. / 16.))
         .text_color(color)
         .map(|this| match icon {
@@ -1978,8 +1973,6 @@ fn user_bubble(
             .py_2p5()
             .rounded_2xl()
             .bg(ui::raised())
-            .border_1()
-            .border_color(ui::border())
             .text_size(rems(14. / 16.))
             .text_color(ui::fg())
             .when(!images.is_empty(), |this| {
