@@ -2,7 +2,6 @@
 //! panes and persisted workspaces; no second tab model is created.
 
 use super::*;
-use gpui_kit::component::Selectable as _;
 
 impl Workspace {
     pub(super) fn toggle_tab_layout(&mut self, cx: &mut Context<Self>) {
@@ -19,11 +18,8 @@ impl Workspace {
             return;
         }
         self.tab_layout = layout;
-        if layout == TabLayout::Vertical {
-            self.sidebar_section = SidebarSection::Tabs;
-            self.sidebar_visible = true;
-        }
-        cx.emit(WorkspaceEvent::FilesVisibilityChanged(self.files_sidebar_visible()));
+        // File browsing is a separate right sidebar; switching tab placement
+        // must neither open nor hide that independent panel.
         self.schedule_save(cx);
         cx.notify();
     }
@@ -55,12 +51,6 @@ impl Workspace {
                     });
                 }),
         )
-    }
-
-    fn select_sidebar_section(&mut self, section: SidebarSection, cx: &mut Context<Self>) {
-        self.sidebar_section = section;
-        cx.emit(WorkspaceEvent::FilesVisibilityChanged(self.files_sidebar_visible()));
-        cx.notify();
     }
 
     /// Keep the selected tab stable when rows move, and pins ahead of other tabs.
@@ -134,67 +124,32 @@ impl Workspace {
         );
     }
 
-    /// Tabs and the existing Files/Changes/Branches view share one sidebar slot.
-    pub(super) fn render_vertical_sidebar(
-        &self,
-        files: Option<AnyView>,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let tabs_active = self.sidebar_section == SidebarSection::Tabs || files.is_none();
+    /// The dedicated left navigator is independent of the right Files sidebar.
+    pub(super) fn render_vertical_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
             .child(
                 h_flex()
                     .h(rems(40. / 16.))
                     .flex_none()
-                    .px_2()
-                    .gap_1()
-                    .child(
-                        Button::new("tab-sidebar-tabs")
-                            .small()
-                            .ghost()
-                            .selected(tabs_active)
-                            .label("Tabs")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.select_sidebar_section(SidebarSection::Tabs, cx)
-                            })),
-                    )
-                    .when(files.is_some(), |row| {
-                        row.child(
-                            Button::new("tab-sidebar-files")
-                                .small()
-                                .ghost()
-                                .selected(!tabs_active)
-                                .label("Files")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.select_sidebar_section(SidebarSection::Files, cx)
-                                })),
-                        )
-                    })
+                    .items_center()
+                    .px_3()
+                    .gap_2()
+                    .child(Icon::new(IconName::List).xsmall().text_color(ui::faint()))
+                    .child(ui::section_label("Tabs"))
                     .child(div().flex_1())
                     .child(
                         Button::new("tab-sidebar-horizontal")
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::PanelLeftClose))
-                            .tooltip("Return to horizontal tabs")
+                            .tooltip("Move tabs back to the top bar")
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.toggle_tab_layout(cx)
+                                this.set_tab_layout(TabLayout::Horizontal, cx)
                             })),
                     ),
             )
-            .child(
-                div().flex_1().min_h_0().child(if tabs_active {
-                    self.render_vertical_tabs(cx).into_any_element()
-                } else {
-                    files
-                        .map(|view| {
-                            view.cached(StyleRefinement::default().size_full())
-                                .into_any_element()
-                        })
-                        .unwrap_or_else(|| div().into_any_element())
-                }),
-            )
+            .child(div().flex_1().min_h_0().child(self.render_vertical_tabs(cx)))
     }
 
     fn render_vertical_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
