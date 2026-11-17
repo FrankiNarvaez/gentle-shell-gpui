@@ -1,0 +1,97 @@
+name: Feature request
+description: Suggest an improvement to Gentle Shell GPUI, the desktop app.
+title: "feat(area): "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Write the title and the request in English, with the title as
+        `feat(area): what should become possible` (for example `feat(profiles): export a profile`).
+        Replace `area` with the part of the app, like `session`, `providers` or `settings`.
+
+        A change to the agent itself belongs in
+        [Gentle Shell's issues](https://github.com/Gentleman-Programming/gentle-shell/issues).
+
+        Keep the request public-safe: remove credentials, tokens, private paths, hostnames and other
+        sensitive data, also from screenshots.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched open and closed issues and did not find a request for this feature.
+          required: true
+        - label: I reviewed this request and removed credentials, tokens, private paths, hostnames and other sensitive data.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: Describe the need and who would benefit.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Proposed outcome
+      description: Describe what should become possible or improve. Say what you do today instead, if anything.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: The part of the app this touches.
+      multiple: false
+      options:
+        - Session (chat, tabs, the composer)
+        - Sessions and history
+        - Workspace (windows, folders, layout)
+        - Providers and sign-in
+        - Profiles and models
+        - Files and Git
+        - Terminal and browser
+        - Settings
+        - Setup and onboarding
+        - App updates
+        - Memory and usage
+        - Devices
+        - Themes and appearance
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Platforms
+      description: Where it should work. Pick the ones that matter to you.
+      multiple: true
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe any workarounds or other approaches you considered.
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, examples or links that help. Paste or drag a screenshot if it helps.
+    validations:
+      required: false

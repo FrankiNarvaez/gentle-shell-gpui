@@ -1,0 +1,175 @@
+name: Bug report
+description: Report a reproducible problem in Gentle Shell GPUI, the desktop app.
+title: "bug(area): "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Write the title and the report in English, with the title as
+        `bug(area): what goes wrong` (for example `bug(providers): the key icon shows an error`).
+        Replace `area` with the part of the app, like `session`, `providers` or `settings`.
+
+        This repository is the desktop app. A problem in Gentle Shell itself, the agent, belongs in
+        [Gentle Shell's issues](https://github.com/Gentleman-Programming/gentle-shell/issues).
+        If you are not sure, report it here and say what you saw.
+
+        Keep the report public-safe: remove credentials, tokens, private paths (including your user
+        name in `C:\Users\<name>`), hostnames and other sensitive data, also from logs and screenshots.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched open and closed issues and did not find a report of this problem.
+          required: true
+        - label: I reviewed this report and removed credentials, tokens, private paths, hostnames and other sensitive data.
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong, and how does it affect your use of the app?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: The part of the app where it happens.
+      multiple: false
+      options:
+        - Session (chat, tabs, the composer)
+        - Sessions and history
+        - Workspace (windows, folders, layout)
+        - Providers and sign-in
+        - Profiles and models
+        - Files and Git
+        - Terminal and browser
+        - Settings
+        - Setup and onboarding
+        - App updates
+        - Memory and usage
+        - Devices
+        - Themes and appearance
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps and the setup they need.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: Expected and actual behavior
+      description: Say what you expected and what happened. Paste or drag a screenshot if it helps.
+      placeholder: |
+        Expected:
+        Actual:
+    validations:
+      required: true
+
+  - type: input
+    id: app_version
+    attributes:
+      label: Gentle Shell GPUI version
+      description: Shown in Settings. If you run from source, give the commit.
+      placeholder: "0.1.21"
+    validations:
+      required: true
+
+  - type: input
+    id: shell_version
+    attributes:
+      label: Gentle Shell version
+      description: The output of `gentle-shell --version`.
+      placeholder: "4.8.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Gentle Shell was installed
+      description: The way you installed Gentle Shell, not this app.
+      multiple: false
+      options:
+        - Web installer, release channel
+        - Web installer, main channel
+        - Installed by the gentle-ai TUI
+        - npm or pnpm global (gentle-pi)
+        - From source
+        - I don't know
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      multiple: false
+      options:
+        - Windows
+        - macOS
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: os_version
+    attributes:
+      label: Operating system version
+      placeholder: "Windows 11 Home 10.0.26320, macOS 15.1, Ubuntu 24.04 (Wayland)"
+    validations:
+      required: true
+
+  - type: input
+    id: launcher
+    attributes:
+      label: Gentle Shell launcher (optional)
+      description: Useful when the app cannot start or find Gentle Shell. On Windows run `where.exe gentle-shell` (in PowerShell, plain `where` does not work); on macOS and Linux run `which gentle-shell`. Replace your user name with `<user>`.
+    validations:
+      required: false
+
+  - type: textarea
+    id: verified
+    attributes:
+      label: What you verified and what you did not (optional)
+      description: Separate what you saw in the app from what you only suspect, and say which operating systems, install methods or versions you did not try.
+      placeholder: |
+        Verified:
+        Not verified:
+    validations:
+      required: false
+
+  - type: textarea
+    id: cause
+    attributes:
+      label: Probable cause and suggested fix (optional)
+      description: If you read the code, point to `path:line` and say whether you ran it or only read it.
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or error output (optional)
+      description: Only useful excerpts, with sensitive data removed.
+      render: text
+    validations:
+      required: false
