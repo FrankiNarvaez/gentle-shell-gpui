@@ -413,6 +413,13 @@ impl SessionView {
                 self.sync_design(cx);
                 self.sync_config(cx);
             }
+            DesktopRoute::Reads => {
+                let applied = self.desktop.reads_apply(request);
+                self.apply_reads(applied, cx);
+                self.sync_supervision(cx);
+                self.sync_design(cx);
+                self.sync_config(cx);
+            }
             DesktopRoute::Channel => {
                 let applied = self.desktop.ui(request);
                 self.apply_desktop(applied, cx);
@@ -736,7 +743,8 @@ impl SessionView {
 /// permission event; supervision owns its responses and events; subscription
 /// owns its responses and `rate_limit`; design owns `get_design_canvas` and
 /// `design_canvas`; config owns `get_config`/`set_config` and
-/// `config_changed`; everything else belongs to the channel
+/// `config_changed`; reads owns `list_sessions`, `switch_session`,
+/// `get_usage_stats` and `get_update_status`; everything else belongs to the channel
 /// (probe, resync, and every benign foreign/late record). The shared session
 /// then accepts the record exactly once, in the slice that owns it.
 enum DesktopRoute {
@@ -745,6 +753,7 @@ enum DesktopRoute {
     Subscription,
     Design,
     Config,
+    Reads,
     Channel,
 }
 
@@ -802,6 +811,8 @@ fn route_desktop_widget(
                     | Some(DesktopMethod::ApplyProfile)
             ) {
                 DesktopRoute::Config
+            } else if pending.is_some_and(desktop::reads::is_read) {
+                DesktopRoute::Reads
             } else {
                 DesktopRoute::Channel
             }
