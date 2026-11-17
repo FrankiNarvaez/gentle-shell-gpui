@@ -27,6 +27,7 @@ mod navigation;
 mod music;
 mod notifications;
 mod packages;
+mod pages;
 mod snapshot;
 mod theme;
 mod upgrade;
@@ -34,7 +35,6 @@ mod upgrade;
 pub use claude::forget_claude_auth;
 pub use snapshot::npm_name;
 
-use layout::{row, section};
 use navigation::SettingsPage;
 use snapshot::{Snapshot, probe, read_snapshot};
 
@@ -59,6 +59,7 @@ pub enum SettingsEvent {
 pub struct SettingsView {
     cwd: PathBuf,
     page: SettingsPage,
+    body_scroll: ScrollHandle,
     snapshot: Option<Snapshot>,
     package_input: Entity<InputState>,
     running: Option<String>,
@@ -142,6 +143,7 @@ impl SettingsView {
         let mut this = Self {
             cwd,
             page: SettingsPage::default(),
+            body_scroll: ScrollHandle::new(),
             snapshot: None,
             package_input,
             running: None,
@@ -218,6 +220,7 @@ impl Render for SettingsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let page = self.page;
         let body: AnyElement = match &self.snapshot {
+            Some(snapshot) => self.render_page(page, snapshot, cx),
             None => h_flex()
                 .p_6()
                 .gap_2()
@@ -227,98 +230,6 @@ impl Render for SettingsView {
                 .child(Spinner::new().small().color(ui::accent()))
                 .child("Reading your Gentle Shell configuration…")
                 .into_any_element(),
-            Some(s) => ui::appear(
-                "settings-content",
-                v_flex()
-                    .gap_3()
-                    .p_4()
-                    .when(page == SettingsPage::General, |this| this.child(
-                        section(IconName::SquareTerminal, "Gentle Shell")
-                            .child(row(
-                                "Home",
-                                if s.home_mode.is_empty() {
-                                    s.agent.display().to_string()
-                                } else {
-                                    s.home_mode.clone()
-                                },
-                            ))
-                            .child(row("Agent dir", s.agent.display().to_string()))
-                            .child(row("Config dir", s.config.display().to_string()))
-                            .child(row(
-                                "Launcher",
-                                s.launcher
-                                    .as_ref()
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_else(|| "not found".into()),
-                            ))
-                            .child(row("Versions", s.versions.join(" · ")))
-                            .child(
-                                h_flex()
-                                    .pt_2()
-                                    .gap_2()
-                                    .flex_wrap()
-                                    .child({
-                                        let dir = s.agent.clone();
-                                        Button::new("open-agent-dir")
-                                            .ghost()
-                                            .small()
-                                            .icon(Icon::new(IconName::FolderOpen))
-                                            .label("Open agent dir")
-                                            .on_click(move |_, _, cx| {
-                                                cx.open_url(&format!("file://{}", dir.display()))
-                                            })
-                                    })
-                                    .child({
-                                        let dir = s.config.clone();
-                                        Button::new("open-config-dir")
-                                            .ghost()
-                                            .small()
-                                            .icon(Icon::new(IconName::FolderOpen))
-                                            .label("Open config dir")
-                                            .on_click(move |_, _, cx| {
-                                                cx.open_url(&format!("file://{}", dir.display()))
-                                            })
-                                    }),
-                            ),
-                    )
-                    .child(
-                        section(IconName::CircleCheck, "Setup & requirements")
-                            .child(self.setup.clone()),
-                    ))
-                    .when(page == SettingsPage::Devices, |this| this.child(self.devices_section(cx)))
-                    .when(page == SettingsPage::Integrations, |this| this.child(self.maestro_section(cx)))
-                    .when(page == SettingsPage::Integrations, |this| this.child(self.music_section(cx)))
-                    .when(page == SettingsPage::Agents, |this| this.child(self.hydration_section(cx)))
-                    .when(page == SettingsPage::Appearance, |this| this.child(
-                        div()
-                            .id("theme-drop")
-                            .rounded_xl()
-                            .drag_over::<ExternalPaths>(|style, _, _, _| {
-                                style.bg(ui::surface_hover())
-                            })
-                            .on_drop(cx.listener(|this, paths: &ExternalPaths, _, cx| {
-                                this.theme_drop(paths, cx)
-                            }))
-                            .child(self.theme_section(cx)),
-                    ))
-                    .when(page == SettingsPage::Models, |this| this.child(models::models_section(s)))
-                    .when(page == SettingsPage::Agents, |this| this.child(self.gentle_ai_section(s, cx)))
-                    .when(page == SettingsPage::Notifications, |this| this.child(self.notifications_section(cx)))
-                    .when(page == SettingsPage::Integrations, |this| this.child(self.bridge_section(s, cx)))
-                    .when(page == SettingsPage::Advanced, |this| this.child(self.packages_section(s, cx)))
-                    .when(page == SettingsPage::Updates, |this| {
-                        this.child(app::app_section(cx)).child(
-                            section(IconName::RefreshCw, "Gentle Shell and Engram")
-                                .child(row("Versions", s.versions.join(" · ")))
-                                .when_some(s.update.clone(), |d, offer| {
-                                    d.child(self.render_update(offer, cx))
-                                })
-                                .children(self.upgrade.as_ref().map(upgrade::upgrade_result))
-                                .child(self.render_engram_update(s.engram_update.clone(), cx)),
-                        )
-                    }),
-            )
-            .into_any_element(),
         };
         let (backdrop, panel) = ui::screen(Some(960.));
         backdrop.occlude().child(ui::pop_in(
@@ -403,6 +314,7 @@ impl Render for SettingsView {
                                         .flex_1()
                                         .min_h_0()
                                         .overflow_y_scroll()
+                                        .track_scroll(&self.body_scroll)
                                         .child(body),
                                 ),
                         ),
