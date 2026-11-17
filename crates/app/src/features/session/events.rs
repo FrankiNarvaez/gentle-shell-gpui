@@ -468,6 +468,14 @@ impl SessionView {
                 self.sync_config(cx);
                 self.sync_output(cx);
             }
+            DesktopRoute::Reads => {
+                let applied = self.desktop.reads_apply(request);
+                self.apply_reads(applied, cx);
+                self.sync_supervision(cx);
+                self.sync_design(cx);
+                self.sync_config(cx);
+                self.sync_output(cx);
+            }
             DesktopRoute::Channel => {
                 let applied = self.desktop.ui(request);
                 self.apply_desktop(applied, cx);
@@ -797,10 +805,12 @@ impl SessionView {
 /// `design_canvas`; config owns `get_config`/`set_config` and
 /// `config_changed`; review owns `get_review_mode`/`set_review_mode` and
 /// `review_mode_changed`; changes owns `get_changes`/`get_change_diff`;
-/// output owns `get_job_output`/`get_subagent_thread`; everything else
-/// belongs to the channel (probe, resync, `session_snapshot`, and every
-/// benign foreign/late record). The shared session then accepts the record
-/// exactly once, in the slice that owns it.
+/// output owns `get_job_output`/`get_subagent_thread`; reads owns
+/// `list_sessions`, `switch_session`, `get_usage_stats` and
+/// `get_update_status`; everything else belongs to the channel (probe,
+/// resync, `session_snapshot`, and every benign foreign/late record). The
+/// shared session then accepts the record exactly once, in the slice that
+/// owns it.
 pub(in crate::features::session) enum DesktopRoute {
     Permission,
     Supervision,
@@ -810,6 +820,7 @@ pub(in crate::features::session) enum DesktopRoute {
     Review,
     Changes,
     Output,
+    Reads,
     Channel,
 }
 
@@ -882,6 +893,8 @@ pub(in crate::features::session) fn route_desktop_widget(
                 Some(DesktopMethod::GetJobOutput) | Some(DesktopMethod::GetSubagentThread)
             ) {
                 DesktopRoute::Output
+            } else if pending.is_some_and(desktop::reads::is_read) {
+                DesktopRoute::Reads
             } else {
                 DesktopRoute::Channel
             }

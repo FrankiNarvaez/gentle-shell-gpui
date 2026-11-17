@@ -250,6 +250,8 @@ pub(in crate::features::session) mod desktop {
     #[cfg(test)]
     mod live_tests;
     pub(in crate::features::session) mod output;
+    /// The screens' one-shot reads, in `state/desktop/reads.rs`.
+    pub(in crate::features::session) mod reads;
     pub(in crate::features::session) mod review;
     pub(in crate::features::session) mod sections;
 
@@ -357,6 +359,8 @@ pub(in crate::features::session) mod desktop {
         design: design::Design,
         /// The config stores the Profiles screen reads and writes.
         config: config::Config,
+        /// The screens' one-shot reads (sessions, stats, update status).
+        reads: reads::Reads,
         /// Gentle Shell's session state (`session_snapshot`), when offered.
         sections: sections::Sections,
         /// The snapshot in flight asked for [`sections::SECTIONS`].
@@ -390,6 +394,7 @@ pub(in crate::features::session) mod desktop {
                 subscription: subscription::Subscription::default(),
                 design: design::Design::new(),
                 config: config::Config::default(),
+                reads: reads::Reads::default(),
                 sections: sections::Sections::default(),
                 snapshot_sections: false,
                 output: output::Output::default(),
@@ -414,6 +419,7 @@ pub(in crate::features::session) mod desktop {
             self.subscription.reset(&mut self.session);
             self.design.reset(&mut self.session);
             self.config.reset(&mut self.session);
+            self.reads.reset();
             self.sections.reset();
             self.snapshot_sections = false;
             self.output.reset();
@@ -482,6 +488,7 @@ pub(in crate::features::session) mod desktop {
                             self.supervision.set_capabilities(capabilities.clone());
                             self.subscription.set_capabilities(capabilities.clone());
                             self.config.set_capabilities(capabilities.clone());
+                            self.reads.set_capabilities(capabilities.clone());
                             self.sections.set_capabilities(&capabilities);
                             self.output.set_capabilities(capabilities.clone());
                             self.review.set_capabilities(capabilities.clone());
@@ -918,6 +925,82 @@ pub(in crate::features::session) mod desktop {
             self.config.take_changes()
         }
 
+        /// Whether a screen asks this backend for `method` or keeps its own
+        /// path. A channel that stopped (no extension, a failed probe, one
+        /// abandoned after its capabilities arrived) is the screen's own path,
+        /// as is a peer without the method; a probe that has not answered yet
+        /// (or not started: the backend is still starting) is not decided.
+        pub(in crate::features::session) fn reads_support(
+            &self,
+            method: DesktopMethod,
+        ) -> reads::ReadSupport {
+            match (self.step, self.reads.offers(method)) {
+                (Step::Unavailable, _) | (_, Some(false)) | (Step::Idle, Some(true)) => {
+                    reads::ReadSupport::Legacy
+                }
+                (_, None) => reads::ReadSupport::NotReady,
+                (_, Some(true)) => reads::ReadSupport::Rpc,
+            }
+        }
+
+        /// Queue a read; [`Self::reads_pump`] sends it.
+        pub(in crate::features::session) fn reads_enqueue(
+            &mut self,
+            request: reads::ReadRequest,
+        ) -> Result<reads::ReadTicket, reads::ReadFailure> {
+            if self.reads_support(request.method()) != reads::ReadSupport::Rpc {
+                return Err(reads::ReadFailure::NotOffered);
+            }
+            self.reads.enqueue(request)
+        }
+
+        /// Send the next queued read once the probe has landed, no resync is
+        /// owed and no other request is in flight.
+        pub(in crate::features::session) fn reads_pump(&mut self) -> reads::Applied {
+            if self.step != Step::Ready || self.pending_resync {
+                return reads::Applied::default();
+            }
+            self.reads.pump(&mut self.session)
+        }
+
+        /// The delay after a `session_switching` answer is over.
+        pub(in crate::features::session) fn reads_release(&mut self) {
+            self.reads.release();
+        }
+
+        /// One incoming UI request for the reads slice.
+        pub(in crate::features::session) fn reads_apply(
+            &mut self,
+            request: &UiRequest,
+        ) -> reads::Applied {
+            self.reads.apply(&mut self.session, request)
+        }
+
+        /// The pending timeout for a read.
+        pub(in crate::features::session) fn reads_expire(
+            &mut self,
+            generation: u64,
+        ) -> reads::Applied {
+            self.reads.expire(&mut self.session, generation)
+        }
+
+        /// Pi answered the outer prompt of a read.
+        pub(in crate::features::session) fn reads_outer(
+            &mut self,
+            generation: u64,
+            handled: bool,
+        ) -> reads::Applied {
+            self.reads.outer(&mut self.session, generation, handled)
+        }
+
+        /// The answer to `ticket`, once, if it arrived.
+        pub(in crate::features::session) fn reads_take(
+            &mut self,
+            ticket: reads::ReadTicket,
+        ) -> Option<reads::ReadOutcome> {
+            self.reads.take(ticket)
+        }
+
         /// Gentle Shell's session sections, as the last reads and events left
         /// them; `None`-filled until a read carried them.
         pub(in crate::features::session) fn sections(&self) -> &sections::Sections {
@@ -1095,6 +1178,7 @@ pub(in crate::features::session) mod desktop {
         fn unavailable(&mut self, report: Report) -> Applied {
             self.session.abandon();
             self.config.drop_queued();
+            self.reads.drop_queued();
             self.step = Step::Unavailable;
             Applied {
                 sends: Vec::new(),
@@ -1151,9 +1235,10 @@ pub(in crate::features::session) mod desktop {
             self.session.abandon();
             self.step = Step::Idle;
             self.generation += 1;
-            // Nothing pumps the config queue until the channel is probed
-            // again, so its waiting tickets are answered now.
+            // Nothing pumps the config or read queues until the channel is
+            // probed again, so their waiting tickets are answered now.
             self.config.drop_queued();
+            self.reads.drop_queued();
         }
 
         /// One request; the step follows only when the channel really asked.

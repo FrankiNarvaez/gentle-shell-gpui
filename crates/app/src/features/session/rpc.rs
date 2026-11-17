@@ -33,6 +33,21 @@ use gentle_core::transcript::NoticeLevel;
 /// something is genuinely wrong.
 const DESKTOP_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The reads that may legitimately take longer: a listing or stats scan
+/// reads every session file in scope, a switch replaces the session, and an
+/// update refresh is bounded by the server's own 15-second deadline.
+const DESKTOP_SLOW_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn desktop_timeout(method: DesktopMethod) -> Duration {
+    match method {
+        DesktopMethod::ListSessions
+        | DesktopMethod::SwitchSession
+        | DesktopMethod::GetUsageStats
+        | DesktopMethod::GetUpdateStatus => DESKTOP_SLOW_TIMEOUT,
+        _ => DESKTOP_TIMEOUT,
+    }
+}
+
 /// Whether Pi's `get_commands` answer lists the Gentle Desktop extension. A
 /// failed request lists nothing, so its prompt is never sent.
 fn discovers_desktop(result: &Result<Value>) -> bool {
@@ -204,12 +219,14 @@ impl SessionView {
         cx.notify();
     }
 
-    /// Send the next queued config request once the channel is free.
+    /// Send the next queued config request once the channel is free, then
+    /// the screens' next queued read: both queues wait for the same slot.
     pub(super) fn sync_config(&mut self, cx: &mut Context<Self>) {
         let applied = self.desktop.config_pump();
         if !applied.sends.is_empty() || applied.report.is_some() {
             self.apply_config(applied, cx);
         }
+        self.sync_reads(cx);
     }
 
     /// Send what an output read decided. Its failures show where the output
@@ -466,7 +483,7 @@ impl SessionView {
     /// refreshed by the same re-probe. The subscription and design slices are
     /// reset with the channel; the design canvas re-seeds once behind the new
     /// probe.
-    fn reset_desktop_channel(&mut self) {
+    pub(super) fn reset_desktop_channel(&mut self) {
         self.desktop.reset();
     }
 
@@ -537,7 +554,9 @@ impl SessionView {
             return;
         }
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(DESKTOP_TIMEOUT).await;
+            cx.background_executor()
+                .timer(desktop_timeout(method))
+                .await;
             let _ = this.update(cx, |this, cx| {
                 // Only its own request: a newer one has another generation.
                 this.expire_desktop(generation, method, cx);
@@ -599,15 +618,17 @@ impl SessionView {
                 let applied = self.desktop.output_expire(generation);
                 self.apply_output(applied, cx);
             }
-            // No slice issues these yet, so no request of theirs is pending.
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {}
+            | DesktopMethod::GetUpdateStatus => {
+                let applied = self.desktop.reads_expire(generation);
+                self.apply_reads(applied, cx);
+            }
         }
         // Whichever request was dropped, the shared slot may be free for the
-        // next queued config request, review change, changes read or owed
-        // output read.
+        // next queued config request or screen read, review change, changes
+        // read or owed output read.
         self.sync_config(cx);
         self.sync_review(cx);
         self.sync_changes(cx);
@@ -665,11 +686,13 @@ impl SessionView {
                 let applied = self.desktop.output_outer(generation, handled);
                 self.apply_output(applied, cx);
             }
-            // No slice issues these yet, so no request of theirs is pending.
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {}
+            | DesktopMethod::GetUpdateStatus => {
+                let applied = self.desktop.reads_outer(generation, handled);
+                self.apply_reads(applied, cx);
+            }
         }
         self.sync_config(cx);
         self.sync_review(cx);

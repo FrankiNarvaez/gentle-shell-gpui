@@ -18,6 +18,7 @@ mod attachments;
 mod builtins;
 mod events;
 mod lifecycle;
+mod reads;
 mod rpc;
 mod state;
 mod submit;
@@ -26,6 +27,10 @@ mod view;
 mod view_tests;
 
 pub use agents::{AgentsPanel, AgentsTab};
+pub(crate) use reads::READ_DECIDE_WAIT;
+pub(crate) use state::desktop::reads::{
+    ReadFailure, ReadOutcome, ReadRequest, ReadSupport, ReadTicket,
+};
 
 actions!(session, [Abort, Stop, ToggleAgents, NewSession]);
 

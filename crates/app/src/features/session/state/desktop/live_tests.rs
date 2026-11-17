@@ -232,6 +232,7 @@ impl Live {
             DesktopRoute::Output => self.desktop.output_apply(request).sends,
             DesktopRoute::Review => self.desktop.review_apply(request).sends,
             DesktopRoute::Changes => self.desktop.changes_apply(request).sends,
+            DesktopRoute::Reads => self.desktop.reads_apply(request).sends,
             DesktopRoute::Channel => self.desktop.ui(request).sends,
         };
         self.send(sends);
