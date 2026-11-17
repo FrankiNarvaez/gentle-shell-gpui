@@ -179,7 +179,7 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         },
         row(
             IconName::PanelLeft,
-            "Toggle sidebar",
+            "Toggle Files sidebar",
             &format!("Show or hide Files / Changes / Branches on the right ({cmd}B)"),
             PaletteAction::ToggleSidebar,
         ),
