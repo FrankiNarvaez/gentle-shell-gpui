@@ -3,7 +3,7 @@
 //! drawn natively and edited by the user; the edits go back to the agent
 //! through the extension's `/gentle-ui:event` command, which answers each
 //! one ([`GenUi::outcome`]). Kinds: the diagram ([`DiagramView`]), the
-//! panels ([`PanelView`]: table, form, checklist, kanban, chart) and `html`
+//! panels ([`PanelView`]: table, form, checklist, kanban, chart, review) and `html`
 //! ([`HtmlView`]), an agent-written page run in an isolated web view that
 //! speaks MCP Apps.
 //!
@@ -37,6 +37,7 @@ mod panel;
 mod pinned;
 mod pointer;
 mod refs;
+mod review;
 mod share;
 mod store;
 mod table;
@@ -618,7 +619,10 @@ impl GenUi {
         let snapshot = genui::snapshot(details);
         let title = tool_title(args, snapshot.as_ref());
         match status {
-            ToolStatus::Running => return view::drawing_card(&title),
+            // A review that waits for the user's decisions shows while the
+            // call runs (its partial result carries the surface).
+            ToolStatus::Running if snapshot.is_none() => return view::drawing_card(&title),
+            ToolStatus::Running => {}
             ToolStatus::Failed => return view::failed_card(&title, output),
             ToolStatus::Done => {}
         }

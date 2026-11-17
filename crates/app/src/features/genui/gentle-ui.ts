@@ -1051,6 +1051,386 @@ function summaryChart(surface: Surface): string {
 	return lines.join("\n");
 }
 
+// ── review: a change set reviewed hunk by hunk before the agent writes it ───
+// Mirrors `gentle_core::genui::review`. The extension alone turns a file's
+// `before`/`after` into hunks (`lineDiff`): the app only ever sees hunks.
+
+const REVIEW = { files: 50, hunks: 300, hunkLines: 1000, lines: 6000, line: 1000, path: 300, header: 120, context: 3, edits: 2000 };
+const FILE_STATUS: Record<string, string> = {
+	added: "added", add: "added", new: "added", created: "added",
+	modified: "modified", modify: "modified", changed: "modified", edit: "modified", edited: "modified",
+	deleted: "deleted", delete: "deleted", removed: "deleted",
+	renamed: "renamed", rename: "renamed", moved: "renamed",
+};
+const LINE_KINDS: Record<string, string> = {
+	context: "context", ctx: "context", "": "context", same: "context", unchanged: "context",
+	add: "add", added: "add", "+": "add", insert: "add", ins: "add",
+	del: "del", delete: "del", deleted: "del", remove: "del", removed: "del", "-": "del",
+};
+const DECISIONS: Record<string, string> = { accepted: "accepted", accept: "accepted", rejected: "rejected", reject: "rejected" };
+// A `wait: true` call gives up after this long (the review stays open).
+const REVIEW_WAIT_MS = 30 * 60 * 1000;
+
+interface DiffLine { kind: string; text: string }
+
+/** `text` as lines: one trailing newline ends the last line, `\r` dropped. */
+function textLines(text: string): string[] {
+	if (text === "") return [];
+	return text.replace(/\n$/, "").split("\n").map((line) => line.replace(/\r$/, ""));
+}
+
+/** The lines of `after` against `before` (Myers' O(ND) diff on lines; a
+ * plain replacement when they differ in more than REVIEW.edits places). */
+function lineDiff(before: string[], after: string[]): DiffLine[] {
+	let start = 0;
+	while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+	let endA = before.length;
+	let endB = after.length;
+	while (endA > start && endB > start && before[endA - 1] === after[endB - 1]) {
+		endA -= 1;
+		endB -= 1;
+	}
+	const a = before.slice(start, endA);
+	const b = after.slice(start, endB);
+	const n = a.length;
+	const m = b.length;
+	const middle: DiffLine[] = [];
+	const offset = n + m + 1;
+	const v = new Int32Array(2 * offset + 1);
+	// trace[d]: v for k in -d..d before step d.
+	const trace: Int32Array[] = [];
+	let found = n + m === 0;
+	for (let d = 0; d <= Math.min(n + m, REVIEW.edits) && !found; d += 1) {
+		trace.push(v.slice(offset - d, offset + d + 1));
+		for (let k = -d; k <= d; k += 2) {
+			let x = k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1]) ? v[offset + k + 1] : v[offset + k - 1] + 1;
+			let y = x - k;
+			while (x < n && y < m && a[x] === b[y]) {
+				x += 1;
+				y += 1;
+			}
+			v[offset + k] = x;
+			if (x >= n && y >= m) {
+				found = true;
+				break;
+			}
+		}
+	}
+	if (!found) {
+		middle.push(...a.map((text) => ({ kind: "del", text })), ...b.map((text) => ({ kind: "add", text })));
+	} else {
+		let x = n;
+		let y = m;
+		for (let d = trace.length - 1; d > 0; d -= 1) {
+			const prev = trace[d];
+			const at = (k: number) => prev[k + d];
+			const k = x - y;
+			const down = k === -d || (k !== d && at(k - 1) < at(k + 1));
+			const prevK = down ? k + 1 : k - 1;
+			const prevX = at(prevK);
+			const prevY = prevX - prevK;
+			while (x > prevX && y > prevY) {
+				middle.push({ kind: "context", text: a[x - 1] });
+				x -= 1;
+				y -= 1;
+			}
+			if (down) {
+				middle.push({ kind: "add", text: b[y - 1] });
+				y -= 1;
+			} else {
+				middle.push({ kind: "del", text: a[x - 1] });
+				x -= 1;
+			}
+		}
+		while (x > 0 && y > 0) {
+			middle.push({ kind: "context", text: a[x - 1] });
+			x -= 1;
+			y -= 1;
+		}
+		middle.reverse();
+	}
+	return [
+		...before.slice(0, start).map((text) => ({ kind: "context", text })),
+		...middle,
+		...before.slice(endA).map((text) => ({ kind: "context", text })),
+	];
+}
+
+/** Unified hunks of a line diff, with REVIEW.context lines around changes. */
+function diffHunks(lines: DiffLine[]): Json[] {
+	let old = 0;
+	let now = 0;
+	const at = lines.map((line) => {
+		const place = { old, now };
+		if (line.kind !== "add") old += 1;
+		if (line.kind !== "del") now += 1;
+		return place;
+	});
+	const changed = lines.flatMap((line, i) => (line.kind === "context" ? [] : [i]));
+	const hunks: Json[] = [];
+	let i = 0;
+	while (i < changed.length) {
+		let j = i;
+		while (j + 1 < changed.length && changed[j + 1] - changed[j] <= 2 * REVIEW.context + 1) j += 1;
+		const from = Math.max(0, changed[i] - REVIEW.context);
+		const to = Math.min(lines.length, changed[j] + REVIEW.context + 1);
+		const body = lines.slice(from, to);
+		const oldCount = body.filter((l) => l.kind !== "add").length;
+		const newCount = body.filter((l) => l.kind !== "del").length;
+		hunks.push({
+			oldStart: at[from].old + (oldCount > 0 ? 1 : 0),
+			newStart: at[from].now + (newCount > 0 ? 1 : 0),
+			lines: body,
+		});
+		i = j + 1;
+	}
+	return hunks;
+}
+
+function reviewPath(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const path = value.trim().replace(/\\/g, "/");
+	const clean = path.startsWith("./") ? path.slice(2) : path;
+	return clean === "" ? undefined : clean;
+}
+
+function reviewLines(raw: unknown[], hunk: string, fail: (message: string) => undefined): DiffLine[] {
+	const lines: DiffLine[] = [];
+	raw.forEach((item, i) => {
+		let kind: string | undefined;
+		let text: string;
+		if (typeof item === "string") {
+			const first = item.charAt(0);
+			kind = first === "+" ? "add" : first === "-" ? "del" : "context";
+			text = first === "+" || first === "-" || first === " " ? item.slice(1) : item;
+		} else if (isObject(item)) {
+			const given = item.kind ?? item.type;
+			kind = typeof given === "string" ? LINE_KINDS[given.trim().toLowerCase()] : undefined;
+			if (kind === undefined) return fail(`line ${i + 1} of hunk "${hunk}" needs kind context, add or del`);
+			text = typeof item.text === "string" ? item.text : "";
+		} else {
+			return fail(`line ${i + 1} of hunk "${hunk}" must be a string or {kind, text}`);
+		}
+		const body = text.endsWith("\n") ? text.slice(0, -1) : text;
+		for (const part of body.split("\n")) lines.push({ kind, text: cut(part.replace(/\r$/, ""), REVIEW.line) });
+	});
+	return lines;
+}
+
+/** A file given as `before`/`after` text (no hunks) with its hunks computed. */
+function reviewFromText(file: unknown): unknown {
+	if (!isObject(file) || file.hunks !== undefined) return file;
+	const before = typeof file.before === "string" ? file.before : undefined;
+	const after = typeof file.after === "string" ? file.after : undefined;
+	if (before === undefined && after === undefined) return file;
+	const { before: _b, after: _a, ...rest } = file;
+	const status = rest.status ?? (before === undefined ? "added" : after === undefined ? "deleted" : undefined);
+	const lines = lineDiff(textLines(before ?? ""), textLines(after ?? ""));
+	return { ...rest, ...(status === undefined ? {} : { status }), hunks: diffHunks(lines) };
+}
+
+function normalizeReview(raw: unknown): Json {
+	const { fail, check } = problems("review");
+	if (!isObject(raw) || !Array.isArray(raw.files)) throw new Error("spec.files must be an array");
+	const rawFiles = raw.files.map(reviewFromText);
+	if (rawFiles.length === 0) fail("a review needs at least one file");
+	if (rawFiles.length > REVIEW.files) fail(`too many files (${rawFiles.length}, at most ${REVIEW.files})`);
+	const rawHunks = rawFiles.flatMap((f) => list(isObject(f) ? f.hunks : undefined));
+	if (rawHunks.length > REVIEW.hunks) fail(`too many hunks (${rawHunks.length}, at most ${REVIEW.hunks})`);
+	// Given ids first, so a generated one never takes an id a later hunk names.
+	const given = new Set(rawHunks.flatMap((h) => idText(isObject(h) ? h.id : undefined) ?? []));
+	const seen = new Set<string>();
+	let counter = 0;
+	let totalLines = 0;
+	const files: Json[] = [];
+	rawFiles.slice(0, REVIEW.files).forEach((rawFile, fi) => {
+		const item = isObject(rawFile) ? rawFile : {};
+		const path = reviewPath(item.path);
+		if (path === undefined) return fail(`file ${fi + 1} has no path`);
+		if (Array.from(path).length > REVIEW.path) return fail(`the path of file ${fi + 1} is longer than ${REVIEW.path} characters`);
+		if (files.some((f) => f.path === path)) return fail(`duplicate file "${path}"`);
+		const given_ = reviewPath(item.oldPath);
+		const oldPath = given_ !== path ? given_ : undefined;
+		const status = typeof item.status === "string"
+			? FILE_STATUS[item.status.trim().toLowerCase()] ?? "modified"
+			: oldPath !== undefined ? "renamed" : "modified";
+		if (status === "renamed" && oldPath === undefined) fail(`renamed file "${path}" needs oldPath`);
+		if (item.hunks !== undefined && !Array.isArray(item.hunks)) fail(`the hunks of "${path}" must be an array`);
+		const language = optionalText(item.language, 40)?.toLowerCase();
+		const hunks: Json[] = [];
+		for (const rawHunk of list(item.hunks)) {
+			counter += 1;
+			const h = isObject(rawHunk) ? rawHunk : {};
+			let id = idText(h.id);
+			if (id === undefined) {
+				let n = counter;
+				while (given.has(`h${n}`) || seen.has(`h${n}`)) n += 1;
+				id = `h${n}`;
+			}
+			if (seen.has(id)) {
+				fail(`duplicate hunk id "${id}"`);
+				continue;
+			}
+			seen.add(id);
+			const lines = reviewLines(list(h.lines), id, fail);
+			totalLines += lines.length;
+			if (lines.length > REVIEW.hunkLines) fail(`hunk "${id}" has too many lines (${lines.length}, at most ${REVIEW.hunkLines})`);
+			if (!lines.some((l) => l.kind !== "context")) fail(`hunk "${id}" changes nothing`);
+			const wrong = status === "added" ? lines.some((l) => l.kind !== "add") : status === "deleted" ? lines.some((l) => l.kind !== "del") : false;
+			if (wrong) fail(`hunk "${id}" of ${status} file "${path}" can only ${status === "added" ? "add" : "remove"} lines`);
+			const lineNumber = (value: unknown) => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined);
+			const oldStart = lineNumber(h.oldStart) ?? (status === "added" ? 0 : status === "deleted" ? 1 : undefined);
+			const newStart = lineNumber(h.newStart) ?? (status === "added" ? 1 : status === "deleted" ? 0 : undefined);
+			if (oldStart === undefined || newStart === undefined) {
+				fail(`hunk "${id}" needs oldStart and newStart (1-based line numbers)`);
+				continue;
+			}
+			const decision = typeof h.decision === "string" ? DECISIONS[h.decision.trim().toLowerCase()] : undefined;
+			const hunk: Json = {
+				id,
+				header: optionalText(h.header, REVIEW.header),
+				oldStart,
+				newStart,
+				lines,
+				note: optionalText(h.note, MAX.text),
+				decision,
+				comment: optionalText(h.comment, MAX.text),
+				applied: h.applied === true ? true : undefined,
+			};
+			const oldCount = lines.filter((l) => l.kind !== "add").length;
+			const newCount = lines.filter((l) => l.kind !== "del").length;
+			if ((oldCount > 0 && oldStart === 0) || (newCount > 0 && newStart === 0)) fail(`hunk "${id}" starts at line 0`);
+			hunks.push(hunk);
+		}
+		// In file order; overlapping hunks can't both apply.
+		const count = (h: Json, side: "old" | "new") => (h.lines as DiffLine[]).filter((l) => l.kind !== (side === "old" ? "add" : "del")).length;
+		hunks.sort((x, y) => (x.oldStart as number) - (y.oldStart as number) || (x.newStart as number) - (y.newStart as number));
+		for (let i = 1; i < hunks.length; i += 1) {
+			const [x, y] = [hunks[i - 1], hunks[i]];
+			if ((y.oldStart as number) < (x.oldStart as number) + count(x, "old") || (y.newStart as number) < (x.newStart as number) + count(x, "new")) {
+				fail(`hunks "${x.id}" and "${y.id}" overlap`);
+			}
+		}
+		if (list(item.hunks).length === 0 && status !== "renamed") fail(`file "${path}" has no hunks`);
+		files.push({ path, status, oldPath: status === "renamed" ? oldPath : undefined, language, hunks });
+	});
+	if (totalLines > REVIEW.lines) fail(`too many lines (${totalLines}, at most ${REVIEW.lines})`);
+	check();
+	return clone({ summary: optionalText(raw.summary, MAX.text), files });
+}
+
+/** `applied` marks hunks written; `hunks` merge by id (null clears, e.g.
+ * `decision: null` asks again); `files` upsert by path; `remove: {files, hunks}`. */
+function patchReview(spec: Json, patch: Json): Json {
+	const next = clone(spec) as { files: Json[] } & Json;
+	const goneFiles = removed(patch, "files");
+	const goneHunks = removed(patch, "hunks");
+	next.files = next.files.filter((f) => !goneFiles.has(f.path as string));
+	for (const file of next.files) file.hunks = (file.hunks as Json[]).filter((h) => !goneHunks.has(h.id as string));
+	const hunk = (id: string, where: string): Json => {
+		const found = next.files.flatMap((f) => f.hunks as Json[]).find((h) => h.id === id);
+		if (!found) throw new Error(`${where}: unknown hunk "${id}" (add hunks through files)`);
+		return found;
+	};
+	if (patch.applied !== undefined) {
+		if (!Array.isArray(patch.applied)) throw new Error("patch.applied must be an array of hunk ids");
+		for (const id of patch.applied) hunk(idText(id) ?? "", "patch.applied").applied = true;
+	}
+	if (patch.hunks !== undefined && patch.hunks !== null) {
+		if (!Array.isArray(patch.hunks) || !patch.hunks.every(isObject)) throw new Error("patch.hunks must be an array of objects");
+		for (const item of patch.hunks) {
+			const found = hunk(idText(item.id) ?? "", "patch.hunks");
+			for (const [k, v] of Object.entries(item)) if (k !== "id") v === null ? delete found[k] : (found[k] = v);
+		}
+	}
+	if (patch.files !== undefined && patch.files !== null) {
+		if (!Array.isArray(patch.files) || !patch.files.every(isObject)) throw new Error("patch.files must be an array of objects");
+		for (const item of patch.files) {
+			const path = reviewPath(item.path);
+			if (path === undefined) throw new Error("every item in patch.files needs a path");
+			const at = next.files.findIndex((f) => f.path === path);
+			if (at >= 0) next.files[at] = { ...item, path };
+			else next.files.push({ ...item, path });
+		}
+	}
+	scalars(next, patch, ["summary"]);
+	return normalizeReview(next);
+}
+
+const hunkRef = (file: Json, hunk: Json): string => {
+	const lines = hunk.lines as DiffLine[];
+	const oldCount = lines.filter((l) => l.kind !== "add").length;
+	const newCount = lines.filter((l) => l.kind !== "del").length;
+	return `${hunk.id}: ${file.path} @@ -${hunk.oldStart},${oldCount} +${hunk.newStart},${newCount} @@${hunk.header ? ` ${hunk.header}` : ""}`;
+};
+
+function summaryReview(surface: Surface): string {
+	const files = (surface.spec as { files: Json[] }).files;
+	const hunks = files.flatMap((f) => f.hunks as Json[]);
+	const all = (kind: string) => hunks.reduce((n, h) => n + (h.lines as DiffLine[]).filter((l) => l.kind === kind).length, 0);
+	const decided = hunks.filter((h) => h.decision !== undefined).length;
+	const lines = [
+		`Review "${surface.title}" (${surface.id}, v${surface.version}) is shown to the user: ${plural(files.length, "file")}, ` +
+			`+${all("add")} −${all("del")}, ${decided} of ${plural(hunks.length, "hunk")} decided.`,
+	];
+	const spec = surface.spec as { summary?: string };
+	if (spec.summary) lines.push(cut(spec.summary, 200));
+	for (const file of files) {
+		lines.push(`- ${file.path} (${file.status}${file.oldPath ? ` from ${file.oldPath}` : ""})`);
+		for (const hunk of file.hunks as Json[]) {
+			const state = hunk.applied ? "applied" : (hunk.decision as string | undefined) ?? "undecided";
+			const comment = hunk.comment ? ` — comment: ${quoted(hunk.comment, 120)}` : "";
+			lines.push(`  - [${state}] ${hunkRef(file, hunk)}${comment}`);
+		}
+	}
+	if (lines.length > LIMITS.summaryLines) lines.splice(LIMITS.summaryLines, lines.length, `… and ${lines.length - LIMITS.summaryLines} more hunks`);
+	const unapplied = hunks.filter((h) => h.decision === "accepted" && !h.applied).length;
+	if (decided < hunks.length) {
+		lines.push(`The user decides each hunk (accept, reject, comment); decisions arrive as a "${EVENT_MESSAGE}" message (op decide). Write no undecided or rejected hunk; apply only accepted ones.`);
+	} else if (unapplied > 0) {
+		lines.push("Every hunk is decided: apply only the accepted ones, then mark them with update patch {applied: [hunk ids]}.");
+	} else {
+		lines.push("Every hunk is decided and every accepted one is applied.");
+	}
+	return lines.join("\n");
+}
+
+/** What the agent is told about a review's newly sent decisions. */
+function reviewDecisions(surface: Surface, changes: unknown[], note: string | undefined): string {
+	const files = (surface.spec as { files: Json[] }).files;
+	const placed = files.flatMap((file) => (file.hunks as Json[]).map((hunk) => ({ file, hunk })));
+	const ref = (id: string) => {
+		const found = placed.find((p) => p.hunk.id === id);
+		return found ? hunkRef(found.file, found.hunk) : id;
+	};
+	const decided = changes.flatMap((c) => (isObject(c) && c.op === "decide" && typeof c.hunk === "string" ? [c] : []));
+	const pick = (decision: string | null) => decided.filter((c) => (c.decision ?? null) === decision);
+	const accepted = pick("accepted");
+	const rejected = pick("rejected");
+	const commented = decided.filter((c) => typeof c.comment === "string" && c.comment !== "");
+	const undecided = placed.filter((p) => p.hunk.decision === undefined && !p.hunk.applied).map((p) => p.hunk.id as string);
+	const lines = [`The user reviewed the changes in "${surface.title}" (${surface.id}, now v${surface.version}):`];
+	if (accepted.length > 0) {
+		lines.push("Accepted: apply exactly these hunks as proposed:", ...accepted.map((c) => `- ${ref(c.hunk as string)}`));
+	}
+	if (rejected.length > 0) {
+		lines.push("Rejected: do NOT apply these hunks:", ...rejected.map((c) => `- ${ref(c.hunk as string)}`));
+	}
+	if (commented.length > 0) {
+		lines.push(
+			"Comments to address (on an accepted hunk, apply it as the comment asks; on a rejected one, it says why or what to do instead; on an undecided one, answer it or revise the hunk with update):",
+			...commented.map((c) => `- ${c.hunk} (${(c.decision as string | null) ?? "undecided"}): ${quoted(c.comment, 400)}`),
+		);
+	}
+	if (undecided.length > 0) lines.push(listed("Still undecided (don't apply these yet; decisions on them arrive later)", undecided));
+	if (note) lines.push(`Note from the user: ${note}`);
+	if (accepted.length > 0) {
+		lines.push(`After applying, call gentle_ui update with ${JSON.stringify({ action: "update", id: surface.id, patch: { applied: accepted.map((c) => c.hunk) } })} so the user sees them applied.`);
+	}
+	lines.push(`Changes: ${JSON.stringify(changes)}`);
+	return lines.join("\n");
+}
+
 // ── html: an agent-written page, run as an MCP App ─────────────────────────
 
 const HTML_MAX = 512 * 1024;
@@ -1183,6 +1563,7 @@ const KINDS: Record<string, KindDef> = {
 	kanban: { noun: "board", title: "Board", normalize: normalizeKanban, patch: patchKanban, summary: summaryKanban, instructions: kanbanInstructions },
 	chart: { noun: "chart", title: "Chart", normalize: normalizeChart, patch: patchChart, summary: (s) => withLive(summaryChart(s), s) },
 	html: { noun: "HTML UI", title: "HTML", normalize: normalizeHtml, patch: patchHtml, summary: summaryHtml },
+	review: { noun: "review", title: "Review", normalize: normalizeReview, patch: patchReview, summary: summaryReview },
 };
 
 const KIND_EXAMPLES = [
@@ -1191,13 +1572,14 @@ const KIND_EXAMPLES = [
 	{ kind: "checklist", title: "Migration plan", spec: { items: [{ id: "backup", label: "Back up the DB" }, { id: "migrate", label: "Run migrations", items: [{ id: "users", label: "users table" }] }] } },
 	{ kind: "kanban", title: "Sprint", spec: { columns: [{ id: "todo", label: "To do" }, { id: "doing", label: "Doing", limit: 3 }, { id: "done", label: "Done" }], cards: [{ id: "oauth", title: "OAuth login", column: "doing", tags: ["backend"] }] } },
 	{ kind: "chart", title: "p95 latency", spec: { type: "line", labels: ["Mon", "Tue", "Wed"], series: [{ name: "api", values: [120, 135, 98] }], unit: "ms" } },
+	{ kind: "review", title: "Rename login", spec: { summary: "login → sign_in", files: [{ path: "src/auth.ts", hunks: [{ id: "auth-1", header: "export function", oldStart: 12, newStart: 12, lines: [" export function", "-login(user) {", "+signIn(user) {", "   return check(user);"] }] }, { path: "src/app.ts", before: "login(u);\n", after: "signIn(u);\n" }] } },
 ].map((example) => `gentle_ui ${example.kind} example: ${JSON.stringify({ action: "show", ...example })}`);
 
 const Params = Type.Object({
 	action: StringEnum(["show", "update", "close"] as const),
 	id: Type.Optional(Type.String({ description: "Stable slug for the UI (show) or the id to update/close" })),
 	title: Type.Optional(Type.String({ description: "Short title, default the kind's name (\"Diagram\", \"Table\"…)" })),
-	kind: Type.Optional(StringEnum(["diagram", "table", "form", "checklist", "kanban", "chart", "html"] as const, { description: "For show, default diagram; an id keeps its kind" })),
+	kind: Type.Optional(StringEnum(["diagram", "table", "form", "checklist", "kanban", "chart", "html", "review"] as const, { description: "For show, default diagram; an id keeps its kind" })),
 	spec: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
 		description:
@@ -1211,7 +1593,8 @@ const Params = Type.Object({
 			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked?, live? }. ` +
 			`live (table, chart, checklist; the app fills the data): { source: ${LIVE_SOURCES.filter((s) => s !== "command").join("|")}, map? } or { command: {cmd, cwd?, parse: json|lines|csv}, interval?: seconds ≥ ${LIVE.minInterval}, map? }; ` +
 			"map: { items?: path to the records, id?, columns?: {key: path} (table), label?, status?, note? (checklist), label?, series?: {name: path} (chart) } with JSONPath-lite paths ($.a.b, $.list[0], $.list[*], relative to each record). " +
-			"html: { html: self-contained page ≤512 KiB, height?: px, data?: object (the page's tool input/result), csp?: { connectDomains?, resourceDomains?, frameDomains?, baseUriDomains? } (origins; default no network) }.",
+			"html: { html: self-contained page ≤512 KiB, height?: px, data?: object (the page's tool input/result), csp?: { connectDomains?, resourceDomains?, frameDomains?, baseUriDomains? } (origins; default no network) }. " +
+			"review: { summary?, files: [{path, status?: added|modified|deleted|renamed, oldPath?, language?, hunks: [{id, header?, oldStart, newStart, lines: [\"+added\"|\"-removed\"|\" context\" or {kind: context|add|del, text}], note?}]}] } or per file {path, before?, after?} (whole texts; hunks are computed; no before = added, no after = deleted).",
 	})),
 	patch: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
@@ -1221,8 +1604,10 @@ const Params = Type.Object({
 			"form: { fields? (by id), values?: {id: value}, remove?: {fields}, submitted? } (an update reopens a submitted form). " +
 			"checklist: { items? (by id at any level; parent: id|null places it; status: pending|running|done|failed|skipped), remove?: {items}, run?, live? }. " +
 			"kanban: { cards? (by id; agentId: the subagent you dispatched), columns? (by id), remove?: {cards,columns} }. chart: { series? (by name), remove?: {series}, labels?, type?, titles?, live? }. table: also live?. " +
-			"html: { html?, height?, csp? (replace; null clears), data?: {merged; null deletes a key} } (data-only updates reach the open page without reloading).",
+			"html: { html?, height?, csp? (replace; null clears), data?: {merged; null deletes a key} } (data-only updates reach the open page without reloading). " +
+			"review: { applied?: [hunk ids you wrote], hunks? (by id; decision: null asks again), files? (by path, replace), remove?: {files,hunks}, summary? }.",
 	})),
+	wait: Type.Optional(Type.Boolean({ description: "review only: wait for the user's decisions and get them as this call's result (default false: they arrive later as a message)" })),
 });
 
 export default function gentleUi(pi: ExtensionAPI) {
@@ -1231,6 +1616,9 @@ export default function gentleUi(pi: ExtensionAPI) {
 	const pendingContext = new Map<string, { surface: Surface; change: Json }>();
 	// Every id seen on the branch, closed ones included, so `ui-<n>` never repeats.
 	const seen = new Set<string>();
+	// Reviews a `wait: true` call is waiting on, by id: `decided` ends the
+	// call with the user's decisions, `cancel` with why it stopped waiting.
+	const waiting = new Map<string, { decided: (surface: Surface, text: string) => void; cancel: (why: string) => void }>();
 
 	const remember = (details: unknown) => {
 		if (!isObject(details) || typeof details.id !== "string" || details.id === "") return;
@@ -1240,6 +1628,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 	};
 
 	const reconstruct = (ctx: ExtensionContext) => {
+		for (const wait of [...waiting.values()]) wait.cancel("The session changed while waiting for the user's decisions.");
 		surfaces.clear();
 		pendingContext.clear();
 		seen.clear();
@@ -1289,9 +1678,9 @@ export default function gentleUi(pi: ExtensionAPI) {
 		name: TOOL,
 		label: "Gentle UI",
 		description:
-			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, table, form, checklist, kanban board, chart or an html page), " +
+			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, table, form, checklist, kanban board, chart, change review or an html page), " +
 			"update it (spec replaces, patch merges) or close it. The user can edit or use it (charts are read-only); the result summarizes its current state.",
-		promptSnippet: "Show, update or close an interactive diagram, table, form, checklist, kanban board, chart or html page the user can edit in the app",
+		promptSnippet: "Show, update or close an interactive diagram, table, form, checklist, kanban board, chart, change review or html page the user can edit in the app",
 		promptGuidelines: [
 			"Use gentle_ui when the user should see or act on structured content, picking the kind by what they will do: diagram for architecture, data flow and dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs they check off or reorder; kanban for work items across stages; chart for numbers (read-only). Don't use gentle_ui for an answer that fits in a short reply.",
 			"The user is in the Gentle Shell desktop app, where a gentle_ui diagram appears right in the conversation and they can move, connect and correct it. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
@@ -1308,6 +1697,9 @@ export default function gentleUi(pi: ExtensionAPI) {
 			"gentle_ui tables, charts and checklists can be live: spec.live {source: jobs|subagents|git:status|git:log|todo} or {command: {cmd, cwd?, parse}, interval} with a map of JSONPath-lite picks. The app reads the data itself and keeps the UI current (commands only after the user allows them on the card), so don't push rows or values for a live UI; use it for dashboards of background jobs, subagents, git state or a test command's JSON.",
 			"Use gentle_ui kind html only for custom interactive visuals, simulations, calculators or working prototypes no other kind fits (design screens and mockups stay in gentle_design). The page is an MCP App: self-contained (inline JS/CSS, no network unless spec.csp lists origins), put changing values in spec.data and update them with patch {data}.",
 			"A gentle_ui html page talks JSON-RPC 2.0 over window.parent.postMessage(msg, \"*\"): request ui/initialize {protocolVersion:\"2026-01-26\",appInfo:{name,version},appCapabilities:{}} (result.hostContext.styles.variables: theme CSS vars like --color-background-primary, --color-text-primary, --color-ring-primary, --font-sans; apply them), then notify ui/notifications/initialized; it receives ui/notifications/tool-result {structuredContent: spec.data}. Request ui/message {role:\"user\",content:[{type:\"text\",text}]} to message you, ui/update-model-context {content|structuredContent} to share state, ui/open-link {url}; notify ui/notifications/size-changed {height}.",
+			"Use gentle_ui kind review to let the user review proposed file changes before you write them: show it before large or risky edits, and before every edit when the user asked for review mode. Give per file hunks (lines \"+…\", \"-…\", \" …\" with oldStart/newStart) or before/after texts. Don't write any of those changes until the decisions arrive.",
+			`gentle_ui review decisions arrive as a "${EVENT_MESSAGE}" message (or, with wait: true, as the tool result): apply ONLY the accepted hunks, exactly as proposed or as their comments ask; never apply rejected or undecided ones (revise a rejected hunk with update if its comment asks for something else). Then call update with patch {applied: [hunk ids]} so the card shows them applied.`,
+			"Use gentle_ui review with wait: true when you can't continue without the decisions (the call returns them; the user can stop it); otherwise end your turn after showing the review.",
 		],
 		parameters: Params,
 		executionMode: "sequential",
@@ -1325,7 +1717,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 			}
 			return parsed as never;
 		},
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		async execute(_toolCallId, params, signal, onUpdate, ctx) {
 			workspaceRoot = ctx.cwd;
 			if (params.action === "close") {
 				const surface = existing(params.id);
@@ -1365,7 +1757,30 @@ export default function gentleUi(pi: ExtensionAPI) {
 			surfaces.set(surface.id, surface);
 			seen.add(surface.id);
 			const text = (KINDS[surface.kind] ?? KINDS.diagram).summary(surface);
-			return { content: [{ type: "text", text }], details: surface };
+			if (params.wait !== true) return { content: [{ type: "text", text }], details: surface };
+			if (surface.kind !== "review") throw new Error("gentle_ui: wait is only for kind review");
+			// The card shows from this partial result while the call waits;
+			// the user's decisions (`/gentle-ui:event`) end it, as do Stop,
+			// a session change or the time limit (the review stays open).
+			onUpdate?.({ content: [{ type: "text", text: `${text}\nWaiting for the user's decisions…` }], details: surface });
+			const id = surface.id;
+			waiting.get(id)?.cancel("A newer version of this review is waiting instead.");
+			const { promise, resolve } = Promise.withResolvers<{ content: { type: "text"; text: string }[]; details: Surface }>();
+			const finish = (details: Surface, result: string) => {
+				clearTimeout(timer);
+				signal?.removeEventListener("abort", onAbort);
+				if (waiting.get(id) === wait) waiting.delete(id);
+				resolve({ content: [{ type: "text", text: result }], details });
+			};
+			const stopped = (why: string) =>
+				finish(surfaces.get(id) ?? surface, `${why} The review stays open: decisions the user sends later arrive as "${EVENT_MESSAGE}" messages; write none of its hunks before then.`);
+			const onAbort = () => stopped("The user stopped waiting before deciding.");
+			const timer = setTimeout(() => stopped(`No decisions after ${REVIEW_WAIT_MS / 60000} minutes.`), REVIEW_WAIT_MS);
+			const wait = { decided: finish, cancel: stopped };
+			waiting.set(id, wait);
+			if (signal?.aborted) onAbort();
+			else signal?.addEventListener("abort", onAbort, { once: true });
+			return await promise;
 		},
 	});
 
@@ -1483,6 +1898,15 @@ export default function gentleUi(pi: ExtensionAPI) {
 					...messages,
 					...(shared ? [`Context the page shared: ${contextText(shared.change)}`] : []),
 				].join("\n");
+			} else if (current.kind === "review") {
+				content = `${reviewDecisions(surface, changes, note)}\n${summaryReview(surface)}`;
+				// A `wait: true` call gets the decisions as its result instead.
+				const wait = waiting.get(surface.id);
+				if (wait) {
+					wait.decided(surface, content);
+					answer({ ok: true, current: surface.version });
+					return;
+				}
 			} else {
 				content = [
 					`The user edited the ${def.noun} "${surface.title}" (${surface.id}, now v${surface.version}) in the app:`,

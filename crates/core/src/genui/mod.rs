@@ -15,6 +15,7 @@ pub mod kanban;
 pub mod layout;
 pub mod live;
 pub mod refs;
+pub mod review;
 pub mod table;
 pub mod template;
 

@@ -11,6 +11,7 @@ use gentle_core::genui::edits::{Editable as _, plural};
 use gentle_core::genui::form::Form;
 use gentle_core::genui::kanban::{self, Board, card_count};
 use gentle_core::genui::live::Live;
+use gentle_core::genui::review::{Decision, Review};
 use gentle_core::genui::table::Table;
 use gentle_core::genui::{self, Outcome, Snapshot};
 use gpui_kit::assets::IconName;
@@ -28,6 +29,7 @@ use super::form::FormState;
 use super::kanban::KanbanState;
 use super::live::{AgentStatus, LiveState, SharedEnv};
 use super::motion::Glides;
+use super::review::ReviewState;
 use super::table::TableState;
 use crate::shared::ui;
 
@@ -38,12 +40,13 @@ pub(super) const CHROME: f32 = 38. + 38.;
 pub(super) const MAX_HEIGHT: f32 = 480.;
 
 /// Wire kind, default title, header icon.
-const KINDS: [(&str, &str, IconName); 5] = [
+const KINDS: [(&str, &str, IconName); 6] = [
     ("table", "Table", IconName::Table),
     ("form", "Form", IconName::ClipboardList),
     ("checklist", "Checklist", IconName::ListChecks),
     ("kanban", "Board", IconName::SquareKanban),
     ("chart", "Chart", IconName::ChartColumn),
+    ("review", "Review", IconName::GitCompare),
 ];
 
 /// Whether `kind` is drawn by a [`PanelView`].
@@ -74,6 +77,7 @@ pub(super) enum Body {
     Checklist(ChecklistState),
     Kanban(KanbanState),
     Chart(ChartState),
+    Review(ReviewState),
 }
 
 /// `$e` bound to the kind's edits (`mut`: mutably); charts have none.
@@ -93,6 +97,10 @@ macro_rules! edits {
                 $then
             }
             Body::Kanban(s) => {
+                let $e = &s.edits;
+                $then
+            }
+            Body::Review(s) => {
                 let $e = &s.edits;
                 $then
             }
@@ -117,6 +125,10 @@ macro_rules! edits {
                 let $e = &mut s.edits;
                 $then
             }
+            Body::Review(s) => {
+                let $e = &mut s.edits;
+                $then
+            }
             Body::Chart(_) => $chart,
         }
     };
@@ -130,6 +142,7 @@ impl Body {
             "checklist" => Body::Checklist(ChecklistState::new(Checklist::parse(spec)?)),
             "kanban" => Body::Kanban(KanbanState::new(Board::parse(spec)?)),
             "chart" => Body::Chart(ChartState::new(Chart::parse(spec)?)),
+            "review" => Body::Review(ReviewState::new(Review::parse(spec)?)),
             other => return Err(vec![format!("unknown kind \"{other}\"")]),
         })
     }
@@ -143,6 +156,7 @@ impl Body {
             Body::Checklist(s) => s.rebase(Checklist::parse(spec)?),
             Body::Kanban(s) => s.rebase(Board::parse(spec)?),
             Body::Chart(s) => s.rebase(Chart::parse(spec)?),
+            Body::Review(s) => s.rebase(Review::parse(spec)?),
         }
         Ok(())
     }
@@ -155,6 +169,7 @@ impl Body {
             Body::Checklist(s) => Checklist::parse(spec).is_ok_and(|c| &c == s.edits.base()),
             Body::Kanban(s) => Board::parse(spec).is_ok_and(|b| &b == s.edits.base()),
             Body::Chart(s) => Chart::parse(spec).is_ok_and(|c| c == s.chart),
+            Body::Review(s) => Review::parse(spec).is_ok_and(|r| &r == s.edits.base()),
         }
     }
 
@@ -166,6 +181,7 @@ impl Body {
             Body::Checklist(s) => s.edits.base().to_value(),
             Body::Kanban(s) => s.edits.base().to_value(),
             Body::Chart(s) => s.chart.to_value(),
+            Body::Review(s) => s.edits.base().to_value(),
         }
     }
 
@@ -175,7 +191,7 @@ impl Body {
             Body::Table(s) => s.edits.base().live.as_deref(),
             Body::Checklist(s) => s.edits.base().live.as_deref(),
             Body::Chart(s) => s.chart.live.as_deref(),
-            Body::Form(_) | Body::Kanban(_) => None,
+            Body::Form(_) | Body::Kanban(_) | Body::Review(_) => None,
         }
     }
 
@@ -235,6 +251,7 @@ impl Body {
             Body::Checklist(s) => s.edits.working().to_value(),
             Body::Kanban(s) => s.edits.working().to_value(),
             Body::Chart(s) => s.chart.to_value(),
+            Body::Review(s) => s.edits.working().to_value(),
         }
     }
 
@@ -260,6 +277,7 @@ impl Body {
             }
             Body::Kanban(s) => card_count(s.edits.working()),
             Body::Chart(s) => format!("{} · {} series", s.chart.kind.name(), s.chart.series.len()),
+            Body::Review(s) => s.edits.working().stats(),
         }
     }
 
@@ -276,6 +294,9 @@ impl Body {
             }
             Body::Kanban(_) => "Drag cards between columns · click one for its details",
             Body::Chart(_) => "Hover for values · click one to ask about it",
+            Body::Review(_) => {
+                "j/k to move · a accept · r reject · c comment · Shift-A/R the whole file"
+            }
         }
     }
 
@@ -287,6 +308,7 @@ impl Body {
             Body::Checklist(s) => s.height(),
             Body::Kanban(s) => s.height(),
             Body::Chart(_) => 300.,
+            Body::Review(s) => s.height(),
         }
     }
 }
@@ -575,6 +597,7 @@ impl PanelView {
             Some(Body::Kanban(_)) => self.kanban_key(keystroke, window, cx),
             Some(Body::Table(_)) => self.table_key(keystroke, window, cx),
             Some(Body::Chart(_)) => self.chart_key(keystroke, cx),
+            Some(Body::Review(_)) => self.review_key(keystroke, window, cx),
             _ => false,
         };
         if handled {
@@ -677,6 +700,31 @@ impl PanelView {
                             ),
                         )
                     })
+                    .when(matches!(self.body, Some(Body::Review(_))), |d| {
+                        d.child(
+                            div()
+                                .debug_selector(|| "genui-review-accept-all".into())
+                                .child(
+                                    tool(
+                                        "genui-review-accept-all",
+                                        IconName::CheckCheck,
+                                        "Accept all",
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| {
+                                            this.decide_all(None, Decision::Accepted, cx)
+                                        },
+                                    )),
+                                ),
+                        )
+                        .child(
+                            tool("genui-review-reject-all", IconName::X, "Reject all").on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.decide_all(None, Decision::Rejected, cx)
+                                }),
+                            ),
+                        )
+                    })
                     .when(editable, |d| {
                         d.child(
                             tool("genui-panel-undo", IconName::Undo2, "Undo")
@@ -735,6 +783,7 @@ impl PanelView {
             Some(Body::Checklist(_)) => self.render_checklist(window, cx),
             Some(Body::Kanban(_)) => self.render_kanban(window, cx),
             Some(Body::Chart(_)) => self.render_chart(window, cx),
+            Some(Body::Review(_)) => self.render_review(window, cx),
             None => div().into_any_element(),
         }
     }
@@ -801,8 +850,12 @@ impl PanelView {
         }
         let pending = self.pending();
         if pending > 0 {
+            let (count, send) = match &self.body {
+                Some(Body::Review(s)) => (s.edits.working().progress(), "Send decisions"),
+                _ => (plural(pending, "change"), "Send to agent"),
+            };
             return self
-                .pending_footer(footer, plural(pending, "change"), "Send to agent", cx)
+                .pending_footer(footer, count, send, cx)
                 .into_any_element();
         }
         match &self.send {

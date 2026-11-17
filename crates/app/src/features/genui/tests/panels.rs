@@ -666,3 +666,161 @@ fn a_command_source_runs_nothing_until_the_user_allows_it(cx: &mut TestAppContex
         "once is for this card only"
     );
 }
+
+// ── Change review ───────────────────────────────────────────────────────────
+
+fn review_spec() -> Value {
+    json!({
+        "summary": "Rename login to sign_in",
+        "files": [
+            {"path": "src/auth.rs", "hunks": [
+                {"id": "sig", "oldStart": 1, "newStart": 1, "lines": [" fn main() {", "-    login();", "+    sign_in();", " }"]},
+                {"id": "doc", "oldStart": 20, "newStart": 20, "lines": ["-// logs in", "+// signs in"]}
+            ]},
+            {"path": "README.md", "hunks": [
+                {"id": "readme", "oldStart": 3, "newStart": 3, "lines": ["+Sign in with OAuth."]}
+            ]}
+        ]
+    })
+}
+
+#[gpui::test]
+fn review_decides_by_click_and_keys_then_sends_decisions(cx: &mut TestAppContext) {
+    let (host, cx) = open(cx, "review", review_spec());
+    click(cx, "genui-hunk-accept-sig");
+    assert_eq!(pending(&host, cx), 1);
+
+    // The click made "sig" current: j moves to "doc", r rejects it, c
+    // comments on it.
+    cx.simulate_keystrokes("j r c");
+    cx.simulate_input("keep the old wording");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(pending(&host, cx), 2);
+
+    // A second press of the same decision leaves the hunk undecided again.
+    click(cx, "genui-hunk-accept-sig");
+    assert_eq!(pending(&host, cx), 1);
+    click(cx, "genui-hunk-accept-sig");
+
+    // The file list scrolls to README; its header accepts the whole file.
+    click(cx, "genui-review-file-README.md");
+    click(cx, "genui-review-accept-file-README.md");
+    assert_eq!(pending(&host, cx), 3);
+
+    click(cx, "genui-panel-send");
+    let event = last_event(&host, cx);
+    assert_eq!(event["version"], 1);
+    assert_eq!(
+        event["changes"],
+        json!([
+            {"op": "decide", "hunk": "sig", "decision": "accepted"},
+            {"op": "decide", "hunk": "doc", "decision": "rejected", "comment": "keep the old wording"},
+            {"op": "decide", "hunk": "readme", "decision": "accepted"}
+        ])
+    );
+    assert_eq!(
+        event["summary"],
+        json!([
+            "accepted hunk 1 of src/auth.rs",
+            "rejected hunk 2 of src/auth.rs, commenting “keep the old wording”",
+            "accepted README.md"
+        ])
+    );
+    assert_eq!(
+        event["spec"]["files"][0]["hunks"][1]["decision"],
+        "rejected"
+    );
+
+    // The extension took them; the agent then marks what it applied.
+    answer(&host, 1, Ok(2), cx);
+    assert_eq!(pending(&host, cx), 0);
+    let mut spec = event["spec"].clone();
+    spec["files"][0]["hunks"][0]["applied"] = json!(true);
+    let view = cx.update(|_, cx| host.read(cx).view.clone());
+    let snapshot = Snapshot {
+        id: "ui-review".into(),
+        version: 3,
+        kind: "review".into(),
+        title: "Test review".into(),
+        spec,
+        closed: false,
+    };
+    cx.update(|_, cx| view.update(cx, |view, cx| view.set_snapshot(&snapshot, false, cx)));
+    cx.run_until_parked();
+    // Applied hunks are final: no decision buttons on them.
+    cx.update(|window, cx| view.update(cx, |view, cx| view.select_file("src/auth.rs", window, cx)));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("genui-hunk-bar-sig").is_some());
+    assert!(cx.debug_bounds("genui-hunk-accept-sig").is_none());
+    assert!(cx.debug_bounds("genui-hunk-accept-doc").is_some());
+}
+
+#[gpui::test]
+fn review_accept_all_then_undo(cx: &mut TestAppContext) {
+    let (host, cx) = open(cx, "review", review_spec());
+    click(cx, "genui-review-accept-all");
+    assert_eq!(pending(&host, cx), 3);
+    let progress = cx.update(|_, cx| match &host.read(cx).view.read(cx).body {
+        Some(super::super::panel::Body::Review(s)) => s.edits.working().progress(),
+        _ => String::new(),
+    });
+    assert_eq!(progress, "3 of 3 hunks decided");
+    // One step undoes the whole Accept all.
+    let view = cx.update(|_, cx| host.read(cx).view.clone());
+    cx.update(|_, cx| view.update(cx, |view, cx| view.undo(cx)));
+    assert_eq!(pending(&host, cx), 0);
+}
+
+/// Stands in for the conversation's rows: one `gentle_ui` tool item.
+struct Conversation {
+    genui: super::super::GenUi,
+    items: Vec<gentle_core::transcript::Item>,
+}
+
+impl Render for Conversation {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .child(self.genui.render_tool(0, &self.items[0], cx))
+    }
+}
+
+#[gpui::test]
+fn a_waiting_review_shows_while_its_call_runs(cx: &mut TestAppContext) {
+    use gentle_core::transcript::{Item, ToolStatus};
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let item = |details: Value| Item::Tool {
+        call_id: "c1".into(),
+        name: "gentle_ui".into(),
+        args: json!({"action": "show", "kind": "review", "wait": true}),
+        status: ToolStatus::Running,
+        output: String::new(),
+        details,
+        duration_ms: None,
+    };
+    let (view, cx) = cx.add_window_view(|_, _| Conversation {
+        genui: Default::default(),
+        items: vec![item(Value::Null)],
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("genui-hunk-bar-sig").is_none(),
+        "still drawing"
+    );
+
+    // The partial result carries the surface: the live card shows at once.
+    let details = json!({"id": "rv", "version": 1, "kind": "review", "title": "Rename", "spec": review_spec()});
+    cx.update(|_, cx| {
+        view.update(cx, |this, cx| {
+            this.items = vec![item(details)];
+            this.genui.sync(&this.items, 0, false, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("genui-hunk-bar-sig").is_some());
+}

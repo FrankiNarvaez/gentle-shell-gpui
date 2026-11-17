@@ -1250,12 +1250,13 @@ pub(super) fn event_card(details: &serde_json::Value) -> AnyElement {
             row(
                 IconName::Pencil,
                 ui::accent(),
-                if details["inserted"] == true {
-                    format!("You inserted {title} from a template")
-                } else if details["kind"] == "html" {
-                    format!("You, from {title}")
-                } else {
-                    format!("You edited {title}")
+                match details["kind"].as_str() {
+                    _ if details["inserted"] == true => {
+                        format!("You inserted {title} from a template")
+                    }
+                    Some("html") => format!("You, from {title}"),
+                    Some("review") => format!("You reviewed {title}"),
+                    _ => format!("You edited {title}"),
                 },
                 None,
             )
