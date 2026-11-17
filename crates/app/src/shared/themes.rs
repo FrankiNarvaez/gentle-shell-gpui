@@ -806,7 +806,7 @@ pub fn init(cx: &mut App) {
                 let cwd = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
                 pi_rpc::resolve_backend(&cwd)
                     .ok()
-                    .and_then(|spec| crate::features::profiles::gentle_pi_root(&spec))
+                    .and_then(|spec| pi_rpc::gentle_pi_root(&spec))
                     .map(|root| read_theme_dir(&root.join("themes"), Source::Gentle))
                     .unwrap_or_default()
             })
