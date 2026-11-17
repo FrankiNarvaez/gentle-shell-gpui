@@ -16,6 +16,15 @@ const EVENT_COMMAND = "gentle-ui:event";
 const OUTCOME_WIDGET = "gentle-ui.outcome";
 // Model context an html page shares: held until the next turn starts.
 const CONTEXT_MESSAGE = "gentle-ui.context";
+// Agent UI (the app's Configuration): how readily the agent uses the tool.
+// GENTLE_UI_MODE at launch, `/gentle-ui:event {"op":"mode","mode"}` live.
+const MODE_ENV = "GENTLE_UI_MODE";
+const MODES = ["proactive", "asked", "off"] as const;
+type Mode = (typeof MODES)[number];
+const parseMode = (value: unknown): Mode | undefined => {
+	const text = typeof value === "string" ? value.trim().toLowerCase() : "";
+	return MODES.find((m) => m === text);
+};
 
 const NODE_KINDS = ["service", "database", "queue", "cache", "client", "external", "storage", "function", "note"];
 const STATUSES = ["planned", "existing", "deprecated", "risk"];
@@ -2118,6 +2127,44 @@ const KIND_EXAMPLES = [
 	{ kind: "timeline", title: "Launch plan", spec: { tasks: [{ id: "design", label: "Design", start: "2026-03-02", duration: 5 }, { id: "build", label: "Build", start: "2026-03-09", end: "2026-03-20", dependsOn: ["design"], progress: 30 }, { id: "launch", label: "Launch", start: "2026-03-23", milestone: true, dependsOn: ["build"] }] } },
 ].map((example) => `gentle_ui ${example.kind} example: ${JSON.stringify({ action: "show", ...example })}`);
 
+// The policy bullets each mode puts first among the tool's rules (Off
+// deactivates the tool, so its rules go with it).
+const POLICY: Record<Exclude<Mode, "off">, string[]> = {
+	proactive: [
+		"Use gentle_ui on your own initiative, without being asked, whenever a surface clearly beats prose: a system with 4+ interacting parts you explain or propose → diagram (with refs to the code); calls between components over time → sequence; a schema or migration → erd; a workflow or lifecycle → state; dated work with dependencies → timeline; a plan of 4+ steps or work you are about to execute → checklist with run: true; 3+ options or items compared on 2+ attributes → table; 2+ decisions you need from the user at once → one form instead of a string of questions; numbers over time or by category → chart; multi-file or risky edits → review before writing them.",
+		"Don't use gentle_ui for simple answers, one-liners, small edits, when the user wants text only, or to decorate. When a gentle_ui surface for the same thing is already open, update it instead of showing another. At most one new gentle_ui surface per reply unless the user asks for more; keep the prose around it short.",
+	],
+	asked: [
+		"The user wants gentle_ui surfaces only on request: use gentle_ui only when they ask for one (a diagram, table, form, chart, review… or to see, map, draw or plan something visually), or to update a surface already open; otherwise answer in text.",
+	],
+};
+// What the model is told while the tool is off, and the error a call gets.
+const OFF_RULE = "The user turned Agent UI off: gentle_ui is unavailable. Answer in text; gentle_ui surfaces earlier in the conversation are read-only for you.";
+const OFF_NOTE = "Agent UI is off in the app's settings: gentle_ui is unavailable, so don't try to update this surface; answer in text.";
+const OFF_ERROR = "gentle_ui is off: the user turned it off in the app (Configuration › Agent UI). Answer in text instead.";
+
+// How to use the tool, in every mode it is on.
+const GUIDELINES = [
+	"Pick the gentle_ui kind by what the user will do: diagram for architecture, data flow and dependencies; sequence for calls between components over time; erd for data models (read from the migrations or ORM models); state for state machines and lifecycles (current: the live state); timeline for dated plans with dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs; kanban for work items across stages; chart for numbers (read-only); review for file changes you propose.",
+	"The user is in the Gentle Shell desktop app, where gentle_ui surfaces appear right in the conversation and they can move, connect and correct them. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
+	"To change a UI already shown, call gentle_ui with action update and a small patch instead of a new show; ids are stable slugs (api, orders-db) reused across updates.",
+	`Attach ref { path (repo-relative), line?, endLine? } to every gentle_ui item that corresponds to code (a diagram node, erd table, table row, checklist item or kanban card) so the user can open it, e.g. "ref":{"path":"src/auth/mod.rs","line":42}; paths outside the workspace are rejected.`,
+	`The user's edits to a gentle_ui UI arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them. Such a message may also insert a saved UI (treat it like your own, update it by id) or ask you to add one to the project's docs.`,
+	"In gentle_ui specs omit x/y and let auto-layout place things; keep labels short and put details in description, tech or note.",
+	"A gentle_ui form's answers arrive once, when the user submits (op submit); wait for them instead of guessing. To ask again or change the questions, update the form: an update reopens it.",
+	`gentle_ui example: ${EXAMPLE}`,
+	...KIND_EXAMPLES,
+	"A gentle_ui checklist with run: true is a plan the user runs (Run, Run next, skip, reorder); an event tells you which step to do. Before a step update it to status running, after it to done or failed (with a note). After Run go on through the pending steps; after Run next stop after that step; after Stop start no new step.",
+	"A gentle_ui kanban column with starts: true dispatches work: a card dragged into it asks you to dispatch a subagent (card.agent {name, task} says which and what) with your own subagent tool; then update the card with agentId so it shows the subagent's live status and the user can stop it.",
+	"gentle_ui tables, charts and checklists can be live: spec.live {source: jobs|subagents|git:status|git:log|todo} or {command: {cmd, cwd?, parse}, interval} with a map of JSONPath-lite picks. The app keeps them current itself (commands only once the user allows them), so don't push rows or values to a live UI.",
+	"A gentle_ui review (before every edit when the user asked for review mode) gives per file hunks (lines \"+…\", \"-…\", \" …\" with oldStart/newStart) or before/after texts. Write none of it until the decisions arrive, then apply ONLY the accepted hunks (as proposed or as their comments ask), never rejected or undecided ones, and update with patch {applied: [hunk ids]}. Use wait: true only when you can't continue without the decisions (the call returns them); otherwise end your turn after showing it.",
+	"Use gentle_ui kind html only for custom interactive visuals, simulations, calculators or working prototypes no other kind fits (design screens and mockups stay in gentle_design). The page is an MCP App: self-contained (inline JS/CSS, no network unless spec.csp lists origins), put changing values in spec.data and update them with patch {data}.",
+	"A gentle_ui html page talks JSON-RPC 2.0 over window.parent.postMessage(msg, \"*\"): request ui/initialize {protocolVersion:\"2026-01-26\",appInfo:{name,version},appCapabilities:{}} (result.hostContext.styles.variables: theme CSS vars like --color-background-primary, --color-text-primary, --color-ring-primary, --font-sans; apply them), then notify ui/notifications/initialized; it receives ui/notifications/tool-result {structuredContent: spec.data}. Request ui/message {role:\"user\",content:[{type:\"text\",text}]} to message you, ui/update-model-context {content|structuredContent} to share state, ui/open-link {url}; notify ui/notifications/size-changed {height}.",
+];
+
+/** The tool's rules in `mode`: its policy first, then how to use it. */
+const guidelines = (mode: Mode): string[] => (mode === "off" ? GUIDELINES : [...POLICY[mode], ...GUIDELINES]);
+
 const Params = Type.Object({
 	action: StringEnum(["show", "update", "close"] as const),
 	id: Type.Optional(Type.String({ description: "Stable slug for the UI (show) or the id to update/close" })),
@@ -2168,6 +2215,19 @@ export default function gentleUi(pi: ExtensionAPI) {
 	// Reviews a `wait: true` call is waiting on, by id: `decided` ends the
 	// call with the user's decisions, `cancel` with why it stopped waiting.
 	const waiting = new Map<string, { decided: (surface: Surface, text: string) => void; cancel: (why: string) => void }>();
+	// Agent UI. The env var is updated with each change too, so the next
+	// load (a new or resumed session reloads extensions) starts in it.
+	let mode: Mode = parseMode(process.env[MODE_ENV]) ?? "proactive";
+	// The tool is inactive because of Off (not for another reason): turning
+	// Agent UI back on activates it again.
+	let offByMode = mode === "off";
+	const syncTools = () => {
+		const active = pi.getActiveTools();
+		const on = active.includes(TOOL);
+		if (mode === "off" && on) pi.setActiveTools(active.filter((name) => name !== TOOL));
+		else if (mode !== "off" && !on && offByMode) pi.setActiveTools([...active, TOOL]);
+		offByMode = mode === "off" && (on || offByMode);
+	};
 
 	const remember = (details: unknown) => {
 		if (!isObject(details) || typeof details.id !== "string" || details.id === "") return;
@@ -2192,6 +2252,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		workspaceRoot = ctx.cwd;
 		reconstruct(ctx);
+		syncTools();
 	});
 	pi.on("session_tree", async (_event, ctx) => {
 		workspaceRoot = ctx.cwd;
@@ -2207,6 +2268,15 @@ export default function gentleUi(pi: ExtensionAPI) {
 			.map(({ surface, change }) => `Context shared by the HTML UI "${surface.title}" (${surface.id}):\n${contextText(change)}`)
 			.join("\n\n");
 		return { message: { customType: CONTEXT_MESSAGE, content, display: false, details: { ids: shared.map((s) => s.surface.id) } } };
+	});
+	// The mode's policy, per run: Pi rebuilds the prompt options from the
+	// tools' own each run and patches only what changed, so an unchanged
+	// mode costs nothing and a new one replaces the rules once.
+	pi.on("before_agent_start", async (event) => {
+		syncTools();
+		const options = event.systemPromptOptions;
+		if (mode === "off") options.promptGuidelines.push(OFF_RULE);
+		else options.toolGuidelines[TOOL] = guidelines(mode);
 	});
 
 	const existing = (id: string | undefined): Surface => {
@@ -2230,23 +2300,9 @@ export default function gentleUi(pi: ExtensionAPI) {
 			"Show an interactive UI in the user's Gentle Shell app conversation (a diagram, sequence diagram, data model, state machine, timeline, table, form, checklist, kanban board, chart, change review or html page), " +
 			"update it (spec replaces, patch merges) or close it. The user can edit or use it (charts are read-only); the result summarizes its current state.",
 		promptSnippet: "Show, update or close an interactive diagram, sequence, data model, state machine, timeline, table, form, checklist, board, chart, change review or html page the user can edit in the app",
-		promptGuidelines: [
-			"Use gentle_ui when the user should see or act on structured content, picking the kind by what they will do: diagram for architecture, data flow and dependencies; sequence for calls between components over time; erd for data models (read from the migrations or ORM models); state for state machines and lifecycles (current: the live state); timeline for dated plans with dependencies; table for rows to compare, select or correct; form to ask several structured questions at once; checklist for plans and TODOs; kanban for work items across stages; chart for numbers (read-only); review for file changes you propose. Don't use gentle_ui for an answer that fits in a short reply.",
-			"The user is in the Gentle Shell desktop app, where gentle_ui surfaces appear right in the conversation and they can move, connect and correct them. When they ask to see, map, draw or plan an architecture, system or flow, use gentle_ui, not gentle_design: gentle_design is for HTML design canvases (screens, mockups, visual directions) opened in a browser.",
-			"To change a UI already shown, call gentle_ui with action update and a small patch instead of a new show; ids are stable slugs (api, orders-db) reused across updates.",
-			`Attach ref { path (repo-relative), line?, endLine? } to every gentle_ui item that corresponds to code (a diagram node, erd table, table row, checklist item or kanban card) so the user can open it, e.g. "ref":{"path":"src/auth/mod.rs","line":42}; paths outside the workspace are rejected.`,
-			`The user's edits to a gentle_ui UI arrive as "${EVENT_MESSAGE}" messages with the full current spec; they are authoritative, so build on them and don't undo them. Such a message may also insert a saved UI (treat it like your own, update it by id) or ask you to add one to the project's docs.`,
-			"In gentle_ui specs omit x/y and let auto-layout place things; keep labels short and put details in description, tech or note.",
-			"A gentle_ui form's answers arrive once, when the user submits (op submit); wait for them instead of guessing. To ask again or change the questions, update the form: an update reopens it.",
-			`gentle_ui example: ${EXAMPLE}`,
-			...KIND_EXAMPLES,
-			"A gentle_ui checklist with run: true is a plan the user runs (Run, Run next, skip, reorder); an event tells you which step to do. Before a step update it to status running, after it to done or failed (with a note). After Run go on through the pending steps; after Run next stop after that step; after Stop start no new step.",
-			"A gentle_ui kanban column with starts: true dispatches work: a card dragged into it asks you to dispatch a subagent (card.agent {name, task} says which and what) with your own subagent tool; then update the card with agentId so it shows the subagent's live status and the user can stop it.",
-			"gentle_ui tables, charts and checklists can be live: spec.live {source: jobs|subagents|git:status|git:log|todo} or {command: {cmd, cwd?, parse}, interval} with a map of JSONPath-lite picks. The app keeps them current itself (commands only once the user allows them), so don't push rows or values to a live UI.",
-			"Use gentle_ui kind review before large or risky edits, and before every edit when the user asked for review mode: per file hunks (lines \"+…\", \"-…\", \" …\" with oldStart/newStart) or before/after texts. Write none of it until the decisions arrive, then apply ONLY the accepted hunks (as proposed or as their comments ask), never rejected or undecided ones, and update with patch {applied: [hunk ids]}. Use wait: true only when you can't continue without the decisions (the call returns them); otherwise end your turn after showing it.",
-			"Use gentle_ui kind html only for custom interactive visuals, simulations, calculators or working prototypes no other kind fits (design screens and mockups stay in gentle_design). The page is an MCP App: self-contained (inline JS/CSS, no network unless spec.csp lists origins), put changing values in spec.data and update them with patch {data}.",
-			"A gentle_ui html page talks JSON-RPC 2.0 over window.parent.postMessage(msg, \"*\"): request ui/initialize {protocolVersion:\"2026-01-26\",appInfo:{name,version},appCapabilities:{}} (result.hostContext.styles.variables: theme CSS vars like --color-background-primary, --color-text-primary, --color-ring-primary, --font-sans; apply them), then notify ui/notifications/initialized; it receives ui/notifications/tool-result {structuredContent: spec.data}. Request ui/message {role:\"user\",content:[{type:\"text\",text}]} to message you, ui/update-model-context {content|structuredContent} to share state, ui/open-link {url}; notify ui/notifications/size-changed {height}.",
-		],
+		promptGuidelines: guidelines(mode),
+		// Off at launch: registered inactive (`syncTools` turns it on later).
+		defaultActive: mode !== "off",
 		parameters: Params,
 		executionMode: "sequential",
 		// Some models send the spec or patch as a JSON string.
@@ -2264,6 +2320,8 @@ export default function gentleUi(pi: ExtensionAPI) {
 			return parsed as never;
 		},
 		async execute(_toolCallId, params, signal, onUpdate, ctx) {
+			// A call already on its way when the user turned Agent UI off.
+			if (mode === "off") throw new Error(OFF_ERROR);
 			workspaceRoot = ctx.cwd;
 			if (params.action === "close") {
 				const surface = existing(params.id);
@@ -2342,6 +2400,19 @@ export default function gentleUi(pi: ExtensionAPI) {
 				ctx.ui.notify(`gentle_ui: unreadable event (${(error as Error).message})`, "error");
 				return;
 			}
+			// Agent UI changed in the app's Configuration: no surface, no answer
+			// (Pi reports the command handled); the next run gets the policy.
+			if (event.op === "mode") {
+				const next = parseMode(event.mode);
+				if (!next) {
+					ctx.ui.notify(`gentle_ui: unknown mode ${JSON.stringify(event.mode)}`, "error");
+					return;
+				}
+				mode = next;
+				process.env[MODE_ENV] = next;
+				syncTools();
+				return;
+			}
 			const id = typeof event.id === "string" ? event.id : "";
 			const baseVersion = typeof event.version === "number" ? event.version : undefined;
 			// Every event is answered, whatever its kind: the app's card shows
@@ -2369,7 +2440,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 				seen.add(surface.id);
 				const template = typeof event.template === "string" && event.template.trim() !== "" ? event.template.trim() : title;
 				const content = [
-					`The user inserted the ${def.noun} "${title}" (${surface.id}, v1) from their saved template "${template}"; it is shown in the conversation and is yours to update like any gentle_ui surface.`,
+					`The user inserted the ${def.noun} "${title}" (${surface.id}, v1) from their saved template "${template}"; it is shown in the conversation and ${mode === "off" ? `is theirs. ${OFF_NOTE}` : "is yours to update like any gentle_ui surface."}`,
 					def.summary(surface),
 				].join("\n");
 				// Shown at once; the agent reads it with the next prompt (or now, mid-turn).
@@ -2463,6 +2534,7 @@ export default function gentleUi(pi: ExtensionAPI) {
 					def.summary(surface),
 				].join("\n");
 			}
+			if (mode === "off") content += `\n${OFF_NOTE}`;
 			pi.sendMessage(
 				{ customType: EVENT_MESSAGE, display: true, content, details: { ...surface, changes, summary: said, note, baseVersion: current.version } },
 				ctx.isIdle() ? { triggerTurn: true } : { deliverAs: "steer" },

@@ -98,6 +98,9 @@ pub struct SessionView {
     /// Generative UI surfaces the agent showed (`gentle_ui`), rebuilt
     /// from the transcript.
     genui: crate::features::genui::GenUi,
+    /// The Agent UI mode this tab's backend was last given (at launch or
+    /// by command); a different choice in Configuration gets sent to it.
+    genui_mode: gentle_core::genui::mode::Mode,
     /// This conversation is on screen with nothing over the window (the
     /// workspace says so): its web views may show.
     web_shown: bool,
@@ -257,6 +260,8 @@ impl SessionView {
                     cx.stop_propagation();
                 }
             }),
+            // Configuration › Agent UI changed: tell this tab's extension.
+            crate::features::genui::mode::follow(cx, |this, _, cx| this.sync_genui_mode(cx)),
         ];
         let mut this = Self {
             cwd,
@@ -267,6 +272,7 @@ impl SessionView {
             markdown: HashMap::new(),
             expanded: HashSet::new(),
             genui: Default::default(),
+            genui_mode: crate::features::genui::mode::mode(cx),
             web_shown: false,
             composer,
             composer_focused: false,

@@ -58,7 +58,7 @@ flowchart TD
 | `version`: stable versions, comparison and Gentle Shell update offer | `updates/`: launcher cache, npm query, clock. |
 | `engram`: observation model and query encoding | `memory/`: HTTP requests to Engram. |
 | `workspaces`: unique workspace names | `workspaces/`: saved model (uses `PaneTree`), reading and writing `workspaces.json`. |
-| `genui`: the `gentle_ui` diagram spec (parsing, limits, normalization), its layered auto-layout and hit testing, the change list between two versions (diff, apply, human-readable sentences) and the `/gentle-ui:event` command line | `genui/`: the Pi extension it ships (`gentle-ui.ts`, written by `extension.rs`), surfaces rebuilt from the transcript (`GenUi`), the diagram view (`DiagramView`: viewport, pointer and keyboard edits, undo, send) and its painting. |
+| `genui`: the `gentle_ui` diagram spec (parsing, limits, normalization), its layered auto-layout and hit testing, the change list between two versions (diff, apply, human-readable sentences), the `/gentle-ui:event` command line and the Agent UI mode (`mode`: saved value, launch variable, mode command) | `genui/`: the Pi extension it ships (`gentle-ui.ts`, written by `extension.rs`), surfaces rebuilt from the transcript (`GenUi`), the diagram view (`DiagramView`: viewport, pointer and keyboard edits, undo, send) and its painting; `mode.rs`: the Agent UI choice every tab follows. |
 
 ## Layout
 

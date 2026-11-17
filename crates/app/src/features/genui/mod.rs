@@ -33,6 +33,7 @@ mod form;
 mod html;
 mod kanban;
 mod live;
+pub mod mode;
 mod motion;
 mod paint;
 mod panel;

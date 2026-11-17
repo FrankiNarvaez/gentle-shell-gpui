@@ -15,6 +15,7 @@ pub mod html;
 pub mod kanban;
 pub mod layout;
 pub mod live;
+pub mod mode;
 pub mod refs;
 pub mod review;
 pub mod sequence;

@@ -10,6 +10,7 @@ use super::diagram::DiagramEvent;
 mod canvas;
 mod diagram;
 mod links;
+mod mode;
 mod panels;
 
 /// What a surface asked the conversation for.
