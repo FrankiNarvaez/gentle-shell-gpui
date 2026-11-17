@@ -1,5 +1,7 @@
-//! The default permission mode file (`<config>/permission-mode.json`). The
-//! mode itself, jobs and the ODD phase are pure: `gentle_core::gentle_state`.
+//! The default permission mode file (`<config>/permission-mode.json`): the
+//! fallback for a Shell without Desktop RPC's permission slice, which
+//! otherwise owns the mode and its default. The mode itself, jobs and the ODD
+//! phase are pure: `gentle_core::gentle_state`.
 
 use std::path::Path;
 
@@ -8,8 +10,9 @@ use serde_json::Value;
 
 /// Save the default every fresh session starts in:
 /// `<config>/permission-mode.json`, exactly two keys, mode 0600
-/// (lib/permission-mode-policy.ts). The live mode of a running session can
-/// only change from the terminal UI, so callers start a new session after.
+/// (lib/permission-mode-policy.ts). Only for a Shell that cannot switch the
+/// live session over Desktop RPC (`set_permission_mode`), so callers restart
+/// the backend after.
 pub fn save_default_mode(config: &Path, mode: PermissionMode) -> std::io::Result<()> {
     std::fs::create_dir_all(config)?;
     let body = format!(
@@ -29,6 +32,8 @@ pub fn save_default_mode(config: &Path, mode: PermissionMode) -> std::io::Result
 
 /// The default fresh sessions start in, from `<config>/permission-mode.json`
 /// (`None` when there's no valid file: Gentle Shell then starts in Normal).
+/// The picker's placeholder until Desktop RPC's `get_permission_mode`
+/// answers, and the only source on a Shell without it.
 pub fn read_default_mode(config: &Path) -> Option<PermissionMode> {
     let text = std::fs::read_to_string(config.join("permission-mode.json")).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;

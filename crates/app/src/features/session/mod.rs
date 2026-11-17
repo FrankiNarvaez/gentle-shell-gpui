@@ -113,7 +113,11 @@ pub struct SessionView {
     activity: state::TurnActivity,
     agents_panel: AgentsPanel,
     /// This session's live permission mode (Gentle Shell's `gentle:mode`
-    /// status), and the default new sessions start in (`permission-mode.json`).
+    /// status), and the default new sessions start in. Both follow Desktop
+    /// RPC's `get_permission_mode` / `set_permission_mode` /
+    /// `permission_mode_changed` once that slice answers. `default_mode`
+    /// starts as `permission-mode.json`, only a placeholder until then and
+    /// the source for an older Shell without Desktop RPC.
     mode: Option<gentle_core::gentle_state::PermissionMode>,
     default_mode: Option<gentle_core::gentle_state::PermissionMode>,
     _agents_ticker: Task<()>,
@@ -468,9 +472,9 @@ impl SessionView {
         cx.propagate();
     }
 
-    /// ⌘. (Ctrl+. elsewhere): stop the running turn.
+    /// ⌘. (Ctrl+. elsewhere): stop the running turn or `!command`.
     fn on_stop(&mut self, _: &Stop, _: &mut Window, cx: &mut Context<Self>) {
-        if self.busy() {
+        if self.stoppable() {
             self.stop(cx);
         } else {
             cx.propagate();
