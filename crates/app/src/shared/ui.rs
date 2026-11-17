@@ -375,6 +375,44 @@ pub fn provider_color(provider: &str) -> Hsla {
     palette[hash % palette.len()]
 }
 
+/// Prefix used by common Cmd shortcuts on macOS and Ctrl shortcuts elsewhere.
+///
+/// This matches the `key!()` bindings in `app/mod.rs`. Shortcuts that differ
+/// beyond their primary modifier should use [`platform_shortcut`] instead.
+pub const fn shortcut_prefix() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "⌘"
+    } else {
+        "Ctrl+"
+    }
+}
+
+/// Display a Cmd/Ctrl shortcut, such as `⌘K` or `Ctrl+K`.
+pub fn shortcut(key: &str) -> String {
+    format!("{}{key}", shortcut_prefix())
+}
+
+/// Display a Cmd/Ctrl+Shift shortcut, such as `⌘⇧T` or `Ctrl+Shift+T`.
+pub fn shortcut_shift(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("⌘⇧{key}")
+    } else {
+        format!("Ctrl+Shift+{key}")
+    }
+}
+
+/// A shortcut with genuinely different bindings on each platform.
+///
+/// For example, tiled panes use `⌘D` but `Ctrl+Shift+D` off macOS.
+/// Being `const` also allows static hints in other modules to use it.
+pub const fn platform_shortcut(mac: &'static str, other: &'static str) -> &'static str {
+    if cfg!(target_os = "macos") {
+        mac
+    } else {
+        other
+    }
+}
+
 /// A key cap for shortcut hints (`esc`, `↵`, `⌘`). Use [`key_button`] when the
 /// hint stands for one action the user could click.
 pub fn kbd(text: impl Into<SharedString>) -> Div {
@@ -778,6 +816,19 @@ mod tests {
             .map(|i| spring(i as f32 / 100.))
             .fold(0., f32::max);
         assert!(peak > 1.0 && peak < 1.05, "peak was {peak}");
+    }
+
+    #[test]
+    fn shortcuts_follow_the_platform_key_bindings() {
+        let (simple, shifted, special, prefix) = if cfg!(target_os = "macos") {
+            ("⌘K", "⌘⇧T", "⌘D", "⌘")
+        } else {
+            ("Ctrl+K", "Ctrl+Shift+T", "Ctrl+Shift+D", "Ctrl+")
+        };
+        assert_eq!(shortcut("K"), simple);
+        assert_eq!(shortcut_shift("T"), shifted);
+        assert_eq!(platform_shortcut("⌘D", "Ctrl+Shift+D"), special);
+        assert_eq!(shortcut_prefix(), prefix);
     }
 
     #[test]
