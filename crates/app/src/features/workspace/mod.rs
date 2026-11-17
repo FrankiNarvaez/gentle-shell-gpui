@@ -329,7 +329,7 @@ impl Workspace {
             })
             .collect();
         let tab_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Find an open tab…")
+            InputState::new(window, cx).placeholder("Find tabs in this workspace…")
         });
         let music = cx.new(|cx| Music::new(window, cx));
         let devices = cx.new(DevicePanel::new);
