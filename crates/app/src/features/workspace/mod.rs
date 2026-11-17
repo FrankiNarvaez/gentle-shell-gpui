@@ -95,6 +95,8 @@ pub enum WorkspaceEvent {
     RootChanged(PathBuf),
     /// The left sidebar was shown or hidden.
     SidebarToggled(bool),
+    /// Whether the files pane is actually in view (not hidden behind Tabs).
+    FilesVisibilityChanged(bool),
 }
 
 /// A window-level screen drawn over the active tab.
