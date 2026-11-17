@@ -549,7 +549,9 @@ impl PanelView {
                 );
         }
         if working.submitted {
-            let sending = matches!(self.send, SendState::Sending);
+            // Sent and not answered yet, or taken by an extension that doesn't
+            // answer (its echo makes the answers the base).
+            let sending = matches!(self.send, SendState::Sending { .. } | SendState::Sent);
             return footer
                 .when(sending, |d| {
                     d.text_color(ui::muted())
@@ -612,7 +614,7 @@ impl PanelView {
                         .xsmall()
                         .icon(Icon::new(IconName::Send))
                         .label(working.submit_label.clone())
-                        .disabled(matches!(self.send, SendState::Sending))
+                        .disabled(matches!(self.send, SendState::Sending { .. }))
                         .on_click(cx.listener(|this, _, _, cx| this.submit_form(cx))),
                 ),
             )

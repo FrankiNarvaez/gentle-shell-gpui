@@ -103,14 +103,17 @@ pub(super) enum Drag {
     MiniMap,
 }
 
-pub(super) enum SendState {
+/// Where a surface's last send stands; every kind uses it. `S` is what
+/// went out (the diagram keeps its sent copy here; panels keep theirs in
+/// their `Edits`, the html page has none).
+pub(super) enum SendState<S = ()> {
     Idle,
-    /// Waiting for the extension's answer about the edits made on `version`.
+    /// Waiting for the extension's answer about what was sent from `version`.
     Sending {
         version: u64,
-        spec: Diagram,
+        spec: S,
     },
-    /// The extension took the edits; says so until the next edit.
+    /// The extension took it; says so until the next edit.
     Sent,
     /// Not delivered, or rejected by the extension: the edits are kept.
     Failed(String),
@@ -171,7 +174,7 @@ pub struct DiagramView {
     pub(super) rename: Option<Rename>,
     pub(super) fields: Option<Fields>,
     pub(super) note: Option<Entity<InputState>>,
-    pub(super) send: SendState,
+    pub(super) send: SendState<Diagram>,
     /// The canvas' and the minimap's bounds last frame, written while painting.
     pub(super) bounds: Rc<Cell<Bounds<Pixels>>>,
     pub(super) minimap: Rc<Cell<Bounds<Pixels>>>,

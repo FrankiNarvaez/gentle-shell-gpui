@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use gentle_core::genui::apps::{self, Ask, Bridge};
 use gentle_core::genui::html::{self as spec, HtmlSpec};
-use gentle_core::genui::{self, Snapshot};
+use gentle_core::genui::{self, Outcome, Snapshot};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, Size, h_flex, v_flex};
@@ -54,11 +54,23 @@ struct Pages {
     view_csp: String,
 }
 
-/// The send in flight (one at a time).
+/// A `ui/message` on its way to the agent: the page's JSON-RPC request id
+/// (answered once the extension took it) and the event command.
+struct PageMessage {
+    /// `None` once the page that asked is gone.
+    id: Option<Value>,
+    version: u64,
+    command: String,
+}
+
+/// The send in flight (one at a time), until Gentle Shell ran its command.
 enum Sending {
-    /// A `ui/message`, answered with its JSON-RPC id once the extension took it.
-    Message(Value),
-    Context,
+    Message(PageMessage),
+    Context {
+        version: u64,
+    },
+    /// The extension already answered it ([`HtmlView::outcome`]).
+    Answered,
 }
 
 pub struct HtmlView {
@@ -85,6 +97,9 @@ pub struct HtmlView {
     /// The last `ui/message`'s fate, for the footer.
     send: SendState,
     in_flight: Option<Sending>,
+    /// A message the agent didn't get, kept for Retry (the page waits for
+    /// its answer until then, or until Discard).
+    unsent: Option<PageMessage>,
     /// The page's latest model context, not sent yet.
     context: Option<(Vec<Value>, Option<Value>)>,
     /// Bumped by each context update, so only the last one's timer sends.
@@ -135,6 +150,7 @@ impl HtmlView {
             ),
             send: SendState::Idle,
             in_flight: None,
+            unsent: None,
             context: None,
             context_generation: 0,
             link: None,
@@ -213,30 +229,99 @@ impl HtmlView {
         }
     }
 
-    /// The extension's answer to the last [`DiagramEvent::Send`].
+    /// Whether Gentle Shell ran the last [`DiagramEvent::Send`]'s command.
+    /// The extension answers first ([`Self::outcome`]); an answer only here
+    /// means an extension that doesn't send outcomes.
     pub fn sent(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
-        match self.in_flight.take() {
-            Some(Sending::Message(id)) => {
-                let answer = match &result {
-                    Ok(()) => apps::reply(&id, json!({})),
-                    Err(error) => apps::error(&id, apps::DENIED, error),
-                };
-                self.post(&answer, cx);
-                self.send = match result {
-                    Ok(()) => SendState::Sent,
-                    Err(error) => SendState::Failed(error),
-                };
+        if let Some(sending) = self.in_flight.take() {
+            self.settle(sending, result, cx);
+        }
+        // The next send waits for this one's command to finish.
+        if self.context.is_some() {
+            self.send_context(cx);
+        }
+        cx.notify();
+    }
+
+    /// The extension's answer to the event in flight: the page hears
+    /// whether its message reached the agent, the footer says so.
+    pub fn outcome(&mut self, outcome: &Outcome, cx: &mut Context<Self>) {
+        let version = match &self.in_flight {
+            Some(Sending::Message(PageMessage { version, .. }) | Sending::Context { version }) => {
+                *version
             }
-            Some(Sending::Context) => {
+            _ => return,
+        };
+        if version != outcome.version {
+            return;
+        }
+        if let Some(sending) = self.in_flight.replace(Sending::Answered) {
+            let result = outcome.result.as_ref().map(|_| ()).map_err(String::clone);
+            self.settle(sending, result, cx);
+        }
+        if let Ok(current) = &outcome.result {
+            // A message is a new version of the page's surface (same spec).
+            self.version = self.version.max(*current);
+        }
+        cx.notify();
+    }
+
+    fn settle(&mut self, sending: Sending, result: Result<(), String>, cx: &mut Context<Self>) {
+        match sending {
+            Sending::Message(message) => match result {
+                Ok(()) => {
+                    if let Some(id) = &message.id {
+                        self.post(&apps::reply(id, json!({})), cx);
+                    }
+                    self.send = SendState::Sent;
+                }
+                // The page keeps waiting: Retry sends it again, Discard
+                // tells the page it didn't go.
+                Err(error) => {
+                    self.unsent = Some(message);
+                    self.send = SendState::Failed(error);
+                }
+            },
+            Sending::Context { .. } => {
                 if let Err(error) = result {
                     self.send = SendState::Failed(error);
                 }
             }
-            None => {}
+            Sending::Answered => {}
         }
-        if self.context.is_some() {
-            self.send_context(cx);
+    }
+
+    /// Send the message the agent didn't get again.
+    fn retry(&mut self, cx: &mut Context<Self>) {
+        if self.in_flight.is_some() {
+            return;
         }
+        let Some(message) = self.unsent.take() else {
+            return;
+        };
+        let command = message.command.clone();
+        self.send = SendState::Sending {
+            version: message.version,
+            spec: (),
+        };
+        self.in_flight = Some(Sending::Message(message));
+        cx.emit(DiagramEvent::Send(command));
+        cx.notify();
+    }
+
+    /// Give up on the message the agent didn't get: the page hears so.
+    fn discard(&mut self, cx: &mut Context<Self>) {
+        let Some(message) = self.unsent.take() else {
+            return;
+        };
+        let error = match &self.send {
+            SendState::Failed(error) => error.clone(),
+            _ => "Not sent".to_string(),
+        };
+        if let Some(id) = &message.id {
+            self.post(&apps::error(id, apps::DENIED, &error), cx);
+        }
+        self.send = SendState::Idle;
         cx.notify();
     }
 
@@ -265,7 +350,7 @@ impl HtmlView {
             pages.view = spec.document(&base_css(cx));
             pages.view_csp = spec.csp.policy();
         }
-        self.bridge.reset();
+        self.forget_page();
         self.bridge
             .set_capabilities(apps::capabilities(spec.csp.to_value()));
         self.link = None;
@@ -331,7 +416,17 @@ impl HtmlView {
         self.live = None;
         self.closing = false;
         self.link = None;
+        self.forget_page();
+    }
+
+    /// The page instance is gone (closed or reloaded): its requests can't
+    /// be answered any more, and a message it wasn't told about is dropped.
+    fn forget_page(&mut self) {
         self.bridge.reset();
+        self.unsent = None;
+        if let Some(Sending::Message(message)) = &mut self.in_flight {
+            message.id = None;
+        }
     }
 
     /// Show the native view only when nothing may be drawn over it.
@@ -397,7 +492,7 @@ impl HtmlView {
                 self.deliver_result(cx);
             }
             Some(Ask::Message { id, text }) => {
-                if self.in_flight.is_some() {
+                if self.in_flight.is_some() || self.unsent.is_some() {
                     let busy = "Another message to the agent is still being sent";
                     self.post(&apps::error(&id, apps::DENIED, busy), cx);
                     return;
@@ -412,8 +507,15 @@ impl HtmlView {
                     &self.spec_value,
                     None,
                 );
-                self.in_flight = Some(Sending::Message(id));
-                self.send = SendState::Sending;
+                self.send = SendState::Sending {
+                    version: self.version,
+                    spec: (),
+                };
+                self.in_flight = Some(Sending::Message(PageMessage {
+                    id: Some(id),
+                    version: self.version,
+                    command: command.clone(),
+                }));
                 cx.emit(DiagramEvent::Send(command));
                 cx.notify();
             }
@@ -487,7 +589,9 @@ impl HtmlView {
             &self.spec_value,
             None,
         );
-        self.in_flight = Some(Sending::Context);
+        self.in_flight = Some(Sending::Context {
+            version: self.version,
+        });
         cx.emit(DiagramEvent::Send(command));
     }
 
@@ -671,7 +775,7 @@ impl Render for HtmlView {
         shell
             .child(self.render_header(cx))
             .child(self.render_page(cx))
-            .child(self.render_footer())
+            .child(self.render_footer(cx))
             .into_any_element()
     }
 }
@@ -780,7 +884,6 @@ impl HtmlView {
     /// else all the room), or the link question in its place.
     fn render_page(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let area = self.area.clone();
-        let view = cx.entity_id();
         let height = self
             .content_height
             .or(self.spec.as_ref().and_then(|s| s.height.map(|h| h as f32)));
@@ -814,10 +917,12 @@ impl HtmlView {
             .px_2()
             .child(
                 canvas(
-                    move |bounds, _, cx| {
+                    move |bounds, window, _| {
                         if area.get() != bounds {
                             area.set(bounds);
-                            cx.notify(view);
+                            // Lay the page out for this size on the next
+                            // frame (notifying from prepaint draws it stale).
+                            window.request_animation_frame();
                         }
                     },
                     |_, _, _, _| {},
@@ -876,7 +981,7 @@ impl HtmlView {
             )
     }
 
-    fn render_footer(&self) -> impl IntoElement {
+    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let footer = h_flex()
             .px_3()
             .py_1p5()
@@ -884,7 +989,7 @@ impl HtmlView {
             .min_h(rems(34. / 16.))
             .text_size(rems(12. / 16.));
         match &self.send {
-            SendState::Sending => footer
+            SendState::Sending { .. } => footer
                 .text_color(ui::muted())
                 .child(ui::spinner(Size::XSmall, ui::info()))
                 .child("Sending the page's message to the agent…"),
@@ -895,7 +1000,25 @@ impl HtmlView {
             SendState::Failed(error) => footer
                 .text_color(ui::danger())
                 .child(Icon::new(IconName::CircleAlert).xsmall())
-                .child(div().flex_1().min_w_0().truncate().child(error.clone())),
+                .child(div().flex_1().min_w_0().truncate().child(error.clone()))
+                .when(self.unsent.is_some(), |footer| {
+                    footer
+                        .child(
+                            Button::new("genui-html-discard")
+                                .ghost()
+                                .xsmall()
+                                .label("Discard")
+                                .on_click(cx.listener(|this, _, _, cx| this.discard(cx))),
+                        )
+                        .child(
+                            Button::new("genui-html-retry")
+                                .primary()
+                                .xsmall()
+                                .icon(Icon::new(IconName::RefreshCw))
+                                .label("Retry")
+                                .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
+                        )
+                }),
             SendState::Idle => footer.text_color(ui::faint()).child(
                 div()
                     .flex_1()
@@ -904,5 +1027,97 @@ impl HtmlView {
                     .child("Runs isolated from your files and the app · messages from the page go to the agent"),
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use gentle_core::genui::{Outcome, Snapshot};
+    // Not a glob: GPUI exports a `test` attribute that would shadow `#[test]`.
+    use gpui_kit::{AppContext as _, Entity, TestAppContext};
+    use serde_json::json;
+
+    use super::{DiagramEvent, HtmlView, PageMessage, SendState, Sending};
+
+    const COMMAND: &str = "/gentle-ui:event {\"id\":\"page\",\"version\":1}";
+
+    fn answer(view: &Entity<HtmlView>, result: Result<u64, String>, cx: &mut TestAppContext) {
+        let outcome = Outcome {
+            id: "page".into(),
+            version: 1,
+            result,
+        };
+        view.update(cx, |view, cx| view.outcome(&outcome, cx));
+    }
+
+    /// A page's message waits for the extension's answer; a rejection
+    /// keeps it for Retry, an acceptance adopts the new version.
+    #[gpui::test]
+    fn a_page_message_waits_for_the_answer_and_can_be_retried(cx: &mut TestAppContext) {
+        let snapshot = Snapshot {
+            id: "page".into(),
+            version: 1,
+            kind: "html".into(),
+            title: "Page".into(),
+            spec: json!({"html": "<p>hi</p>"}),
+            closed: false,
+        };
+        let view = cx.update(|cx| cx.new(|cx| HtmlView::new(&snapshot, cx)));
+        let sends = Rc::new(RefCell::new(Vec::new()));
+        let log = sends.clone();
+        cx.update(|cx| {
+            cx.subscribe(&view, move |_, event: &DiagramEvent, _| {
+                if let DiagramEvent::Send(command) = event {
+                    log.borrow_mut().push(command.clone());
+                }
+            })
+            .detach()
+        });
+        // As `receive` leaves it for a `ui/message` (no live page here).
+        view.update(cx, |view, _| {
+            view.in_flight = Some(Sending::Message(PageMessage {
+                id: Some(json!(7)),
+                version: 1,
+                command: COMMAND.into(),
+            }));
+            view.send = SendState::Sending {
+                version: 1,
+                spec: (),
+            };
+        });
+
+        answer(&view, Err("No agent is running".into()), cx);
+        // The command's own completion comes after and changes nothing.
+        view.update(cx, |view, cx| view.sent(Ok(()), cx));
+        view.read_with(cx, |view, _| {
+            assert!(matches!(&view.send, SendState::Failed(e) if e == "No agent is running"));
+            assert!(view.unsent.is_some() && view.in_flight.is_none());
+        });
+
+        view.update(cx, |view, cx| view.retry(cx));
+        assert_eq!(*sends.borrow(), vec![COMMAND.to_string()]);
+        // An answer about another version is ignored.
+        view.update(cx, |view, cx| {
+            let other = Outcome {
+                id: "page".into(),
+                version: 4,
+                result: Ok(5),
+            };
+            view.outcome(&other, cx)
+        });
+        view.read_with(cx, |view, _| {
+            assert!(matches!(view.send, SendState::Sending { .. }));
+        });
+
+        answer(&view, Ok(2), cx);
+        view.update(cx, |view, cx| view.sent(Ok(()), cx));
+        view.read_with(cx, |view, _| {
+            assert!(matches!(view.send, SendState::Sent));
+            assert_eq!(view.version, 2);
+            assert!(view.unsent.is_none() && view.in_flight.is_none());
+        });
     }
 }

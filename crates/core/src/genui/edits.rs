@@ -30,6 +30,8 @@ pub struct Edits<S> {
     base: S,
     working: S,
     undo: Vec<S>,
+    /// The working copy last sent, until the agent's answer about it.
+    sent: Option<S>,
 }
 
 impl<S: Editable> Edits<S> {
@@ -38,6 +40,7 @@ impl<S: Editable> Edits<S> {
             working: base.clone(),
             base,
             undo: Vec::new(),
+            sent: None,
         }
     }
 
@@ -100,7 +103,8 @@ impl<S: Editable> Edits<S> {
     }
 
     /// A newer version from the agent: the unsent edits that still apply
-    /// are replayed on top of it; undo starts over.
+    /// are replayed on top of it; undo starts over, and an answer about an
+    /// earlier send no longer applies.
     pub fn rebase(&mut self, base: S) {
         let pending = self.changes();
         let mut working = base.clone();
@@ -111,6 +115,20 @@ impl<S: Editable> Edits<S> {
         self.base = base;
         self.working = working;
         self.undo.clear();
+        self.sent = None;
+    }
+
+    /// The working copy is going to the agent: remember it for its answer.
+    pub fn mark_sent(&mut self) {
+        self.sent = Some(self.working.clone());
+    }
+
+    /// The agent took what was sent: it becomes the base, and edits made
+    /// since stay pending (undo keeps working on the working copy).
+    pub fn accept_sent(&mut self) {
+        if let Some(sent) = self.sent.take() {
+            self.base = sent;
+        }
     }
 
     /// The pending changes as JSON and one sentence each.
@@ -276,6 +294,21 @@ mod tests {
         // An edit the new version can't take is dropped.
         edits.rebase(words(&[]));
         assert_eq!(edits.pending(), 0);
+    }
+
+    #[test]
+    fn an_accepted_send_becomes_the_base_and_later_edits_stay_pending() {
+        let mut edits = Edits::new(words(&["a", "b"]));
+        edits.edit(&Set(0, "x".into())).unwrap();
+        edits.mark_sent();
+        // Edited again while the answer is on its way.
+        edits.edit(&Set(1, "y".into())).unwrap();
+        edits.accept_sent();
+        assert_eq!(edits.base(), &words(&["x", "b"]));
+        assert_eq!(edits.changes(), vec![Set(1, "y".into())]);
+        // Only once: a second answer changes nothing.
+        edits.accept_sent();
+        assert_eq!(edits.base(), &words(&["x", "b"]));
     }
 
     #[test]

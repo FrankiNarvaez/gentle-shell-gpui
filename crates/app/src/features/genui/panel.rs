@@ -5,13 +5,13 @@
 //! own state. Edits go through `gentle_core::genui::edits`, so what the
 //! user does is exactly the change list sent to the agent.
 
-use gentle_core::genui::Snapshot;
 use gentle_core::genui::chart::Chart;
 use gentle_core::genui::checklist::Checklist;
 use gentle_core::genui::edits::plural;
 use gentle_core::genui::form::Form;
 use gentle_core::genui::kanban::{Board, card_count};
 use gentle_core::genui::table::Table;
+use gentle_core::genui::{Outcome, Snapshot};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
@@ -171,6 +171,14 @@ impl Body {
         edits!(mut self, e => e.discard(), ())
     }
 
+    fn mark_sent(&mut self) {
+        edits!(mut self, e => e.mark_sent(), ())
+    }
+
+    fn accept_sent(&mut self) {
+        edits!(mut self, e => e.accept_sent(), ())
+    }
+
     fn event_command(&self, id: &str, version: u64, note: Option<&str>) -> Option<String> {
         edits!(self, e => Some(e.event_command(id, version, note)), None)
     }
@@ -304,8 +312,13 @@ impl PanelView {
         }
     }
 
-    /// The extension's answer to [`DiagramEvent::Send`].
+    /// Whether Gentle Shell ran the `/gentle-ui:event` command. The
+    /// extension answers first ([`Self::outcome`]); `Ok` while still
+    /// sending means an extension that doesn't answer, which took them.
     pub fn sent(&mut self, result: Result<(), String>, cx: &mut Context<Self>) {
+        if !matches!(self.send, SendState::Sending { .. }) {
+            return;
+        }
         self.send = match result {
             Ok(()) => {
                 self.note = None;
@@ -313,6 +326,30 @@ impl PanelView {
             }
             Err(error) => SendState::Failed(error),
         };
+        cx.notify();
+    }
+
+    /// The extension's answer to the edits being sent: accepted ones
+    /// become the base (edits made since stay pending); rejected ones stay
+    /// pending with the reason, to retry or discard.
+    pub fn outcome(&mut self, outcome: &Outcome, cx: &mut Context<Self>) {
+        let SendState::Sending { version, .. } = self.send else {
+            return;
+        };
+        if version != outcome.version {
+            return;
+        }
+        match &outcome.result {
+            Ok(current) => {
+                if let Some(body) = &mut self.body {
+                    body.accept_sent();
+                }
+                self.version = *current;
+                self.note = None;
+                self.send = SendState::Sent;
+            }
+            Err(error) => self.send = SendState::Failed(error.clone()),
+        }
         cx.notify();
     }
 
@@ -359,9 +396,13 @@ impl PanelView {
     }
 
     pub(super) fn discard(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.send, SendState::Sending { .. }) {
+            return;
+        }
         if let Some(body) = &mut self.body {
             body.discard();
             self.refused = None;
+            self.send = SendState::Idle;
             cx.notify();
         }
     }
@@ -370,20 +411,24 @@ impl PanelView {
         self.body.as_ref().map_or(0, Body::pending)
     }
 
-    /// Send the unsent edits (and the note, if any) to the agent.
+    /// Send the unsent edits (and the note, if any) to the agent, or again
+    /// after a failure.
     pub(super) fn send(&mut self, cx: &mut Context<Self>) {
-        if self.pending() == 0 || matches!(self.send, SendState::Sending) {
+        if self.pending() == 0 || matches!(self.send, SendState::Sending { .. }) {
             return;
         }
         let note = self.note.as_ref().map(|n| n.read(cx).value().to_string());
-        let Some(command) = self
-            .body
-            .as_ref()
-            .and_then(|body| body.event_command(&self.id, self.version, note.as_deref()))
-        else {
+        let Some(body) = &mut self.body else {
             return;
         };
-        self.send = SendState::Sending;
+        let Some(command) = body.event_command(&self.id, self.version, note.as_deref()) else {
+            return;
+        };
+        body.mark_sent();
+        self.send = SendState::Sending {
+            version: self.version,
+            spec: (),
+        };
         cx.emit(DiagramEvent::Send(command));
         cx.notify();
     }
@@ -636,7 +681,7 @@ impl PanelView {
     }
 
     /// The pending edits: a count, the note, the send error, Discard and
-    /// the primary action (`send_label`).
+    /// the primary action (`send_label`, Retry after a failure).
     pub(super) fn pending_footer(
         &self,
         footer: Div,
@@ -644,7 +689,8 @@ impl PanelView {
         send_label: &'static str,
         cx: &mut Context<Self>,
     ) -> Div {
-        let sending = matches!(self.send, SendState::Sending);
+        let sending = matches!(self.send, SendState::Sending { .. });
+        let retry = matches!(self.send, SendState::Failed(_));
         footer
             .child(ui::chip(count, ui::accent()))
             .child(match &self.note {
@@ -680,6 +726,7 @@ impl PanelView {
                 |d, error| {
                     d.child(
                         div()
+                            .debug_selector(|| "genui-panel-send-error".into())
                             .max_w(rems(220. / 16.))
                             .truncate()
                             .text_color(ui::danger())
@@ -700,8 +747,12 @@ impl PanelView {
                     Button::new("genui-panel-send")
                         .primary()
                         .xsmall()
-                        .icon(Icon::new(IconName::Send))
-                        .label(send_label)
+                        .icon(Icon::new(if retry {
+                            IconName::RefreshCw
+                        } else {
+                            IconName::Send
+                        }))
+                        .label(if retry { "Retry" } else { send_label })
                         .loading(sending)
                         .on_click(cx.listener(|this, _, _, cx| this.send(cx))),
                 ),

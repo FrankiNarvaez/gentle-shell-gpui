@@ -2,7 +2,7 @@
 //! simulated pointer and keyboard input, checking the `/gentle-ui:event`
 //! command Send hands the conversation.
 
-use gentle_core::genui::Snapshot;
+use gentle_core::genui::{Outcome, Snapshot};
 // Not a glob: GPUI exports a `test` attribute that would shadow `#[test]`.
 use gpui_kit::{
     AppContext as _, Bounds, Context, Entity, IntoElement, Modifiers, MouseButton, MouseDownEvent,
@@ -11,7 +11,7 @@ use gpui_kit::{
 };
 use serde_json::{Value, json};
 
-use super::super::diagram::DiagramEvent;
+use super::super::diagram::{DiagramEvent, SendState};
 use super::super::panel::PanelView;
 use super::{Seen, event_json, ops};
 
@@ -138,6 +138,68 @@ fn sent(host: &Entity<Host>, cx: &mut VisualTestContext) -> Vec<String> {
 fn last_event(host: &Entity<Host>, cx: &mut VisualTestContext) -> Value {
     let command = sent(host, cx).pop().expect("Send produced a command");
     event_json(&command)
+}
+
+/// The extension's answer about the event sent from `version`.
+fn answer(
+    host: &Entity<Host>,
+    version: u64,
+    result: Result<u64, String>,
+    cx: &mut VisualTestContext,
+) {
+    let view = cx.update(|_, cx| host.read(cx).view.clone());
+    let outcome = Outcome {
+        id: cx.update(|_, cx| view.read(cx).id().to_string()),
+        version,
+        result,
+    };
+    cx.update(|_, cx| view.update(cx, |view, cx| view.outcome(&outcome, cx)));
+    cx.run_until_parked();
+}
+
+fn sending(host: &Entity<Host>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|_, cx| matches!(host.read(cx).view.read(cx).send, SendState::Sending { .. }))
+}
+
+#[gpui::test]
+fn panels_wait_for_the_answer_and_retry_a_rejection(cx: &mut TestAppContext) {
+    let (host, cx) = open(
+        cx,
+        "checklist",
+        json!({"items": [{"id": "plan", "label": "Plan"}, {"id": "ship", "label": "Ship"}]}),
+    );
+    click(cx, "genui-item-check-plan");
+    click(cx, "genui-panel-send");
+    assert!(sending(&host, cx), "Sending until the extension answers");
+
+    // Rejected: the edit stays, with the reason and Retry.
+    answer(
+        &host,
+        1,
+        Err("The agent changed this checklist meanwhile".into()),
+        cx,
+    );
+    assert!(!sending(&host, cx));
+    assert_eq!(pending(&host, cx), 1);
+    assert!(cx.debug_bounds("genui-panel-send-error").is_some());
+    click(cx, "genui-panel-send");
+    assert_eq!(sent(&host, cx).len(), 2, "Retry sends again");
+
+    // An answer about another version is ignored.
+    answer(&host, 7, Ok(8), cx);
+    assert!(sending(&host, cx));
+
+    // Edited while the answer is on its way: accepted edits become the base
+    // and version, the later one stays pending.
+    click(cx, "genui-item-check-ship");
+    answer(&host, 1, Ok(2), cx);
+    assert!(!sending(&host, cx));
+    assert_eq!(pending(&host, cx), 1);
+    assert_eq!(cx.update(|_, cx| host.read(cx).view.read(cx).version), 2);
+    click(cx, "genui-panel-send");
+    let event = last_event(&host, cx);
+    assert_eq!(event["version"], 2);
+    assert_eq!(ops(&event), vec!["toggle"]);
 }
 
 #[gpui::test]
@@ -324,9 +386,12 @@ fn chart_hover_select_and_ask(cx: &mut TestAppContext) {
     cx.simulate_click(at, Modifiers::none());
     cx.run_until_parked();
     click(cx, "genui-chart-ask");
-    let asked = cx.update(|_, cx| host.read(cx).seen.last() == Some(&Seen::Ask(
-        "About b (20 ms) in the “Test chart” chart (ui-chart): ".into(),
-    )));
+    let asked = cx.update(|_, cx| {
+        host.read(cx).seen.last()
+            == Some(&Seen::Ask(
+                "About b (20 ms) in the “Test chart” chart (ui-chart): ".into(),
+            ))
+    });
     assert!(asked, "Ask about this names the selected value");
     // Read-only: nothing to send.
     assert_eq!(pending(&host, cx), 0);

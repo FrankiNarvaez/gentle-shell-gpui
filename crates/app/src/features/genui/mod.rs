@@ -88,9 +88,7 @@ impl Surface {
             Self::Diagram(view) => {
                 view.update(cx, |view, cx| view.set_snapshot(snapshot, reset, cx))
             }
-            Self::Panel(view) => {
-                view.update(cx, |view, cx| view.set_snapshot(snapshot, reset, cx))
-            }
+            Self::Panel(view) => view.update(cx, |view, cx| view.set_snapshot(snapshot, reset, cx)),
             Self::Html(view) => view.update(cx, |view, cx| view.set_snapshot(snapshot, reset, cx)),
         }
     }
@@ -186,7 +184,10 @@ fn tool_title(args: &serde_json::Value, snapshot: Option<&Snapshot>) -> String {
         .map(|s| s.title.as_str())
         .or(args["title"].as_str())
         .filter(|t| !t.is_empty())
-        .unwrap_or_else(|| panel::default_title(args["kind"].as_str().unwrap_or_default()))
+        .unwrap_or_else(|| match args["kind"].as_str().unwrap_or_default() {
+            "html" => "HTML",
+            kind => panel::default_title(kind),
+        })
         .to_string()
 }
 
