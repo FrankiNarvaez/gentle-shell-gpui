@@ -76,7 +76,7 @@ impl SettingsPage {
         }
     }
 }
-pub(super) fn sidebar(selected: SettingsPage, cx: &mut Context<SettingsView>) -> Div {
+pub(super) fn sidebar(selected: SettingsPage, cx: &mut Context<SettingsView>) -> impl IntoElement {
     v_flex()
         .id("settings-navigation")
         .w(rems(200. / 16.))
@@ -95,6 +95,7 @@ pub(super) fn sidebar(selected: SettingsPage, cx: &mut Context<SettingsView>) ->
         )
         .child(
             v_flex()
+                .id("settings-navigation-scroll")
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
