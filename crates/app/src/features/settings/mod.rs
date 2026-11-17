@@ -322,6 +322,10 @@ impl Render for SettingsView {
                 )
                 .child(
                     h_flex()
+                        // h_flex defaults to items_center. That lets the
+                        // settings column grow taller than this row and clips
+                        // its scrollable body instead of constraining it.
+                        .items_stretch()
                         .flex_1()
                         .min_h_0()
                         .when(!compact, |container| {
@@ -329,6 +333,9 @@ impl Render for SettingsView {
                         })
                         .child(
                             v_flex()
+                                // Fill the row's bounded height, not the
+                                // intrinsic height of every settings card.
+                                .h_full()
                                 .flex_1()
                                 .min_w_0()
                                 .min_h_0()
