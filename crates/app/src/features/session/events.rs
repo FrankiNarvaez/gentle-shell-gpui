@@ -119,7 +119,10 @@ impl SessionView {
             }
             Some("tool_execution_end") => {
                 let details = &event["result"]["details"];
+                // The session feed's todo section, when it reports one, is
+                // the list's source; the tool result is the older Shells'.
                 if event["toolName"] == "todo"
+                    && self.desktop.sections().todo().is_none()
                     && let Some(tasks) = tools::todo_tasks(details)
                 {
                     self.todo.apply(tasks);
@@ -339,9 +342,16 @@ impl SessionView {
                     self.sync_supervision(cx);
                     self.sync_design(cx);
                     self.sync_config(cx);
+                    self.sync_output(cx);
                 }
             }
             DesktopRoute::Supervision => {
+                // A helper moved: the thread on screen may have too.
+                if matches!(&decoded, Ok(Some(DesktopRecord::Event(event)))
+                    if event.event == desktop::supervision::AGENTS_UPDATE)
+                {
+                    self.desktop.output_mut().refresh_thread();
+                }
                 let applied = self.desktop.supervision_apply(request);
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
@@ -364,6 +374,7 @@ impl SessionView {
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Subscription => {
                 let applied = self.desktop.subscription_apply(request);
@@ -379,6 +390,7 @@ impl SessionView {
                 }
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Design => {
                 let applied = self.desktop.design_apply(request);
@@ -394,6 +406,7 @@ impl SessionView {
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Config => {
                 let applied = self.desktop.config_apply(request);
@@ -412,14 +425,25 @@ impl SessionView {
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
+            }
+            DesktopRoute::Output => {
+                let applied = self.desktop.output_apply(request);
+                self.apply_output(applied, cx);
+                self.sync_supervision(cx);
+                self.sync_design(cx);
+                self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Channel => {
                 let applied = self.desktop.ui(request);
                 self.apply_desktop(applied, cx);
+                self.sync_sections(cx);
                 self.sync_permission_capabilities(cx);
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
         }
     }
@@ -736,15 +760,17 @@ impl SessionView {
 /// permission event; supervision owns its responses and events; subscription
 /// owns its responses and `rate_limit`; design owns `get_design_canvas` and
 /// `design_canvas`; config owns `get_config`/`set_config` and
-/// `config_changed`; everything else belongs to the channel
-/// (probe, resync, and every benign foreign/late record). The shared session
-/// then accepts the record exactly once, in the slice that owns it.
-enum DesktopRoute {
+/// `config_changed`; output owns `get_job_output`/`get_subagent_thread`;
+/// everything else belongs to the channel (probe, resync, `session_snapshot`,
+/// and every benign foreign/late record). The shared session then accepts
+/// the record exactly once, in the slice that owns it.
+pub(in crate::features::session) enum DesktopRoute {
     Permission,
     Supervision,
     Subscription,
     Design,
     Config,
+    Output,
     Channel,
 }
 
@@ -768,7 +794,7 @@ fn notify_target(message: &str, design_events_ready: bool) -> Option<NotifyTarge
     }
 }
 
-fn route_desktop_widget(
+pub(in crate::features::session) fn route_desktop_widget(
     decoded: &Result<Option<DesktopRecord>, DesktopRpcError>,
     pending: Option<DesktopMethod>,
 ) -> DesktopRoute {
@@ -802,6 +828,11 @@ fn route_desktop_widget(
                     | Some(DesktopMethod::ApplyProfile)
             ) {
                 DesktopRoute::Config
+            } else if matches!(
+                pending,
+                Some(DesktopMethod::GetJobOutput) | Some(DesktopMethod::GetSubagentThread)
+            ) {
+                DesktopRoute::Output
             } else {
                 DesktopRoute::Channel
             }
