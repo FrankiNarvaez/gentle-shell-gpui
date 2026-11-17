@@ -173,16 +173,19 @@ When stdout closes, pending requests are flushed (their callers get the error "g
 
 The picker's selection is the consent. When the backend's `capabilities` advertise `set_permission_mode`, the app sends `set_permission_mode` with `persist: true` over the Gentle Desktop RPC channel and switches the live session without writing `permission-mode.json` or restarting. The server's answer is the truth: `changed: false` is a no-op, a `persist_error` is live success plus a "default not saved" warning, and a timeout/transport/server failure reverts and reports. Events move the confirmed state only for the exact `permission_mode_changed` name that the capabilities `emits`; a sequence gap resyncs once through the channel's `get_snapshot`.
 
-Two cases keep the legacy path (save `permission-mode.json` and restart the backend on the same conversation, exactly once):
+Three cases keep the legacy path (save `permission-mode.json` and restart the backend on the same conversation, exactly once):
 
+- Pi lists no `gentle:desktop` command (a Shell without Desktop RPC: `Permission::without_desktop`);
 - the capabilities are known and do not list `set_permission_mode`;
 - the server answers `unsupported_method` for the `set_permission_mode` it advertised.
 
 While capabilities are still loading, a picker click reports "try again" and never writes the default file or restarts. `choose_mode` in `lifecycle.rs` is the only caller of either path; every other restart caller is unchanged.
 
+The picker's live mode and default come from the permission slice (`get_permission_mode` seed, `set_permission_mode` answers, `permission_mode_changed`) as soon as it confirms them. `permission-mode.json` is read once when the tab is created, only as the default's placeholder until that seed answers, and stays the source on a Shell without Desktop RPC.
+
 ### Agents and jobs (`state::desktop::supervision`)
 
-When the backend's `capabilities` advertise `list_subagents` and/or `list_jobs`, the app seeds a full list once the probe (capabilities → snapshot) and the permission seed have settled, then reconciles `agents_update`/`jobs_update` events by id. The structured lists are the primary source once seeded; the legacy `gentle-agents` widget and `details.gentleJobs` stay as the fallback for older Shells, and the panel/jobs chip never shows both, so the two sources cannot double a helper or a job.
+When the backend's `capabilities` advertise `list_subagents` and/or `list_jobs`, the app seeds a full list once the probe (capabilities → snapshot) and the permission seed have settled, then reconciles `agents_update`/`jobs_update` events by id. The structured lists are the primary source once seeded; the legacy `gentle-agents` widget and `details.gentleJobs` stay as the fallback for older Shells, and the panel/jobs chip never shows both, so the two sources cannot double a helper or a job. Desktop RPC carries no helper transcript, so in both modes the Activity tab and the detail pane's live step, time, turns, tools, label, prompt and error come from the `gentle-agents` widget's entry with the same task id (`Helper::Structured(agent, live)` in `session/agents.rs`); a structured helper the widget never published says so instead of showing a thread.
 
 - `list_subagents` / `list_jobs`: empty params, answered with the typed `agents`/`jobs` arrays. Only these full-list responses mark a list as seeded. A list that cannot be decoded leaves the legacy fallback in place and is never retried in a loop; a malformed record never fabricates an empty list.
 - `agents_update` / `jobs_update`: full bounded projections, so the event replaces the list (ids absent from the projection drop rather than growing forever). They never mark a list as seeded, so a pre-seed event is replaced by the real seed. A sequence gap forgets the seeded markers so the lists re-seed behind the channel's `get_snapshot` resync.
@@ -238,6 +241,7 @@ When the backend's `capabilities` advertise both `get_config` and `set_config`, 
 | `prompt` | `message`, `images?`, `streamingBehavior: "steer"?` | `attachments::prompt_command`, `rpc.rs` `send_prompt_with` | Send; in the middle of a turn it is sent as steer |
 | `prompt` | `message` (`/gentle:…`) | `rpc.rs` `run_extension_command` | Extension command without a turn; success only if `disposition == "handled"` |
 | `clear_queue`, `abort` | — | `rpc.rs` `stop` | Stop the turn (⌘. / Ctrl+. or the Stop button): clear the queue, then abort. Esc does not stop turns; it closes panels and dialogs |
+| `abort_bash` | — | `rpc.rs` `stop` | Stop a running `!cmd` (same Stop button / ⌘.; shown while one runs, `Transcript::shells_running`). Its `bash` response then settles the card. Sent alongside `abort` when a turn runs too |
 | `bash` | `command`, `excludeFromContext` | `submit.rs` `run_shell` | `!cmd` / `!!cmd`; output arrives via `bash_execution_update` |
 | `get_state` | — | `refresh_state`, `set_model` | `model`, `thinkingLevel`, `sessionName`, `sessionFile`, `autoCompactionEnabled` |
 | `get_available_models` | — | `refresh_state` | Model picker |
@@ -331,7 +335,7 @@ Only `http://` and `https://` are accepted by `--open-url` and `/web`. The gener
 | `select`, `confirm`, `input`, `editor` | `extension.dialogs` queue; the first one is drawn (`session/view/dialogs.rs`) and answered with `answer_dialog` → `respond_ui`. Triggers the `NeedsYou` alert. If it has a `timeout`, it is removed from the queue when it expires (the agent already resolved it). Esc answers `Cancelled`. |
 | `notify` | `notifyType` → `NoticeLevel` (`error`, `warning`, everything else `Info`). "Design canvas…" text → `browser::canvas_notice` → canvas, unless `design_canvas` events are the source (see Design canvas). Usage limit notices (`parse_rate_limit`, "`N% used (window)`") → chip in `extension.rate_limits`. Everything else: capture for the running `/` command (`builtins::Capture`), toast only for warning/error (no repeats, `first_toast`) and `SessionEvent::Notice` to the notification center (`features/notices/`). |
 | `setStatus` | `extension.statuses[key] = text`; empty or missing text removes the key. |
-| `setWidget` | `gentle-agents` → `gentle_core::activity::parse` + `retain_finished` (the legacy helper source, used only until `list_subagents` seeds; see “Agents and jobs”). Any other key → `extension.widgets` (one chip per widget with its lines). `widgetPlacement` is ignored. |
+| `setWidget` | `gentle-agents` → `gentle_core::activity::parse` + `retain_finished`: the helper list and status until `list_subagents` seeds, and in both modes the activity thread joined by task id (see “Agents and jobs”). Any other key → `extension.widgets` (one chip per widget with its lines). `widgetPlacement` is ignored. |
 | `setTitle` | Tab title. |
 | `set_editor_text` | Replaces the composer text. |
 
@@ -382,7 +386,7 @@ App paths: `dirs::data_dir()/gentle-shell-gpui/` (on macOS, `~/Library/Applicati
 | `<agent>/themes/*.json` | User | R | `shared/themes.rs` |
 | `<data>/gentle-shell-gpui/themes/` (`*.json`, `*.gentletheme`, scene `*.js`, images; written by the app: `GUIDE.md`, `scene-error.txt`, `examples/` (the shipped example themes and scenes, for agents to read) and `previews/<stem>.png` / `.txt` (each scene theme drawn offscreen), `.grid.png` (a picture with its coordinate grid and effect regions) and `.effects.png` (its effects in motion)) | App, the user and their agents | R/W | `shared/themes.rs`, `shared/backdrop/` (`preview.rs`), `devices/instructions.rs` (`GUIDE.md`, `examples/`) |
 | `<config>/profiles.json`, `<config>/models.json`, `<config>/profile-fallbacks.json` | Gentle AI | R/W (over RPC: the `profiles`, `models`, `profile_fallbacks` stores; Make default still writes `profiles.json` and `models.json` directly) | `profiles/files.rs`, `profiles/env.rs` |
-| `<config>/permission-mode.json` (2 keys, 0600, atomic write) | Gentle AI | R/W | `shared/gentle_state.rs` |
+| `<config>/permission-mode.json` (2 keys, 0600, atomic write) | Gentle AI | R/W (read once as the picker's placeholder default; the source and the write path only on a Shell without Desktop RPC's permission methods) | `shared/gentle_state.rs` |
 | `<config>/notifications.json` | Gentle AI | R/W | `features/alerts/policy.rs` |
 | `<config>/background-subagents.json`, `<cwd>/.pi/gentle-ai/background-subagents.json` | Gentle AI | R (changes via shell command) | `settings/background.rs` |
 | `<config>/banner.json` | Gentle AI | R | `shared/banner.rs`, `settings/snapshot.rs` |
@@ -462,7 +466,7 @@ The canvas is detected from the Gentle Desktop `design_canvas` events and seed (
 - Claude subscription windows arrive through the `rate_limit` event when the backend advertises `get_subscription_usage`; without it the app sees only the legacy limit notices (`notify`), not the full windows.
 - Helpers and background jobs stop directly only when the backend offers `cancel_subagent`/`cancel_job`; without them the Agents panel keeps the legacy "ask the agent to run `subagent_cancel`" prompt, and jobs have no cancel.
 - Auto mode may reject actions: input over RPC does not count as a live human decision.
-- The permission mode of a live session changes over the Gentle Desktop RPC channel when the backend advertises `set_permission_mode`; a backend without that method keeps the legacy path (save `permission-mode.json` and restart). See “Permission mode” under RPC protocol.
+- The permission mode of a live session changes over the Gentle Desktop RPC channel when the backend advertises `set_permission_mode`, and its default comes from `get_permission_mode`; a backend without Desktop RPC or that method keeps the legacy path (`permission-mode.json` as the default, save it and restart). See “Permission mode” under RPC protocol.
 - Gentle Shell does not play sounds for RPC hosts (`notificationContextAllowed`): `features/alerts/` plays them.
 - `ctx.ui.custom()` screens do not arrive: they are rebuilt natively or hidden.
 - New credentials are only read when the backend starts.

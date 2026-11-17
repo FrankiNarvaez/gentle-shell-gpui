@@ -576,17 +576,16 @@ impl SessionView {
             AgentsTab::Agents => {
                 self.render_agents_table(&visible, selected_id.as_deref(), now, cx)
             }
+            // Structured or not, the thread is the `gentle-agents` widget's
+            // entry for the same task id; Desktop RPC carries no thread.
             AgentsTab::Activity => match selected {
                 Some(Helper::Legacy(task) | Helper::Structured(_, Some(task))) => {
                     self.render_thread(task, cx)
                 }
-                Some(Helper::Structured(_, None)) => div()
-                    .pt_6()
-                    .text_sm()
-                    .text_center()
-                    .text_color(ui::muted())
-                    .child("The transcript is not available for helpers from this Gentle Shell.")
-                    .into_any_element(),
+                Some(Helper::Structured(_, None)) => empty_state(
+                    IconName::MessageSquare,
+                    "Gentle Shell has not published an activity thread for this helper.",
+                ),
                 None => no_subagents(),
             },
             AgentsTab::Jobs if jobs.is_empty() => empty_state(

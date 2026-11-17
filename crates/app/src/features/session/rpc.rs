@@ -520,6 +520,11 @@ impl SessionView {
                 // The window shows which skills an agent has (Architecture docs).
                 this.sync_chrome(cx);
                 let applied = this.desktop.ready(registered);
+                if matches!(applied.report, Some(desktop::Report::MissingExtension)) {
+                    // A Shell without Desktop RPC: the picker keeps the
+                    // `permission-mode.json` default and the legacy switch.
+                    this.permission.without_desktop();
+                }
                 this.apply_desktop(applied, cx);
             }
         });
@@ -657,12 +662,21 @@ impl SessionView {
         });
     }
 
+    /// Stop what is running: a `!command` with `abort_bash` (its `bash`
+    /// response then settles the card), the turn with `abort`.
     pub(super) fn stop(&mut self, cx: &mut Context<Self>) {
-        // Pi's Esc: drop queued messages first so abort does not resume them.
-        self.request(json!({"type": "clear_queue"}), cx, |_, _, _| {});
-        self.request(json!({"type": "abort"}), cx, |this, result, _| {
-            this.report(result);
-        });
+        if self.transcript.shells_running() {
+            self.request(json!({"type": "abort_bash"}), cx, |this, result, _| {
+                this.report(result);
+            });
+        }
+        if self.busy() {
+            // Pi's Esc: drop queued messages first so abort does not resume them.
+            self.request(json!({"type": "clear_queue"}), cx, |_, _, _| {});
+            self.request(json!({"type": "abort"}), cx, |this, result, _| {
+                this.report(result);
+            });
+        }
     }
 
     /// RPC `new_session`: a fresh conversation on the same backend. A fresh

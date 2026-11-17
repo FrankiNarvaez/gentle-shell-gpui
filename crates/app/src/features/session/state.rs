@@ -1090,6 +1090,20 @@ pub(in crate::features::session) mod desktop {
                 self.capabilities = Some(capabilities);
             }
 
+            /// Pi lists no `gentle:desktop` command: this Shell predates
+            /// Desktop RPC, so it offers no permission method and a mode change
+            /// takes the legacy path (`Unsupported`) instead of waiting for
+            /// capabilities that never come (`NotReady`).
+            pub(in crate::features::session) fn without_desktop(&mut self) {
+                self.capabilities = Some(Capabilities {
+                    methods: Vec::new(),
+                    events: Vec::new(),
+                    schema: None,
+                    command: None,
+                    widget: None,
+                });
+            }
+
             /// What the extension offers, when the probe has said.
             #[allow(dead_code)]
             pub(in crate::features::session) fn capabilities(&self) -> Option<&Capabilities> {
@@ -4524,6 +4538,20 @@ mod tests {
         let applied =
             permission.set_permission_mode(&mut session, PermissionMode::Yolo, Some(true));
         assert_eq!(applied.report, Some(PermissionReport::Unsupported));
+    }
+
+    #[test]
+    fn permission_without_desktop_is_unsupported_not_ready() {
+        let mut permission = Permission::new();
+        let mut session = DesktopSession::new();
+        permission.without_desktop();
+        let applied =
+            permission.set_permission_mode(&mut session, PermissionMode::Yolo, Some(true));
+        assert!(applied.sends.is_empty());
+        assert_eq!(applied.report, Some(PermissionReport::Unsupported));
+        // Nothing is seeded from a Shell without the channel.
+        let seeded = permission.seed(&mut session);
+        assert!(seeded.sends.is_empty() && seeded.report.is_none());
     }
 
     #[test]

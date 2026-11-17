@@ -377,7 +377,7 @@ impl SessionView {
         let busy = self.busy();
         let ready = self.backend.is_ready();
 
-        let action_button = if busy && empty {
+        let action_button = if self.stoppable() && empty {
             Button::new("stop")
                 .small()
                 .danger()

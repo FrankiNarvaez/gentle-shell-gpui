@@ -111,6 +111,11 @@ impl SessionView {
         self.transcript.running || self.live.pending.is_some()
     }
 
+    /// Something the Stop button or ⌘. can stop: a turn or a `!command`.
+    pub(super) fn stoppable(&self) -> bool {
+        self.busy() || self.transcript.shells_running()
+    }
+
     /// The empty state (hero and banner) shows.
     pub(super) fn hero_shown(&self) -> bool {
         self.transcript.items.is_empty() && self.live.pending.is_none()

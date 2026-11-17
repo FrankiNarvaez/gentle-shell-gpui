@@ -13,9 +13,10 @@ use gentle_core::gentle_state::PermissionMode;
 
 impl SessionView {
     pub(super) fn render_mode_picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // The chip is this session's mode. Picking one switches it now (the
-        // backend restarts on the same conversation); mid-turn the switch
-        // waits for the turn to end, and the chip shows both until then.
+        // The chip is this session's mode. Picking one switches it now over
+        // Desktop RPC; on a Shell without it the backend restarts on the same
+        // conversation, mid-turn once the turn ends, and the chip shows both
+        // until then.
         let current = self.mode;
         let default = self.default_mode.or(current);
         let pending = default.filter(|d| current.is_some_and(|c| c != *d));
