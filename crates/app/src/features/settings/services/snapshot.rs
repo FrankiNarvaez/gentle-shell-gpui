@@ -8,7 +8,7 @@ use std::path::Path;
 
 use super::super::snapshot::{Snapshot, probe, read_snapshot};
 
-pub(super) fn load(cwd: &Path) -> Snapshot {
+pub(in crate::features::settings) fn load(cwd: &Path) -> Snapshot {
     let homes = pi_rpc::resolve_homes();
     let mut snapshot = read_snapshot(&homes.agent, &homes.config, cwd);
     let spec = pi_rpc::resolve_backend(cwd).ok();

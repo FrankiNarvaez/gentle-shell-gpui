@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 /// Install and verify the Gentle Shell version the app will run afterwards.
 /// The tuple is (process success, stdout+stderr, resolved version, launcher).
-pub(super) fn upgrade_shell(cwd: &Path) -> (bool, String, Option<String>, Option<PathBuf>) {
+pub(in crate::features::settings) fn upgrade_shell(cwd: &Path) -> (bool, String, Option<String>, Option<PathBuf>) {
     let spec = match pi_rpc::resolve_backend(cwd) {
         Ok(spec) => spec,
         Err(error) => return (false, format!("{error:#}"), None, None),
@@ -35,7 +35,7 @@ pub(super) fn upgrade_shell(cwd: &Path) -> (bool, String, Option<String>, Option
 }
 
 /// Update Engram using its existing installer, capturing command output.
-pub(super) fn upgrade_engram() -> (Result<String, String>, Vec<String>) {
+pub(in crate::features::settings) fn upgrade_engram() -> (Result<String, String>, Vec<String>) {
     let lines = std::sync::Mutex::new(Vec::new());
     let result = crate::features::setup::upgrade_engram(&|line| {
         lines.lock().unwrap().push(line);
