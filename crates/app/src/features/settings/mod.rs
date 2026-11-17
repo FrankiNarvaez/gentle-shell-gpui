@@ -28,6 +28,7 @@ mod music;
 mod notifications;
 mod packages;
 mod pages;
+mod services;
 mod snapshot;
 mod theme;
 mod upgrade;
@@ -36,7 +37,7 @@ pub use claude::forget_claude_auth;
 pub use snapshot::npm_name;
 
 use navigation::SettingsPage;
-use snapshot::{Snapshot, probe, read_snapshot};
+use snapshot::Snapshot;
 
 pub enum SettingsEvent {
     Close,
@@ -192,28 +193,7 @@ impl SettingsView {
         self._load = cx.spawn(async move |this, cx| {
             let snapshot = cx
                 .background_executor()
-                .spawn(async move {
-                    let homes = pi_rpc::resolve_homes();
-                    let mut snapshot = read_snapshot(&homes.agent, &homes.config, &cwd);
-                    let spec = pi_rpc::resolve_backend(&cwd).ok();
-                    if let Some(spec) = &spec {
-                        probe(spec, &mut snapshot);
-                    }
-                    // Cached for a day in the launcher config, so reopening
-                    // Configuration stays off the network. gentle-ai updates
-                    // its managed install, and its launcher config, itself.
-                    if !spec
-                        .as_ref()
-                        .is_some_and(pi_rpc::LaunchSpec::managed_by_gentle_ai)
-                    {
-                        snapshot.update =
-                            crate::features::updates::current_from_versions(&snapshot.versions)
-                                .and_then(crate::features::updates::check);
-                    }
-                    snapshot.engram_update = crate::features::setup::engram_version()
-                        .and_then(|v| crate::features::updates::engram::check(&v));
-                    snapshot
-                })
+                .spawn(async move { services::snapshot::load(&cwd) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.snapshot = Some(snapshot);

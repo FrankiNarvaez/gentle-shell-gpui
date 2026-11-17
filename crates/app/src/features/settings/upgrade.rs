@@ -82,31 +82,7 @@ impl SettingsView {
         self._job = cx.spawn(async move |this, cx| {
             let (succeeded, text, running, launcher) = cx
                 .background_executor()
-                .spawn(async move {
-                    let spec = match pi_rpc::resolve_backend(&cwd) {
-                        Ok(spec) => spec,
-                        Err(error) => return (false, format!("{error:#}"), None, None),
-                    };
-                    let mut command = spec.launcher_command(["upgrade"]);
-                    command.stdin(std::process::Stdio::null());
-                    let (succeeded, text) = match command.output() {
-                        Ok(out) => (
-                            out.status.success(),
-                            format!(
-                                "{}{}",
-                                String::from_utf8_lossy(&out.stdout),
-                                String::from_utf8_lossy(&out.stderr)
-                            ),
-                        ),
-                        Err(error) => (false, error.to_string()),
-                    };
-                    // The upgrade may have installed Gentle Shell somewhere
-                    // new (its self-contained install): resolve it afresh.
-                    pi_rpc::forget_cached();
-                    let now = pi_rpc::resolve_backend(&cwd).ok();
-                    let running = now.as_ref().and_then(pi_rpc::backend_version);
-                    (succeeded, text, running, now.map(|spec| spec.launcher))
-                })
+                .spawn(async move { super::services::updates::upgrade_shell(&cwd) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.shell_update.upgrading = false;
@@ -171,13 +147,7 @@ impl SettingsView {
         self.engram._job = cx.spawn(async move |this, cx| {
             let (result, lines) = cx
                 .background_executor()
-                .spawn(async move {
-                    let lines = std::sync::Mutex::new(Vec::new());
-                    let result = crate::features::setup::upgrade_engram(&|line| {
-                        lines.lock().unwrap().push(line);
-                    });
-                    (result, lines.into_inner().unwrap())
-                })
+                .spawn(async move { super::services::updates::upgrade_engram() })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.engram.upgrading = false;
