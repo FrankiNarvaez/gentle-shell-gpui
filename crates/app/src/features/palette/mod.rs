@@ -52,6 +52,7 @@ pub enum PaletteAction {
     ClosePane,
     ReopenClosed,
     ToggleSidebar,
+    ToggleTabLayout,
     /// Send `/name` as a prompt in the active agent pane.
     Command(String),
     /// A Gentle Shell command whose UI is terminal-only, opened natively.
