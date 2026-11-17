@@ -13,13 +13,14 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::{features::app_update, shared::themes, shared::ui};
+use crate::{features::app_update, features::workspaces::TabLayout, shared::themes, shared::ui};
 
 mod app;
 mod background;
 mod claude;
 mod devices;
 mod hydration;
+mod interface;
 mod layout;
 mod maestro;
 mod models;
@@ -38,6 +39,8 @@ use snapshot::{Snapshot, probe, read_snapshot};
 
 pub enum SettingsEvent {
     Close,
+    /// Where this window should display its tabs.
+    TabLayoutChanged(TabLayout),
     /// Packages or sign-ins changed: tabs should reload their backend.
     Changed,
     /// Run this Gentle Shell slash command in the active agent pane and
@@ -56,6 +59,8 @@ pub enum SettingsEvent {
 
 pub struct SettingsView {
     cwd: PathBuf,
+    /// Mirrors the parent workspace's persisted tab placement while settings is open.
+    tab_layout: TabLayout,
     snapshot: Option<Snapshot>,
     package_input: Entity<InputState>,
     running: Option<String>,
@@ -98,7 +103,12 @@ pub struct SettingsView {
 impl EventEmitter<SettingsEvent> for SettingsView {}
 
 impl SettingsView {
-    pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        cwd: PathBuf,
+        tab_layout: TabLayout,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let package_input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("npm:package-name, git:github.com/…, or a local path")
@@ -138,6 +148,7 @@ impl SettingsView {
         });
         let mut this = Self {
             cwd,
+            tab_layout,
             snapshot: None,
             package_input,
             running: None,
@@ -301,6 +312,7 @@ impl Render for SettingsView {
                             }))
                             .child(self.theme_section(cx)),
                     )
+                    .child(self.interface_section(cx))
                     .child(models::models_section(s))
                     .child(self.gentle_ai_section(s, cx))
                     .child(self.notifications_section(cx))
