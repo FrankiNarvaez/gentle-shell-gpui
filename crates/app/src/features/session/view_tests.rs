@@ -267,3 +267,40 @@ fn the_session_feed_drives_the_todo_list_and_the_command_menu(cx: &mut TestAppCo
         ));
     });
 }
+
+/// ↑ and ↓ in the composer walk the prompts sent before and come back to
+/// the draft; inside a multi-line prompt ↑ moves the cursor first.
+#[gpui::test]
+fn arrows_recall_sent_prompts_and_return_to_the_draft(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, _| {
+        view.prompt_history.record("first");
+        view.prompt_history.record("second\nline two");
+    });
+    cx.update(|window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.set_value("draft", window, cx);
+        });
+    });
+    let composer = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string())
+    };
+    assert_eq!(composer(cx), "draft");
+
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "second\nline two");
+    // The cursor sits at the end, on the second line: ↑ moves it up first.
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "second\nline two");
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "first");
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "first", "nothing older than the oldest");
+    cx.simulate_keystrokes("down");
+    assert_eq!(composer(cx), "second\nline two");
+    cx.simulate_keystrokes("down");
+    assert_eq!(composer(cx), "draft");
+}
