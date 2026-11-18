@@ -253,7 +253,7 @@ As in Tern, what a session tracks sits in chips over the composer instead of a s
 
 <br>
 
-Click a chip for its card. The task list is a Dynamic-Island-style pill at the top of the conversation: when a session has tasks, **Todos 2/7** appears there with a small progress equalizer. Click it to unfold the task list downward over the conversation, then click again to fold it; the list shows each task's status (done, in progress, pending, blocked, dropped) and note. It floats over the chat, so the conversation never moves, and nothing is added around the composer.
+Click a chip for its card. The task list is a Dynamic-Island-style pill at the top of the conversation: when a session has tasks, **Todos 2/7** appears there with a small progress equalizer. Click it to unfold the task list downward over the conversation, then click again to fold it; the list shows each task's status (done, in progress, pending, blocked, dropped) and note. It floats over the chat, so the conversation never moves, and nothing is added around the composer. While a generative UI surface is expanded the island steps aside, and Esc takes you back to the conversation.
 
 </details>
 
