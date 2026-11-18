@@ -22,9 +22,8 @@ pub(in crate::features::settings) fn load(cwd: &Path, shell_updates: bool) -> Sn
         .is_some_and(pi_rpc::LaunchSpec::managed_by_gentle_ai);
     snapshot.skipped_release = crate::features::updates::skipped();
     if !snapshot.managed && !shell_updates {
-        snapshot.update =
-            crate::features::updates::current_from_versions(&snapshot.versions)
-                .and_then(crate::features::updates::check);
+        snapshot.update = crate::features::updates::current_from_versions(&snapshot.versions)
+            .and_then(crate::features::updates::check);
     }
     snapshot.engram_update = crate::features::setup::engram_version()
         .and_then(|v| crate::features::updates::engram::check(&v));

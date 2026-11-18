@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 /// Install and verify the Gentle Shell version the app will run afterwards.
 /// The tuple is (process success, stdout+stderr, resolved version, launcher).
-pub(in crate::features::settings) fn upgrade_shell(cwd: &Path) -> (bool, String, Option<String>, Option<PathBuf>) {
+pub(in crate::features::settings) fn upgrade_shell(
+    cwd: &Path,
+) -> (bool, String, Option<String>, Option<PathBuf>) {
     let spec = match pi_rpc::resolve_backend(cwd) {
         Ok(spec) => spec,
         Err(error) => return (false, format!("{error:#}"), None, None),

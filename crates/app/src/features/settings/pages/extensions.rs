@@ -10,7 +10,5 @@ pub(super) fn render(
     snapshot: &Snapshot,
     cx: &mut Context<SettingsView>,
 ) -> Div {
-    v_flex()
-        .gap_3()
-        .child(view.packages_section(snapshot, cx))
+    v_flex().gap_3().child(view.packages_section(snapshot, cx))
 }

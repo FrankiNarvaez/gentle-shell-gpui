@@ -296,7 +296,12 @@ impl SettingsView {
                 .map(|(i, t)| theme_card(i, &t, i == active, cx))
                 .collect()
         };
-        card = card.child(div().pt_3().pb_1().child(ui::section_label("Theme library")));
+        card = card.child(
+            div()
+                .pt_3()
+                .pb_1()
+                .child(ui::section_label("Theme library")),
+        );
         for (source, label) in groups {
             let cards = cards_of(source, cx);
             if cards.is_empty() {

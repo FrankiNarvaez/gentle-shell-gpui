@@ -29,7 +29,6 @@ pub const RECOMMENDED: &[(&str, &str)] = &[
     ),
 ];
 
-
 /// The Advanced / Packages page's input, status and event subscription.
 /// The subscription lives with its input so it cannot be dropped by accident.
 pub(super) struct PackageUiState {
@@ -271,7 +270,8 @@ impl SettingsView {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let source = this.package.input.read(cx).value().trim().to_string();
                                 if !source.is_empty() {
-                                    this.package.input
+                                    this.package
+                                        .input
                                         .update(cx, |s, cx| s.set_value("", window, cx));
                                     this.run_package("install", source, cx);
                                 }
@@ -292,7 +292,8 @@ impl SettingsView {
             .when(!self.package.log.is_empty(), |d| {
                 d.child(
                     ui::well_box().mt_2().px_3().py_2().gap_0p5().children(
-                        self.package.log
+                        self.package
+                            .log
                             .iter()
                             .map(|l| div().text_color(ui::muted()).child(l.clone())),
                     ),

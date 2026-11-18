@@ -98,15 +98,33 @@ impl SettingsPage {
     /// It only locates a page; it never changes a setting or its storage.
     fn keywords(self) -> &'static str {
         match self {
-            Self::General => "home setup requirements agent directory configuration launcher path environment initial",
-            Self::Appearance => "theme color dark light import share transparency window opacity interface zoom size fonts scene motion background animated library terminal banner rose text",
-            Self::Agents => "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked",
-            Self::Models => "model models provider providers thinking effort profile profiles routing default scoped sign-ins authentication claude bridge pro max code manage",
-            Self::Devices => "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access",
-            Self::Integrations => "mcp servers maestro ui testing music gentle stream player instruments soundfont external tools integrations",
-            Self::Notifications => "notification notifications sounds alert alerts toggle status turn ended needs you context threshold water hydration reminder frequency preview",
-            Self::Updates => "update upgrade versions app gentle shell engram release install notes check github restart desktop rpc",
-            Self::Extensions => "package packages extension extensions install remove npm git local recommended updates version management advanced",
+            Self::General => {
+                "home setup requirements agent directory configuration launcher path environment initial"
+            }
+            Self::Appearance => {
+                "theme color dark light import share transparency window opacity interface zoom size fonts scene motion background animated library terminal banner rose text"
+            }
+            Self::Agents => {
+                "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked"
+            }
+            Self::Models => {
+                "model models provider providers thinking effort profile profiles routing default scoped sign-ins authentication claude bridge pro max code manage"
+            }
+            Self::Devices => {
+                "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access"
+            }
+            Self::Integrations => {
+                "mcp servers maestro ui testing music gentle stream player instruments soundfont external tools integrations"
+            }
+            Self::Notifications => {
+                "notification notifications sounds alert alerts toggle status turn ended needs you context threshold water hydration reminder frequency preview"
+            }
+            Self::Updates => {
+                "update upgrade versions app gentle shell engram release install notes check github restart desktop rpc"
+            }
+            Self::Extensions => {
+                "package packages extension extensions install remove npm git local recommended updates version management advanced"
+            }
         }
     }
 
@@ -125,11 +143,7 @@ impl SettingsPage {
     }
 }
 
-fn search_field(
-    filter: &Entity<InputState>,
-    query: &str,
-    cx: &mut Context<SettingsView>,
-) -> Div {
+fn search_field(filter: &Entity<InputState>, query: &str, cx: &mut Context<SettingsView>) -> Div {
     ui::field()
         .w_full()
         .child(Icon::new(IconName::Search).small().text_color(ui::faint()))
@@ -156,11 +170,7 @@ fn search_field(
         })
 }
 
-fn navigation_items(
-    selected: SettingsPage,
-    query: &str,
-    cx: &mut Context<SettingsView>,
-) -> Div {
+fn navigation_items(selected: SettingsPage, query: &str, cx: &mut Context<SettingsView>) -> Div {
     let matches: Vec<_> = SettingsPage::ALL
         .into_iter()
         .filter(|page| page.matches_query(query))
@@ -204,11 +214,11 @@ fn navigation_items(
                                     gpui_kit::transparent_black()
                                 }),
                         )
-                        .child(
-                            Icon::new(page.icon())
-                                .small()
-                                .text_color(if active { ui::accent() } else { ui::muted() }),
-                        )
+                        .child(Icon::new(page.icon()).small().text_color(if active {
+                            ui::accent()
+                        } else {
+                            ui::muted()
+                        }))
                         .child(
                             div()
                                 .flex_1()
@@ -244,12 +254,7 @@ pub(super) fn sidebar(
                 .pt_4()
                 .pb_3()
                 .gap_2()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(ui::muted())
-                        .child("CATEGORIES"),
-                )
+                .child(div().text_xs().text_color(ui::muted()).child("CATEGORIES"))
                 .child(search_field(filter, &query, cx)),
         )
         .child(
@@ -294,15 +299,13 @@ pub(super) fn compact(
                 })),
         )
         .when(expanded, |panel| {
-            panel
-                .child(search_field(filter, &query, cx))
-                .child(
-                    div()
-                        .id("settings-compact-scroll")
-                        .max_h(rems(260. / 16.))
-                        .overflow_y_scroll()
-                        .child(navigation_items(selected, &query, cx)),
-                )
+            panel.child(search_field(filter, &query, cx)).child(
+                div()
+                    .id("settings-compact-scroll")
+                    .max_h(rems(260. / 16.))
+                    .overflow_y_scroll()
+                    .child(navigation_items(selected, &query, cx)),
+            )
         })
 }
 
@@ -317,7 +320,10 @@ mod tests {
         for page in SettingsPage::ALL {
             assert!(ids.insert(page.id()), "duplicate settings page id");
             assert!(!page.label().is_empty(), "settings page without label");
-            assert!(!page.description().is_empty(), "settings page without description");
+            assert!(
+                !page.description().is_empty(),
+                "settings page without description"
+            );
         }
         assert_eq!(ids.len(), 9);
         assert_eq!(SettingsPage::ALL[7], SettingsPage::Extensions);
@@ -395,6 +401,10 @@ mod tests {
         assert!(SettingsPage::Updates.matches_query("engram version"));
         assert!(SettingsPage::General.matches_query("setup"));
         assert!(!SettingsPage::Devices.matches_query("theme"));
-        assert!(SettingsPage::ALL.iter().all(|page| page.matches_query("  ")));
+        assert!(
+            SettingsPage::ALL
+                .iter()
+                .all(|page| page.matches_query("  "))
+        );
     }
 }

@@ -14,9 +14,9 @@ mod models;
 mod notifications;
 mod updates;
 
-use gpui_kit::*;
 use super::{SettingsView, navigation::SettingsPage, snapshot::Snapshot};
 use crate::shared::ui;
+use gpui_kit::*;
 
 impl SettingsView {
     pub(super) fn render_page(

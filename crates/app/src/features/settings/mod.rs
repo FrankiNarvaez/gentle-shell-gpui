@@ -20,8 +20,8 @@ mod hydration;
 mod layout;
 mod maestro;
 mod models;
-mod navigation;
 mod music;
+mod navigation;
 mod notifications;
 mod packages;
 mod pages;
@@ -92,26 +92,25 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) -> Self {
         let package = packages::PackageUiState::new(window, cx);
-        let settings_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Find a setting…")
-        });
-        let settings_search_subscription =
-            cx.subscribe(&settings_search, |this, input, event: &InputEvent, cx| {
-                match event {
-                    InputEvent::Change => cx.notify(),
-                    InputEvent::PressEnter { .. } => {
-                        let query = input.read(cx).value().to_string();
-                        if !query.trim().is_empty()
-                            && let Some(page) = SettingsPage::ALL
-                                .into_iter()
-                                .find(|page| page.matches_query(&query))
-                        {
-                            this.navigate_to(page, cx);
-                        }
+        let settings_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Find a setting…"));
+        let settings_search_subscription = cx.subscribe(
+            &settings_search,
+            |this, input, event: &InputEvent, cx| match event {
+                InputEvent::Change => cx.notify(),
+                InputEvent::PressEnter { .. } => {
+                    let query = input.read(cx).value().to_string();
+                    if !query.trim().is_empty()
+                        && let Some(page) = SettingsPage::ALL
+                            .into_iter()
+                            .find(|page| page.matches_query(&query))
+                    {
+                        this.navigate_to(page, cx);
                     }
-                    _ => {}
                 }
-            });
+                _ => {}
+            },
+        );
         let percent = (cx.global::<themes::Themes>().transparency * 100.).round();
         let transparency = cx.new(|_| {
             SliderState::new()
@@ -208,4 +207,3 @@ impl SettingsView {
         });
     }
 }
-

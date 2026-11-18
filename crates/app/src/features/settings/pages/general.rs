@@ -5,16 +5,17 @@ use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
-use super::super::{SettingsView, layout::{row, section}, snapshot::Snapshot};
+use super::super::{
+    SettingsView,
+    layout::{row, section},
+    snapshot::Snapshot,
+};
 
 pub(super) fn render(view: &SettingsView, snapshot: &Snapshot) -> Div {
     v_flex()
         .gap_3()
         .child(gentle_shell_section(snapshot))
-        .child(
-            section(IconName::CircleCheck, "Setup & requirements")
-                .child(view.setup.clone()),
-        )
+        .child(section(IconName::CircleCheck, "Setup & requirements").child(view.setup.clone()))
 }
 
 fn gentle_shell_section(snapshot: &Snapshot) -> Div {
@@ -49,9 +50,7 @@ fn gentle_shell_section(snapshot: &Snapshot) -> Div {
                         .small()
                         .icon(Icon::new(IconName::FolderOpen))
                         .label("Open agent dir")
-                        .on_click(move |_, _, cx| {
-                            cx.open_url(&format!("file://{}", dir.display()))
-                        })
+                        .on_click(move |_, _, cx| cx.open_url(&format!("file://{}", dir.display())))
                 })
                 .child({
                     let dir = snapshot.config.clone();
@@ -60,9 +59,7 @@ fn gentle_shell_section(snapshot: &Snapshot) -> Div {
                         .small()
                         .icon(Icon::new(IconName::FolderOpen))
                         .label("Open config dir")
-                        .on_click(move |_, _, cx| {
-                            cx.open_url(&format!("file://{}", dir.display()))
-                        })
+                        .on_click(move |_, _, cx| cx.open_url(&format!("file://{}", dir.display())))
                 }),
         )
 }
