@@ -494,9 +494,13 @@ impl SessionView {
                                     }),
                                 )
                                 .child(Icon::new(IconName::Folder).xsmall().text_color(ui::faint()))
+                                // The prefix gives way first; then the leaf
+                                // truncates from its start too, so its end (the
+                                // part that tells folders apart) stays readable.
                                 .child(
                                     div()
                                         .min_w_0()
+                                        .flex_shrink(100.)
                                         .overflow_hidden()
                                         .text_ellipsis_start()
                                         .font_family(ui::MONO)
@@ -505,7 +509,9 @@ impl SessionView {
                                 )
                                 .child(
                                     div()
-                                        .flex_shrink_0()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .text_ellipsis_start()
                                         .font_family(ui::MONO)
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(ui::fg())
