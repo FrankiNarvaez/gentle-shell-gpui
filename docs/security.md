@@ -22,7 +22,7 @@ No tool detects malicious code reliably. The checks narrow down what a person mu
 | Job | What it does | Fails on |
 | --- | --- | --- |
 | `cargo-deny` | `cargo deny check advisories bans sources` with [`deny.toml`](../deny.toml) | A RustSec vulnerability; a direct dependency marked unmaintained; a crate from git or another registry; a `*` version |
-| `dependency-review` | GitHub's advisory database on the dependencies the PR adds or bumps | Moderate or higher severity |
+| `dependency-review` | GitHub's advisory database on the dependencies the PR adds or bumps. **Off for now** (`if: false && …`): it needs the Dependency graph, which an admin has to enable; turn it back on afterwards | Moderate or higher severity |
 | `workflows` | [zizmor](https://docs.zizmor.sh) on `.github/workflows/` ([`.github/zizmor.yml`](../.github/zizmor.yml) holds accepted findings, each with a reason) | Script injection, excessive permissions, unpinned actions, dangerous triggers |
 | `risk-report` | [`.github/scripts/pr_risk_report.py`](../.github/scripts/pr_risk_report.py): a table in the run's summary, annotations on the diff | Only bidirectional Unicode controls; everything else is information |
 
