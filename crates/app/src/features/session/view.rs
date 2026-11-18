@@ -1417,6 +1417,7 @@ impl Render for SessionView {
         // the composer stays, to talk about it. A web view there hides while
         // the `/` menu, which opens over it, is up, or the tab isn't shown.
         let expanded = self.genui.expanded();
+        let surface_open = expanded.is_some();
         if expanded.is_some() {
             let obscured = !self.web_shown || self.slash_menu_open(cx);
             self.genui.set_obscured(obscured, cx);
@@ -1489,9 +1490,15 @@ impl Render for SessionView {
                     .pb_2()
                     .child(self.render_composer(rem_size, cx)),
             )
-            .when_some(self.render_todo_island(rem_size, cx), |this, island| {
-                this.child(island)
-            })
+            // The Todos island floats over the top of the conversation, where
+            // an expanded surface keeps its header controls (collapse among
+            // them): it steps aside while one is expanded.
+            .when_some(
+                (!surface_open)
+                    .then(|| self.render_todo_island(rem_size, cx))
+                    .flatten(),
+                |this, island| this.child(island),
+            )
             .children(self.genui.render_templates(cx));
 
         h_flex()

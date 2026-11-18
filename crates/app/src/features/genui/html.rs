@@ -485,6 +485,13 @@ impl HtmlView {
         if self.live.is_none() {
             return;
         }
+        // Esc pressed inside the page: the web view kept the keyboard.
+        if spec::is_escape(raw) {
+            if self.expanded {
+                cx.emit(DiagramEvent::Collapse);
+            }
+            return;
+        }
         let step = self.bridge.receive(raw);
         for message in &step.post {
             self.post(message, cx);

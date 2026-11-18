@@ -494,9 +494,10 @@ impl SessionView {
         }
     }
 
-    /// Esc: close what's open (the Agents panel, then a dialog). It never
-    /// stops the turn: a few Esc presses to close things used to abort the
-    /// agent once nothing was left open. Stopping is ⌘. or the Stop button.
+    /// Esc: close what's open (the Agents panel, then a dialog, then an
+    /// expanded generative UI surface that doesn't have the keyboard). It
+    /// never stops the turn: a few Esc presses to close things used to abort
+    /// the agent once nothing was left open. Stopping is ⌘. or the Stop button.
     fn abort(&mut self, _: &Abort, window: &mut Window, cx: &mut Context<Self>) {
         if self.agents_panel.open {
             self.close_agents(cx);
@@ -504,6 +505,11 @@ impl SessionView {
         }
         if !self.extension.dialogs.is_empty() {
             self.answer_dialog(UiAnswer::Cancelled, window, cx);
+            return;
+        }
+        // The `/` menu, open over an expanded surface, closes first.
+        if !self.slash_menu_open(cx) && self.genui.collapse_on_escape(window, cx) {
+            cx.notify();
             return;
         }
         cx.propagate();
