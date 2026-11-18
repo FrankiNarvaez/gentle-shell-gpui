@@ -45,7 +45,7 @@ rquickjs = "0.14.0"
 # (the same resvg GPUI draws icons with).
 resvg = { version = "0.46", default-features = false, features = ["text", "raster-images"] }
 # A theme image's size without decoding it, for the camera over it.
-imagesize = "0.14"
+imagesize = "0.15"
 
 # UI tests drive real views in headless windows (GPUI's `TestAppContext`):
 # the generative UI diagram's and panels' pointer and keyboard. Only GPUI's
