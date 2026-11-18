@@ -744,7 +744,6 @@ pub fn read_font(path: &Path, slot: FontSlot) -> Option<String> {
 
 /// Set the family of `slot` in the app's settings file, keeping every other
 /// key. `None` or a blank name is the default: the key is removed.
-#[allow(dead_code)] // The Settings fonts picker is the caller.
 pub fn write_font(path: &Path, slot: FontSlot, family: Option<&str>) -> std::io::Result<()> {
     match family.and_then(fonts::normalize) {
         Some(name) => write_key(path, slot.key(), Value::String(name)),
@@ -867,7 +866,6 @@ pub struct Fonts {
 }
 
 impl Fonts {
-    #[allow(dead_code)] // The Settings fonts picker is the caller.
     pub fn get(&self, slot: FontSlot) -> Option<&SharedString> {
         match slot {
             FontSlot::Interface => self.interface.as_ref(),
@@ -1206,7 +1204,6 @@ pub fn set_interface_size(percent: u16, cx: &mut App) {
 
 /// Use `family` for `slot` in every window (`None` is the default font)
 /// and persist it. A family that isn't installed is the default.
-#[allow(dead_code)] // The Settings fonts picker is the caller.
 pub fn set_font(slot: FontSlot, family: Option<&str>, cx: &mut App) {
     let family = resolve_font(family, cx);
     let themes = cx.global_mut::<Themes>();

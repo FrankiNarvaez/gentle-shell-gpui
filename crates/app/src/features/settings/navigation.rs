@@ -102,7 +102,7 @@ impl SettingsPage {
                 "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report"
             }
             Self::Appearance => {
-                "theme color dark light import share transparency window opacity interface zoom size fonts scene motion background animated library terminal banner rose text"
+                "theme color dark light import share transparency window opacity interface zoom size font fonts family typeface nerd monospace code terminal scene motion background animated library terminal banner rose text"
             }
             Self::Agents => {
                 "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked"

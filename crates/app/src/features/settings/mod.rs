@@ -17,6 +17,7 @@ mod claude;
 mod devices;
 mod diagnostics;
 mod events;
+mod fonts;
 mod hydration;
 mod layout;
 mod maestro;
@@ -79,6 +80,8 @@ pub struct SettingsView {
     engram: upgrade::EngramUpdate,
     /// Theme: importing and sharing themes.
     theme_share: theme::ThemeShare,
+    /// Fonts: the open picker, its search and cursor.
+    fonts: fonts::FontsUi,
     /// Active agent tab, if available, for the new Desktop RPC update status.
     session: Option<Entity<crate::features::session::SessionView>>,
     _session_sub: Option<Subscription>,
@@ -160,6 +163,7 @@ impl SettingsView {
             devices: devices::Devices::default(),
             engram: upgrade::EngramUpdate::default(),
             theme_share: theme::ThemeShare::new(window, cx),
+            fonts: fonts::FontsUi::new(window, cx),
             _session_sub: session
                 .as_ref()
                 .map(|session| cx.observe(session, |this, _, cx| this.update_status_changed(cx))),

@@ -227,6 +227,8 @@ impl SettingsView {
                     ),
             )
             .child(interface_size_row(size))
+            .child(div().pt_1().pb_1().child(ui::section_label("Fonts")))
+            .children(self.fonts_rows(cx))
             .when(active.background.as_ref().is_some_and(backdrop::Backdrop::moves), |d| {
                 let motion = backdrop::motion(cx);
                 let labels = backdrop::Motion::ALL.map(backdrop::Motion::label);
