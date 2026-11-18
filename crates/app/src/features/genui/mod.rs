@@ -126,6 +126,17 @@ impl Surface {
         }
     }
 
+    /// Whether the keyboard is inside the surface: a diagram or panel then
+    /// handles Esc itself (clearing a selection first). An HTML page never
+    /// is, for GPUI: its keys go to the web view.
+    fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        match self {
+            Self::Diagram(view) => view.read(cx).focus.contains_focused(window, cx),
+            Self::Panel(view) => view.read(cx).focus.contains_focused(window, cx),
+            Self::Html(_) => false,
+        }
+    }
+
     /// Whether Gentle Shell ran the surface's last [`DiagramEvent::Send`].
     pub fn sent(&self, result: Result<(), String>, cx: &mut App) {
         match self {
@@ -595,6 +606,19 @@ impl GenUi {
             Some(surface) => Some(surface.clone()),
             None if id == TODO_SURFACE => self.todo.clone(),
             None => None,
+        }
+    }
+
+    /// Esc in the session: back to the conversation when a surface is
+    /// expanded and doesn't have the keyboard (one that has it collapses on
+    /// its own Esc). Whether it collapsed one.
+    pub fn collapse_on_escape(&mut self, window: &Window, cx: &mut App) -> bool {
+        match self.expanded() {
+            Some(surface) if !surface.has_focus(window, cx) => {
+                self.set_expanded(None, cx);
+                true
+            }
+            _ => false,
         }
     }
 
