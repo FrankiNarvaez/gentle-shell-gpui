@@ -315,7 +315,7 @@ backdrop.occlude().child(ui::pop_in(
 
 `features/session/view/activity.rs` draws the activity line above the composer. On the left, while the agent works: `pulse` of a 6 px `petal` dot, clock in `MONO` and `muted`, a 1×10 px separator in `border_strong`, `✿ phase…` in `petal` and the current tool, truncated, in `muted`. On the right, the chips.
 
-Every new chip uses `chip_popover(id, icon, color, label, title, count, body)`: a `ghost().xsmall()` `Button` with `text_color(color)` that opens a `Popover` anchored `BottomRight`, 360 px wide, with `appearance(false)`, content in `ui::island(cx)` + `ui::popover_in`. The card shows icon and title (`text_sm MEDIUM`), the count in `MONO` and a scrollable list; `body` builds the rows only on open. Chip color: `accent` if something is running, `muted` at rest, `faint` for passive information (token usage). In panels narrower than `TINY`, extension states collapse into a single chip.
+Every new chip uses `chip_popover(ChipPopoverOptions::new(id, icon, color, label).title(..).count(..), body)`: a `ghost().xsmall()` `Button` with `text_color(color)` that opens a `Popover` anchored `BottomRight`, 360 px wide, with `appearance(false)`, content in `ui::island(cx)` + `ui::popover_in`. The card shows icon and title (`text_sm MEDIUM`), the count in `MONO` and a scrollable list; `body` builds the rows only on open. Chip color: `accent` if something is running, `muted` at rest, `faint` for passive information (token usage). In panels narrower than `TINY`, extension states collapse into a single chip.
 
 ### Conversation cards
 

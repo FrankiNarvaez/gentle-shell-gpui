@@ -17,7 +17,7 @@ use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::activity::chip_popover;
+use super::activity::{ChipPopoverOptions, chip_popover};
 use super::dialogs::checkbox_box;
 use super::{NARROW, TINY, image_tile, number_badge};
 use crate::features::session::SessionView;
@@ -101,12 +101,9 @@ impl SessionView {
         let color = if high { ui::warning() } else { ui::faint() };
         let weak = cx.entity().downgrade();
         chip_popover(
-            "context",
-            IconName::Gauge,
-            color,
-            label,
-            "Context",
-            count,
+            ChipPopoverOptions::new("context", IconName::Gauge, color, label)
+                .title("Context")
+                .count(count),
             move || {
                 let compact = weak.clone();
                 let toggle = weak.clone();
