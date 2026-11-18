@@ -155,7 +155,7 @@ impl Workspace {
     fn render_vertical_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.tab_search.read(cx).value().trim().to_lowercase();
         let mut list = v_flex()
-            .id("vertical-tabs-list")
+            .id(("vertical-tabs-list", self.current))
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -166,6 +166,15 @@ impl Workspace {
             let active_space = index == self.current;
             let name = space.name.clone();
             let count = space.tab_count();
+            // Mirror the activity shown by the horizontal workspace switcher.
+            let activity = self.space_activity(space);
+            let status = if activity.needs_you > 0 {
+                Some(("needs you", ui::warning()))
+            } else if activity.working > 0 {
+                Some(("working", ui::accent()))
+            } else {
+                None
+            };
             list = list.child(
                 h_flex()
                     .id(("vertical-space", index))
@@ -194,7 +203,24 @@ impl Workspace {
                         div()
                             .text_xs()
                             .text_color(ui::faint())
+                            .children(status.map(|(label, color)| {
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(div().size(rems(6. / 16.)).rounded_full().bg(color))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(color)
+                                    .child(label),
+                            )
+                    }))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(ui::faint())
                             .child(count.to_string()),
+                    ),
                     ),
             );
             if !active_space {

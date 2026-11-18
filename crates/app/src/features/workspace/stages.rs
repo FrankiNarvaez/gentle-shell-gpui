@@ -214,7 +214,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// A screen opened or closed over the window: web views hide under it.
+    /// A screen or dialog opened or closed over the window: web views hide
+    /// under it.
     pub(super) fn set_stages_covered(&self, covered: bool, cx: &mut App) {
         for stage in self.stages.iter().filter(|stage| stage.shown) {
             stage
@@ -223,6 +224,34 @@ impl Workspace {
         }
         self.devices
             .update(cx, |panel, cx| panel.set_covered(covered, cx));
+    }
+
+    /// Tell agent panes whether their web views (an expanded HTML surface)
+    /// may show: only those in the shown tab, with nothing over them. Only
+    /// changes reach the panes, so hidden tabs aren't touched every frame.
+    pub(super) fn sync_web_views(&mut self, covered: bool, cx: &mut App) {
+        let shown: std::collections::HashSet<PaneId> = match self.tab() {
+            Some(tab) if !covered => tab
+                .tree
+                .leaves()
+                .into_iter()
+                .filter(|id| self.panes.get(id).is_some_and(|p| p.session.is_some()))
+                .collect(),
+            _ => Default::default(),
+        };
+        if shown == self.web_shown {
+            return;
+        }
+        for (id, pane) in &self.panes {
+            let Some(session) = &pane.session else {
+                continue;
+            };
+            let on = shown.contains(id);
+            if on != self.web_shown.contains(id) {
+                session.update(cx, |session, cx| session.set_web_shown(on, cx));
+            }
+        }
+        self.web_shown = shown;
     }
 
     pub(super) fn shown_stages(&self) -> usize {

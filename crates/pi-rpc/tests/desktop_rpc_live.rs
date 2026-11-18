@@ -25,10 +25,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow, ensure};
 use pi_rpc::desktop_rpc::{
-    ApplyProfileOutcome, ApplyProfileResult, Capabilities, ConfigStatus, ConfigStore, ConfigWrite,
-    ConfigWriteTarget, DesktopMethod, DesktopRecord, DesktopRequest, DesktopResponse,
-    DesktopSession, PROMPT_COMMAND, PermissionMode, ProfileApplyMode, ProfilesData, SCHEMA,
-    Snapshot, UsageRefresh, WIDGET_KEY,
+    ApplyProfileOutcome, ApplyProfileResult, Capabilities, ChangeSource, ChangeStatus,
+    ConfigChangeOrigin, ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget,
+    DesktopErrorCode, DesktopEvent, DesktopMethod, DesktopRecord, DesktopRequest, DesktopResponse,
+    DesktopRpcError, DesktopSession, ListSessionsQuery, PROMPT_COMMAND, PermissionMode,
+    ProfileApplyMode, ProfilesData, ReviewEffective, ReviewMode, ReviewScope, ReviewSetting,
+    SCHEMA, SessionSection, SessionsScope, SetReviewModeOutcome, Snapshot, StatsRange, StatsScope,
+    UsageRefresh, WIDGET_KEY,
 };
 use pi_rpc::{Incoming, LaunchSpec, PiProcess, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -282,6 +285,8 @@ struct Probe {
     /// Monotonic ids for raw (not yet typed in the adapter) Desktop methods.
     raw_ids: u64,
     stderr: Vec<String>,
+    /// Events consumed while waiting for a response, kept for inspection.
+    events: Vec<DesktopEvent>,
     root: TempRoot,
 }
 
@@ -354,7 +359,7 @@ impl Probe {
                     );
                     return Ok(response);
                 }
-                DesktopRecord::Event(_) => continue,
+                DesktopRecord::Event(event) => self.events.push(event),
             }
         }
     }
@@ -616,7 +621,7 @@ impl Probe {
                 && changed.previous_mode == PermissionMode::Normal
                 && changed.default_mode == PermissionMode::Normal
                 && !changed.persisted
-                && changed.source == "desktop",
+                && changed.source == ChangeSource::Desktop,
             "unexpected permission event payload: {changed:?}"
         );
 
@@ -718,20 +723,16 @@ impl Probe {
             "config event store: {changed:?}"
         );
         ensure!(
-            changed.write_target == ConfigWriteTarget::Global,
-            "config event target: {changed:?}"
-        );
-        ensure!(
-            changed.write_revision == new_write_revision,
-            "config event writeRevision must match the response: {changed:?}"
+            changed.origin
+                == ConfigChangeOrigin::Desktop {
+                    write_target: ConfigWriteTarget::Global,
+                    write_revision: new_write_revision.clone(),
+                },
+            "config event must name the global target and match the response's writeRevision: {changed:?}"
         );
         ensure!(
             changed.revision == write.state.revision,
             "config event revision must match the response: {changed:?}"
-        );
-        ensure!(
-            changed.source == "desktop",
-            "config event source: {changed:?}"
         );
 
         // Disk bytes: the owner wrote exactly the canonical serialized file.
@@ -869,6 +870,359 @@ impl Probe {
 
         Ok(())
     }
+}
+
+/// The Gentle Shell `main` additions, driven through the launcher.
+impl Probe {
+    /// Issue a typed request only when the peer advertises its method, then
+    /// roundtrip it.
+    fn gated(
+        &mut self,
+        capabilities: &Capabilities,
+        method: DesktopMethod,
+        issue: impl FnOnce(&mut DesktopSession) -> Result<DesktopRequest, DesktopRpcError>,
+    ) -> Result<DesktopResponse> {
+        capabilities
+            .require(method)
+            .map_err(|e| anyhow!("{method}: {e}"))?;
+        let request = issue(&mut self.session).map_err(|e| anyhow!("issue {method}: {e}"))?;
+        ensure!(request.method() == method, "issued {}", request.method());
+        self.typed_roundtrip(request)
+    }
+
+    /// The next event named `name`, keeping the others.
+    fn wait_for_event(&mut self, name: &str, within: Duration) -> Result<Option<DesktopEvent>> {
+        let deadline = Instant::now() + within;
+        loop {
+            match self.next_desktop_record_until(deadline) {
+                Ok(DesktopRecord::Event(event)) if event.event == name => return Ok(Some(event)),
+                Ok(DesktopRecord::Event(event)) => self.events.push(event),
+                Ok(DesktopRecord::Response(response)) => {
+                    anyhow::bail!("unexpected response while waiting for {name}: {response:?}")
+                }
+                Err(_) if Instant::now() >= deadline => return Ok(None),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Gentle Shell 4.8.0: none of the additions is offered, the gate refuses
+    /// each one before a request exists, and the legacy reads still work.
+    fn run_release_gates(&mut self, capabilities: &Capabilities) -> Result<()> {
+        for method in NEW_METHODS {
+            ensure!(
+                capabilities.require(method) == Err(DesktopRpcError::NotAdvertised(method)),
+                "{method} must not be offered by this backend: {capabilities:?}"
+            );
+        }
+        ensure!(
+            !capabilities.supports_session_sections() && !capabilities.emits("review_mode_changed"),
+            "no new events expected: {capabilities:?}"
+        );
+        ensure!(
+            self.session.pending().is_none(),
+            "a refused method must leave nothing in flight"
+        );
+        let snapshot = self
+            .typed(DesktopMethod::GetSnapshot)?
+            .snapshot()
+            .map_err(|e| anyhow!("snapshot decode: {e}"))?;
+        ensure!(snapshot.session.is_none(), "{snapshot:?}");
+        eprintln!(
+            "desktop_rpc_live: release backend refuses {} new methods; methods {:?}; events {:?}",
+            NEW_METHODS.len(),
+            capabilities.methods,
+            capabilities.events
+        );
+        Ok(())
+    }
+
+    fn run_additions(&mut self, capabilities: &Capabilities) -> Result<()> {
+        ensure!(
+            capabilities.supports_session_sections() && capabilities.emits("review_mode_changed"),
+            "main advertises session_snapshot and review_mode_changed: {capabilities:?}"
+        );
+
+        // 1. get_snapshot with every section.
+        capabilities.require(DesktopMethod::GetSnapshot)?;
+        let request = self
+            .session
+            .issue_get_snapshot_sections(SessionSection::ALL)
+            .map_err(|e| anyhow!("issue sections: {e}"))?;
+        let snapshot = self
+            .typed_roundtrip(request)?
+            .snapshot()
+            .map_err(|e| anyhow!("snapshot decode: {e}"))?;
+        ensure!(snapshot.state.get("config").is_some(), "{snapshot:?}");
+        let session = snapshot
+            .session
+            .ok_or_else(|| anyhow!("no state.session"))?;
+        let project = session
+            .project
+            .clone()
+            .ok_or_else(|| anyhow!("no project"))?;
+        ensure!(project.name.as_deref() == Some("workspace"), "{project:?}");
+        let changes = session
+            .changes
+            .clone()
+            .flatten()
+            .ok_or_else(|| anyhow!("no changes section: {session:?}"))?;
+        ensure!(
+            changes.files.iter().any(|f| f.path == "notes.txt"),
+            "{changes:?}"
+        );
+        ensure!(
+            changes.worktrees.iter().all(|w| w
+                .root
+                .as_deref()
+                .is_some_and(|root| root.starts_with("root-"))),
+            "worktree roots must be opaque labels: {changes:?}"
+        );
+        eprintln!(
+            "desktop_rpc_live: get_snapshot sections -> sequence {}, project {project:?}, \
+             changes {} file(s) {:?}, activity {:?}, commands {}",
+            snapshot.sequence,
+            changes.files.len(),
+            changes.files,
+            session
+                .activity
+                .as_ref()
+                .map(|a| (a.state, a.label.clone())),
+            session.commands.as_ref().map_or(0, |c| c.items.len()),
+        );
+
+        // 2. get_changes and get_change_diff.
+        let changed = self
+            .gated(capabilities, DesktopMethod::GetChanges, |s| {
+                s.issue(DesktopMethod::GetChanges)
+            })?
+            .changes()
+            .map_err(|e| anyhow!("changes decode: {e}"))?;
+        eprintln!("desktop_rpc_live: get_changes -> {changed:?}");
+        let notes = changed
+            .files
+            .iter()
+            .find(|f| f.path == "notes.txt")
+            .cloned()
+            .ok_or_else(|| anyhow!("notes.txt not listed: {changed:?}"))?;
+        ensure!(notes.status == ChangeStatus::Modified, "{notes:?}");
+        ensure!(
+            changed
+                .files
+                .iter()
+                .any(|f| f.path == "fresh.txt" && f.status == ChangeStatus::Untracked),
+            "{changed:?}"
+        );
+        let diff = self
+            .gated(capabilities, DesktopMethod::GetChangeDiff, |s| {
+                s.issue_get_change_diff(&notes.root, &notes.path)
+            })?
+            .change_diff()
+            .map_err(|e| anyhow!("change_diff decode: {e}"))?;
+        ensure!(diff.diff.contains("+two") && !diff.truncated, "{diff:?}");
+        eprintln!("desktop_rpc_live: get_change_diff -> {diff:?}");
+        let outside = self.gated(capabilities, DesktopMethod::GetChangeDiff, |s| {
+            s.issue_get_change_diff(&notes.root, ".git/config")
+        })?;
+        expect_error(&outside, DesktopErrorCode::NotFound)?;
+
+        // 3. Unknown job and subagent ids.
+        let job = self.gated(capabilities, DesktopMethod::GetJobOutput, |s| {
+            s.issue_get_job_output("job-unknown")
+        })?;
+        expect_error(&job, DesktopErrorCode::NotFound)?;
+        let thread = self.gated(capabilities, DesktopMethod::GetSubagentThread, |s| {
+            s.issue_get_subagent_thread("agent-unknown", Some(0))
+        })?;
+        expect_error(&thread, DesktopErrorCode::NotFound)?;
+
+        // 4. Sessions: a fresh home lists none; an unknown id never switches.
+        for query in [
+            ListSessionsQuery::default(),
+            ListSessionsQuery {
+                scope: Some(SessionsScope::All),
+                limit: Some(1),
+                cursor: None,
+            },
+        ] {
+            let list = self
+                .gated(capabilities, DesktopMethod::ListSessions, |s| {
+                    s.issue_list_sessions(&query)
+                })?
+                .list_sessions()
+                .map_err(|e| anyhow!("list_sessions decode: {e}"))?;
+            eprintln!("desktop_rpc_live: list_sessions {query:?} -> {list:?}");
+        }
+        let switch = self.gated(capabilities, DesktopMethod::SwitchSession, |s| {
+            s.issue_switch_session("00000000-0000-0000-0000-000000000000", None)
+        })?;
+        expect_error(&switch, DesktopErrorCode::NotFound)?;
+
+        // 5. Review mode: read, then the two-call confirmation round on this
+        // temporary repository's own (clone) setting.
+        let review = self.gated(capabilities, DesktopMethod::GetReviewMode, |s| {
+            s.issue(DesktopMethod::GetReviewMode)
+        })?;
+        match review.review_mode() {
+            Ok(mode) => {
+                eprintln!("desktop_rpc_live: get_review_mode -> {mode:?}");
+                self.review_round(capabilities, mode)?;
+            }
+            Err(DesktopRpcError::RemoteError(info))
+                if info.kind() == Some(DesktopErrorCode::ReviewUnavailable) =>
+            {
+                eprintln!(
+                    "desktop_rpc_live: get_review_mode -> review_unavailable ({}); \
+                     gentle-ai is not installed next to this launcher, so set_review_mode is skipped",
+                    info.message
+                );
+            }
+            Err(error) => anyhow::bail!("get_review_mode: {error}"),
+        }
+
+        // 6. Usage stats.
+        for (range, scope) in [(None, None), (Some(StatsRange::All), Some(StatsScope::All))] {
+            let stats = self
+                .gated(capabilities, DesktopMethod::GetUsageStats, |s| {
+                    s.issue_get_usage_stats(range, scope)
+                })?
+                .usage_stats()
+                .map_err(|e| anyhow!("usage_stats decode: {e}"))?;
+            eprintln!("desktop_rpc_live: get_usage_stats {range:?} {scope:?} -> {stats:?}");
+        }
+
+        // 7. Update status: the child is offline, so even a refresh looks
+        // nothing up and claims nothing.
+        for refresh in [None, Some(true)] {
+            let status = self
+                .gated(capabilities, DesktopMethod::GetUpdateStatus, |s| {
+                    s.issue_get_update_status(refresh)
+                })?
+                .update_status()
+                .map_err(|e| anyhow!("update_status decode: {e}"))?;
+            ensure!(status.offline && !status.refreshed, "{status:?}");
+            eprintln!("desktop_rpc_live: get_update_status {refresh:?} -> {status:?}");
+        }
+
+        // 8. An external config change (#3335): a profiles.json written
+        // behind the channel's back is announced with `source: external`.
+        std::fs::write(
+            self.root.dir("config").join("profiles.json"),
+            expected_profiles_bytes(),
+        )?;
+        let external = self
+            .wait_for_event("config_changed", Duration::from_secs(10))?
+            .ok_or_else(|| anyhow!("no external config_changed within 10s"))?
+            .config_changed()
+            .map_err(|e| anyhow!("config_changed decode: {e}"))?;
+        ensure!(
+            external.store == ConfigStore::Profiles
+                && external.origin
+                    == ConfigChangeOrigin::External {
+                        status: ConfigStatus::Ok
+                    },
+            "{external:?}"
+        );
+        eprintln!("desktop_rpc_live: external config_changed -> {external:?}");
+
+        // Every session_snapshot the backend published decodes.
+        let snapshots: Vec<_> = self
+            .events
+            .iter()
+            .filter(|event| event.event == "session_snapshot")
+            .collect();
+        for event in &snapshots {
+            event
+                .session_snapshot()
+                .map_err(|e| anyhow!("session_snapshot seq {} decode: {e}", event.seq))?;
+        }
+        eprintln!(
+            "desktop_rpc_live: {} session_snapshot event(s) decoded",
+            snapshots.len()
+        );
+        Ok(())
+    }
+
+    /// `set_review_mode` off for this clone: a confirmation, then the
+    /// approved resend applies and emits `review_mode_changed`, and the same
+    /// token resent is stale and asks again.
+    fn review_round(&mut self, capabilities: &Capabilities, before: ReviewMode) -> Result<()> {
+        let first = self
+            .gated(capabilities, DesktopMethod::SetReviewMode, |s| {
+                s.issue_set_review_mode(false, ReviewScope::Clone, None)
+            })?
+            .set_review_mode()
+            .map_err(|e| anyhow!("set_review_mode decode: {e}"))?;
+        eprintln!("desktop_rpc_live: set_review_mode (no token) -> {first:?}");
+        ensure!(first.mode == before, "{first:?}");
+        let SetReviewModeOutcome::ConfirmationRequired(confirmation) = first.outcome else {
+            anyhow::bail!("the first call must ask: {first:?}");
+        };
+        let applied = self
+            .gated(capabilities, DesktopMethod::SetReviewMode, |s| {
+                s.issue_set_review_mode(false, ReviewScope::Clone, Some(&confirmation.token))
+            })?
+            .set_review_mode()
+            .map_err(|e| anyhow!("set_review_mode decode: {e}"))?;
+        eprintln!("desktop_rpc_live: set_review_mode (token) -> {applied:?}");
+        ensure!(
+            applied.outcome == SetReviewModeOutcome::Applied { changed: true }
+                && applied.mode.effective == ReviewEffective::Disabled
+                && applied.mode.scopes.clone == ReviewSetting::Disabled,
+            "{applied:?}"
+        );
+        let event = self
+            .wait_for_event("review_mode_changed", STEP_TIMEOUT)?
+            .ok_or_else(|| anyhow!("no review_mode_changed"))?
+            .review_mode_changed()
+            .map_err(|e| anyhow!("review_mode_changed decode: {e}"))?;
+        ensure!(
+            event.mode == applied.mode && event.previous_mode == before,
+            "{event:?}"
+        );
+        eprintln!("desktop_rpc_live: review_mode_changed -> {event:?}");
+        let stale = self
+            .gated(capabilities, DesktopMethod::SetReviewMode, |s| {
+                s.issue_set_review_mode(false, ReviewScope::Clone, Some(&confirmation.token))
+            })?
+            .set_review_mode()
+            .map_err(|e| anyhow!("set_review_mode decode: {e}"))?;
+        ensure!(
+            matches!(&stale.outcome, SetReviewModeOutcome::ConfirmationRequired(fresh) if fresh.token != confirmation.token),
+            "a stale token must ask again: {stale:?}"
+        );
+        eprintln!("desktop_rpc_live: set_review_mode (stale token) -> {stale:?}");
+        Ok(())
+    }
+}
+
+/// The methods Gentle Shell `main` added after 4.8.0.
+const NEW_METHODS: [DesktopMethod; 10] = [
+    DesktopMethod::GetJobOutput,
+    DesktopMethod::GetSubagentThread,
+    DesktopMethod::ListSessions,
+    DesktopMethod::SwitchSession,
+    DesktopMethod::GetChanges,
+    DesktopMethod::GetChangeDiff,
+    DesktopMethod::GetReviewMode,
+    DesktopMethod::SetReviewMode,
+    DesktopMethod::GetUsageStats,
+    DesktopMethod::GetUpdateStatus,
+];
+
+/// Require a response to be the documented error `code`.
+fn expect_error(response: &DesktopResponse, code: DesktopErrorCode) -> Result<()> {
+    let info = response
+        .error()
+        .ok_or_else(|| anyhow!("expected {code}, got {response:?}"))?;
+    ensure!(info.kind() == Some(code), "expected {code}, got {info:?}");
+    eprintln!(
+        "desktop_rpc_live: {:?} -> {} ({})",
+        response.request_id(),
+        info.code,
+        info.message
+    );
+    Ok(())
 }
 
 impl Drop for Probe {
@@ -1067,8 +1421,102 @@ fn spawn_probe(spec: LaunchSpec, root: TempRoot) -> Result<Probe> {
         session: DesktopSession::new(),
         raw_ids: 0,
         stderr: Vec::new(),
+        events: Vec::new(),
         root,
     })
+}
+
+/// The Gentle Shell launcher (`bin/gentle-shell.mjs`) from
+/// `GENTLE_SHELL_LIVE_LAUNCHER`, or a clear skip.
+fn locate_launcher() -> Option<PathBuf> {
+    let path = match std::env::var_os("GENTLE_SHELL_LIVE_LAUNCHER") {
+        Some(path) if !path.is_empty() => PathBuf::from(path),
+        _ => {
+            eprintln!(
+                "desktop_rpc_live: GENTLE_SHELL_LIVE_LAUNCHER is not set; set it to \
+                 .../bin/gentle-shell.mjs to run the launcher probe (it is #[ignore] by default)"
+            );
+            return None;
+        }
+    };
+    let absolute = std::fs::canonicalize(&path).unwrap_or(path);
+    if absolute.is_file() {
+        Some(absolute)
+    } else {
+        eprintln!(
+            "desktop_rpc_live: GENTLE_SHELL_LIVE_LAUNCHER={} is not a file; skipping",
+            absolute.display()
+        );
+        None
+    }
+}
+
+/// Make the workspace a Git repository with one committed file, then modify
+/// it and add an untracked one, so the changes owner has something to list.
+fn init_workspace_repo(root: &TempRoot) -> Result<()> {
+    let workspace = root.dir("workspace");
+    let git = |args: &[&str]| -> Result<()> {
+        let status = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=probe",
+                "-c",
+                "user.email=probe@example.invalid",
+            ])
+            .args(args)
+            .current_dir(&workspace)
+            .envs(isolation_env(root))
+            .status()
+            .map_err(|e| anyhow!("git {args:?}: {e}"))?;
+        ensure!(status.success(), "git {args:?} failed: {status}");
+        Ok(())
+    };
+    git(&["init", "-q", "-b", "main"])?;
+    std::fs::write(workspace.join("notes.txt"), "one\n")?;
+    git(&["add", "notes.txt"])?;
+    git(&["commit", "-q", "-m", "init"])?;
+    std::fs::write(workspace.join("notes.txt"), "one\ntwo\n")?;
+    std::fs::write(workspace.join("fresh.txt"), "new\n")?;
+    Ok(())
+}
+
+/// `node <launcher> --mode rpc` in the isolated root: the launcher's own home
+/// resolution, extensions and owners, with no auto setup and no network.
+fn launcher_spec(launcher: &Path, node: &Path, root: &TempRoot) -> LaunchSpec {
+    let home = root.dir("home");
+    let mut env = isolation_env(root);
+    env.extend([
+        ("GENTLE_SHELL_NO_AUTO_SETUP".into(), "1".into()),
+        ("GENTLE_PI_SKIP_GENTLE_AI_INSTALL".into(), "1".into()),
+        (
+            "XDG_CONFIG_HOME".into(),
+            home.join(".config").into_os_string(),
+        ),
+        (
+            "XDG_DATA_HOME".into(),
+            home.join(".local/share").into_os_string(),
+        ),
+        (
+            "XDG_STATE_HOME".into(),
+            home.join(".local/state").into_os_string(),
+        ),
+        (
+            "XDG_CACHE_HOME".into(),
+            home.join(".cache").into_os_string(),
+        ),
+    ]);
+    LaunchSpec {
+        program: node.to_path_buf(),
+        args: vec![
+            launcher.to_string_lossy().into_owned(),
+            "--mode".into(),
+            "rpc".into(),
+        ],
+        cwd: root.dir("workspace"),
+        env,
+        launcher: node.to_path_buf(),
+        bundled: None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1098,6 +1546,47 @@ fn live_desktop_shell_roundtrip() {
         );
     }
     eprintln!("desktop_rpc_live: Desktop↔Shell roundtrip passed");
+}
+
+/// The protocol additions of Gentle Shell `main`, through the real launcher.
+/// Against `main` every added method and event is exercised; against a
+/// release that predates them (4.8.0), the capability gate must refuse each
+/// one without sending it. Point `GENTLE_SHELL_LIVE_LAUNCHER` at either
+/// `bin/gentle-shell.mjs`.
+#[test]
+#[ignore = "live launcher probe: set GENTLE_SHELL_LIVE_LAUNCHER to .../bin/gentle-shell.mjs, then run with --ignored"]
+fn live_desktop_launcher_additions() {
+    let Some(launcher) = locate_launcher() else {
+        return;
+    };
+    let Some(node) = find_node() else {
+        eprintln!("desktop_rpc_live: node was not found on PATH; skipping live probe");
+        return;
+    };
+    let root = TempRoot::new();
+    init_workspace_repo(&root).unwrap_or_else(|error| panic!("{error:#}"));
+    let spec = launcher_spec(&launcher, &node, &root);
+    let mut probe = spawn_probe(spec, root).unwrap_or_else(|error| panic!("{error:#}"));
+    let result = (|| -> Result<()> {
+        let commands = probe.rpc_command(json!({"type": "get_commands"}))?;
+        assert_desktop_command_listed(&commands)?;
+        let capabilities = probe
+            .typed(DesktopMethod::Capabilities)?
+            .capabilities()
+            .map_err(|e| anyhow!("capabilities decode: {e}"))?;
+        if capabilities.supports(DesktopMethod::GetChanges) {
+            probe.run_additions(&capabilities)
+        } else {
+            probe.run_release_gates(&capabilities)
+        }
+    })();
+    if let Err(error) = result {
+        panic!(
+            "live launcher probe failed: {error:#}\n--- backend stderr ---\n{}",
+            probe.stderr.join("\n")
+        );
+    }
+    eprintln!("desktop_rpc_live: launcher probe passed");
 }
 
 // --- Hermetic checks of the probe's own parsing (no backend required) --------

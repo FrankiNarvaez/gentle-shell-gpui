@@ -105,7 +105,38 @@ gpui_kit::assets::icon_assets!(
         PictureInPicture2,
         // Configuration → Theme: share a theme, import one from a link.
         Share2,
-        Link
+        Link,
+        // Generative UI diagrams: node kinds and the toolbar.
+        Server,
+        Database,
+        Monitor,
+        SquareFunction,
+        StickyNote,
+        ZoomIn,
+        ZoomOut,
+        Scan,
+        Send,
+        // Generative UI diagrams: groups, box selection and the lock.
+        Group,
+        Ungroup,
+        SquareDashed,
+        LockOpen,
+        // Generative UI panels: tables, forms, checklists, kanban, charts.
+        Table,
+        ClipboardList,
+        ListChecks,
+        SquareKanban,
+        ChartColumn,
+        GripVertical,
+        Circle,
+        ListIndentIncrease,
+        ListIndentDecrease,
+        ArrowUpDown,
+        // Generative UI canvas kinds: sequence, state machine, timeline.
+        ArrowLeftRight,
+        CircleDot,
+        ChartGantt,
+        Flag
     ]
 );
 

@@ -3,9 +3,11 @@ resolver = "2"
 members = ["crates/core", "crates/pi-rpc", "crates/app"]
 
 [workspace.package]
-version = "0.1.22"
+version = "0.1.23"
 edition = "2024"
 license = "MIT"
+# An app, not libraries: never published to crates.io.
+publish = false
 
 [workspace.dependencies]
 anyhow = "1"

@@ -52,7 +52,6 @@ mod view;
 
 pub(crate) use env::{
     ConfigChange, ConfigFailure, ConfigOutcome, ConfigSupport, ConfigTicket, ProfileApply,
-    gentle_pi_root,
 };
 pub use gentle_core::profiles::ModelChoice;
 

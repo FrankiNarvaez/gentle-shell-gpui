@@ -1,8 +1,9 @@
 //! A web page drawn by the system's web view where GPUI lays this element
-//! out. The browser card puts one in its body and the device panel one per
-//! device tab. The native view sits above everything GPUI draws, so it hides
-//! while a screen covers the window, and it only exists while the surface is
-//! shown: a hidden page costs no web process.
+//! out. The browser card puts one in its body, the device panel one per
+//! device tab and generative UI one per expanded HTML surface (sandboxed).
+//! The native view sits above everything GPUI draws, so it hides while a
+//! screen or a dialog covers the window, and it only exists while the
+//! surface is shown: a hidden page costs no web process.
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -10,7 +11,7 @@ use std::rc::{Rc, Weak};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{PUMP_EVERY, PUMP_IDLE, native, page_background};
+use super::{PUMP_EVERY, PUMP_IDLE, Sandbox, native, page_background};
 use crate::shared::ui;
 
 thread_local! {
@@ -46,6 +47,8 @@ pub struct WebSurface {
     url: String,
     /// Runs before the page's own scripts, on every load.
     script: Option<String>,
+    /// Set for a page the app serves itself, locked down (see [`Sandbox`]).
+    sandbox: Option<Sandbox>,
     /// A screen covers the window: the native view must not show over it.
     covered: bool,
     /// Not on screen (the card is in the tray, the tab isn't active): no
@@ -68,6 +71,7 @@ impl WebSurface {
         Self {
             url,
             script,
+            sandbox: None,
             covered: false,
             hidden: false,
             view: None,
@@ -75,6 +79,23 @@ impl WebSurface {
             failed: None,
             _pump: None,
             _window_moves: None,
+        }
+    }
+
+    /// An isolated page served by `sandbox`, starting at `url` (one of its
+    /// [`super::sandbox_url`]s).
+    pub fn sandboxed(url: String, sandbox: Sandbox) -> Self {
+        Self {
+            sandbox: Some(sandbox),
+            ..Self::new(url, None)
+        }
+    }
+
+    /// Run `script` in the page, if its view exists (nothing otherwise: a
+    /// view built later loads the page afresh).
+    pub fn evaluate(&self, script: &str) {
+        if let Some(view) = &self.view {
+            view.evaluate(script);
         }
     }
 
@@ -98,10 +119,16 @@ impl WebSurface {
         cx.notify();
     }
 
-    /// A screen opened or closed over the window.
+    /// Something opened or closed over the page (a screen, a dialog), or
+    /// its element stopped being drawn (another tab). Covering hides the
+    /// native view right away, without waiting for a frame that may never
+    /// draw this element; uncovering shows it at the next placement.
     pub fn set_covered(&mut self, covered: bool, cx: &mut Context<Self>) {
         if self.covered != covered {
             self.covered = covered;
+            if covered && let Some(view) = &mut self.view {
+                view.conceal();
+            }
             cx.notify();
         }
     }
@@ -143,9 +170,16 @@ impl WebSurface {
         self.creating = true;
         let url = self.url.clone();
         let script = self.script.clone();
+        let sandbox = self.sandbox.clone();
         let background = page_background();
         cx.spawn(async move |this, cx| {
-            let view = native::NativeView::new(host, &url, background, script.as_deref());
+            let view = native::NativeView::new(
+                host,
+                &url,
+                background,
+                script.as_deref(),
+                sandbox.as_ref(),
+            );
             // A surface dropped meanwhile drops the view, and its popup with
             // it; one hidden meanwhile drops the view right here.
             let _ = this.update(cx, |surface, cx| {

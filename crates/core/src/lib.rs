@@ -10,6 +10,7 @@ pub mod docs;
 pub mod engram;
 pub mod fuzzy;
 pub mod gentle_state;
+pub mod genui;
 pub mod git;
 pub mod hydration;
 pub mod ides;

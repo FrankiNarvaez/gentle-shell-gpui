@@ -6,6 +6,7 @@ pub mod browser;
 pub mod devices;
 pub mod docs;
 pub mod files;
+pub mod genui;
 pub mod git;
 pub mod history;
 pub mod hydration;

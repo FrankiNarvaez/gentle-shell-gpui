@@ -74,7 +74,7 @@ Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`:
 | --- | --- |
 | `instance.json` | `platform/instance.rs` |
 | `workspaces.json` | `features/workspaces/store.rs` |
-| `settings.json` | `shared/themes.rs` (`store_path`): theme, transparency, the interface size (`interfaceScale`, a factor such as `1.25`), the water reminder (`hydration`: `{ "enabled": true, "everyMinutes": 60 }`, written by `features/hydration`) and the `onboarding` key (`{ "done": true, "version": … }`) that decides the first run (`features/setup/mod.rs`: `first_run`, `mark_done`). |
+| `settings.json` | `shared/themes.rs` (`store_path`): theme, transparency, the interface size (`interfaceScale`, a factor such as `1.25`), the water reminder (`hydration`: `{ "enabled": true, "everyMinutes": 60 }`, written by `features/hydration`), Agent UI (`genuiMode`: `"proactive"`, `"asked"` or `"off"`, written by `features/genui/mode.rs`) and the `onboarding` key (`{ "done": true, "version": … }`) that decides the first run (`features/setup/mod.rs`: `first_run`, `mark_done`). |
 | `app-update.json` | `features/app_update/cache.rs` |
 | `toolchain/` | `features/setup/mod.rs` (Node, npm prefix, Engram, Maestro and its Java, and the diagram renderer `bin/merman-cli`, installed by the app) |
 
@@ -227,13 +227,24 @@ One PR per change, from a `feat/…` or `refactor/…` branch. PRs are merged wi
 
 | Workflow | Triggers | What it does |
 | --- | --- | --- |
-| `ci.yml` (CI) | `push` to `main` and `pull_request`, both with `paths-ignore: ["**.md", "packaging/icons/**"]` | Matrix `macos-latest`, `ubuntu-latest`, `windows-latest` (`fail-fast: false`): `cargo clippy --workspace --all-targets --locked -- -D warnings` and `cargo test --workspace --locked`. Cache `Swatinem/rust-cache@v2`. |
+| `ci.yml` (CI) | `push` to `main` and `pull_request`, both with `paths-ignore: ["**.md", "packaging/icons/**"]` | Matrix `macos-latest`, `ubuntu-latest`, `windows-latest` (`fail-fast: false`): `cargo clippy --workspace --all-targets --locked -- -D warnings` and `cargo test --workspace --locked`, without debug info (`CARGO_PROFILE_DEV_DEBUG=0`). Cache `Swatinem/rust-cache@v2`, saved only on `main` (`save-if`); pull requests restore it. |
 | `cache-warm.yml` (Cache warm) | `push` to `main` touching `Cargo.lock`, `**/Cargo.toml`, `cache-warm.yml` or `release.yml`; `workflow_dispatch` | Builds `--profile dist` for the four targets and saves the cache with `shared-key: dist-<target>`. It exists because a tag can only restore caches from the default branch. |
 | `release.yml` (Release) | Tags `v*`; `workflow_dispatch` (dry run) | See [Releases](#releases). |
+| `security.yml` (Security) | `pull_request`, `push` to `main`, Mondays, `workflow_dispatch` | `cargo-deny`, dependency review, `zizmor` on the workflows and the PR risk report. See [`security.md`](security.md). |
+
+Every workflow has a read-only token unless a job needs more, actions are pinned to a commit SHA (Dependabot updates them), and checkout doesn't keep credentials.
 
 Concurrency: CI uses `group: ci-${{ github.ref }}` with `cancel-in-progress: true` (a new push to the same branch cancels the previous one); Cache warm also cancels; Release uses `cancel-in-progress: false`.
 
 A change that only touches Markdown or `packaging/icons/` does not run CI.
+
+Caches: GitHub keeps 10 GB per repository and evicts the least recently used past that. Main's CI caches (~3.7 GB for the three systems) and Cache warm's `dist` caches (~2.9 GB for the four targets) have to fit; a pull request that saved its own would evict them and the next build would start cold (15–18 min instead of 2–4). That is why only `main` saves, and why the CI run on `push` to `main` after a merge isn't redundant: it refreshes the cache every pull request starts from.
+
+### Dependency updates
+
+Dependabot (`.github/dependabot.yml`) opens weekly PRs, a week after each release (cooldown): one for all GitHub Actions, one for the crates' minor and patch bumps, and one per major bump (in `0.x`, `0.9 → 0.10` counts as major). They go through CI and Security like any PR; a bump that doesn't compile is closed with the reason.
+
+It ignores the crates that move with GPUI: `gpui-kit` and `resvg`/`fontdb`/`gtk` majors, and `gpui-pre` entirely. Upgrade them by hand, together: bump `gpui-kit`, set `gpui-pre` (dev-dependency) to the exact GPUI version it brings (`cargo tree -i gpui-pre`), then align `resvg` and `fontdb` with the ones GPUI uses and `gtk` with `wry`'s (`cargo tree -d` shows duplicates). Check the app in a temporary `HOME` before merging.
 
 ## Releases
 
@@ -268,7 +279,7 @@ Workflow steps:
 
 | Module | Role |
 | --- | --- |
-| `network.rs` | `GET https://api.github.com/repos/ismaelosuna7824/gentle-shell-gpui/releases/latest`, download with SHA-256 and progress. |
+| `network.rs` | `GET https://api.github.com/repos/Gentleman-Programming/gentle-shell-gpui/releases/latest`, download with SHA-256 and progress. |
 | `release.rs` | Only counts published releases, not `draft`, not `prerelease`, with a stable `vX.Y.Z`. `asset_name(version, os, arch)` picks `macos-<arch>.zip`, `windows-x86_64.zip` or `linux-x86_64.tar.gz` (there is no asset for Linux/Windows aarch64). `expected_digest` reads `SHA256SUMS`. `is_dev`: `0.0.0` or a non-stable version does not check at startup. |
 | `cache.rs` | `app-update.json`: 6 h cache (`TTL_MS`) and skipped version. |
 | `archive.rs` | Safe zip and tar.gz extraction. |
@@ -281,7 +292,7 @@ Therefore: renaming an asset, changing the `SHA256SUMS` format or the binary nam
 
 ### macOS
 
-- `packaging/macos/Info.plist` (identifier `io.github.ismaelosuna7824.gentle-shell-gpui`, `@VERSION@` and `@MIN_MACOS@` replaced by `bundle.sh`). `GENTLE_BIN=<path>` packages an already built binary.
+- `packaging/macos/Info.plist` (identifier `io.github.ismaelosuna7824.gentle-shell-gpui`, `@VERSION@` and `@MIN_MACOS@` replaced by `bundle.sh`; the identifier predates the move to Gentleman-Programming and stays, since changing it makes macOS treat the app as a different one: its permissions and saved state). `GENTLE_BIN=<path>` packages an already built binary.
 - Outside a `.app` (`cargo run`), `platform/icons.rs` (`set_dock_icon`) sets the Dock icon at runtime from `icon-512.png`; inside the bundle it uses `AppIcon.icns`.
 - Ad hoc signing, not notarized: Gatekeeper blocks the first launch (README). `bundle.sh` clears xattrs before signing because they would break the seal.
 
@@ -334,7 +345,7 @@ It runs `generate.py` (SVG), `render.swift` (PNG in several sizes), `iconutil` (
 - [ ] `cargo fmt`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`.
 - [ ] Smoke test in a temporary `HOME`; screenshots only of the sandbox window.
 - [ ] No temporary code for reaching states.
-- [ ] `Cargo.lock` included if it changed.
+- [ ] `Cargo.lock` included if it changed; new crates come from crates.io and are named in the PR description.
 - [ ] `architecture.md` or an ADR updated if a boundary changes; README if something visible changes.
 - [ ] Commits prefixed `feat|fix|refactor|test|docs(<area>):`.
 

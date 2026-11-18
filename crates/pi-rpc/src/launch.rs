@@ -94,12 +94,26 @@ pub fn resolve_backend(cwd: &Path) -> Result<LaunchSpec> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone();
-    Ok(launch_spec(launcher, cwd, path, prompt.as_deref()))
+    let extensions = EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    Ok(launch_spec(
+        launcher,
+        cwd,
+        path,
+        prompt.as_deref(),
+        &extensions,
+    ))
 }
 
-/// The RPC launch through `launcher`, with `path` as the child's PATH and
-/// `prompt` as the host's instructions file.
-fn launch_spec(launcher: PathBuf, cwd: &Path, path: OsString, prompt: Option<&Path>) -> LaunchSpec {
+/// The RPC launch through `launcher`, with `path` as the child's PATH,
+/// `prompt` as the host's instructions file and `extensions` as the host's
+/// Pi extensions.
+fn launch_spec(
+    launcher: PathBuf,
+    cwd: &Path,
+    path: OsString,
+    prompt: Option<&Path>,
+    extensions: &[PathBuf],
+) -> LaunchSpec {
     let managed = managed_install(&launcher);
     // Launcher options such as `--link` or `--home <dir>` go before the Pi
     // args. A managed install takes none: its supervisor refuses them too.
@@ -113,6 +127,12 @@ fn launch_spec(launcher: PathBuf, cwd: &Path, path: OsString, prompt: Option<&Pa
     // quotes, `%` and newlines.
     if let Some(file) = prompt {
         args.push("--append-system-prompt".to_string());
+        args.push(file.to_string_lossy().into_owned());
+    }
+    // The host's Pi extensions (the generative UI tool); the launcher passes
+    // `--extension` through to Pi.
+    for file in extensions {
+        args.push("--extension".to_string());
         args.push(file.to_string_lossy().into_owned());
     }
     // Turns on ask_user_question dialogs and live helper activity for
@@ -428,6 +448,74 @@ fn supervisor_root(script: &str) -> Option<PathBuf> {
     })
 }
 
+/// The Node script `launcher` runs, by its real path: the launcher itself
+/// when it is (a link to) one, as npm and yarn link `<prefix>/bin/gentle-shell`
+/// on macOS and Linux, else the script a package manager's shim starts
+/// ([`shim_script`]): npm's, pnpm's or yarn's `gentle-shell.cmd` on Windows,
+/// pnpm's `gentle-shell` everywhere. Links are followed to the end, so a pnpm
+/// global install lands in its store (`…/links/@/gentle-pi/<v>/<hash>/
+/// node_modules/gentle-pi/bin/gentle-shell.mjs`). `None` when the launcher
+/// is neither.
+pub(crate) fn launcher_script(launcher: &Path) -> Option<PathBuf> {
+    let real = dunce::canonicalize(launcher).ok()?;
+    if is_node_script(&real.to_string_lossy()) {
+        return Some(real);
+    }
+    let shim = std::fs::read_to_string(&real).ok()?;
+    dunce::canonicalize(shim_script(&shim, real.parent()?)?).ok()
+}
+
+/// `path` names a Node script (`.mjs`, `.cjs`, `.js`), whatever its separators.
+fn is_node_script(path: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, ext)| {
+        ["mjs", "cjs", "js"]
+            .iter()
+            .any(|js| ext.eq_ignore_ascii_case(js))
+    })
+}
+
+/// The script a package manager's shim for a Node bin starts, from the shim's
+/// text and the folder it is in (`@zkochan/cmd-shim`, which pnpm and yarn
+/// use, and npm's `cmd-shim`):
+/// - the POSIX shim pnpm writes records it: `# cmd-shim-target=<absolute path>`;
+/// - the `.cmd`, `.ps1` and older POSIX shims quote it relative to their own
+///   folder: `"%~dp0\<path>"` (pnpm, which doubles `%` since 11, and yarn),
+///   `"%dp0%\<path>"` (npm), `"$basedir/<path>"`, `"$basedir_win/<path>"`,
+///   or absolute when it is on another drive.
+fn shim_script(text: &str, dir: &Path) -> Option<PathBuf> {
+    if let Some(target) = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# cmd-shim-target="))
+    {
+        return Some(PathBuf::from(target.trim()));
+    }
+    text.lines()
+        .flat_map(|line| line.split('"').skip(1).step_by(2))
+        .filter(|quoted| is_node_script(quoted))
+        .find_map(|quoted| {
+            if let Some(path) = quoted.strip_prefix("%~dp0") {
+                return Some(join_relative(dir, &path.replace("%%", "%")));
+            }
+            let relative = ["%dp0%", "$basedir_win", "$basedir"]
+                .iter()
+                .find_map(|base| quoted.strip_prefix(base));
+            match relative {
+                Some(path) => Some(join_relative(dir, path)),
+                None => Path::new(quoted)
+                    .is_absolute()
+                    .then(|| PathBuf::from(quoted)),
+            }
+        })
+}
+
+/// `dir` joined with `relative`, a path with `\` or `/` separators.
+fn join_relative(dir: &Path, relative: &str) -> PathBuf {
+    relative
+        .split(['\\', '/'])
+        .filter(|part| !part.is_empty() && *part != ".")
+        .fold(dir.to_path_buf(), |path, part| path.join(part))
+}
+
 /// Launcher options from `GENTLE_SHELL_ARGS`.
 pub(crate) fn extra_args() -> Vec<String> {
     std::env::var("GENTLE_SHELL_ARGS")
@@ -501,6 +589,14 @@ static SYSTEM_PROMPT: Mutex<Option<PathBuf>> = Mutex::new(None);
 /// what they started with.
 pub fn set_system_prompt(file: Option<PathBuf>) {
     *SYSTEM_PROMPT.lock().unwrap_or_else(|e| e.into_inner()) = file;
+}
+
+static EXTENSIONS: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Pi extension files loaded into every new RPC session (`--extension`).
+/// Replaces the previous list; sessions already running keep theirs.
+pub fn set_extensions(files: Vec<PathBuf>) {
+    *EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()) = files;
 }
 
 /// Forget everything resolved from the environment: cached `--version`
@@ -1083,7 +1179,7 @@ mod managed_tests {
             layout.shim.clone(),
             root.join("bin").join("gentle-shell.cmd"),
         ] {
-            let spec = launch_spec(launcher, root, inherited.clone(), None);
+            let spec = launch_spec(launcher, root, inherited.clone(), None, &[]);
             assert_eq!(spec.program, root.join("runtime/node/node.exe"));
             assert_eq!(spec.args, [&*cli.to_string_lossy(), "--mode", "rpc"]);
             assert_eq!(spec.launcher, root.join("bin").join("gentle-shell.cmd"));
@@ -1127,6 +1223,31 @@ mod managed_tests {
     }
 
     #[test]
+    fn host_extensions_follow_the_system_prompt() {
+        let layout = layout("extensions");
+        let prompt = layout.dir.join("agent-instructions.md");
+        let extension = layout.dir.join("gentle-ui.ts");
+        let spec = launch_spec(
+            layout.shim.clone(),
+            &layout.root,
+            OsString::new(),
+            Some(&prompt),
+            std::slice::from_ref(&extension),
+        );
+        assert_eq!(
+            spec.args[1..],
+            [
+                "--mode".to_string(),
+                "rpc".to_string(),
+                "--append-system-prompt".to_string(),
+                prompt.to_string_lossy().into_owned(),
+                "--extension".to_string(),
+                extension.to_string_lossy().into_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn only_a_complete_managed_install_is_recognized() {
         let layout = layout("partial");
         assert!(managed_install(&layout.shim).is_some());
@@ -1136,7 +1257,7 @@ mod managed_tests {
         let npm = layout.dir.join("npm-gentle-shell");
         std::fs::write(&npm, "#!/usr/bin/env node\n").unwrap();
         assert!(managed_install(&npm).is_none());
-        let spec = launch_spec(npm.clone(), &layout.dir, OsString::new(), None);
+        let spec = launch_spec(npm.clone(), &layout.dir, OsString::new(), None, &[]);
         assert_eq!(spec.program, npm);
         assert!(!spec.managed_by_gentle_ai());
         // Another product of the supervisor is not Gentle Shell.

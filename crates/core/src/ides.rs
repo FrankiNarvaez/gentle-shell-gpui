@@ -355,6 +355,57 @@ pub fn launch(os: Os, found: &Path, folder: &Path) -> (PathBuf, Vec<OsString>) {
     }
 }
 
+/// The URL scheme of VS Code and its forks, which open `file:line` links.
+fn file_scheme(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "VS Code" => "vscode",
+        "VS Code Insiders" => "vscode-insiders",
+        "Cursor" => "cursor",
+        "Windsurf" => "windsurf",
+        "VSCodium" => "vscodium",
+        "Kiro" => "kiro",
+        _ => return None,
+    })
+}
+
+/// The program and arguments that open `file` in the editor `name` found at
+/// `found`, at `line` where the editor takes one: VS Code and its forks
+/// through their `<scheme>://file/<path>:<line>` URL on macOS and `--goto`
+/// elsewhere, Zed and Sublime Text with `path:line`; otherwise the file
+/// opens like a folder does ([`launch`]).
+pub fn launch_file(
+    os: Os,
+    name: &str,
+    found: &Path,
+    file: &Path,
+    line: Option<u32>,
+) -> (PathBuf, Vec<OsString>) {
+    let Some(line) = line else {
+        return launch(os, found, file);
+    };
+    let at = format!("{}:{line}", file.display());
+    match (os, file_scheme(name)) {
+        (Os::Mac, Some(scheme)) => {
+            let path = at
+                .replace('\\', "/")
+                .replace('%', "%25")
+                .replace(' ', "%20");
+            let slash = if path.starts_with('/') { "" } else { "/" };
+            (
+                PathBuf::from("/usr/bin/open"),
+                vec![format!("{scheme}://file{slash}{path}").into()],
+            )
+        }
+        (Os::Windows | Os::Linux, Some(_)) => {
+            (found.to_path_buf(), vec!["--goto".into(), at.into()])
+        }
+        (Os::Windows | Os::Linux, None) if matches!(name, "Zed" | "Sublime Text") => {
+            (found.to_path_buf(), vec![at.into()])
+        }
+        _ => launch(os, found, file),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +499,48 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), IDES.len());
+    }
+
+    #[test]
+    fn files_open_at_their_line_where_the_editor_can() {
+        let file = Path::new("/repo/src/my file.rs");
+        let (program, args) = launch_file(
+            Os::Mac,
+            "Cursor",
+            Path::new("/Applications/Cursor.app"),
+            file,
+            Some(42),
+        );
+        assert_eq!(program, PathBuf::from("/usr/bin/open"));
+        assert_eq!(args, ["cursor://file/repo/src/my%20file.rs:42"]);
+        let (_, args) = launch_file(
+            Os::Mac,
+            "Zed",
+            Path::new("/Applications/Zed.app"),
+            file,
+            Some(42),
+        );
+        assert_eq!(
+            args,
+            ["-a", "/Applications/Zed.app", "/repo/src/my file.rs"]
+        );
+        let (program, args) = launch_file(
+            Os::Linux,
+            "VS Code",
+            Path::new("/usr/bin/code"),
+            file,
+            Some(7),
+        );
+        assert_eq!(
+            (program, args),
+            (
+                PathBuf::from("/usr/bin/code"),
+                vec![OsString::from("--goto"), "/repo/src/my file.rs:7".into()]
+            )
+        );
+        let (_, args) = launch_file(Os::Linux, "Zed", Path::new("/usr/bin/zed"), file, Some(7));
+        assert_eq!(args, ["/repo/src/my file.rs:7"]);
+        let (_, args) = launch_file(Os::Linux, "VS Code", Path::new("/usr/bin/code"), file, None);
+        assert_eq!(args, ["/repo/src/my file.rs"]);
     }
 }

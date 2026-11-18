@@ -21,17 +21,123 @@
 //! backend restart or a lost event sequence.
 //!
 //! The server validates the domain: the client keeps only the rules the
-//! contract documents. The config requests are the one place it checks input
-//! before sending — `set_config` refuses an empty `expectedRevision` and an
-//! empty pin profile (a clear is an explicit `profile: null`), both of which
-//! the server would only answer with `revision_conflict` / `invalid_data`.
-//! `apply_profile` likewise refuses a profile name or confirmation token
-//! outside the documented 1–128 characters.
+//! contract documents. It checks input before sending only where the server
+//! would merely refuse it — `set_config` refuses an empty `expectedRevision`
+//! and an empty pin profile (a clear is an explicit `profile: null`), both of
+//! which the server would only answer with `revision_conflict` /
+//! `invalid_data`; `apply_profile` and `set_review_mode` refuse a profile name
+//! or confirmation token outside the documented 1–128 characters; the id
+//! reads refuse an empty id, `list_sessions` a limit outside 1–50, and
+//! `get_snapshot` an empty or repeated section list.
+//!
+//! Which methods and events a peer offers is only what its `capabilities`
+//! say: [`Capabilities::require`] refuses a method it does not list before a
+//! request exists, so a Gentle Shell release older than a method is never
+//! sent it.
 
 use crate::record::{Response as PiResponse, UiMethod, UiRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt;
+
+/// A closed wire vocabulary: the enum, its wire names, parsing (an unknown
+/// name is [`DesktopRpcError::InvalidValue`] for `$field`) and decoding, so a
+/// value outside the documented set is refused instead of misread.
+macro_rules! wire_enum {
+    (
+        $(#[$meta:meta])*
+        $name:ident, $field:literal {
+            $($variant:ident => $wire:literal),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum $name {
+            $($variant),+
+        }
+
+        impl $name {
+            /// Every value the protocol speaks, in wire order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// The wire name.
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $wire),+
+                }
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = $crate::desktop_rpc::DesktopRpcError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                match value {
+                    $($wire => Ok(Self::$variant),)+
+                    other => Err($crate::desktop_rpc::DesktopRpcError::InvalidValue {
+                        field: $field,
+                        value: other.to_string(),
+                    }),
+                }
+            }
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str(self.as_str())
+            }
+        }
+
+        impl<'de> serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                <String as serde::Deserialize>::deserialize(deserializer)?
+                    .parse()
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+    };
+}
+
+mod changes;
+mod output;
+mod review;
+mod session_state;
+mod sessions;
+mod stats;
+mod updates;
+
+pub use changes::{ChangeDiff, ChangeRoot, ChangeStatus, ChangedFile, Changes};
+pub use output::{JobOutput, SubagentThread, ThreadItem};
+pub use review::{
+    ReviewConfirmation, ReviewEffective, ReviewMode, ReviewModeChanged, ReviewScope, ReviewScopes,
+    ReviewSetting, ReviewSource, SetReviewModeOutcome, SetReviewModeResult,
+};
+pub use session_state::{
+    ActivityState, CommandSource, PendingQuestionKind, ServiceTier, SessionActivity,
+    SessionAgentItem, SessionAgentRuns, SessionAgents, SessionChangedFile, SessionChanges,
+    SessionChangesSummary, SessionCommand, SessionCommands, SessionContext, SessionCost,
+    SessionJobs, SessionModel, SessionModelProfile, SessionOrchestratorRoute,
+    SessionPendingQuestion, SessionPermission, SessionProfileItem, SessionProfiles, SessionProject,
+    SessionQuestion, SessionQuestionOption, SessionRecentJob, SessionReview, SessionRoleRoute,
+    SessionRunningJob, SessionSection, SessionSections, SessionSnapshotEvent, SessionSpend,
+    SessionStats, SessionStatsModel, SessionTodo, SessionTodoItem, SessionTodoProgress,
+    SessionUsage, SessionUsageEntry, SessionUsageLimit, SessionUsageWindow, SessionWorktree,
+};
+pub use sessions::{
+    ListSessionsQuery, MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT, SessionEntry, SessionList,
+    SessionsScope, SwitchSessionResult,
+};
+pub use stats::{
+    StatsRange, StatsScope, UsageStats, UsageStatsDay, UsageStatsModel, UsageStatsProject,
+    UsageStatsTotals, UsageStatsTruncated,
+};
+pub use updates::{
+    PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PackagesUpdate, PiUpdate,
+    ShellChannel, ShellUpdate, UpdateState, UpdateStatus,
+};
 
 /// Schema of the inner request, response and event records.
 pub const SCHEMA: &str = "gentle-shell.desktop-rpc/v1";
@@ -63,9 +169,49 @@ pub enum DesktopMethod {
     GetConfig,
     SetConfig,
     ApplyProfile,
+    GetJobOutput,
+    GetSubagentThread,
+    ListSessions,
+    SwitchSession,
+    GetChanges,
+    GetChangeDiff,
+    GetReviewMode,
+    SetReviewMode,
+    GetUsageStats,
+    GetUpdateStatus,
 }
 
 impl DesktopMethod {
+    /// Every method this client knows, in the order `capabilities` lists
+    /// them on Gentle Shell `main`. Which ones a peer offers is only what its
+    /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
+    pub const ALL: [Self; 24] = [
+        Self::Capabilities,
+        Self::GetSnapshot,
+        Self::GetConfig,
+        Self::SetConfig,
+        Self::GetPermissionMode,
+        Self::SetPermissionMode,
+        Self::GetSubscriptionUsage,
+        Self::RefreshSubscriptionUsage,
+        Self::GetDesignCanvas,
+        Self::ListJobs,
+        Self::CancelJob,
+        Self::GetJobOutput,
+        Self::ApplyProfile,
+        Self::ListSubagents,
+        Self::CancelSubagent,
+        Self::GetSubagentThread,
+        Self::ListSessions,
+        Self::SwitchSession,
+        Self::GetChanges,
+        Self::GetChangeDiff,
+        Self::GetReviewMode,
+        Self::SetReviewMode,
+        Self::GetUsageStats,
+        Self::GetUpdateStatus,
+    ];
+
     /// The wire name of the method.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -83,15 +229,37 @@ impl DesktopMethod {
             Self::GetConfig => "get_config",
             Self::SetConfig => "set_config",
             Self::ApplyProfile => "apply_profile",
+            Self::GetJobOutput => "get_job_output",
+            Self::GetSubagentThread => "get_subagent_thread",
+            Self::ListSessions => "list_sessions",
+            Self::SwitchSession => "switch_session",
+            Self::GetChanges => "get_changes",
+            Self::GetChangeDiff => "get_change_diff",
+            Self::GetReviewMode => "get_review_mode",
+            Self::SetReviewMode => "set_review_mode",
+            Self::GetUsageStats => "get_usage_stats",
+            Self::GetUpdateStatus => "get_update_status",
         }
     }
 
     /// Whether the method's params can only be built by its typed
-    /// constructor: the config methods name a store, never a path, and
-    /// `apply_profile` takes exactly its documented keys, so the generic
-    /// `params` path is closed to them.
+    /// constructor: the config methods name a store, never a path,
+    /// `apply_profile` takes exactly its documented keys, and the methods with
+    /// a required param (an id, a root and path, a review change) would only
+    /// be refused by the server with `{}`, so the generic `params` path is
+    /// closed to them.
     fn requires_typed_params(self) -> bool {
-        matches!(self, Self::GetConfig | Self::SetConfig | Self::ApplyProfile)
+        matches!(
+            self,
+            Self::GetConfig
+                | Self::SetConfig
+                | Self::ApplyProfile
+                | Self::GetJobOutput
+                | Self::GetSubagentThread
+                | Self::SwitchSession
+                | Self::GetChangeDiff
+                | Self::SetReviewMode
+        )
     }
 
     /// Parse a wire method name.
@@ -111,6 +279,16 @@ impl DesktopMethod {
             "get_config" => Ok(Self::GetConfig),
             "set_config" => Ok(Self::SetConfig),
             "apply_profile" => Ok(Self::ApplyProfile),
+            "get_job_output" => Ok(Self::GetJobOutput),
+            "get_subagent_thread" => Ok(Self::GetSubagentThread),
+            "list_sessions" => Ok(Self::ListSessions),
+            "switch_session" => Ok(Self::SwitchSession),
+            "get_changes" => Ok(Self::GetChanges),
+            "get_change_diff" => Ok(Self::GetChangeDiff),
+            "get_review_mode" => Ok(Self::GetReviewMode),
+            "set_review_mode" => Ok(Self::SetReviewMode),
+            "get_usage_stats" => Ok(Self::GetUsageStats),
+            "get_update_status" => Ok(Self::GetUpdateStatus),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
         }
     }
@@ -346,6 +524,46 @@ fn get_design_canvas_params(include_url: Option<bool>) -> Value {
     }
 }
 
+/// The wire `params` object for `get_snapshot` with session sections:
+/// exactly `{ sections }`, a non-empty list of unique names. The server
+/// answers them in canonical order whatever order they were asked in.
+fn snapshot_sections_params(sections: &[SessionSection]) -> Result<Value, DesktopRpcError> {
+    let unique = sections
+        .iter()
+        .enumerate()
+        .all(|(index, section)| !sections[..index].contains(section));
+    if sections.is_empty() || !unique {
+        return Err(DesktopRpcError::InvalidSessionSections);
+    }
+    let names: Vec<&str> = sections.iter().map(|section| section.as_str()).collect();
+    Ok(json!({ "sections": names }))
+}
+
+/// The wire `params` object for `get_job_output`: exactly `{ id }` with a
+/// non-empty id.
+fn job_output_params(id: &str) -> Result<Value, DesktopRpcError> {
+    if id.is_empty() {
+        return Err(DesktopRpcError::InvalidId(DesktopMethod::GetJobOutput));
+    }
+    Ok(json!({ "id": id }))
+}
+
+/// The wire `params` object for `get_change_diff`: exactly `{ root, path }`,
+/// as `get_changes` listed them. Whether they name a changed file is the
+/// server's to answer (`not_found`).
+fn change_diff_params(root: &str, path: &str) -> Value {
+    json!({ "root": root, "path": path })
+}
+
+/// The wire `params` object for `get_update_status`: `{}` for a read of what
+/// is already known, or exactly `{ refresh }`.
+fn update_status_params(refresh: Option<bool>) -> Value {
+    match refresh {
+        None => json!({}),
+        Some(refresh) => json!({ "refresh": refresh }),
+    }
+}
+
 impl DesktopRequest {
     /// The `capabilities` request. It takes no params.
     pub fn capabilities(request_id: impl Into<String>) -> Result<Self, DesktopRpcError> {
@@ -501,6 +719,141 @@ impl DesktopRequest {
         )
     }
 
+    /// The `get_snapshot` request with session sections: the legacy answer
+    /// plus `state.session` with the requested sections. Gentle Shell 4.8.0
+    /// ignores the param and answers without them, so send it only when
+    /// [`Capabilities::supports_session_sections`] says so. An empty or
+    /// repeated list is refused before sending.
+    pub fn get_snapshot_sections(
+        request_id: impl Into<String>,
+        sections: &[SessionSection],
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::GetSnapshot,
+            snapshot_sections_params(sections)?,
+        )
+    }
+
+    /// The `get_job_output` request. Params are exactly `{ id }` with a
+    /// non-empty id, as reported by `list_jobs` or `jobs_update`.
+    pub fn get_job_output(
+        request_id: impl Into<String>,
+        id: &str,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::GetJobOutput,
+            job_output_params(id)?,
+        )
+    }
+
+    /// The `get_subagent_thread` request. Params are `{ id }` with a
+    /// non-empty id, plus `sinceVersion` (the `version` of the last read) to
+    /// get no items when nothing changed.
+    pub fn get_subagent_thread(
+        request_id: impl Into<String>,
+        id: &str,
+        since_version: Option<u64>,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::GetSubagentThread,
+            output::subagent_thread_params(id, since_version)?,
+        )
+    }
+
+    /// The `list_sessions` request with the given optional params. A limit
+    /// outside 1–50 or an empty cursor is refused before sending.
+    pub fn list_sessions(
+        request_id: impl Into<String>,
+        query: &ListSessionsQuery,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(request_id, DesktopMethod::ListSessions, query.params()?)
+    }
+
+    /// The `switch_session` request: `{ id }` (1–256 characters) and, when
+    /// given, the `scope` the id was listed with.
+    pub fn switch_session(
+        request_id: impl Into<String>,
+        id: &str,
+        scope: Option<SessionsScope>,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::SwitchSession,
+            sessions::switch_session_params(id, scope)?,
+        )
+    }
+
+    /// The `get_changes` request. It takes no params.
+    pub fn get_changes(request_id: impl Into<String>) -> Result<Self, DesktopRpcError> {
+        Self::build(request_id, DesktopMethod::GetChanges, json!({}))
+    }
+
+    /// The `get_change_diff` request: exactly `{ root, path }`, as
+    /// `get_changes` listed them.
+    pub fn get_change_diff(
+        request_id: impl Into<String>,
+        root: &str,
+        path: &str,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::GetChangeDiff,
+            change_diff_params(root, path),
+        )
+    }
+
+    /// The `get_review_mode` request. It takes no params.
+    pub fn get_review_mode(request_id: impl Into<String>) -> Result<Self, DesktopRpcError> {
+        Self::build(request_id, DesktopMethod::GetReviewMode, json!({}))
+    }
+
+    /// The `set_review_mode` request: `{ enabled, scope }`, plus
+    /// `confirmationToken` when resending the token of a
+    /// `confirmation_required` answer the human approved. A token outside
+    /// 1–128 characters is refused before sending.
+    pub fn set_review_mode(
+        request_id: impl Into<String>,
+        enabled: bool,
+        scope: ReviewScope,
+        confirmation_token: Option<&str>,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::SetReviewMode,
+            review::set_review_mode_params(enabled, scope, confirmation_token)?,
+        )
+    }
+
+    /// The `get_usage_stats` request; a `None` param is omitted so the
+    /// server default (`7d`, `project`) applies.
+    pub fn get_usage_stats(
+        request_id: impl Into<String>,
+        range: Option<StatsRange>,
+        scope: Option<StatsScope>,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::GetUsageStats,
+            stats::usage_stats_params(range, scope),
+        )
+    }
+
+    /// The `get_update_status` request: `None` omits `refresh` (a read of
+    /// what is already known, no network), `Some` sends it explicitly.
+    pub fn get_update_status(
+        request_id: impl Into<String>,
+        refresh: Option<bool>,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::GetUpdateStatus,
+            update_status_params(refresh),
+        )
+    }
+
     /// A request for a known method, validated against the id and size limits
     /// before anything reaches the transport. The config methods are refused
     /// here: their params come only from [`Self::get_config`] and
@@ -596,6 +949,62 @@ impl DesktopErrorInfo {
     pub fn profile_apply_error(&self) -> Option<ProfileApplyErrorCode> {
         ProfileApplyErrorCode::parse(&self.code)
     }
+
+    /// The documented failure this error reports, if the code is one this
+    /// client knows.
+    pub fn kind(&self) -> Option<DesktopErrorCode> {
+        self.code.parse().ok()
+    }
+}
+
+wire_enum! {
+    /// Every documented `error.code`. The config and `apply_profile` subsets
+    /// are also [`ConfigErrorCode`] and [`ProfileApplyErrorCode`].
+    /// `changes_unavailable`, `session_unavailable` and `updates_unavailable`
+    /// are answered by Gentle Shell `main` but missing from its specification's
+    /// list of codes; they are kept here because the server sends them.
+    DesktopErrorCode, "error.code" {
+        InvalidRequest => "invalid_request",
+        UnknownStore => "unknown_store",
+        ReadOnly => "read_only",
+        InvalidData => "invalid_data",
+        RevisionConflict => "revision_conflict",
+        WriteFailed => "write_failed",
+        UnsupportedMethod => "unsupported_method",
+        PermissionUnavailable => "permission_unavailable",
+        PermissionDenied => "permission_denied",
+        ConfigUnavailable => "config_unavailable",
+        UsageUnavailable => "usage_unavailable",
+        DesignUnavailable => "design_unavailable",
+        JobsUnavailable => "jobs_unavailable",
+        AgentsUnavailable => "agents_unavailable",
+        ChangesUnavailable => "changes_unavailable",
+        ProfilesUnavailable => "profiles_unavailable",
+        UnknownProfile => "unknown_profile",
+        ProfileApplyBusy => "profile_apply_busy",
+        SessionsUnavailable => "sessions_unavailable",
+        SessionSwitching => "session_switching",
+        SessionUnavailable => "session_unavailable",
+        ReviewUnavailable => "review_unavailable",
+        ReviewModeBusy => "review_mode_busy",
+        StatsUnavailable => "stats_unavailable",
+        UpdatesUnavailable => "updates_unavailable",
+        NotFound => "not_found",
+        InternalError => "internal_error",
+    }
+}
+
+impl DesktopErrorCode {
+    /// Whether the same request may succeed when sent again unchanged:
+    /// `session_switching` answers every request while a `switch_session` is
+    /// in flight, and the busy codes a request racing a single-flight write.
+    /// Nothing was done in either case.
+    pub fn is_retryable(self) -> bool {
+        matches!(
+            self,
+            Self::SessionSwitching | Self::ReviewModeBusy | Self::ProfileApplyBusy
+        )
+    }
 }
 
 /// A decoded inner response. `requestId` is kept so the caller can prove the
@@ -689,6 +1098,56 @@ impl DesktopResponse {
         ApplyProfileResult::from_data(self.data()?)
     }
 
+    /// The response to `get_job_output`.
+    pub fn job_output(&self) -> Result<JobOutput, DesktopRpcError> {
+        JobOutput::from_data(self.data()?)
+    }
+
+    /// The response to `get_subagent_thread`.
+    pub fn subagent_thread(&self) -> Result<SubagentThread, DesktopRpcError> {
+        SubagentThread::from_data(self.data()?)
+    }
+
+    /// The response to `list_sessions`.
+    pub fn list_sessions(&self) -> Result<SessionList, DesktopRpcError> {
+        SessionList::from_data(self.data()?)
+    }
+
+    /// The response to `switch_session`.
+    pub fn switch_session(&self) -> Result<SwitchSessionResult, DesktopRpcError> {
+        SwitchSessionResult::from_data(self.data()?)
+    }
+
+    /// The response to `get_changes`.
+    pub fn changes(&self) -> Result<Changes, DesktopRpcError> {
+        Changes::from_data(self.data()?)
+    }
+
+    /// The response to `get_change_diff`.
+    pub fn change_diff(&self) -> Result<ChangeDiff, DesktopRpcError> {
+        ChangeDiff::from_data(self.data()?)
+    }
+
+    /// The response to `get_review_mode`.
+    pub fn review_mode(&self) -> Result<ReviewMode, DesktopRpcError> {
+        ReviewMode::from_data(self.data()?)
+    }
+
+    /// The response to `set_review_mode`.
+    pub fn set_review_mode(&self) -> Result<SetReviewModeResult, DesktopRpcError> {
+        SetReviewModeResult::from_data(self.data()?)
+    }
+
+    /// The response to `get_usage_stats`.
+    pub fn usage_stats(&self) -> Result<UsageStats, DesktopRpcError> {
+        UsageStats::from_data(self.data()?)
+    }
+
+    /// The response to `get_update_status`.
+    pub fn update_status(&self) -> Result<UpdateStatus, DesktopRpcError> {
+        UpdateStatus::from_data(self.data()?)
+    }
+
     fn data(&self) -> Result<&Value, DesktopRpcError> {
         self.result
             .as_ref()
@@ -754,6 +1213,20 @@ impl DesktopEvent {
         expect_event(self, "profile_applied")?;
         ProfileApplied::from_data(&self.data)
     }
+
+    /// Decode the data of a `session_snapshot` event, verifying the exact
+    /// event name before the shape, exactly like [`Self::agents_update`].
+    pub fn session_snapshot(&self) -> Result<SessionSnapshotEvent, DesktopRpcError> {
+        expect_event(self, "session_snapshot")?;
+        SessionSnapshotEvent::from_data(&self.data)
+    }
+
+    /// Decode the data of a `review_mode_changed` event, verifying the exact
+    /// event name before the shape, exactly like [`Self::agents_update`].
+    pub fn review_mode_changed(&self) -> Result<ReviewModeChanged, DesktopRpcError> {
+        expect_event(self, "review_mode_changed")?;
+        ReviewModeChanged::from_data(&self.data)
+    }
 }
 
 /// A record decoded from the Desktop widget.
@@ -790,6 +1263,27 @@ impl Capabilities {
         self.events.iter().any(|name| name == event)
     }
 
+    /// Refuse a method the peer does not offer, before anything is sent: the
+    /// gate for every method newer than a peer (Gentle Shell 4.8.0 offers
+    /// none of `get_job_output`, `get_subagent_thread`, `list_sessions`,
+    /// `switch_session`, `get_changes`, `get_change_diff`, `get_review_mode`,
+    /// `set_review_mode`, `get_usage_stats` or `get_update_status`).
+    pub fn require(&self, method: DesktopMethod) -> Result<(), DesktopRpcError> {
+        if self.supports(method) {
+            Ok(())
+        } else {
+            Err(DesktopRpcError::NotAdvertised(method))
+        }
+    }
+
+    /// Whether `get_snapshot` accepts `sections`. The method itself is old,
+    /// so its name cannot tell: the server advertises `session_snapshot`
+    /// exactly while the feed owner the sections are read from is wired, and
+    /// Gentle Shell 4.8.0 ignores the param instead of refusing it.
+    pub fn supports_session_sections(&self) -> bool {
+        self.supports(DesktopMethod::GetSnapshot) && self.emits("session_snapshot")
+    }
+
     fn from_data(data: &Value) -> Result<Self, DesktopRpcError> {
         let schema = text_field(data, "schema")?;
         expect_field("schema", SCHEMA, &schema)?;
@@ -823,6 +1317,12 @@ fn text_field(data: &Value, field: &'static str) -> Result<Option<String>, Deskt
             "{field} must be a string"
         ))),
     }
+}
+
+/// Decode a data document into its typed shape; any mismatch is a malformed
+/// payload.
+fn decode_data<T: serde::de::DeserializeOwned>(data: &Value) -> Result<T, DesktopRpcError> {
+    T::deserialize(data).map_err(|error| DesktopRpcError::MalformedPayload(error.to_string()))
 }
 
 /// Refuse a declared wire value the client does not speak.
@@ -1032,11 +1532,14 @@ fn expect_event(event: &DesktopEvent, expected: &'static str) -> Result<(), Desk
     }
 }
 
-/// The decoded `get_snapshot` data.
+/// The decoded `get_snapshot` data. `session` is the decoded
+/// `state.session`, present only when the request asked for `sections` and
+/// the peer supports them; `state` keeps the whole projection as sent.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub sequence: u64,
     pub state: Value,
+    pub session: Option<SessionSections>,
 }
 
 impl Snapshot {
@@ -1054,7 +1557,26 @@ impl Snapshot {
             .ok_or_else(|| {
                 DesktopRpcError::MalformedPayload("snapshot has no state object".into())
             })?;
-        Ok(Self { sequence, state })
+        let session = state
+            .get("session")
+            .map(SessionSections::from_data)
+            .transpose()?;
+        Ok(Self {
+            sequence,
+            state,
+            session,
+        })
+    }
+}
+
+wire_enum! {
+    /// Who made a change a `permission_mode_changed` or `config_changed`
+    /// event reports: a Desktop request on this channel, or anything else
+    /// (the TUI, an editor, the installer, another process). Gentle Shell
+    /// 4.8.0 only sends `desktop`.
+    ChangeSource, "source" {
+        Desktop => "desktop",
+        External => "external",
     }
 }
 
@@ -1101,17 +1623,19 @@ impl SetPermissionModeResult {
     }
 }
 
-/// The data of a `permission_mode_changed` event: the change the server just
-/// applied. `source` is `desktop` because this slice only publishes changes
-/// it made itself; other session changes are visible through
-/// `get_permission_mode` but do not emit this event.
+/// The data of a `permission_mode_changed` event. A `desktop` change follows
+/// the successful `set_permission_mode` response it reports, and `persisted`
+/// says whether that request saved the default. An `external` change
+/// (`/gentle:mode`, `/gentle:yolo`, the owner revoking YOLO) arrives on its
+/// own, debounced; `previous_mode` is the last state this channel reported
+/// and `persisted` says the default is what changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionModeChanged {
     pub mode: PermissionMode,
     pub previous_mode: PermissionMode,
     pub default_mode: PermissionMode,
     pub persisted: bool,
-    pub source: String,
+    pub source: ChangeSource,
 }
 
 impl PermissionModeChanged {
@@ -1121,7 +1645,7 @@ impl PermissionModeChanged {
             previous_mode: permission_mode_field(data, "previous_mode")?,
             default_mode: permission_mode_field(data, "default_mode")?,
             persisted: bool_field(data, "persisted")?,
-            source: string_field(data, "source")?,
+            source: closed_field(data, "source")?,
         })
     }
 }
@@ -2553,20 +3077,40 @@ impl SetConfigResult {
     }
 }
 
-/// The data of a `config_changed` event: the resulting values of the
-/// `set_config` response it follows. `source` is `desktop` because this slice
-/// only publishes changes it made itself.
+/// Where a `config_changed` came from, and what only that origin carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigChangeOrigin {
+    /// A `set_config` on this store, after its response: the target it
+    /// wrote and that target's resulting `writeRevision`.
+    Desktop {
+        write_target: ConfigWriteTarget,
+        write_revision: String,
+    },
+    /// A best-effort observation of a change made elsewhere (or a store a
+    /// Desktop write changed indirectly, such as a pin gone stale): the
+    /// store's status now. No write target: re-read with `get_config`.
+    External { status: ConfigStatus },
+}
+
+/// The data of a `config_changed` event: the store's resulting `revision`
+/// (what `get_config` and `get_snapshot` answer now) and its origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigChanged {
     pub store: ConfigStore,
     pub scope: ConfigScope,
-    pub write_target: ConfigWriteTarget,
     pub revision: String,
-    pub write_revision: String,
-    pub source: String,
+    pub origin: ConfigChangeOrigin,
 }
 
 impl ConfigChanged {
+    /// The wire `source` of the event.
+    pub fn source(&self) -> ChangeSource {
+        match self.origin {
+            ConfigChangeOrigin::Desktop { .. } => ChangeSource::Desktop,
+            ConfigChangeOrigin::External { .. } => ChangeSource::External,
+        }
+    }
+
     fn from_data(data: &Value) -> Result<Self, DesktopRpcError> {
         let store: ConfigStore = closed_field(data, "store")?;
         let scope = closed_field(data, "scope")?;
@@ -2576,15 +3120,24 @@ impl ConfigChanged {
                 store.scope()
             )));
         }
-        let write_target = closed_field(data, "writeTarget")?;
-        expect_write_target(store, write_target)?;
+        let origin = match closed_field(data, "source")? {
+            ChangeSource::Desktop => {
+                let write_target = closed_field(data, "writeTarget")?;
+                expect_write_target(store, write_target)?;
+                ConfigChangeOrigin::Desktop {
+                    write_target,
+                    write_revision: revision_field(data, "writeRevision")?,
+                }
+            }
+            ChangeSource::External => ConfigChangeOrigin::External {
+                status: closed_field(data, "status")?,
+            },
+        };
         Ok(Self {
             store,
             scope,
-            write_target,
             revision: revision_field(data, "revision")?,
-            write_revision: revision_field(data, "writeRevision")?,
-            source: string_field(data, "source")?,
+            origin,
         })
     }
 }
@@ -3064,6 +3617,107 @@ impl DesktopSession {
         )
     }
 
+    /// Issue `get_snapshot` with exactly `{ sections }`, refusing an empty or
+    /// repeated list without occupying the session. Gate it on
+    /// [`Capabilities::supports_session_sections`].
+    pub fn issue_get_snapshot_sections(
+        &mut self,
+        sections: &[SessionSection],
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::GetSnapshot,
+            snapshot_sections_params(sections)?,
+        )
+    }
+
+    /// Issue `get_job_output` with exactly `{ id }`.
+    pub fn issue_get_job_output(&mut self, id: &str) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(DesktopMethod::GetJobOutput, job_output_params(id)?)
+    }
+
+    /// Issue `get_subagent_thread` with `{ id }` and, when given,
+    /// `sinceVersion`.
+    pub fn issue_get_subagent_thread(
+        &mut self,
+        id: &str,
+        since_version: Option<u64>,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::GetSubagentThread,
+            output::subagent_thread_params(id, since_version)?,
+        )
+    }
+
+    /// Issue `list_sessions` with the given optional params.
+    pub fn issue_list_sessions(
+        &mut self,
+        query: &ListSessionsQuery,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(DesktopMethod::ListSessions, query.params()?)
+    }
+
+    /// Issue `switch_session` with `{ id }` and, when given, `scope`. A
+    /// switch replaces the backend session and restarts its event sequence at
+    /// 1, so while it is in flight, and once it is answered, [`Self::accept`]
+    /// takes the next event as a new baseline instead of refusing it as a
+    /// replay. Re-read `get_snapshot` after a changed switch.
+    pub fn issue_switch_session(
+        &mut self,
+        id: &str,
+        scope: Option<SessionsScope>,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::SwitchSession,
+            sessions::switch_session_params(id, scope)?,
+        )
+    }
+
+    /// Issue `get_change_diff` with exactly `{ root, path }`.
+    pub fn issue_get_change_diff(
+        &mut self,
+        root: &str,
+        path: &str,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(DesktopMethod::GetChangeDiff, change_diff_params(root, path))
+    }
+
+    /// Issue `set_review_mode` with `{ enabled, scope }` and, when resending
+    /// an approved confirmation, its `confirmationToken`.
+    pub fn issue_set_review_mode(
+        &mut self,
+        enabled: bool,
+        scope: ReviewScope,
+        confirmation_token: Option<&str>,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::SetReviewMode,
+            review::set_review_mode_params(enabled, scope, confirmation_token)?,
+        )
+    }
+
+    /// Issue `get_usage_stats` with only the given params.
+    pub fn issue_get_usage_stats(
+        &mut self,
+        range: Option<StatsRange>,
+        scope: Option<StatsScope>,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::GetUsageStats,
+            stats::usage_stats_params(range, scope),
+        )
+    }
+
+    /// Issue `get_update_status` with `{}` or exactly `{ refresh }`.
+    pub fn issue_get_update_status(
+        &mut self,
+        refresh: Option<bool>,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::GetUpdateStatus,
+            update_status_params(refresh),
+        )
+    }
+
     /// A new request with a fresh id; `params` is built by the typed callers
     /// above, never from app-supplied JSON.
     fn issue_with(
@@ -3128,6 +3782,10 @@ impl DesktopSession {
         let Some(record) = decode_widget(request)? else {
             return Ok(None);
         };
+        let switching = self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.method == DesktopMethod::SwitchSession);
         match &record {
             DesktopRecord::Response(response) => {
                 let expected = self
@@ -3145,8 +3803,15 @@ impl DesktopSession {
                 } else {
                     return Err(DesktopRpcError::UncorrelatedResponse { expected, got });
                 }
+                if switching {
+                    // The new session numbers its events from 1 again.
+                    self.last_seq = None;
+                }
             }
             DesktopRecord::Event(event) => match self.last_seq {
+                // During a switch either session may speak, and the new one
+                // restarts at 1: each event is a new baseline.
+                _ if switching => self.last_seq = Some(event.seq),
                 Some(last) if event.seq <= last => {
                     return Err(DesktopRpcError::DuplicateSequence {
                         last,
@@ -3344,6 +4009,19 @@ pub enum DesktopRpcError {
     InvalidProfileApplyStatus(String),
     /// An `apply_profile` note `level` outside the closed vocabulary.
     InvalidProfileNoteLevel(String),
+    /// A wire value outside the closed vocabulary of `field`.
+    InvalidValue { field: &'static str, value: String },
+    /// The peer's `capabilities` do not list the method, so it is not sent.
+    NotAdvertised(DesktopMethod),
+    /// A request named an empty (or, for `switch_session`, over 256
+    /// characters) id.
+    InvalidId(DesktopMethod),
+    /// A `list_sessions` limit outside 1–50.
+    InvalidSessionsLimit(u32),
+    /// A `list_sessions` cursor that is empty.
+    InvalidSessionsCursor,
+    /// `get_snapshot` sections that are empty or repeat a name.
+    InvalidSessionSections,
     /// A method whose params only its typed constructor may build was sent
     /// through the generic path.
     TypedParamsRequired(DesktopMethod),
@@ -3472,6 +4150,24 @@ impl fmt::Display for DesktopRpcError {
             Self::InvalidProfileNoteLevel(level) => {
                 write!(formatter, "unknown desktop profile note level: {level}")
             }
+            Self::InvalidValue { field, value } => {
+                write!(formatter, "unknown desktop {field}: {value}")
+            }
+            Self::NotAdvertised(method) => {
+                write!(formatter, "the backend does not offer desktop {method}")
+            }
+            Self::InvalidId(method) => {
+                write!(formatter, "desktop {method} id is empty or too long")
+            }
+            Self::InvalidSessionsLimit(limit) => write!(
+                formatter,
+                "desktop list_sessions limit must be 1 to {MAX_SESSIONS_LIMIT}, got {limit}"
+            ),
+            Self::InvalidSessionsCursor => {
+                formatter.write_str("desktop list_sessions cursor must not be empty")
+            }
+            Self::InvalidSessionSections => formatter
+                .write_str("desktop snapshot sections must be a non-empty list of unique names"),
             Self::TypedParamsRequired(method) => {
                 write!(
                     formatter,

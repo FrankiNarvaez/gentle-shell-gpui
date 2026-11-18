@@ -25,9 +25,12 @@ impl Render for Workspace {
         let vertical_tabs = self.tab_layout == TabLayout::Vertical;
         // Below this the screen buttons fold into one overflow menu.
         let narrow = window.viewport_size().width < rems(900. / 16.).to_pixels(window.rem_size());
-        // Native web views would cover a screen opened over them; device
-        // cards stop capturing while covered.
-        self.set_stages_covered(self.overlay.is_some(), cx);
+        // Native web views would cover a screen or a dialog opened over
+        // them; device cards stop capturing while covered.
+        let covered =
+            self.overlay.is_some() || window.has_active_dialog(cx) || window.has_active_sheet(cx);
+        self.set_stages_covered(covered, cx);
+        self.sync_web_views(covered, cx);
         let (devices_docked, devices_floating) = {
             let panel = self.devices.read(cx);
             let docked = panel.mode() == crate::features::devices::Mode::Docked;
@@ -53,6 +56,7 @@ impl Render for Workspace {
             })
             .on_action(cx.listener(Self::on_new_tab))
             .on_action(cx.listener(Self::on_show_in_pane))
+            .on_action(cx.listener(Self::on_close_viewer))
             .on_action(cx.listener(Self::on_new_terminal_tab))
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_next_tab))
@@ -122,7 +126,6 @@ impl Render for Workspace {
                                     // panes carry no header; these act on the
                                     // focused pane.
                                     .when(self.tab().is_some(), |d| {
-                                        let mac = cfg!(target_os = "macos");
                                         d.child(
                                             Button::new("title-tile-pane")
                                                 .ghost()
@@ -130,7 +133,7 @@ impl Render for Workspace {
                                                 .icon(Icon::new(IconName::LayoutDashboard))
                                                 .tooltip(format!(
                                                     "New pane, tiled ({})",
-                                                    if mac { "⌘D" } else { "Ctrl+Shift+D" }
+                                                    ui::platform_shortcut("⌘D", "Ctrl+Shift+D")
                                                 ))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.on_tile_pane(&TilePane, window, cx)
@@ -143,7 +146,7 @@ impl Render for Workspace {
                                                 .icon(Icon::new(IconName::Rows2))
                                                 .tooltip(format!(
                                                     "Split down ({})",
-                                                    if mac { "⌘⇧D" } else { "Ctrl+Shift+E" }
+                                                    ui::platform_shortcut("⌘⇧D", "Ctrl+Shift+E")
                                                 ))
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.on_split_down(&SplitDown, window, cx)
@@ -179,7 +182,7 @@ impl Render for Workspace {
                                                         .tooltip(format!(
                                                             "Close \u{201c}{}\u{201d} ({})",
                                                             target.trim_end_matches(" •"),
-                                                            if mac { "⌘W" } else { "Ctrl+W" }
+                                                            ui::shortcut("W")
                                                         ))
                                                         .on_click(cx.listener(
                                                             |this, _, window, cx| {
@@ -262,7 +265,7 @@ impl Render for Workspace {
                                             .ghost()
                                             .xsmall()
                                             .icon(Icon::new(IconName::Command))
-                                            .tooltip("Commands (⌘K)")
+                                            .tooltip(format!("Commands ({})", ui::shortcut("K")))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.on_open_palette(&OpenPalette, window, cx)
                                             })),
@@ -436,11 +439,7 @@ impl Render for Workspace {
                                                 .tooltip(format!(
                                                     "{} Files sidebar ({})",
                                                     if self.sidebar_visible { "Hide" } else { "Show" },
-                                                    if cfg!(target_os = "macos") {
-                                                        "⌘B"
-                                                    } else {
-                                                        "Ctrl+B"
-                                                    }
+                                                    ui::shortcut("B")
                                                 ))
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.toggle_sidebar(cx)
@@ -457,8 +456,7 @@ impl Render for Workspace {
                     .px_1p5()
                     .pb_1p5()
                     .gap_1p5()
-                    // Vertical tabs have their own left sidebar, independent of
-                    // whether the Files / Changes / Branches panel is open.
+                    // The vertical tab navigator remains independent of the Files panel.
                     .when(vertical_tabs, |row| {
                         row.child(ui::appear(
                             "tabs-sidebar-in",
@@ -481,12 +479,10 @@ impl Render for Workspace {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(self.render_body(window, cx))
-                            .children(self.render_peek(cx)),
+                            .child(self.render_body(window, cx)),
                     )
                     .when(devices_docked, |row| row.child(self.devices.clone()))
-                    // The file browser always sits on the right, in both tab
-                    // layouts. Ctrl/Cmd+B controls only this panel.
+                    // Ctrl/Cmd+B toggles only the right Files/Changes/Branches sidebar.
                     .when_some(files_sidebar, |row, view| {
                         row.child(ui::appear(
                             "files-sidebar-in",

@@ -383,11 +383,7 @@ impl SessionView {
                 .danger()
                 .rounded(px(999.))
                 .child(div().size(rems(9. / 16.)).rounded_sm().bg(ui::well()))
-                .tooltip(if cfg!(target_os = "macos") {
-                    "Stop (⌘.)"
-                } else {
-                    "Stop (Ctrl+.)"
-                })
+                .tooltip(format!("Stop ({})", ui::shortcut(".")))
                 .on_click(cx.listener(|this, _, _, cx| this.stop(cx)))
         } else {
             Button::new("send")
@@ -540,6 +536,7 @@ impl SessionView {
             .gap_1p5()
             .children(self.render_slash_menu(cx))
             .children(self.render_dialog(cx))
+            .children(self.render_review_confirm(cx))
             .child(self.render_activity(rem_size, cx))
             .child(self.render_context_line(cx))
             .child(composer_box)
@@ -553,15 +550,14 @@ impl SessionView {
                         .overflow_hidden().text_size(rems(10. / 16.))
                         .text_color(ui::faint())
                         .child(div().min_w_0().truncate().child(if busy {
-                            if cfg!(target_os = "macos") {
-                                "↵ steers · ⌘. stops"
-                            } else {
-                                "↵ steers · Ctrl+. stops"
-                            }
+                            format!("↵ steers · {} stops", ui::shortcut("."))
                         } else if narrow {
-                            "↵ sends · ⇧↵ newline · / commands"
+                            "↵ sends · ⇧↵ newline · / commands".to_string()
                         } else {
-                            "↵ sends · ⇧↵ newline · !cmd runs a shell command · / for commands · ⌘N new session"
+                            format!(
+                                "↵ sends · ⇧↵ newline · !cmd runs a shell command · / for commands · {} new session",
+                                ui::shortcut("N")
+                            )
                         })),
                 )
             })

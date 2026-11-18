@@ -189,6 +189,9 @@ impl Workspace {
                 SessionEvent::OpenWeb(url) => {
                     this.open_web(url.clone(), Some(id), true, window, cx)
                 }
+                SessionEvent::OpenFile { path, line } => {
+                    this.open_file_at(path.clone(), *line, window, cx)
+                }
                 SessionEvent::AgentWeb(url) => {
                     this.open_web(url.clone(), Some(id), false, window, cx)
                 }
@@ -393,11 +396,9 @@ impl Workspace {
         }
     }
 
-    /// Focus the quick look while it shows, else the active tab's focused pane.
+    /// Focus the active tab's focused pane.
     pub(super) fn focus_active(&self, window: &mut Window, cx: &mut App) {
-        if let Some(peek) = &self.peek {
-            peek.item.focus.focus(window, cx);
-        } else if let Some(pane) = self.focused_pane().and_then(|id| self.panes.get(&id)) {
+        if let Some(pane) = self.focused_pane().and_then(|id| self.panes.get(&id)) {
             pane.item.focus.focus(window, cx);
         }
     }
@@ -609,8 +610,9 @@ impl Workspace {
         let mut lines = Vec::new();
         if !unsaved.is_empty() {
             lines.push(format!(
-                "Unsaved edits in {} are lost. ⌘S saves first.",
-                names(&unsaved)
+                "Unsaved edits in {} are lost. {} saves first.",
+                names(&unsaved),
+                ui::shortcut("S")
             ));
         }
         if !busy.is_empty() {

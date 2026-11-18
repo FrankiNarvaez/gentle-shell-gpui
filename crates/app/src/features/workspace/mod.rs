@@ -35,7 +35,7 @@ use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
 use crate::features::workspaces::{self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout};
 use crate::shared::pane::{
-    PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
+    CloseViewer, PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
 use crate::shared::ui;
 use gentle_core::commands::Screen;
@@ -45,7 +45,6 @@ mod closed;
 mod layout;
 mod overlays;
 mod panes;
-mod peek;
 mod persistence;
 mod render;
 mod spaces;
@@ -254,8 +253,9 @@ pub struct Workspace {
     panes: HashMap<PaneId, Pane>,
     next_id: usize,
     overlay: Option<(Overlay, Subscription)>,
-    /// The file shown in the quick-look modal over the panes.
-    peek: Option<peek::Peek>,
+    /// Agent panes last told their web views may show (see
+    /// `sync_web_views`).
+    web_shown: std::collections::HashSet<PaneId>,
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     tab_layout: TabLayout,
@@ -379,7 +379,7 @@ impl Workspace {
             panes: HashMap::new(),
             next_id: 0,
             overlay: None,
-            peek: None,
+            web_shown: Default::default(),
             sidebar: None,
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
@@ -515,17 +515,39 @@ impl Workspace {
 
     /// Show `path` in the tab's preview pane, or a new split beside the largest pane.
     pub fn open_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // Already in the quick look: move that view (edits included) instead.
-        if self.peek.as_ref().is_some_and(|peek| peek.path == path) {
-            self.pin_peek(window, cx);
-            return;
-        }
         if self.tab().is_none() {
             self.open_tab(PaneKind::File, path, None, None, window, cx);
             return;
         }
         if let Some(pane) = self.new_pane(PaneKind::File, path, None, None, window, cx) {
             self.place_preview(pane, window, cx);
+        }
+    }
+
+    /// [`Self::open_file`], then put its cursor at `line` (1-based).
+    pub fn open_file_at(
+        &mut self,
+        path: PathBuf,
+        line: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_file(path.clone(), window, cx);
+        let Some(line) = line else { return };
+        let view = self
+            .panes
+            .iter()
+            .filter(|(_, pane)| pane.path.as_ref() == Some(&path))
+            .max_by_key(|(id, _)| **id)
+            .and_then(|(_, pane)| {
+                pane.item
+                    .view
+                    .clone()
+                    .downcast::<crate::features::files::FileView>()
+                    .ok()
+            });
+        if let Some(view) = view {
+            view.update(cx, |view, cx| view.go_to_line(line, window, cx));
         }
     }
 

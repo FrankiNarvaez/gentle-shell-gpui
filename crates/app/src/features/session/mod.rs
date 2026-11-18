@@ -18,12 +18,19 @@ mod attachments;
 mod builtins;
 mod events;
 mod lifecycle;
+mod reads;
 mod rpc;
 mod state;
 mod submit;
 mod view;
+#[cfg(test)]
+mod view_tests;
 
 pub use agents::{AgentsPanel, AgentsTab};
+pub(crate) use reads::READ_DECIDE_WAIT;
+pub(crate) use state::desktop::reads::{
+    ReadFailure, ReadOutcome, ReadRequest, ReadSupport, ReadTicket,
+};
 
 actions!(session, [Abort, Stop, ToggleAgents, NewSession]);
 
@@ -63,6 +70,12 @@ pub enum SessionEvent {
     /// A tool printed a local web app's URL: the window keeps it in its
     /// instance tray until the user looks.
     AgentWeb(String),
+    /// Show this file in the file viewer, at this line (a code reference
+    /// in a generative UI surface).
+    OpenFile {
+        path: std::path::PathBuf,
+        line: Option<u32>,
+    },
 }
 
 /// What the window reads from a tab, to emit [`SessionEvent::ChromeChanged`]
@@ -89,6 +102,15 @@ pub struct SessionView {
     /// Rendered Markdown per (item, block), with the byte length already pushed.
     markdown: HashMap<(usize, usize), (Entity<TextViewState>, usize)>,
     expanded: HashSet<usize>,
+    /// Generative UI surfaces the agent showed (`gentle_ui`), rebuilt
+    /// from the transcript.
+    genui: crate::features::genui::GenUi,
+    /// The Agent UI mode this tab's backend was last given (at launch or
+    /// by command); a different choice in Configuration gets sent to it.
+    genui_mode: gentle_core::genui::mode::Mode,
+    /// This conversation is on screen with nothing over the window (the
+    /// workspace says so): its web views may show.
+    web_shown: bool,
     composer: Entity<TextareaState>,
     /// The composer has the keyboard: its border takes the accent.
     composer_focused: bool,
@@ -121,6 +143,8 @@ pub struct SessionView {
     mode: Option<gentle_core::gentle_state::PermissionMode>,
     default_mode: Option<gentle_core::gentle_state::PermissionMode>,
     _agents_ticker: Task<()>,
+    /// The background job output on screen and its poll.
+    job_output: agents::JobOutputView,
     todo: state::TodoIsland,
     git: state::GitStatus,
     models: state::Models,
@@ -245,6 +269,8 @@ impl SessionView {
                     cx.stop_propagation();
                 }
             }),
+            // Configuration › Agent UI changed: tell this tab's extension.
+            crate::features::genui::mode::follow(cx, |this, _, cx| this.sync_genui_mode(cx)),
         ];
         let mut this = Self {
             cwd,
@@ -254,6 +280,9 @@ impl SessionView {
             transcript: Transcript::default(),
             markdown: HashMap::new(),
             expanded: HashSet::new(),
+            genui: Default::default(),
+            genui_mode: crate::features::genui::mode::mode(cx),
+            web_shown: false,
             composer,
             composer_focused: false,
             composer_pulse: None,
@@ -272,6 +301,7 @@ impl SessionView {
                 &pi_rpc::resolve_homes().config,
             ),
             _agents_ticker: Task::ready(()),
+            job_output: agents::JobOutputView::default(),
             todo: state::TodoIsland::default(),
             git: state::GitStatus::default(),
             models: state::Models::default(),
@@ -323,6 +353,16 @@ impl SessionView {
         !self.extension.dialogs.is_empty()
     }
 
+    /// Whether this conversation is on screen with nothing over the window;
+    /// an expanded HTML surface's web view hides otherwise.
+    pub fn set_web_shown(&mut self, shown: bool, cx: &mut Context<Self>) {
+        if self.web_shown != shown {
+            self.web_shown = shown;
+            self.genui.set_obscured(!shown, cx);
+            cx.notify();
+        }
+    }
+
     pub fn composer(&self) -> Entity<TextareaState> {
         self.composer.clone()
     }
@@ -334,18 +374,15 @@ impl SessionView {
     }
 
     /// Commands for the `/` menu and the palette: Pi's built-ins the app
-    /// runs, then Gentle Shell's, without the ones that do nothing here.
-    pub fn commands(&self) -> Vec<(String, String)> {
-        builtins::BUILTINS
-            .iter()
-            .map(|(name, description)| (name.to_string(), description.to_string()))
-            .chain(
-                self.commands
-                    .iter()
-                    .filter(|(name, _)| !gentle_core::commands::hidden(name))
-                    .cloned(),
-            )
-            .collect()
+    /// runs, then the other Pi built-ins Gentle Shell's session feed lists
+    /// (terminal-only ones marked), then Gentle Shell's, without the ones
+    /// that do nothing here.
+    pub fn commands(&self) -> Vec<gentle_core::commands::SlashCommand> {
+        gentle_core::commands::menu(
+            builtins::BUILTINS,
+            &self.desktop.sections().pi_commands(),
+            &self.commands,
+        )
     }
 
     /// Where skill `name` lives, if this tab's Gentle Shell has it.

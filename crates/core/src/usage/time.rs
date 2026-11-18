@@ -5,7 +5,7 @@ pub(super) const HOUR: i64 = 3_600;
 pub const DAY: i64 = 86_400;
 pub(super) const WEEK: i64 = 604_800;
 
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let y = if month <= 2 { year - 1 } else { year };
     let era = y.div_euclid(400);
     let yoe = y - era * 400;

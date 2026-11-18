@@ -3,7 +3,9 @@
 
 use gpui_kit::assets::IconName;
 
-use gentle_core::commands;
+use gentle_core::commands::{self, SlashCommand};
+
+use crate::shared::ui;
 
 use super::{PaletteAction, Row, TabLayout};
 
@@ -18,16 +20,14 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         workspace: None,
         current: false,
     };
-    let cmd = if cfg!(target_os = "macos") {
-        "⌘"
-    } else {
-        "Ctrl+"
-    };
     vec![
         row(
             IconName::Users,
             "Agents",
-            &format!("Helpers working for this session ({cmd}⇧A)"),
+            &format!(
+                "Helpers working for this session ({})",
+                ui::shortcut_shift("A")
+            ),
             PaletteAction::Agents,
         ),
         row(
@@ -99,13 +99,16 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         row(
             IconName::Plus,
             "New session",
-            &format!("Start a fresh conversation in this pane ({cmd}N)"),
+            &format!(
+                "Start a fresh conversation in this pane ({})",
+                ui::shortcut("N")
+            ),
             PaletteAction::NewSession,
         ),
         row(
             IconName::Bot,
             "New agent tab",
-            &format!("Another agent in the same folder ({cmd}T)"),
+            &format!("Another agent in the same folder ({})", ui::shortcut("T")),
             PaletteAction::NewTab,
         ),
         row(
@@ -117,7 +120,10 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         row(
             IconName::LayoutDashboard,
             "New pane (tiled)",
-            &format!("Same kind of pane, tiled beside the focused one ({cmd}D)"),
+            &format!(
+                "Same kind of pane, tiled beside the focused one ({})",
+                ui::platform_shortcut("⌘D", "Ctrl+Shift+D")
+            ),
             PaletteAction::TilePane,
         ),
         row(
@@ -129,7 +135,10 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         row(
             IconName::Rows2,
             "Split down",
-            &format!("Same kind of pane below this one ({cmd}⇧D)"),
+            &format!(
+                "Same kind of pane below this one ({})",
+                ui::platform_shortcut("⌘⇧D", "Ctrl+Shift+E")
+            ),
             PaletteAction::SplitDown,
         ),
         row(
@@ -147,7 +156,7 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         row(
             IconName::X,
             "Close pane",
-            &format!("The last pane closes its tab ({cmd}W)"),
+            &format!("The last pane closes its tab ({})", ui::shortcut("W")),
             PaletteAction::ClosePane,
         ),
         row(
@@ -155,11 +164,7 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             "Reopen closed pane",
             &format!(
                 "The last pane or tab closed, where it was ({})",
-                if cfg!(target_os = "macos") {
-                    "⌥⌘T"
-                } else {
-                    "Ctrl+Alt+Shift+T"
-                }
+                ui::platform_shortcut("⌥⌘T", "Ctrl+Alt+Shift+T")
             ),
             PaletteAction::ReopenClosed,
         ),
@@ -178,17 +183,23 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             ),
         },
         row(
-            IconName::PanelLeft,
+            IconName::PanelRight,
             "Toggle Files sidebar",
-            &format!("Show or hide Files / Changes / Branches on the right ({cmd}B)"),
+            &format!("Show or hide Files / Changes / Branches on the right ({})", ui::shortcut("B")),
             PaletteAction::ToggleSidebar,
         ),
     ]
 }
 
-/// The row of a backend slash command: `None` for commands that do nothing
-/// over RPC; terminal-only ones open their native screen instead of running.
-pub(super) fn command_row((name, detail): (String, String)) -> Option<Row> {
+/// The row of a slash command: `None` for commands that do nothing over RPC;
+/// terminal-only Gentle Shell ones open their native screen instead of
+/// running, and Pi built-ins that only work in the terminal say so.
+pub(super) fn command_row(command: SlashCommand) -> Option<Row> {
+    let SlashCommand {
+        name,
+        description: detail,
+        terminal,
+    } = command;
     if commands::hidden(&name) {
         return None;
     }
@@ -206,7 +217,11 @@ pub(super) fn command_row((name, detail): (String, String)) -> Option<Row> {
     Some(Row {
         icon,
         title: format!("/{name}"),
-        meta: String::new(),
+        meta: if terminal {
+            "terminal".to_string()
+        } else {
+            String::new()
+        },
         detail,
         group,
         action,
@@ -217,13 +232,21 @@ pub(super) fn command_row((name, detail): (String, String)) -> Option<Row> {
 
 #[cfg(test)]
 mod tests {
-    use gentle_core::commands::Screen;
+    use gentle_core::commands::{Screen, SlashCommand};
 
     use super::super::{PaletteAction, TabLayout};
     use super::{command_row, screen_rows};
 
+    fn command(name: &str, detail: &str, terminal: bool) -> SlashCommand {
+        SlashCommand {
+            name: name.into(),
+            description: detail.into(),
+            terminal,
+        }
+    }
+
     fn action(name: &str) -> Option<PaletteAction> {
-        command_row((name.into(), "detail".into())).map(|row| row.action)
+        command_row(command(name, "detail", false)).map(|row| row.action)
     }
 
     #[test]
@@ -268,10 +291,17 @@ mod tests {
             action("gentle:doctor"),
             Some(PaletteAction::Command("gentle:doctor".into()))
         );
-        let row = command_row(("gentle:stats".into(), "Local stats".into())).unwrap();
+        let row = command_row(command("gentle:stats", "Local stats", false)).unwrap();
         assert_eq!(
-            (row.title.as_str(), row.detail.as_str()),
-            ("/gentle:stats", "Local stats")
+            (row.title.as_str(), row.detail.as_str(), row.meta.as_str()),
+            ("/gentle:stats", "Local stats", "")
         );
+    }
+
+    #[test]
+    fn terminal_only_pi_built_ins_are_marked() {
+        let row = command_row(command("model", "Select model", true)).unwrap();
+        assert_eq!(row.meta, "terminal");
+        assert_eq!(row.action, PaletteAction::Command("model".into()));
     }
 }

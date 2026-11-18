@@ -12,12 +12,14 @@ mod launch;
 mod login;
 mod record;
 
-pub use home::{Homes, adopt_standalone_config, launcher_config_path, pi_package, resolve_homes};
+pub use home::{
+    Homes, adopt_standalone_config, gentle_pi_root, launcher_config_path, pi_package, resolve_homes,
+};
 pub use login::{AuthEvent, AuthPrompt, LoginHelper, LoginMessage, PromptOption, ProviderInfo};
 
 pub use launch::{
     BundledInstall, LaunchSpec, backend_version, child_path, command, find_program, forget_cached,
-    forget_versions, output_within, resolve_backend, resolve_node, set_extra_path,
+    forget_versions, output_within, resolve_backend, resolve_node, set_extensions, set_extra_path,
     set_system_prompt, version_output,
 };
 pub use record::{Record, Response, UiMethod, UiRequest, parse_record};
@@ -309,12 +311,13 @@ fn wait_child(child: &Mutex<Child>) -> Option<i32> {
     }
 }
 
-/// Kill what is left of a backend and reap it: on Unix its whole process
-/// group (the launcher, Pi and the tool processes still in it; a leader
-/// that exited moments ago keeps its group id while members remain), on
-/// Windows its process tree while it runs (an exited one's pid is not
-/// looked up). Then the child itself, in case that failed.
-fn kill_tree(child: &mut Child) {
+/// Kill what is left of a backend (or any child started in its own process
+/// group) and reap it: on Unix its whole process group (the launcher, Pi
+/// and the tool processes still in it; a leader that exited moments ago
+/// keeps its group id while members remain), on Windows its process tree
+/// while it runs (an exited one's pid is not looked up). Then the child
+/// itself, in case that failed.
+pub fn kill_tree(child: &mut Child) {
     let pid = child.id().to_string();
     #[cfg(unix)]
     if let Some(mut kill) = signal("-KILL", &format!("-{pid}")) {

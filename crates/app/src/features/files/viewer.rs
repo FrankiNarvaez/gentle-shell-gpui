@@ -27,7 +27,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::{file_icon, human_size, language, mermaid};
-use crate::shared::pane::ShowInPane;
+use crate::shared::pane::{CloseViewer, ShowInPane};
 use crate::shared::ui;
 
 actions!(file_view, [Save]);
@@ -35,11 +35,7 @@ actions!(file_view, [Save]);
 /// Key context of a file pane, where ⌘S saves.
 const CONTEXT: &str = "GentleFileView";
 /// The save shortcut as the header shows it.
-const SAVE_HINT: &str = if cfg!(target_os = "macos") {
-    "⌘S"
-} else {
-    "Ctrl+S"
-};
+const SAVE_HINT: &str = ui::platform_shortcut("⌘S", "Ctrl+S");
 /// How often an open file is checked for outside writes while it has focus.
 const POLL: Duration = Duration::from_millis(800);
 /// The same for an unfocused pane, which may be in a hidden tab or
@@ -345,6 +341,20 @@ impl FileView {
             format!("{name} •").into()
         } else {
             name.into()
+        }
+    }
+
+    /// Put the cursor at the start of `line` (1-based), scrolled into view.
+    pub fn go_to_line(&mut self, line: u32, window: &mut Window, cx: &mut Context<Self>) {
+        if let Body::Code(editor) = &self.body {
+            let row = line.saturating_sub(1);
+            editor.update(cx, |state, cx| {
+                state.set_cursor_position(
+                    gpui_kit::component::input::Position::new(row, 0),
+                    window,
+                    cx,
+                )
+            });
         }
     }
 
@@ -786,7 +796,9 @@ impl FileView {
         let mut budget = self.header_width.get() / unit
             - 32.
             - 24.
+            // Two trailing xsmall icon buttons (reveal and close): 20 px + 8 px gap each.
             - 32.
+            - 28.
             - save_width
             - toggle_width
             - path_width;
@@ -946,6 +958,17 @@ impl FileView {
                     .tooltip("Open with default app")
                     .on_click(cx.listener(move |_, _, _, cx| cx.open_with_system(&path))),
             )
+            .child({
+                let view = cx.entity_id();
+                Button::new("file-view-close")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::X))
+                    .tooltip("Close pane")
+                    .on_click(move |_, window, cx| {
+                        window.dispatch_action(Box::new(CloseViewer { pane: view }), cx)
+                    })
+            })
     }
 
     /// The outside-write or save-error notice above the buffer, tinted, with

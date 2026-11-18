@@ -14,6 +14,7 @@ use super::state::desktop;
 use super::state::{BackendStatus, Dialog, TurnActivity};
 use super::{SessionEvent, SessionView, view};
 use crate::features::browser::CanvasNotice;
+use crate::features::genui::{DiagramEvent, Surface, TemplatesEvent, TemplatesView};
 use crate::features::git;
 use gentle_core::tools;
 use gentle_core::transcript::{self, NoticeLevel};
@@ -118,7 +119,10 @@ impl SessionView {
             }
             Some("tool_execution_end") => {
                 let details = &event["result"]["details"];
+                // The session feed's todo section, when it reports one, is
+                // the list's source; the tool result is the older Shells'.
                 if event["toolName"] == "todo"
+                    && self.desktop.sections().todo().is_none()
                     && let Some(tasks) = tools::todo_tasks(details)
                 {
                     self.todo.apply(tasks);
@@ -160,6 +164,9 @@ impl SessionView {
         if effects.settled {
             // Always once at turn end, whatever the tool calls scheduled.
             self.refresh_git(cx);
+            // The agent's own change set too (Gentle Shell `main`; nothing on
+            // a Shell without `get_changes`).
+            self.refresh_session_changes(cx);
         } else if effects.files_touched {
             self.refresh_git_soon(cx);
         }
@@ -259,7 +266,20 @@ impl SessionView {
             },
             UiMethod::SetWidget { key, lines, .. } => {
                 let lines = lines.filter(|l| !l.is_empty());
-                if key == "gentle-agents" {
+                if key == gentle_core::genui::OUTCOME_WIDGET {
+                    // The generative UI extension's answer to sent edits;
+                    // its clearing record carries no lines.
+                    if let Some(line) = lines.as_ref().and_then(|l| l.first())
+                        && let Some(error) = self.genui.outcome(line, cx)
+                    {
+                        self.toast(
+                            Notification::warning(format!(
+                                "The template couldn't be inserted: {error}"
+                            )),
+                            cx,
+                        );
+                    }
+                } else if key == "gentle-agents" {
                     let next = lines.and_then(|l| gentle_core::activity::parse(&l));
                     self.activity.agents = Some(gentle_core::activity::retain_finished(
                         self.activity.agents.take(),
@@ -291,6 +311,12 @@ impl SessionView {
     /// channel (probe, sequencing, resync, and every benign foreign record).
     fn handle_desktop_ui(&mut self, request: &UiRequest, cx: &mut Context<Self>) {
         let decoded = decode_widget(request);
+        // A `session_snapshot` whose `changes` section moved: the change set
+        // is read again. Only a peek; the record itself is accepted once,
+        // below, by whichever slice owns it.
+        if desktop::changes::changes_moved(&decoded) {
+            self.desktop.changes_mark_stale();
+        }
         let pending = self.desktop.session().pending().map(|(_, method)| method);
         match route_desktop_widget(&decoded, pending) {
             DesktopRoute::Permission => {
@@ -325,9 +351,16 @@ impl SessionView {
                     self.sync_supervision(cx);
                     self.sync_design(cx);
                     self.sync_config(cx);
+                    self.sync_output(cx);
                 }
             }
             DesktopRoute::Supervision => {
+                // A helper moved: the thread on screen may have too.
+                if matches!(&decoded, Ok(Some(DesktopRecord::Event(event)))
+                    if event.event == desktop::supervision::AGENTS_UPDATE)
+                {
+                    self.desktop.output_mut().refresh_thread();
+                }
                 let applied = self.desktop.supervision_apply(request);
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
@@ -350,6 +383,7 @@ impl SessionView {
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Subscription => {
                 let applied = self.desktop.subscription_apply(request);
@@ -365,6 +399,7 @@ impl SessionView {
                 }
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Design => {
                 let applied = self.desktop.design_apply(request);
@@ -380,6 +415,7 @@ impl SessionView {
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Config => {
                 let applied = self.desktop.config_apply(request);
@@ -398,16 +434,61 @@ impl SessionView {
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
+            }
+            DesktopRoute::Output => {
+                let applied = self.desktop.output_apply(request);
+                self.apply_output(applied, cx);
+                self.sync_supervision(cx);
+                self.sync_design(cx);
+                self.sync_config(cx);
+                self.sync_output(cx);
+            }
+            DesktopRoute::Review => {
+                let applied = self.desktop.review_apply(request);
+                match applied.report.as_ref() {
+                    // Events were lost: the channel owns the get_snapshot
+                    // resync, and the switch is read again behind it.
+                    Some(desktop::review::Report::OutOfOrderSequence) => {
+                        let sends = self.desktop.resync();
+                        self.send_desktop(sends, cx);
+                    }
+                    _ => self.apply_review(applied, cx),
+                }
+                self.sync_supervision(cx);
+                self.sync_design(cx);
+                self.sync_config(cx);
+                self.sync_output(cx);
+            }
+            DesktopRoute::Changes => {
+                let applied = self.desktop.changes_apply(request);
+                self.apply_changes(applied, cx);
+                self.sync_supervision(cx);
+                self.sync_design(cx);
+                self.sync_config(cx);
+                self.sync_output(cx);
+            }
+            DesktopRoute::Reads => {
+                let applied = self.desktop.reads_apply(request);
+                self.apply_reads(applied, cx);
+                self.sync_supervision(cx);
+                self.sync_design(cx);
+                self.sync_config(cx);
+                self.sync_output(cx);
             }
             DesktopRoute::Channel => {
                 let applied = self.desktop.ui(request);
                 self.apply_desktop(applied, cx);
+                self.sync_sections(cx);
                 self.sync_permission_capabilities(cx);
                 self.sync_supervision(cx);
                 self.sync_design(cx);
                 self.sync_config(cx);
+                self.sync_output(cx);
             }
         }
+        self.sync_review(cx);
+        self.sync_changes(cx);
     }
 
     /// Seed the design canvas once the probe and any in-flight request
@@ -571,6 +652,150 @@ impl SessionView {
         })
         .detach();
     }
+
+    /// Listen to generative UI surfaces created since the last frame.
+    pub(super) fn watch_surfaces(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for surface in self.genui.take_fresh() {
+            let subscription = match &surface {
+                Surface::Diagram(view) => Self::watch_surface(view, surface.clone(), window, cx),
+                Surface::Panel(view) => Self::watch_surface(view, surface.clone(), window, cx),
+                Surface::Html(view) => Self::watch_surface(view, surface.clone(), window, cx),
+            };
+            self.genui.keep(surface.entity_id(), subscription);
+        }
+    }
+
+    fn watch_surface<V: EventEmitter<DiagramEvent>>(
+        view: &Entity<V>,
+        surface: Surface,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(view, window, move |this, _, event, window, cx| {
+            this.on_surface_event(&surface, event, window, cx)
+        })
+    }
+
+    fn on_surface_event(
+        &mut self,
+        surface: &Surface,
+        event: &DiagramEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // The user's edits go to the extension, which records them in
+            // the conversation for the agent.
+            DiagramEvent::Send(command) => {
+                let surface = surface.clone();
+                self.run_extension_command(command.clone(), cx, move |result, cx| {
+                    surface.sent(result, cx);
+                });
+            }
+            DiagramEvent::Ask(text) => self.composer.update(cx, |state, cx| {
+                state.insert(text.clone(), window, cx);
+                state.focus(window, cx);
+            }),
+            DiagramEvent::Expand => {
+                let id = surface.id(cx);
+                self.genui.set_expanded(Some(id), cx);
+                cx.notify();
+            }
+            DiagramEvent::Collapse => {
+                self.genui.set_expanded(None, cx);
+                cx.notify();
+            }
+            DiagramEvent::OpenWeb(url) => cx.emit(SessionEvent::OpenWeb(url.clone())),
+            DiagramEvent::Pin(on) => {
+                let (id, session) = (surface.id(cx), self.session_file());
+                self.genui.pin(&id, *on, session.as_deref(), cx);
+                cx.notify();
+            }
+            DiagramEvent::Request(command) => {
+                let this = cx.entity().downgrade();
+                self.run_extension_command(command.clone(), cx, move |result, cx| {
+                    let note = match result {
+                        Ok(()) => Notification::success("Asked the agent to add it to the docs."),
+                        Err(error) => Notification::warning(error),
+                    };
+                    let _ = this.update(cx, |this, cx| this.toast(note, cx));
+                });
+            }
+            DiagramEvent::OpenRef(code_ref) => match code_ref.resolve(&self.cwd) {
+                Some(path) if path.is_file() => cx.emit(SessionEvent::OpenFile {
+                    path,
+                    line: code_ref.line,
+                }),
+                Some(_) => self.warn(
+                    format!("{} isn't in the workspace.", code_ref.path),
+                    window,
+                    cx,
+                ),
+                None => self.warn(
+                    format!("{} is outside the workspace.", code_ref.path),
+                    window,
+                    cx,
+                ),
+            },
+            DiagramEvent::Notice(Ok(text)) => {
+                window.push_notification(Notification::success(text.clone()), cx)
+            }
+            DiagramEvent::Notice(Err(error)) => self.warn(error.clone(), window, cx),
+            // A kanban card's Stop: the same `cancel_subagent` as the agents panel.
+            DiagramEvent::CancelSubagent(id) => self.stop_agent(id, cx),
+        }
+    }
+
+    /// `/ui-template [name]`: insert the template named `name`, or open the
+    /// templates manager.
+    pub(super) fn ui_template(&mut self, name: &str, cx: &mut Context<Self>) {
+        let manager = cx.new(TemplatesView::new);
+        if !name.trim().is_empty() {
+            match manager.read(cx).find(name) {
+                Some(template) => self.insert_template(&template, cx),
+                None => {
+                    let names = manager.read(cx).names();
+                    let known = if names.is_empty() {
+                        "none saved yet".to_string()
+                    } else {
+                        names.join(", ")
+                    };
+                    self.note(
+                        format!("No UI template named “{}” ({known}).", name.trim()),
+                        cx,
+                    );
+                }
+            }
+            return;
+        }
+        let subscription = cx.subscribe(&manager, |this, _, event: &TemplatesEvent, cx| {
+            match event {
+                TemplatesEvent::Insert(template) => {
+                    let template = template.clone();
+                    this.insert_template(&template, cx);
+                    this.genui.set_templates(None);
+                }
+                TemplatesEvent::Close => this.genui.set_templates(None),
+            }
+            cx.notify();
+        });
+        self.genui.set_templates(Some((manager, subscription)));
+        cx.notify();
+    }
+
+    fn insert_template(
+        &mut self,
+        template: &gentle_core::genui::template::Template,
+        cx: &mut Context<Self>,
+    ) {
+        let command = self.genui.insert_command(template);
+        let this = cx.entity().downgrade();
+        self.run_extension_command(command, cx, move |result, cx| {
+            if let Err(error) = result {
+                let _ = this.update(cx, |this, cx| this.toast(Notification::warning(error), cx));
+            }
+        });
+    }
 }
 
 /// Which slice owns one incoming Desktop record. A record is routed to the
@@ -578,15 +803,24 @@ impl SessionView {
 /// permission event; supervision owns its responses and events; subscription
 /// owns its responses and `rate_limit`; design owns `get_design_canvas` and
 /// `design_canvas`; config owns `get_config`/`set_config` and
-/// `config_changed`; everything else belongs to the channel
-/// (probe, resync, and every benign foreign/late record). The shared session
-/// then accepts the record exactly once, in the slice that owns it.
-enum DesktopRoute {
+/// `config_changed`; review owns `get_review_mode`/`set_review_mode` and
+/// `review_mode_changed`; changes owns `get_changes`/`get_change_diff`;
+/// output owns `get_job_output`/`get_subagent_thread`; reads owns
+/// `list_sessions`, `switch_session`, `get_usage_stats` and
+/// `get_update_status`; everything else belongs to the channel (probe,
+/// resync, `session_snapshot`, and every benign foreign/late record). The
+/// shared session then accepts the record exactly once, in the slice that
+/// owns it.
+pub(in crate::features::session) enum DesktopRoute {
     Permission,
     Supervision,
     Subscription,
     Design,
     Config,
+    Review,
+    Changes,
+    Output,
+    Reads,
     Channel,
 }
 
@@ -610,7 +844,7 @@ fn notify_target(message: &str, design_events_ready: bool) -> Option<NotifyTarge
     }
 }
 
-fn route_desktop_widget(
+pub(in crate::features::session) fn route_desktop_widget(
     decoded: &Result<Option<DesktopRecord>, DesktopRpcError>,
     pending: Option<DesktopMethod>,
 ) -> DesktopRoute {
@@ -644,6 +878,23 @@ fn route_desktop_widget(
                     | Some(DesktopMethod::ApplyProfile)
             ) {
                 DesktopRoute::Config
+            } else if matches!(
+                pending,
+                Some(DesktopMethod::GetReviewMode) | Some(DesktopMethod::SetReviewMode)
+            ) {
+                DesktopRoute::Review
+            } else if matches!(
+                pending,
+                Some(DesktopMethod::GetChanges) | Some(DesktopMethod::GetChangeDiff)
+            ) {
+                DesktopRoute::Changes
+            } else if matches!(
+                pending,
+                Some(DesktopMethod::GetJobOutput) | Some(DesktopMethod::GetSubagentThread)
+            ) {
+                DesktopRoute::Output
+            } else if pending.is_some_and(desktop::reads::is_read) {
+                DesktopRoute::Reads
             } else {
                 DesktopRoute::Channel
             }
@@ -672,6 +923,11 @@ fn route_desktop_widget(
                 || event.event == desktop::config::PROFILE_APPLIED =>
         {
             DesktopRoute::Config
+        }
+        Ok(Some(DesktopRecord::Event(event)))
+            if event.event == desktop::review::REVIEW_MODE_CHANGED =>
+        {
+            DesktopRoute::Review
         }
         _ => DesktopRoute::Channel,
     }
@@ -798,6 +1054,7 @@ mod tests {
     };
     use crate::features::browser::CanvasNotice;
     use crate::features::session::state::TurnActivity;
+    use crate::features::session::state::desktop;
     use gentle_core::transcript::NoticeLevel;
 
     #[test]
@@ -1186,5 +1443,70 @@ mod tests {
             route_desktop_widget(&applied("profile_applied_v2"), None),
             DesktopRoute::Channel
         ));
+    }
+
+    #[test]
+    fn review_and_changes_records_route_to_their_slices() {
+        let answer = decode_widget(&widget(Some(record(json!({
+            "schema": SCHEMA,
+            "kind": "response",
+            "requestId": "desktop-5",
+            "ok": true,
+            "data": {},
+        })))));
+        for method in [DesktopMethod::GetReviewMode, DesktopMethod::SetReviewMode] {
+            assert!(matches!(
+                route_desktop_widget(&answer, Some(method)),
+                DesktopRoute::Review
+            ));
+        }
+        for method in [DesktopMethod::GetChanges, DesktopMethod::GetChangeDiff] {
+            assert!(matches!(
+                route_desktop_widget(&answer, Some(method)),
+                DesktopRoute::Changes
+            ));
+        }
+        let event = |name: &str, data: Value| {
+            decode_widget(&widget(Some(record(json!({
+                "schema": SCHEMA,
+                "kind": "event",
+                "seq": 1,
+                "event": name,
+                "data": data,
+            })))))
+        };
+        let mode = json!({"effective": "enabled", "source": "default",
+                          "scopes": {"global": "unset", "clone": "unset"}});
+        let changed = event(
+            "review_mode_changed",
+            json!({"mode": mode, "previousMode": mode}),
+        );
+        assert!(matches!(
+            route_desktop_widget(&changed, None),
+            DesktopRoute::Review
+        ));
+
+        // A `session_snapshot` carrying `changes` marks the change set stale
+        // (a peek); without that section, or under another name, it does not.
+        let changes = json!({
+            "files": [], "summary": {"files": 0, "added": 0, "deleted": 0},
+            "worktrees": [], "truncated": false,
+        });
+        assert!(desktop::changes::changes_moved(&event(
+            "session_snapshot",
+            json!({"sections": {"changes": changes}}),
+        )));
+        assert!(desktop::changes::changes_moved(&event(
+            "session_snapshot",
+            json!({"sections": {"changes": null}}),
+        )));
+        assert!(!desktop::changes::changes_moved(&event(
+            "session_snapshot",
+            json!({"sections": {"usage": null}}),
+        )));
+        assert!(!desktop::changes::changes_moved(&event(
+            "session_snapshot_v2",
+            json!({"sections": {"changes": changes}}),
+        )));
     }
 }

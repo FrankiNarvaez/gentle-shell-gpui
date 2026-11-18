@@ -193,8 +193,4 @@ impl Workspace {
 }
 
 /// The shortcut that reopens, as the notice and the palette show it.
-pub(super) const REOPEN_KEY: &str = if cfg!(target_os = "macos") {
-    "⌥⌘T"
-} else {
-    "Ctrl+Alt+Shift+T"
-};
+pub(super) const REOPEN_KEY: &str = ui::platform_shortcut("⌥⌘T", "Ctrl+Alt+Shift+T");
