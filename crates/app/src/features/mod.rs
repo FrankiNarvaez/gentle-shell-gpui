@@ -4,6 +4,7 @@ pub mod alerts;
 pub mod app_update;
 pub mod browser;
 pub mod devices;
+pub mod diagnostics;
 pub mod docs;
 pub mod files;
 pub mod genui;

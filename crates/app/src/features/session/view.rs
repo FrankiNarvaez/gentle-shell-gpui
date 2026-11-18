@@ -298,6 +298,7 @@ impl SessionView {
         self.live.ticker = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
+                crate::shared::diagnostics::tick();
                 match this.update(cx, |this, cx| this.tick(cx)) {
                     Ok(true) => {}
                     _ => break,
@@ -1396,6 +1397,7 @@ impl SessionView {
 
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::shared::diagnostics::render("SessionView");
         // A tab starts its backend once shown.
         self.ensure_started(window, cx);
         self.sync_view(cx);
@@ -1405,7 +1407,7 @@ impl Render for SessionView {
         // frame only while they play.
         let composing = self.composer_animating();
         if self.fade_answers() || composing {
-            window.request_animation_frame();
+            ui::request_animation_frame(window);
         }
         let rem_size = window.rem_size();
         self.list.follow_rem_size(rem_size);

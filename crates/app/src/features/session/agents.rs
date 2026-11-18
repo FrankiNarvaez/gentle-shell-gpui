@@ -291,6 +291,23 @@ impl JobRow {
 }
 
 impl SessionView {
+    /// This tab's numbers for the resource diagnostics.
+    pub fn resources(&self) -> crate::features::diagnostics::TabResources {
+        let helpers = self.helpers();
+        let jobs = self.job_rows();
+        crate::features::diagnostics::TabResources {
+            backend: self.process().map(|p| {
+                let (records, bytes) = p.traffic();
+                (p.pid(), records, bytes)
+            }),
+            agents: helpers.len(),
+            agents_running: helpers.iter().filter(|h| h.is_active()).count(),
+            jobs: jobs.len(),
+            jobs_running: jobs.iter().filter(|j| j.is_running()).count(),
+            items: self.transcript.items.len(),
+        }
+    }
+
     /// Every background job, newest data source first: the structured list
     /// once the channel seeded it, the legacy records otherwise.
     pub(super) fn job_rows(&self) -> Vec<JobRow> {
@@ -342,6 +359,7 @@ impl SessionView {
         self.job_output._poll = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(JOB_OUTPUT_POLL).await;
+                crate::shared::diagnostics::tick();
                 let keep = this
                     .update(cx, |this, cx| {
                         let shown = this
@@ -633,6 +651,7 @@ impl SessionView {
         self._agents_ticker = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
+                crate::shared::diagnostics::tick();
                 let keep = this
                     .update(cx, |this, cx| {
                         let open = this.agents_panel.open;

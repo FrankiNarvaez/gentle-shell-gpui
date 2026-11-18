@@ -284,7 +284,7 @@ impl Tween {
             self.started = None;
             return 1.;
         }
-        window.request_animation_frame();
+        ui::request_animation_frame(window);
         ease_out_quint()(t)
     }
 }
@@ -375,7 +375,7 @@ impl Glides {
         let now = Instant::now();
         self.moving.retain(|_, glide| glide.t(now) < 1.);
         if !self.moving.is_empty() {
-            window.request_animation_frame();
+            ui::request_animation_frame(window);
         }
     }
 

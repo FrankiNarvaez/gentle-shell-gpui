@@ -151,6 +151,7 @@ impl DevicePanel {
                 cx.background_executor()
                     .timer(Duration::from_millis(16))
                     .await;
+                crate::shared::diagnostics::tick();
                 let Ok(done) = this.update(cx, |this, cx| {
                     cx.notify();
                     let Some((at, opening)) = this.slide else {

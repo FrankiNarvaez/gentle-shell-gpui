@@ -2432,6 +2432,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "smol",
+ "sysinfo",
  "tar",
  "trash",
  "ureq",

@@ -380,6 +380,7 @@ impl Workspace {
             _title_poll: cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
+                    crate::shared::diagnostics::tick();
                     let Ok(()) = this.update(cx, |this, cx| this.refresh_titles(cx)) else {
                         break;
                     };

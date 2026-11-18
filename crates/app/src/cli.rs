@@ -1,4 +1,5 @@
-//! Command line: `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT] [--open-url URL]`.
+//! Command line: `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT] [--open-url URL]
+//! [--diagnostics]`.
 
 use std::path::PathBuf;
 
@@ -26,6 +27,8 @@ pub fn parse_cli() -> Cli {
                     .map(|p| p.to_string_lossy().into_owned())
                     .unwrap_or_default(),
             );
+        } else if arg == crate::shared::diagnostics::FLAG {
+            // Read by `diagnostics::enabled`.
         } else if cli.folder.is_none() {
             cli.folder = Some(PathBuf::from(arg));
         }

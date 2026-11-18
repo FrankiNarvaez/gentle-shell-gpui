@@ -8,6 +8,7 @@ pub(super) const TITLE_BAR_HEIGHT: f32 = 36.;
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::shared::diagnostics::render("Workspace");
         // Follow keyboard focus into panes (a terminal focused by its own click).
         if let Some(tab) = self.tab()
             && let Some(inside) = tab.tree.leaves().into_iter().find(|id| {
@@ -40,7 +41,7 @@ impl Render for Workspace {
         // tree (and every element's state) stays the same.
         let (shake_x, shake_y) = match self.surge {
             Some((_, started, level)) => {
-                window.request_animation_frame();
+                ui::request_animation_frame(window);
                 crate::shared::surge::shake_at(started.elapsed(), level)
             }
             None => (0., 0.),
