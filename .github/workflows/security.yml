@@ -56,6 +56,8 @@ jobs:
       - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
         with:
           advanced-security: false
+          # A new zizmor release can add audits; bump it on purpose, not by surprise.
+          version: 1.32.0
 
   # What a reviewer must read line by line: sensitive files, binaries,
   # suspicious patterns. Fails only on bidirectional Unicode (Trojan Source).
