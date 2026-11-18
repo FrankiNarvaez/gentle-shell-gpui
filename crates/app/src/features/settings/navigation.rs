@@ -246,15 +246,14 @@ pub(super) fn sidebar(
         .h_full()
         .flex_shrink_0()
         .min_h_0()
-        .border_r_1()
-        .border_color(ui::border())
+        .bg(ui::surface())
         .child(
             v_flex()
                 .px_3()
                 .pt_4()
                 .pb_3()
                 .gap_2()
-                .child(div().text_xs().text_color(ui::muted()).child("CATEGORIES"))
+                .child(ui::section_label("Categories"))
                 .child(search_field(filter, &query, cx)),
         )
         .child(
@@ -284,8 +283,6 @@ pub(super) fn compact(
         .px_3()
         .pt_3()
         .pb_2()
-        .border_b_1()
-        .border_color(ui::border())
         .child(
             Button::new("settings-compact-picker")
                 .ghost()

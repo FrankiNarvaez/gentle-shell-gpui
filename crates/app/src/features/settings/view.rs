@@ -115,8 +115,6 @@ impl Render for SettingsView {
                                         .px_4()
                                         .py_3()
                                         .gap_1()
-                                        .border_b_1()
-                                        .border_color(ui::border())
                                         .child(
                                             div()
                                                 .text_base()
