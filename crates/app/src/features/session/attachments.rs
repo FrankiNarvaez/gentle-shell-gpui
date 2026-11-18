@@ -321,21 +321,17 @@ pub fn renumber(text: &str, kind: Kind, kept: &[usize]) -> String {
     out
 }
 
-/// User text with each image token shown as a `🖼 #N` chip: the display
-/// string and the chip ranges in it.
-pub fn chip_text(text: &str) -> (String, Vec<Range<usize>>) {
+/// User text with each image token shown as `🖼 #N`.
+pub fn chip_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut chips = Vec::new();
     let mut last = 0;
     for (range, number) in find_tokens(text, Kind::Image) {
         out.push_str(&text[last..range.start]);
-        let start = out.len();
         out.push_str(&format!("🖼 #{number}"));
-        chips.push(start..out.len());
         last = range.end;
     }
     out.push_str(&text[last..]);
-    (out, chips)
+    out
 }
 
 // ── Pasted text ────────────────────────────────────────────────────────────
@@ -794,10 +790,8 @@ mod tests {
 
     #[test]
     fn chips_replace_tokens() {
-        let (text, chips) = chip_text("see [Image #1] and [Image#2]");
+        let text = chip_text("see [Image #1] and [Image#2]");
         assert_eq!(text, "see 🖼 #1 and 🖼 #2");
-        let shown: Vec<_> = chips.iter().map(|r| &text[r.clone()]).collect();
-        assert_eq!(shown, vec!["🖼 #1", "🖼 #2"]);
     }
 
     #[test]

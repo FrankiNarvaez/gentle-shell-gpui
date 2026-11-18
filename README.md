@@ -208,7 +208,7 @@ Streaming Markdown, collapsible thinking, and tool cards (`Edit path +12 −3`, 
 
 <br>
 
-A slash command's text output appears as one result card. Hover an answer, or a message you sent, for Copy. When the conversation is longer than the pane, a rail on the right edge marks every message you sent, placed by the heights it has seen (rows not shown yet count as the average), and shows a scroll thumb while you scroll or point at it (the one you are reading highlighted, its first line on hover); click a mark to glide to it, and a ↓ button glides back to the latest output. Both hide when everything fits.
+A slash command's text output appears as one result card. Hover an answer, or a message you sent, for Copy; the text of both can also be selected with the mouse and copied with ⌘C (Ctrl+C elsewhere). When the conversation is longer than the pane, a rail on the right edge marks every message you sent, placed by the heights it has seen (rows not shown yet count as the average), and shows a scroll thumb while you scroll or point at it (the one you are reading highlighted, its first line on hover); click a mark to glide to it, and a ↓ button glides back to the latest output. Both hide when everything fits.
 
 </details>
 
