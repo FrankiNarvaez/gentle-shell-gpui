@@ -85,7 +85,9 @@ impl SettingsView {
         self._job = cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { super::services::packages::run(&cwd, verb, &source) })
+                .spawn(
+                    async move { crate::features::setup::run_gentle_shell(&cwd, &[verb, &source]) },
+                )
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.package.running = None;
