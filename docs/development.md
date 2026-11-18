@@ -240,6 +240,12 @@ A change that only touches Markdown or `packaging/icons/` does not run CI.
 
 Caches: GitHub keeps 10 GB per repository and evicts the least recently used past that. Main's CI caches (~3.7 GB for the three systems) and Cache warm's `dist` caches (~2.9 GB for the four targets) have to fit; a pull request that saved its own would evict them and the next build would start cold (15–18 min instead of 2–4). That is why only `main` saves, and why the CI run on `push` to `main` after a merge isn't redundant: it refreshes the cache every pull request starts from.
 
+### Dependency updates
+
+Dependabot (`.github/dependabot.yml`) opens weekly PRs, a week after each release (cooldown): one for all GitHub Actions, one for the crates' minor and patch bumps, and one per major bump (in `0.x`, `0.9 → 0.10` counts as major). They go through CI and Security like any PR; a bump that doesn't compile is closed with the reason.
+
+It ignores the crates that move with GPUI: `gpui-kit` and `resvg`/`fontdb`/`gtk` majors, and `gpui-pre` entirely. Upgrade them by hand, together: bump `gpui-kit`, set `gpui-pre` (dev-dependency) to the exact GPUI version it brings (`cargo tree -i gpui-pre`), then align `resvg` and `fontdb` with the ones GPUI uses and `gtk` with `wry`'s (`cargo tree -d` shows duplicates). Check the app in a temporary `HOME` before merging.
+
 ## Releases
 
 Assets produced by `release.yml` (the updater consumes these names):
