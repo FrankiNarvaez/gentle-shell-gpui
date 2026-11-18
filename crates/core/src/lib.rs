@@ -6,6 +6,7 @@ pub mod activity;
 pub mod alert_timing;
 pub mod commands;
 pub mod devices;
+pub mod diagnostics;
 pub mod docs;
 pub mod engram;
 pub mod fuzzy;

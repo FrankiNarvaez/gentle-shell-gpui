@@ -209,6 +209,7 @@ impl SessionView {
         })
         .detach();
         let weak = cx.entity().downgrade();
+        crate::features::diagnostics::watch_tab(weak.clone());
         let subscriptions = vec![
             cx.subscribe_in(
                 &composer,

@@ -10,10 +10,15 @@ use features::setup;
 use platform::instance;
 
 fn main() {
-    // `gentle-device …` (the agents' command) runs here and exits.
+    // `gentle-device …` (the agents' command) and `--diagnostics-report`
+    // run here and exit.
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("--device") {
-        std::process::exit(features::devices::cli::run(args.collect()));
+    match args.next().as_deref() {
+        Some("--device") => std::process::exit(features::devices::cli::run(args.collect())),
+        Some(features::diagnostics::REPORT_FLAG) => std::process::exit(
+            features::diagnostics::print_report(args.next().map(Into::into)),
+        ),
+        _ => {}
     }
     // An explicit folder selects (or creates) the workspace rooted there;
     // without one the last workspace is restored.
@@ -38,7 +43,15 @@ fn main() {
         device: None,
     };
     let requests = match instance::claim(&request) {
-        instance::Role::Forwarded => return,
+        instance::Role::Forwarded => {
+            if shared::diagnostics::requested_at_launch() {
+                eprintln!(
+                    "gentle-shell-gpui: already running, so this launch records nothing; \
+                     quit the app and launch it again to record diagnostics"
+                );
+            }
+            return;
+        }
         instance::Role::Primary(requests) => requests,
     };
     // `gentle-open` and `gentle-device` live in the toolchain folder the

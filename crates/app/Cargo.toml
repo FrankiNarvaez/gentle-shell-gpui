@@ -46,6 +46,10 @@ rquickjs = "0.14.0"
 resvg = { version = "0.46", default-features = false, features = ["text", "raster-images"] }
 # A theme image's size without decoding it, for the camera over it.
 imagesize = "0.15"
+# Resource diagnostics (GENTLE_SHELL_GPUI_DIAGNOSTICS): CPU and memory of
+# the app and every process under it. The version another dependency
+# already locks; only process data, read on one thread.
+sysinfo = { version = "0.31", default-features = false, features = ["system"] }
 
 # UI tests drive real views in headless windows (GPUI's `TestAppContext`):
 # the generative UI diagram's and panels' pointer and keyboard. Only GPUI's

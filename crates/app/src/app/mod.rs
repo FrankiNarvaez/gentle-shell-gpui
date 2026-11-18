@@ -39,6 +39,7 @@ pub fn run(
             app_update::init(cx);
             crate::features::hydration::init(cx);
             crate::features::genui::mode::init(cx);
+            crate::features::diagnostics::start(cx);
 
             bind_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());

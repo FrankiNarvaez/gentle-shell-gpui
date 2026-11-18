@@ -49,6 +49,7 @@ flowchart TD
 | `usage`: subscription window models and parsers (Codex, NaN), grouping, account claim; session records, statistics aggregation, ISO dates and civil days | `usage/`: reading `auth.json`, resolving keys (`$VAR`, `!command`), HTTP requests, walking and caching session files, clock and local time offset. |
 | `profiles`: routing model, `profiles.json` format, pins, agent frontmatter, notes | `profiles/`: homes and agent discovery, atomic writes, saved and materialized routing, Pi settings, pin and worktree files, Make default. |
 | `hydration`: the water reminder's settings (`hydration` in the app's `settings.json`) and when the next one is due | `hydration/`: the clock from launch, the timer, saving the setting, the drops animation. |
+| `diagnostics`: a recording's lines (header, sample per tab and process tree), grouping a process table into the trees under the app, rates, file names and retention, and the report that ranks a recording | `diagnostics/`: the sampler (`sysinfo`, the tabs, writing the file), `--diagnostics-report`; `shared/diagnostics.rs`: the frame, render and poll counters every view calls. |
 | `markdown`: where the Mermaid blocks are in a document | `files/mermaid.rs`: drawing them with merman's CLI (installed on demand by `setup`), measured with the system sans font, light or dark theme, and swapping them for images in the preview. |
 | `docs`: the skill's `docs-check` report, each document's standing and front-matter title | `docs/`: the Architecture docs screen, installing the skill (`gentle-shell install`), running `docs-check` with Node, listing `docs/`. |
 | `fuzzy`: fuzzy scoring and file ranking | `palette/`: walking files, reading branches with git. |
@@ -72,7 +73,7 @@ crates/
 │       ├── features/            # one folder per feature; its entry point is mod.rs
 │       │   ├── session/  workspace/  workspaces/  sessions/  palette/  profiles/  settings/  usage/  setup/
 │       │   ├── browser/  devices/  music/  files/  terminal/  git/  history/  providers/  memory/  onboarding/  notices/  alerts/  hydration/  docs/
-│       │   └── app_update/  updates/  welcome/  genui/
+│       │   └── app_update/  updates/  welcome/  genui/  diagnostics/
 │       ├── platform/            # OS integration: single instance, agent command shims, Dock and window icons, installed editors, power state
 │       └── shared/              # pieces used by several features, with no logic of their own:
 │                                # ui, floating, themes, backdrop (theme scenes), assets, banner, surge, pane, gentle_state
