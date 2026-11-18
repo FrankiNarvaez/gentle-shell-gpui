@@ -2405,7 +2405,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "async-channel",
- "base64 0.22.1",
+ "base64 0.23.1",
  "dirs 7.0.0",
  "dunce",
  "embed-resource",

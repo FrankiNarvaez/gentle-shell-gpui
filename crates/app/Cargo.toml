@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 async-channel.workspace = true
-base64 = "0.22"
+base64 = "0.23"
 dunce = "1"
 # Device previews: PNG decoding for iOS screenshots and raw-frame construction;
 # pasted BMP (Windows' Snipping Tool) and TIFF images are re-encoded as PNG.
