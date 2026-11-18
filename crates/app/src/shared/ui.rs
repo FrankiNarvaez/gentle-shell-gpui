@@ -5,7 +5,10 @@
 //!
 //! Views use these instead of ad-hoc colors so every screen looks alike.
 
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
+
+use gentle_core::fonts;
 
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
@@ -243,19 +246,56 @@ const DEFAULT_MONO: &str = if cfg!(target_os = "macos") {
     "DejaVu Sans Mono"
 };
 
+/// The kit's default interface and monospace families.
+static KIT_FAMILIES: OnceLock<(SharedString, SharedString)> = OnceLock::new();
+
+/// The chosen code and terminal families, set by `apply_theme`; `None` is
+/// the default. Render code has no `cx` to ask, so they live here.
+static CODE_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
+static TERMINAL_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
+
+fn chosen_or_default(slot: &RwLock<Option<SharedString>>) -> SharedString {
+    slot.read()
+        .ok()
+        .and_then(|chosen| chosen.clone())
+        .unwrap_or_else(|| SharedString::new_static(DEFAULT_MONO))
+}
+
+fn store_font(slot: &RwLock<Option<SharedString>>, family: Option<SharedString>) {
+    if let Ok(mut chosen) = slot.write() {
+        *chosen = family;
+    }
+}
+
 /// The monospace family for code, paths and numbers in the interface.
 pub fn mono() -> SharedString {
-    SharedString::new_static(DEFAULT_MONO)
+    chosen_or_default(&CODE_FONT)
+}
+
+/// The family of terminal panes: its own choice, else the code font.
+pub fn terminal_mono() -> SharedString {
+    chosen_or_default(&TERMINAL_FONT)
 }
 
 /// Map the gpui-component theme onto the active palette so stock components
 /// match. Switches gpui-component's light/dark mode with the theme first.
 /// The interface size sets the font size, which gpui-component's root makes
-/// every window's rem size: everything sized in rems follows it.
+/// every window's rem size: everything sized in rems follows it. The chosen
+/// fonts replace the kit's families; with none chosen they stay as they are.
 pub fn apply_theme(cx: &mut App) {
     use gpui_kit::component::{Theme as KitTheme, ThemeMode};
     let p = themes::palette(|p| *p);
     let scale = f32::from(cx.global::<themes::Themes>().interface_size) / 100.;
+    let fonts = cx.global::<themes::Themes>().fonts.clone();
+    store_font(&CODE_FONT, fonts.code.clone());
+    store_font(
+        &TERMINAL_FONT,
+        fonts::terminal(
+            fonts.terminal.as_ref().map(|f| f.as_ref()),
+            fonts.code.as_ref().map(|f| f.as_ref()),
+        )
+        .map(|f| SharedString::from(f.to_string())),
+    );
     let mode = if p.light {
         ThemeMode::Light
     } else {
@@ -266,6 +306,11 @@ pub fn apply_theme(cx: &mut App) {
     }
     let clear = color(0x000000, 0.);
     KitTheme::update(cx, |theme| {
+        // The kit's own families, taken before the first override.
+        let (family, mono_family) = KIT_FAMILIES
+            .get_or_init(|| (theme.font_family.clone(), theme.mono_font_family.clone()));
+        theme.font_family = fonts.interface.clone().unwrap_or_else(|| family.clone());
+        theme.mono_font_family = fonts.code.clone().unwrap_or_else(|| mono_family.clone());
         let c = &mut theme.colors;
         c.background = p.window_bg;
         c.foreground = p.fg;

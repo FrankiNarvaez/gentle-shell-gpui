@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 
-use gentle_core::interface_size;
-use gpui_kit::{App, Global};
+use gentle_core::{fonts, interface_size};
+use gpui_kit::{App, Global, SharedString};
 use serde_json::Value;
 
 use crate::shared::backdrop::{self, Backdrop};
@@ -709,6 +709,61 @@ pub fn write_interface_size(path: &Path, percent: u16) -> std::io::Result<()> {
     )
 }
 
+/// A font the user can choose; each has its own `settings.json` key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontSlot {
+    /// Text of the interface.
+    Interface,
+    /// Monospace text of the interface: cards, editor, diffs.
+    Code,
+    /// Terminal panes; follows the code font when unset.
+    Terminal,
+}
+
+impl FontSlot {
+    pub const ALL: [FontSlot; 3] = [FontSlot::Interface, FontSlot::Code, FontSlot::Terminal];
+
+    /// The key in the app's settings file.
+    pub fn key(self) -> &'static str {
+        match self {
+            FontSlot::Interface => "interfaceFont",
+            FontSlot::Code => "codeFont",
+            FontSlot::Terminal => "terminalFont",
+        }
+    }
+}
+
+/// The persisted family for `slot`, trimmed; absent, blank or not a string
+/// is the default.
+pub fn read_font(path: &Path, slot: FontSlot) -> Option<String> {
+    match read_key(path, slot.key())? {
+        Value::String(name) => fonts::normalize(&name),
+        _ => None,
+    }
+}
+
+/// Set the family of `slot` in the app's settings file, keeping every other
+/// key. `None` or a blank name is the default: the key is removed.
+#[allow(dead_code)] // The Settings fonts picker is the caller.
+pub fn write_font(path: &Path, slot: FontSlot, family: Option<&str>) -> std::io::Result<()> {
+    match family.and_then(fonts::normalize) {
+        Some(name) => write_key(path, slot.key(), Value::String(name)),
+        None => remove_key(path, slot.key()),
+    }
+}
+
+/// Drop `key` from the app's settings file, keeping every other key.
+fn remove_key(path: &Path, key: &str) -> std::io::Result<()> {
+    let Some(mut value) = read_settings(path).filter(Value::is_object) else {
+        return Ok(());
+    };
+    if value.as_object_mut().and_then(|o| o.remove(key)).is_none() {
+        return Ok(());
+    }
+    let text = serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?;
+    std::fs::write(path, text + "\n")
+}
+
 // ── Active theme ───────────────────────────────────────────────────────────
 
 /// The terminal's view of the active theme.
@@ -799,6 +854,43 @@ pub struct Themes {
     pub transparency: f32,
     /// The interface size in percent (`gentle_core::interface_size`).
     pub interface_size: u16,
+    /// The fonts in use: only families that are installed.
+    pub fonts: Fonts,
+}
+
+/// The effective font choices; `None` is the default of each surface.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Fonts {
+    pub interface: Option<SharedString>,
+    pub code: Option<SharedString>,
+    pub terminal: Option<SharedString>,
+}
+
+impl Fonts {
+    #[allow(dead_code)] // The Settings fonts picker is the caller.
+    pub fn get(&self, slot: FontSlot) -> Option<&SharedString> {
+        match slot {
+            FontSlot::Interface => self.interface.as_ref(),
+            FontSlot::Code => self.code.as_ref(),
+            FontSlot::Terminal => self.terminal.as_ref(),
+        }
+    }
+
+    fn slot_mut(&mut self, slot: FontSlot) -> &mut Option<SharedString> {
+        match slot {
+            FontSlot::Interface => &mut self.interface,
+            FontSlot::Code => &mut self.code,
+            FontSlot::Terminal => &mut self.terminal,
+        }
+    }
+}
+
+/// The installed spelling of `family`, or `None` (the default) when it is
+/// blank or not installed. Lists the system's fonts only when asked for one.
+fn resolve_font(family: Option<&str>, cx: &App) -> Option<SharedString> {
+    let wanted = fonts::normalize(family?)?;
+    let names = cx.text_system().all_font_names();
+    fonts::installed(&wanted, &names).map(|name| SharedString::from(name.to_string()))
 }
 
 impl Global for Themes {}
@@ -824,6 +916,11 @@ pub fn init(cx: &mut App) {
         .as_deref()
         .and_then(read_interface_size)
         .unwrap_or(interface_size::DEFAULT);
+    let mut chosen = Fonts::default();
+    for slot in FontSlot::ALL {
+        let stored = store.as_deref().and_then(|p| read_font(p, slot));
+        *chosen.slot_mut(slot) = resolve_font(stored.as_deref(), cx);
+    }
     let pi = read_pi_setting(&agent);
     let catalog = load_catalog(Vec::new(), read_user_themes(&agent));
     let active = pick_default(&catalog, persisted.as_deref(), pi.as_deref());
@@ -833,6 +930,7 @@ pub fn init(cx: &mut App) {
         active,
         transparency,
         interface_size,
+        fonts: chosen,
     });
     ui::apply_theme(cx);
     backdrop::init(cx);
@@ -925,6 +1023,7 @@ fn replace_user_themes(user: Vec<Theme>, cx: &mut App) {
     let themes = cx.global::<Themes>();
     let before = themes.active_theme().clone();
     let (transparency, interface_size) = (themes.transparency, themes.interface_size);
+    let chosen = themes.fonts.clone();
     let gentle: Vec<Theme> = themes
         .catalog
         .iter()
@@ -945,6 +1044,7 @@ fn replace_user_themes(user: Vec<Theme>, cx: &mut App) {
         active,
         transparency,
         interface_size,
+        fonts: chosen,
     });
     if changed {
         ui::apply_theme(cx);
@@ -1007,6 +1107,7 @@ fn merge_gentle(gentle: Vec<Theme>, persisted: Option<String>, pi: Option<String
     let themes = cx.global::<Themes>();
     let before = themes.active_theme().clone();
     let (transparency, interface_size) = (themes.transparency, themes.interface_size);
+    let chosen = themes.fonts.clone();
     let explicit =
         themes.active != pick_default(&themes.catalog, persisted.as_deref(), pi.as_deref());
     let user: Vec<Theme> = themes
@@ -1035,6 +1136,7 @@ fn merge_gentle(gentle: Vec<Theme>, persisted: Option<String>, pi: Option<String
         active,
         transparency,
         interface_size,
+        fonts: chosen,
     });
     if changed {
         ui::apply_theme(cx);
@@ -1097,6 +1199,27 @@ pub fn set_interface_size(percent: u16, cx: &mut App) {
         cx.background_executor()
             .spawn(async move {
                 let _ = write_interface_size(&path, percent);
+            })
+            .detach();
+    }
+}
+
+/// Use `family` for `slot` in every window (`None` is the default font)
+/// and persist it. A family that isn't installed is the default.
+#[allow(dead_code)] // The Settings fonts picker is the caller.
+pub fn set_font(slot: FontSlot, family: Option<&str>, cx: &mut App) {
+    let family = resolve_font(family, cx);
+    let themes = cx.global_mut::<Themes>();
+    if themes.fonts.get(slot) == family.as_ref() {
+        return;
+    }
+    *themes.fonts.slot_mut(slot) = family.clone();
+    ui::apply_theme(cx);
+    cx.refresh_windows();
+    if let Some(path) = store_path() {
+        cx.background_executor()
+            .spawn(async move {
+                let _ = write_font(&path, slot, family.as_deref());
             })
             .detach();
     }
@@ -1382,6 +1505,46 @@ mod tests {
         assert_eq!(value["interfaceScale"], 1.25);
         std::fs::write(&path, r#"{"interfaceScale": "big"}"#).unwrap();
         assert_eq!(read_interface_size(&path), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn fonts_persist_per_slot_and_default_removes_the_key() {
+        let dir = scratch("fonts");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"keep": 1, "interfaceScale": 1.25}"#).unwrap();
+        for slot in FontSlot::ALL {
+            assert_eq!(read_font(&path, slot), None);
+        }
+        write_font(
+            &path,
+            FontSlot::Terminal,
+            Some("  JetBrainsMono Nerd Font "),
+        )
+        .unwrap();
+        write_font(&path, FontSlot::Code, Some("Fira Code")).unwrap();
+        assert_eq!(
+            read_font(&path, FontSlot::Terminal).as_deref(),
+            Some("JetBrainsMono Nerd Font")
+        );
+        assert_eq!(
+            read_font(&path, FontSlot::Code).as_deref(),
+            Some("Fira Code")
+        );
+        assert_eq!(read_font(&path, FontSlot::Interface), None);
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["keep"], 1);
+        assert_eq!(value["interfaceScale"], 1.25);
+        assert_eq!(value["terminalFont"], "JetBrainsMono Nerd Font");
+        write_font(&path, FontSlot::Code, None).unwrap();
+        write_font(&path, FontSlot::Terminal, Some("   ")).unwrap();
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(value.get("codeFont").is_none());
+        assert!(value.get("terminalFont").is_none());
+        assert_eq!(value["keep"], 1);
+        std::fs::write(&path, r#"{"interfaceFont": 7, "codeFont": "  "}"#).unwrap();
+        assert_eq!(read_font(&path, FontSlot::Interface), None);
+        assert_eq!(read_font(&path, FontSlot::Code), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
