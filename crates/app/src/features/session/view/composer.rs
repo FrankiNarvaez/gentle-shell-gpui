@@ -402,7 +402,7 @@ impl SessionView {
             h_flex()
                 .id("git-chip")
                 .min_w_0()
-                .flex_shrink(1.)
+                .flex_shrink(50.)
                 .overflow_hidden()
                 .gap_1()
                 .text_size(rems(12. / 16.))
@@ -457,10 +457,13 @@ impl SessionView {
                     .disabled(!ready)
                     .on_click(cx.listener(|this, _, window, cx| this.pick_images(window, cx))),
             )
+            // The model keeps its label while the folder and branch can still
+            // give way; in a narrow pane (folder hidden) it may shrink, and
+            // its trigger clamps the label there.
             .child(
                 div()
                     .min_w_0()
-                    .flex_shrink(1.)
+                    .flex_shrink(if narrow { 1. } else { 0. })
                     .overflow_hidden()
                     .child(self.render_model_picker(narrow, cx)),
             )
@@ -478,8 +481,10 @@ impl SessionView {
                 this.child(
                     h_flex()
                         .id("cwd")
+                        // Folder and branch give way long before the model
+                        // picker (which shrinks too, but last).
                         .min_w_0()
-                        .flex_shrink(1.)
+                        .flex_shrink(50.)
                         .gap_1()
                         .px_1p5()
                         .py_0p5()
@@ -495,15 +500,21 @@ impl SessionView {
                         .child(
                             div()
                                 .min_w_0()
+                                .flex_shrink(100.)
                                 .overflow_hidden()
                                 .text_ellipsis_start()
                                 .font_family(ui::MONO)
                                 .text_color(ui::faint())
                                 .child(prefix),
                         )
+                        // After the prefix, the leaf truncates from its start
+                        // too, so its end stays readable and the pickers
+                        // before it keep their labels.
                         .child(
                             div()
-                                .flex_shrink_0()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis_start()
                                 .font_family(ui::MONO)
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(ui::fg())
