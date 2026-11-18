@@ -618,14 +618,24 @@ fn glyph(ch: char, size: f32, bold: bool, window: &mut Window) -> Option<Glyph> 
     thread_local! {
         static CACHE: std::cell::RefCell<HashMap<(char, u32, bool), Option<Glyph>>> =
             Default::default();
+        /// The family the cached glyphs were shaped with; a new code font
+        /// empties the cache.
+        static FAMILY: std::cell::RefCell<SharedString> = Default::default();
     }
+    let family = ui::mono();
+    FAMILY.with(|current| {
+        if *current.borrow() != family {
+            CACHE.with(|c| c.borrow_mut().clear());
+            *current.borrow_mut() = family.clone();
+        }
+    });
     let key = (ch, (size * 4.).round() as u32, bold);
     if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).copied()) {
         return hit;
     }
     let mut text = [0u8; 4];
     let text = ch.encode_utf8(&mut text);
-    let mut font = font(ui::mono());
+    let mut font = font(family);
     if bold {
         font.weight = FontWeight::BOLD;
     }
