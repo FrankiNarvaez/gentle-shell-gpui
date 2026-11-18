@@ -401,7 +401,9 @@ impl SessionView {
         let git = self.git.snapshot.as_ref().map(|git| {
             h_flex()
                 .id("git-chip")
-                .flex_shrink_0()
+                .min_w_0()
+                .flex_shrink(1.)
+                .overflow_hidden()
                 .gap_1()
                 .text_size(rems(12. / 16.))
                 .child(
@@ -411,6 +413,8 @@ impl SessionView {
                 )
                 .child(
                     div()
+                        .min_w_0()
+                        .truncate()
                         .font_family(ui::MONO)
                         .text_color(ui::champagne())
                         .child(git.branch.clone().unwrap_or_else(|| "detached".into())),
@@ -418,6 +422,7 @@ impl SessionView {
                 .when(!git.files.is_empty(), |this| {
                     this.child(
                         div()
+                            .flex_shrink_0()
                             .font_family(ui::MONO)
                             .text_color(ui::muted())
                             .child(format!("±{}", git.files.len())),
@@ -431,6 +436,12 @@ impl SessionView {
 
         let width = self.pane_width.get();
         let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
+        // The activity line folds every extension status (and the legacy
+        // limit chips) into one chip below `TINY`.
+        let collapse = width < f32::from(rems(TINY / 16.).to_pixels(rem_size));
+        // When the legacy limit chips are on the activity line, the plan
+        // chip has nothing to add: one number, never the same percent twice.
+        let legacy_chips_shown = !collapse && !self.extension.rate_limits.is_empty();
         let bottom = h_flex()
             .w_full()
             .min_w_0()
@@ -456,6 +467,12 @@ impl SessionView {
             .when(
                 self.models.current.as_ref().is_some_and(|m| m.reasoning),
                 |this| this.child(self.render_effort_picker(narrow, cx)),
+            )
+            // The plan-limits chip keeps its width: when the row is tight,
+            // the folder and the branch are the ones that truncate.
+            .when_some(
+                self.render_plan_limits_chip(legacy_chips_shown, cx),
+                |this, chip| this.child(div().flex_shrink_0().child(chip)),
             )
             .when(!narrow, |this| {
                 this.child(

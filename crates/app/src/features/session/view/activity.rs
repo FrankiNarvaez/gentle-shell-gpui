@@ -3,7 +3,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::popover::Popover;
+use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -220,12 +220,13 @@ impl SessionView {
             })
             .children(self.extension.rate_limits.iter().filter(|_| !collapse).map(
                 |(window, limit)| {
-                    let color = if limit.percent >= 95 {
-                        ui::danger()
-                    } else if limit.percent >= 80 {
-                        ui::warning()
-                    } else {
-                        ui::muted()
+                    use gentle_core::usage::subscription::LimitTone;
+                    let color = match gentle_core::usage::subscription::limit_tone(f64::from(
+                        limit.percent,
+                    )) {
+                        LimitTone::Danger => ui::danger(),
+                        LimitTone::Warning => ui::warning(),
+                        LimitTone::Calm => ui::muted(),
                     };
                     let tip = limit.text.clone();
                     div()
@@ -548,9 +549,16 @@ impl SessionView {
     }
 }
 
+/// An extra control at a chip card header's right side (where the count
+/// otherwise sits): it is rebuilt with the card, so it can carry a listener
+/// on the popover's own state — `cx.listener` + `state.dismiss` — to act and
+/// close in one click.
+pub(super) type ChipHeaderAction =
+    Box<dyn Fn(&mut Window, &mut Context<PopoverState>) -> AnyElement>;
+
 /// The slots of a chip card's header, shared by every chip popover: the
-/// trigger's id, icon and color, its label, the card's title and the count
-/// in `MONO`.
+/// trigger's id, icon and color, its label, the card's title, and either a
+/// count in `MONO` or a header action where the count would sit.
 pub(super) struct ChipPopoverOptions {
     id: SharedString,
     icon: IconName,
@@ -558,6 +566,7 @@ pub(super) struct ChipPopoverOptions {
     label: SharedString,
     title: SharedString,
     count: SharedString,
+    action: Option<ChipHeaderAction>,
 }
 
 impl ChipPopoverOptions {
@@ -574,6 +583,7 @@ impl ChipPopoverOptions {
             label: label.into(),
             title: "".into(),
             count: "".into(),
+            action: None,
         }
     }
 
@@ -586,6 +596,12 @@ impl ChipPopoverOptions {
     /// A right-side count in `MONO` ("2/3", "3.4k of 200k").
     pub(super) fn count(mut self, count: impl Into<SharedString>) -> Self {
         self.count = count.into();
+        self
+    }
+
+    /// A right-side control instead of the count (see [`ChipHeaderAction`]).
+    pub(super) fn action(mut self, action: ChipHeaderAction) -> Self {
+        self.action = Some(action);
         self
     }
 }
@@ -604,6 +620,7 @@ pub(super) fn chip_popover(
         label,
         title,
         count,
+        action,
     } = options;
     let trigger = Button::new(SharedString::from(format!("{id}-chip")))
         .ghost()
@@ -616,7 +633,7 @@ pub(super) fn chip_popover(
         .trigger(trigger)
         .w(rems(360. / 16.))
         .appearance(false)
-        .content(move |_, _, cx| {
+        .content(move |_, window, cx| {
             ui::island(cx)
                 .w_full()
                 .child(ui::popover_in(
@@ -644,7 +661,8 @@ pub(super) fn chip_popover(
                                             .text_color(ui::muted())
                                             .child(count.clone()),
                                     )
-                                }),
+                                })
+                                .when_some(action.as_ref(), |d, build| d.child(build(window, cx))),
                         )
                         .child(
                             v_flex()
