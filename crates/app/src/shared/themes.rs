@@ -585,9 +585,9 @@ pub fn load_catalog(gentle: Vec<Theme>, user: Vec<Theme>) -> Vec<Theme> {
     catalog
 }
 
-/// The app's own themes folder: `<data dir>/gentle-shell-gpui/themes/`.
+/// The app's own themes folder: `<app data dir>/themes/` (`shared::data_dir`).
 pub fn app_themes_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|dir| dir.join("gentle-shell-gpui").join("themes"))
+    super::data_dir::app().map(|dir| dir.join("themes"))
 }
 
 /// The user's themes: Pi's folder, then the app's.
@@ -632,9 +632,9 @@ pub fn pick_default(catalog: &[Theme], persisted: Option<&str>, pi: Option<&str>
         .unwrap_or(0)
 }
 
-/// `dirs::data_dir()/gentle-shell-gpui/settings.json`.
+/// `<app data dir>/settings.json` (`shared::data_dir`).
 pub fn store_path() -> Option<PathBuf> {
-    dirs::data_dir().map(|dir| dir.join("gentle-shell-gpui").join("settings.json"))
+    super::data_dir::app().map(|dir| dir.join("settings.json"))
 }
 
 fn read_settings(path: &Path) -> Option<Value> {
