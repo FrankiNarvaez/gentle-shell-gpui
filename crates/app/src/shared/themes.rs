@@ -1228,7 +1228,7 @@ mod tests {
         assert_eq!(light.fg, 0x2b2a27);
         assert_eq!(light.muted, 0x6b675f);
         assert_eq!(light.faint, 0x9a958b);
-        assert_eq!(light.accent, 0xb85c3c);
+        assert_eq!(light.accent, 0xa95334);
         assert_eq!(light.accent_active, 0x9c4a2e);
         assert_eq!(light.raised, 0xece7dc);
         assert_eq!(light.border, 0xdcd5c7);

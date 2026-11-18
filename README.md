@@ -581,7 +581,7 @@ It installs what is missing (the skill into Gentle Shell, the diagram renderer i
 
 ### Configuration — Your Gentle Shell setup, in one place
 
-Your existing Gentle Shell setup: home, models, profiles, sign-ins, permission mode, persona, MCP, packages (install and remove), Claude bridge plan, and the theme picker: Gentle Shell's themes, your Pi themes (`<agent dir>/themes/`), popular terminal schemes, the solid **Studio** and **Studio Light** (a sober, high-contrast pair whose panes stay opaque at any transparency, for a professional, glass-free look), the warm solid **Clay** and **Clay Light** (a calm, cream-and-terracotta pair with an amber accent, also opaque at any transparency) and **OLED Black** (true black that stays solid at any transparency, so an OLED screen keeps those pixels off; soft pearl text and the Gentle rose), applied app-wide and to terminals, remembered across launches.
+Your existing Gentle Shell setup: home, models, profiles, sign-ins, permission mode, persona, MCP, packages (install and remove), Claude bridge plan, and the theme picker: Gentle Shell's themes, your Pi themes (`<agent dir>/themes/`), popular terminal schemes, the solid **Studio** and **Studio Light** (a sober, high-contrast pair whose panes stay opaque at any transparency, for a professional, glass-free look), the warm solid **Clay** and **Clay Light** (a calm, cream-and-graphite pair with a terracotta accent, also opaque at any transparency) and **OLED Black** (true black that stays solid at any transparency, so an OLED screen keeps those pixels off; soft pearl text and the Gentle rose), applied app-wide and to terminals, remembered across launches.
 
 <details>
 <summary><kbd>More</kbd> <strong>Themes, transparency, interface size and more</strong></summary>
