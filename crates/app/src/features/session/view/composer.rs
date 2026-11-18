@@ -381,8 +381,8 @@ impl SessionView {
         };
 
         let repository = self.git.repository.clone();
-        // The branch shrinks and truncates before it would push the row's
-        // right side over the pickers; only its leaf text gives way.
+        // In the row below the box the branch shrinks and truncates —
+        // only its leaf text gives way — before anything else there would.
         let git = self.git.snapshot.as_ref().map(|git| {
             h_flex()
                 .id("git-chip")
@@ -437,22 +437,33 @@ impl SessionView {
                     .disabled(!ready)
                     .on_click(cx.listener(|this, _, window, cx| this.pick_images(window, cx))),
             )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .overflow_hidden()
+                    .child(self.render_model_picker(narrow, cx)),
+            )
+            .when(
+                self.models.current.as_ref().is_some_and(|m| m.reasoning),
+                |this| this.child(self.render_effort_picker(narrow, cx)),
+            )
             .child(div().flex_1().min_w_0())
             .child(div().flex_shrink_0().child(action_button));
 
-        // Below the box: the folder, branch and cost on the left; the model
-        // and effort pickers as quiet text buttons on the right. The left
-        // group shrinks and truncates first; the pickers keep their width
-        // (a shrinking slot let the model's label spill left over the
-        // folder chip), so a long folder never draws over them.
+        // Below the box: the folder, branch and cost in a quiet row of
+        // their own. The group shrinks and truncates before anything else;
+        // the folder's path truncates from the start (`text_ellipsis_start`)
+        // so the leaf name stays readable, and the branch keeps its
+        // ellipsis.
         let below = h_flex()
             .w_full()
             .min_w_0()
             .gap_2()
             .items_center()
             .when(!narrow, |this| {
-                // The left group gives way and truncates (its texts with it)
-                // before anything could push into the pickers.
+                // The group gives way and truncates (its texts with it)
+                // before anything else in the row would.
                 this.child(
                     h_flex()
                         .min_w_0()
@@ -514,24 +525,7 @@ impl SessionView {
                         }),
                 )
             })
-            .child(div().flex_1().min_w_0())
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .justify_end()
-                    .child(self.render_model_picker(narrow, cx)),
-            )
-            .when(
-                self.models.current.as_ref().is_some_and(|m| m.reasoning),
-                |this| {
-                    this.child(
-                        div()
-                            .flex_shrink_0()
-                            .child(self.render_effort_picker(narrow, cx)),
-                    )
-                },
-            );
+            .child(div().flex_1().min_w_0());
 
         let content = v_flex()
             .relative()

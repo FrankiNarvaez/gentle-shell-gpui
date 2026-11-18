@@ -136,7 +136,7 @@ impl SessionView {
         let trigger = Button::new("model")
             .ghost()
             .xsmall()
-            .text_color(ui::muted())
+            .text_color(ui::info())
             .tooltip("Choose model")
             .child(if busy {
                 ui::spinner(Size::XSmall, ui::info()).into_any_element()
@@ -167,7 +167,7 @@ impl SessionView {
         let scroll = self.live.model_scroll.clone();
 
         Popover::new("model-picker")
-            .anchor(Anchor::BottomRight)
+            .anchor(Anchor::BottomLeft)
             .trigger(trigger)
             .open(self.live.model_picker)
             .track_focus(&self.model_search.focus_handle(cx))

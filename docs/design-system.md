@@ -317,7 +317,7 @@ backdrop.occlude().child(ui::pop_in(
 
 Every new chip uses `chip_popover(id, icon, color, label, title, count, body)`: a `ghost().xsmall()` `Button` with `text_color(color)` that opens a `Popover` anchored `BottomRight`, 360 px wide, with `appearance(false)`, content in `ui::island(cx)` + `ui::popover_in`. The card shows icon and title (`text_sm MEDIUM`), the count in `MONO` and a scrollable list; `body` builds the rows only on open. Chip color: `accent` if something is running, `muted` at rest, `faint` for passive information (token usage). In panels narrower than `TINY`, extension states collapse into a single chip.
 
-The composer keeps only the attach button and the send/stop pill inside its box. Below the box, a quiet row carries the folder path, the branch and the session's cost on the left, and the model and effort pickers as quiet text buttons on the right; their menus open upward from that row (`Anchor::BottomRight`).
+The composer's bottom bar inside the box reads `📎 · model · effort · … · send`: the model and effort pickers sit first, right after the attach button, because they are per-message decisions made just before sending; their menus open upward from the bar (`Anchor::BottomLeft`). Below the box, a quiet row carries the folder path, the branch ±n and the session's cost on the left; the group shrinks and truncates before anything else — the folder's path truncates from the start (`text_ellipsis_start()`, so the leaf name stays readable) and the branch keeps its ellipsis.
 
 ### Conversation cards
 
