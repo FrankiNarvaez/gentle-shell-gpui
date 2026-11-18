@@ -24,7 +24,7 @@ use crate::shared::ui;
 
 /// An older Shell keeps its windows out of Desktop RPC: the popover says so
 /// instead of inventing rows.
-const LEGACY_LINE: &str = "Plan limits need a Gentle Shell newer than 4.8.0";
+const LEGACY_LINE: &str = "Plan limits need Gentle Shell 4.8.0 or newer";
 /// How often a hidden plan-limits chip asks for the usage again.
 const PLAN_SEED_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
 /// A Shell that offers the methods but has not reported windows yet.
@@ -616,7 +616,7 @@ mod tests {
         assert_eq!(chip.status_line, None);
         assert_eq!(
             chip.fallback_line,
-            Some("Plan limits need a Gentle Shell newer than 4.8.0")
+            Some("Plan limits need Gentle Shell 4.8.0 or newer")
         );
 
         // A Shell that offers the methods but has not reported windows yet.
