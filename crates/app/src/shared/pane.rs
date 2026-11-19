@@ -35,6 +35,11 @@ pub enum PaneKind {
     File,
     /// A repository's Commit History ([`crate::features::history::HistoryView`]).
     History,
+    /// A whiteboard ([`crate::features::canvas::CanvasView`]); the pane's
+    /// path is its file.
+    Canvas,
+    /// Gentle Tower ([`crate::features::tower::TowerView`]).
+    Tower,
 }
 
 impl PaneKind {
@@ -44,6 +49,8 @@ impl PaneKind {
             PaneKind::Terminal => IconName::SquareTerminal,
             PaneKind::File => IconName::FileText,
             PaneKind::History => IconName::GitGraph,
+            PaneKind::Canvas => IconName::PenTool,
+            PaneKind::Tower => IconName::Building2,
         }
     }
 }
@@ -63,7 +70,7 @@ pub struct PaneItem {
 /// Reads a pane's "has unsaved edits" state.
 pub type UnsavedProbe = Rc<dyn Fn(&App) -> bool>;
 
-/// Builds a pane for a folder (terminal, history) or a file (file viewer).
+/// Builds a pane for a folder (terminal, history) or a file (file viewer, canvas).
 pub type PaneFactory = Rc<dyn Fn(PathBuf, &mut Window, &mut App) -> PaneItem>;
 
 /// Pane kinds other modules provide; a `None` factory makes the actions that
@@ -76,6 +83,10 @@ pub struct PaneFactories {
     pub diff: Option<PaneFactory>,
     /// Commit History of the repository a folder is in.
     pub history: Option<PaneFactory>,
+    /// A canvas saved in a file.
+    pub canvas: Option<PaneFactory>,
+    /// Gentle Tower for a folder.
+    pub tower: Option<PaneFactory>,
 }
 
 impl Global for PaneFactories {}

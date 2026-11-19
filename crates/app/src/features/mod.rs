@@ -3,6 +3,7 @@
 pub mod alerts;
 pub mod app_update;
 pub mod browser;
+pub mod canvas;
 pub mod devices;
 pub mod diagnostics;
 pub mod docs;
@@ -23,6 +24,7 @@ pub mod sessions;
 pub mod settings;
 pub mod setup;
 pub mod terminal;
+pub mod tower;
 pub mod updates;
 pub mod usage;
 pub mod welcome;

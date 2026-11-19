@@ -112,6 +112,9 @@ pub struct SessionView {
     /// The Agent UI mode this tab's backend was last given (at launch or
     /// by command); a different choice in Configuration gets sent to it.
     genui_mode: gentle_core::genui::mode::Mode,
+    /// The canvas this agent was opened beside to read and draw on (the
+    /// canvas extension's tools act on it).
+    canvas: Option<PathBuf>,
     /// This conversation is on screen with nothing over the window (the
     /// workspace says so): its web views may show.
     web_shown: bool,
@@ -290,6 +293,7 @@ impl SessionView {
             expanded: HashSet::new(),
             genui: Default::default(),
             genui_mode: crate::features::genui::mode::mode(cx),
+            canvas: None,
             web_shown: false,
             composer,
             composer_focused: false,
@@ -351,6 +355,11 @@ impl SessionView {
 
     pub fn cwd(&self) -> &PathBuf {
         &self.cwd
+    }
+
+    /// Pairs this agent with a canvas; set before its backend starts.
+    pub fn set_canvas(&mut self, path: PathBuf) {
+        self.canvas = Some(path);
     }
 
     pub fn is_running(&self) -> bool {

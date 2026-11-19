@@ -14,6 +14,7 @@ mod gentle;
 pub mod maestro;
 pub mod music;
 mod probe;
+pub mod tower;
 
 use std::path::{Path, PathBuf};
 

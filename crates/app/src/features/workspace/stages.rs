@@ -229,15 +229,28 @@ impl Workspace {
     /// Tell agent panes whether their web views (an expanded HTML surface)
     /// may show: only those in the shown tab, with nothing over them. Only
     /// changes reach the panes, so hidden tabs aren't touched every frame.
+    /// Tower panes are told apart: a hidden tab drops their page, while a
+    /// screen or popover over them only conceals it, so it keeps its state.
     pub(super) fn sync_web_views(&mut self, covered: bool, cx: &mut App) {
-        let shown: std::collections::HashSet<PaneId> = match self.tab() {
-            Some(tab) if !covered => tab
-                .tree
-                .leaves()
+        let in_tab: std::collections::HashSet<PaneId> = self
+            .tab()
+            .map(|tab| tab.tree.leaves().into_iter().collect())
+            .unwrap_or_default();
+        for (id, pane) in &self.panes {
+            if pane.item.kind == PaneKind::Tower
+                && let Ok(tower) = pane.item.view.clone().downcast::<TowerView>()
+            {
+                let shown = in_tab.contains(id);
+                tower.update(cx, |tower, cx| tower.set_shown(shown, covered, cx));
+            }
+        }
+        let shown: std::collections::HashSet<PaneId> = if covered {
+            Default::default()
+        } else {
+            in_tab
                 .into_iter()
                 .filter(|id| self.panes.get(id).is_some_and(|p| p.session.is_some()))
-                .collect(),
-            _ => Default::default(),
+                .collect()
         };
         if shown == self.web_shown {
             return;
@@ -324,6 +337,9 @@ impl Workspace {
                         .trigger(TrayTrigger { count, open: false })
                         .w(rems(380. / 16.))
                         .p_0()
+                        .on_open_change(|open, window, cx| {
+                            crate::features::browser::popover_open("instances", *open, window, cx)
+                        })
                         .content(move |_, _, cx| {
                             ui::popover_in(
                                 ElementId::Name("instances-in".into()),

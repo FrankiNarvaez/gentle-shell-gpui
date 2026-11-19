@@ -94,6 +94,7 @@ impl Workspace {
             PaletteAction::Welcome => self.open_welcome(None, window, cx),
             PaletteAction::NewTab => self.on_new_tab(&NewTab, window, cx),
             PaletteAction::NewTerminalTab => self.on_new_terminal_tab(&NewTerminalTab, window, cx),
+            PaletteAction::NewCanvasTab => self.on_new_canvas_tab(&NewCanvasTab, window, cx),
             PaletteAction::TilePane => self.tile(None, window, cx),
             PaletteAction::SplitRight => self.split(SplitAxis::Horizontal, None, window, cx),
             PaletteAction::SplitDown => self.split(SplitAxis::Vertical, None, window, cx),
@@ -212,6 +213,27 @@ impl Workspace {
                     self.toggle_sidebar(cx);
                 }
                 tree.update(cx, |tree, cx| tree.show_changes(window, cx));
+            }
+            Screen::Tower => {
+                self.close_overlay(window, cx);
+                self.open_tower(window, cx);
+            }
+        }
+    }
+
+    /// Gentle Tower in a tab of its own, so it spans the whole window: the
+    /// one already open, wherever it is, else a new tab.
+    pub(super) fn open_tower(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self
+            .panes
+            .iter()
+            .find(|(_, pane)| pane.item.kind == PaneKind::Tower)
+            .map(|(id, _)| *id);
+        match open {
+            Some(id) => self.reveal_pane(id, window, cx),
+            None => {
+                let cwd = self.active_cwd(cx);
+                self.open_tab(PaneKind::Tower, cwd, None, None, window, cx);
             }
         }
     }
