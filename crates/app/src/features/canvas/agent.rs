@@ -179,6 +179,11 @@ impl CanvasView {
         self.cwd = cwd;
     }
 
+    /// The floating agent, once it has been opened.
+    pub fn agent_session(&self) -> Option<Entity<SessionView>> {
+        self.agent.as_ref().map(|agent| agent.session.clone())
+    }
+
     /// The conversation to resume when the agent opens (saved with the pane).
     pub fn resume_agent(&mut self, session: PathBuf) {
         self.agent_resume = Some(session);

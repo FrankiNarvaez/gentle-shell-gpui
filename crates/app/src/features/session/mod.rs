@@ -54,6 +54,9 @@ pub enum SessionEvent {
     /// [`SessionView::cwd`] or [`SessionView::model_choices`]. Streaming
     /// output does not emit it, so the window need not redraw per token.
     ChromeChanged,
+    /// The folder button moved this tab to another folder (its backend
+    /// restarts there): the window's file sidebar follows it.
+    CwdChanged(PathBuf),
     /// A Gentle Shell command whose UI is terminal-only was run (typed or
     /// from the palette): open the app's own screen for it instead.
     OpenScreen(gentle_core::commands::Screen),
@@ -373,6 +376,12 @@ impl SessionView {
 
     pub fn is_running(&self) -> bool {
         self.transcript.running
+    }
+
+    /// Something was said here, a turn is running or a saved conversation
+    /// is about to be resumed: moving this agent to another folder loses it.
+    pub fn has_conversation(&self) -> bool {
+        self.transcript.running || !self.hero_shown() || self.backend.pending_session.is_some()
     }
 
     /// A dialog (a question, a confirmation) waits for an answer.
