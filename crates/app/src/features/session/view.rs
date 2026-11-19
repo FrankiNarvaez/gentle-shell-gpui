@@ -112,9 +112,16 @@ impl SessionView {
         self.transcript.running || self.live.pending.is_some()
     }
 
-    /// Something the Stop button or ⌘. can stop: a turn or a `!command`.
+    /// Something the Stop button, ⌘. or Esc can stop: a turn or a `!command`.
     pub(super) fn stoppable(&self) -> bool {
         self.busy() || self.transcript.shells_running()
+    }
+
+    /// When the running turn, or the prompt not picked up yet, began.
+    pub(super) fn turn_since(&self) -> Option<Instant> {
+        self.live
+            .turn
+            .or_else(|| self.live.pending.as_ref().map(|p| p.since))
     }
 
     /// The empty state (hero and banner) shows.
