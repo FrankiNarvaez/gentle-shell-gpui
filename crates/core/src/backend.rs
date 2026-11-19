@@ -129,6 +129,50 @@ impl Backend {
         }
     }
 
+    /// The argv of an interactive terminal in `cwd`, a path as the backend
+    /// sees it: the user's login shell there. `wsl.exe` without `--exec`
+    /// starts the distro's own. `None` for [`Backend::Local`].
+    pub fn terminal(&self, cwd: &str) -> Option<Vec<String>> {
+        match self {
+            Self::Local => None,
+            Self::Wsl { distro } => Some(
+                ["wsl.exe", "-d", distro, "--cd", cwd]
+                    .map(str::to_string)
+                    .to_vec(),
+            ),
+            Self::Command { prefix } => {
+                let script = format!(r#"cd "$1" 2>/dev/null; {LOGIN_SHELL}; exec "$s" -l"#);
+                let mut argv = prefix.clone();
+                argv.extend(["sh", "-c", &script, "sh", cwd].map(str::to_string));
+                Some(argv)
+            }
+        }
+    }
+
+    /// How this computer sees `path`, a path the backend printed (`git
+    /// rev-parse --show-toplevel`): the reverse of [`Self::path`]. In WSL,
+    /// `/mnt/c/a` is `C:\a` and `/home/a` is `\\wsl.localhost\<distro>\home\a`;
+    /// elsewhere it is unchanged.
+    pub fn host_path(&self, path: &str) -> String {
+        let Self::Wsl { distro } = self else {
+            return path.to_string();
+        };
+        if !path.starts_with('/') {
+            return path.to_string();
+        }
+        if let Some(rest) = path.strip_prefix("/mnt/") {
+            let (drive, rest) = rest.split_once('/').unwrap_or((rest, ""));
+            if drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic()) {
+                return format!(
+                    r"{}:\{}",
+                    drive.to_ascii_uppercase(),
+                    rest.replace('/', r"\")
+                );
+            }
+        }
+        format!(r"\\wsl.localhost\{distro}{}", path.replace('/', r"\"))
+    }
+
     /// A short name for the backend: "This computer", "WSL · Ubuntu",
     /// "orb -m dev --".
     pub fn label(&self) -> String {
@@ -157,15 +201,18 @@ fn wsl_share(path: &str) -> Option<(&str, &str)> {
 const PATH_START: &str = "__GENTLE_PATH_START__";
 const PATH_END: &str = "__GENTLE_PATH_END__";
 
+/// `sh` that sets `s` to the user's login shell: `$SHELL`, else the
+/// password database's, else `/bin/sh`.
+const LOGIN_SHELL: &str = r#"s="${SHELL:-}"; [ -n "$s" ] || s="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)"; s="${s:-/bin/sh}""#;
+
 /// The argv (after [`Backend::launch`]) that prints the backend user's login
 /// PATH between markers: its login shell, interactive so the rc files that
 /// set up nvm, fnm or mise run. `wsl.exe --exec` and most commands start
 /// programs without a login shell, so `gentle-shell` and its Node would not
 /// be found otherwise.
 pub fn path_probe() -> Vec<String> {
-    let script = format!(
-        r#"s="${{SHELL:-}}"; [ -n "$s" ] || s="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7)"; exec "${{s:-/bin/sh}}" -l -i -c 'printf "{PATH_START}%s{PATH_END}" "$PATH"'"#
-    );
+    let script =
+        format!(r#"{LOGIN_SHELL}; exec "$s" -l -i -c 'printf "{PATH_START}%s{PATH_END}" "$PATH"'"#);
     vec!["sh".to_string(), "-c".to_string(), script]
 }
 
@@ -304,6 +351,52 @@ mod tests {
         let argv = orb.launch("/Users/ana/my api").unwrap();
         assert_eq!(&argv[..4], ["orb", "-m", "dev", "--"]);
         assert_eq!(argv.last().map(String::as_str), Some("/Users/ana/my api"));
+    }
+
+    #[test]
+    fn backend_paths_read_back_as_this_computers() {
+        let ubuntu = wsl();
+        for host in [
+            r"C:\Users\ana\my api",
+            r"\\wsl.localhost\Ubuntu\home\ana\api",
+        ] {
+            let there = ubuntu.path(host).unwrap();
+            assert_eq!(ubuntu.host_path(&there), host);
+        }
+        assert_eq!(ubuntu.host_path("/mnt/d"), r"D:\");
+        assert_eq!(
+            ubuntu.host_path("/mnt/wsl/x"),
+            r"\\wsl.localhost\Ubuntu\mnt\wsl\x"
+        );
+        assert_eq!(ubuntu.host_path("relative/file.rs"), "relative/file.rs");
+        let orb = Backend::Command {
+            prefix: vec!["orb".into()],
+        };
+        assert_eq!(orb.host_path("/Users/ana/api"), "/Users/ana/api");
+    }
+
+    /// The argv really runs the program in the folder, spaces and all.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_backend_runs_programs_in_the_folder() {
+        let dir = std::env::temp_dir().join(format!("gentle backend {}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::fs::canonicalize(&dir).unwrap();
+        let env = Backend::Command {
+            prefix: vec!["env".into()],
+        };
+        let mut argv = env.launch(&dir.to_string_lossy()).unwrap();
+        argv.push("pwd".into());
+        let out = std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir(&dir);
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            dir.to_string_lossy()
+        );
     }
 
     #[test]

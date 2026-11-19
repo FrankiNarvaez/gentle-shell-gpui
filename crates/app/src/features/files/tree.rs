@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -1579,15 +1578,7 @@ fn paths(state: &GitState) -> Vec<&str> {
 }
 
 fn show_toplevel(root: &Path) -> Option<PathBuf> {
-    let out = pi_rpc::command("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !top.is_empty()).then(|| PathBuf::from(top))
+    crate::features::git::toplevel(root)
 }
 
 /// What a click on a tree row does, by click count.

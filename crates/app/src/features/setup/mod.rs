@@ -14,6 +14,7 @@ mod gentle;
 pub mod maestro;
 pub mod music;
 mod probe;
+mod remote;
 pub mod tower;
 
 use std::path::{Path, PathBuf};
@@ -236,6 +237,10 @@ fn check_order(os: &str) -> Vec<CheckId> {
 /// Blocking: probes every dependency relevant to this OS.
 pub fn run_checks() -> Vec<Check> {
     apply_toolchain_path();
+    let choice = crate::features::backend::saved();
+    if choice != gentle_core::backend::Backend::Local {
+        return remote::run_checks(&choice);
+    }
     let launcher = gentle::launcher();
     let managed = launcher
         .as_ref()
@@ -301,7 +306,7 @@ fn for_managed_install(id: CheckId, status: Status, fix: Fix) -> (Status, Fix) {
 /// Blocking: run `gentle-shell <args>` (e.g. `install <source>`) for the
 /// folder `cwd`, with the launcher's home options; its output either way.
 pub fn run_gentle_shell(cwd: &Path, args: &[&str]) -> Result<String, String> {
-    let spec = pi_rpc::resolve_backend(cwd).map_err(|e| format!("{e:#}"))?;
+    let spec = crate::features::backend::shell_spec(cwd).map_err(|e| format!("{e:#}"))?;
     let out = spec
         .launcher_command(args)
         .stdin(std::process::Stdio::null())
@@ -317,6 +322,13 @@ pub fn run_gentle_shell(cwd: &Path, args: &[&str]) -> Result<String, String> {
     } else {
         Err(text)
     }
+}
+
+/// The agent dir `gentle-shell --version` names where agents run (as that
+/// backend writes it). Blocking.
+pub fn launcher_home() -> Option<String> {
+    let version = gentle::launcher().ok()?.version?;
+    Some(version.home_dir?.to_string_lossy().into_owned())
 }
 
 /// The diagram renderer (merman's CLI) the Markdown preview draws Mermaid

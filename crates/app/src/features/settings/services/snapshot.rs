@@ -11,7 +11,7 @@ use super::super::snapshot::{Snapshot, probe, read_snapshot};
 pub(in crate::features::settings) fn load(cwd: &Path, shell_updates: bool) -> Snapshot {
     let homes = pi_rpc::resolve_homes();
     let mut snapshot = read_snapshot(&homes.agent, &homes.config, cwd);
-    let spec = pi_rpc::resolve_backend(cwd).ok();
+    let spec = crate::features::backend::shell_spec(cwd).ok();
     if let Some(spec) = &spec {
         probe(spec, &mut snapshot);
     }

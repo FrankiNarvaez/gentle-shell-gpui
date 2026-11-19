@@ -22,14 +22,7 @@ pub fn repo_root(path: &std::path::Path) -> PathBuf {
     } else {
         path.parent().unwrap_or(path)
     };
-    pi_rpc::command("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(dir)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
-        .unwrap_or_else(|| dir.to_path_buf())
+    crate::features::git::toplevel(dir).unwrap_or_else(|| dir.to_path_buf())
 }
 
 pub fn register(cx: &mut App) {

@@ -333,8 +333,12 @@ impl SessionView {
                         &files,
                     )?;
                     if let Some(path) = &resume {
+                        // A conversation listed from this computer's view of the
+                        // backend's home reads there as the backend's path.
+                        let path = path.to_string_lossy();
                         spec.args.push("--session".into());
-                        spec.args.push(path.display().to_string());
+                        spec.args
+                            .push(runs_on.path(&path).unwrap_or_else(|| path.into_owned()));
                     }
                     let version = pi_rpc::backend_version(&spec);
                     let (process, rx) = PiProcess::spawn(&spec)?;

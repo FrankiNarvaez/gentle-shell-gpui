@@ -30,10 +30,9 @@ pub use refs::{
 pub use snapshot::snapshot;
 
 fn git(cwd: &Path, args: &[&str]) -> Option<String> {
-    let mut command = pi_rpc::command("git");
+    let mut command = crate::features::backend::git(cwd, &[]);
     command
         .args(args)
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stderr(Stdio::null());
     let out = command.output().ok()?;
@@ -46,7 +45,7 @@ fn git(cwd: &Path, args: &[&str]) -> Option<String> {
 pub fn toplevel(cwd: &Path) -> Option<PathBuf> {
     let top = git(cwd, &["rev-parse", "--show-toplevel"])?;
     let top = top.trim();
-    (!top.is_empty()).then(|| PathBuf::from(top))
+    (!top.is_empty()).then(|| crate::features::backend::host_path(cwd, top))
 }
 
 /// The shortened path of the repository when `root` is a folder inside a
@@ -65,12 +64,8 @@ pub fn repository_path(root: &Path, toplevel: &Path) -> Option<String> {
 /// Run `git` for its effect. The error is git's own message; credentials
 /// are never prompted for (there is no terminal to answer).
 pub fn run(cwd: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = pi_rpc::command("git");
-    command
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null());
+    let mut command = crate::features::backend::git(cwd, &[("GIT_TERMINAL_PROMPT", "0")]);
+    command.args(args).stdin(Stdio::null());
     let out = command.output().map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())

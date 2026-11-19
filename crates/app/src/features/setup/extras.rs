@@ -256,7 +256,7 @@ pub fn check_engram() -> (Status, Fix) {
 
 /// From `engram version` (`engram 1.18.0`, then an update notice). A version
 /// it can't read stays OK, as before.
-fn engram_status(text: &str) -> (Status, Fix) {
+pub(super) fn engram_status(text: &str) -> (Status, Fix) {
     let line = text.lines().next().unwrap_or("installed").trim();
     match line.split_whitespace().last().and_then(parse_version) {
         Some(version) if version < MIN_ENGRAM => (

@@ -13,7 +13,8 @@ mod login;
 mod record;
 
 pub use home::{
-    Homes, adopt_standalone_config, gentle_pi_root, launcher_config_path, pi_package, resolve_homes,
+    Homes, adopt_standalone_config, backend_homes, gentle_pi_root, launcher_config_path,
+    pi_package, resolve_homes, use_backend_homes,
 };
 pub use login::{AuthEvent, AuthPrompt, LoginHelper, LoginMessage, PromptOption, ProviderInfo};
 

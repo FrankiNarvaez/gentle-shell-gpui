@@ -65,6 +65,8 @@ pub(super) struct RunsOn {
     checking: bool,
     task: Task<()>,
     check: Task<()>,
+    /// Pointing Configuration at the new backend's Gentle Shell home.
+    homes: Task<()>,
 }
 
 impl RunsOn {
@@ -97,6 +99,7 @@ impl RunsOn {
             checking: false,
             task: Task::ready(()),
             check: Task::ready(()),
+            homes: Task::ready(()),
         }
     }
 }
@@ -156,7 +159,8 @@ impl SettingsView {
         });
     }
 
-    /// Save where new agent tabs run, then check it has `gentle-shell`.
+    /// Save where new agent tabs run, check it has `gentle-shell`, and read
+    /// Configuration from its Gentle Shell home.
     fn choose_runs_on(&mut self, choice: Backend, cx: &mut Context<Self>) {
         self.runs_on.kind = Kind::of(&choice);
         if self.runs_on.choice == choice {
@@ -169,6 +173,12 @@ impl SettingsView {
         self.runs_on.choice = choice;
         self.runs_on.found = None;
         self.check_runs_on(cx);
+        self.runs_on.homes = cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async { backend::sync_homes() })
+                .await;
+            let _ = this.update(cx, |this, cx| this.reload(cx));
+        });
         cx.notify();
     }
 
@@ -249,9 +259,9 @@ impl SettingsView {
                              docker exec -i dev). Press Enter to use it."
                         }
                         _ => {
-                            "New agent tabs start here; open tabs stay where they started. \
-                             A project opened from \\\\wsl.localhost\\<distro>\\ always runs \
-                             in that distro."
+                            "Agents, terminals, git and Setup run here; open agent tabs stay \
+                             where they started. A project opened from \
+                             \\\\wsl.localhost\\<distro>\\ always runs in that distro."
                         }
                     }),
             )
