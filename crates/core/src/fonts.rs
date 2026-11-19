@@ -24,12 +24,6 @@ pub fn installed<'a>(choice: &str, installed: &'a [String]) -> Option<&'a str> {
         .map(String::as_str)
 }
 
-/// The terminal's family: its own choice, else the code font's, else
-/// `None` (the default monospace).
-pub fn terminal<'a>(terminal: Option<&'a str>, code: Option<&'a str>) -> Option<&'a str> {
-    terminal.or(code)
-}
-
 /// The families the picker lists for `query`, in order. Names are deduped
 /// (case-insensitively), hidden ones (starting with `.`) dropped and the
 /// rest sorted case-insensitively; a query keeps the fuzzy matches, best
@@ -90,13 +84,6 @@ mod tests {
         let list = names(&["Menlo"]);
         assert_eq!(installed("Hack Nerd Font", &list), None);
         assert_eq!(installed("", &list), None);
-    }
-
-    #[test]
-    fn the_terminal_follows_the_code_font_unless_it_has_its_own() {
-        assert_eq!(terminal(Some("Hack"), Some("Fira Code")), Some("Hack"));
-        assert_eq!(terminal(None, Some("Fira Code")), Some("Fira Code"));
-        assert_eq!(terminal(None, None), None);
     }
 
     fn is_mono(name: &str) -> bool {

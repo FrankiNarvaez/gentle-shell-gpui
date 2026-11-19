@@ -8,8 +8,6 @@
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
-use gentle_core::fonts;
-
 use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::component::Sizable as _;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -290,11 +288,7 @@ pub fn apply_theme(cx: &mut App) {
     store_font(&CODE_FONT, fonts.code.clone());
     store_font(
         &TERMINAL_FONT,
-        fonts::terminal(
-            fonts.terminal.as_ref().map(|f| f.as_ref()),
-            fonts.code.as_ref().map(|f| f.as_ref()),
-        )
-        .map(|f| SharedString::from(f.to_string())),
+        fonts.terminal.clone().or_else(|| fonts.code.clone()),
     );
     let mode = if p.light {
         ThemeMode::Light

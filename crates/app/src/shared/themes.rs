@@ -883,14 +883,6 @@ impl Fonts {
     }
 }
 
-/// The installed spelling of `family`, or `None` (the default) when it is
-/// blank or not installed. Lists the system's fonts only when asked for one.
-fn resolve_font(family: Option<&str>, cx: &App) -> Option<SharedString> {
-    let wanted = fonts::normalize(family?)?;
-    let names = cx.text_system().all_font_names();
-    fonts::installed(&wanted, &names).map(|name| SharedString::from(name.to_string()))
-}
-
 impl Global for Themes {}
 
 impl Themes {
@@ -915,9 +907,13 @@ pub fn init(cx: &mut App) {
         .and_then(read_interface_size)
         .unwrap_or(interface_size::DEFAULT);
     let mut chosen = Fonts::default();
+    let mut names = None;
     for slot in FontSlot::ALL {
-        let stored = store.as_deref().and_then(|p| read_font(p, slot));
-        *chosen.slot_mut(slot) = resolve_font(stored.as_deref(), cx);
+        if let Some(stored) = store.as_deref().and_then(|p| read_font(p, slot)) {
+            let names = names.get_or_insert_with(|| cx.text_system().all_font_names());
+            *chosen.slot_mut(slot) =
+                fonts::installed(&stored, names).map(|name| SharedString::from(name.to_string()));
+        }
     }
     let pi = read_pi_setting(&agent);
     let catalog = load_catalog(Vec::new(), read_user_themes(&agent));
@@ -1202,10 +1198,10 @@ pub fn set_interface_size(percent: u16, cx: &mut App) {
     }
 }
 
-/// Use `family` for `slot` in every window (`None` is the default font)
-/// and persist it. A family that isn't installed is the default.
+/// Apply and persist the installed family selected by the picker, or `None`
+/// for the default font.
 pub fn set_font(slot: FontSlot, family: Option<&str>, cx: &mut App) {
-    let family = resolve_font(family, cx);
+    let family = family.map(|name| SharedString::from(name.to_string()));
     let themes = cx.global_mut::<Themes>();
     if themes.fonts.get(slot) == family.as_ref() {
         return;
