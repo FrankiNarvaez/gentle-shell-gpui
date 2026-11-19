@@ -50,14 +50,14 @@ pub struct SettingsView {
     /// Package input, progress, output and event subscription.
     package: packages::PackageUiState,
     _load: Task<()>,
-    /// Existing shared lifecycle for package and Gentle Shell upgrade commands.
+    /// Shared task for package, Gentle Shell and Pi commands.
     _job: Task<()>,
     /// Window transparency, 0–100 %.
     transparency: Entity<SliderState>,
     _transparency: Subscription,
     /// Pending background-helper policy command and its feedback.
     background: background::BackgroundUiState,
-    /// Gentle Shell upgrade status and its feedback.
+    /// Gentle Shell and Pi update progress and feedback.
     shell_update: upgrade::ShellUpdateUiState,
     /// Re-render as this app's own update moves along.
     _app_update: Subscription,

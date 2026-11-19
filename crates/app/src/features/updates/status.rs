@@ -31,13 +31,32 @@ pub fn offer_from_status(
     offer_for(shell.current.as_deref()?, shell.latest.as_deref()?, skipped)
 }
 
+/// The commit offered by Update now for a self-managed main install.
+pub fn main_update_target(shell: &ShellUpdate, managed: bool) -> Option<&str> {
+    if managed || shell.channel != ShellChannel::Main || shell.state != UpdateState::UpdateAvailable
+    {
+        return None;
+    }
+    shell.latest.as_deref()
+}
+
+/// Pi's update can be offered even when the Shell doesn't name a version.
+pub fn pi_update_available(status: &UpdateStatus, managed: bool) -> bool {
+    !is_managed(status.gentle_shell.channel, managed)
+        && status.pi.state == UpdateState::UpdateAvailable
+}
+
+fn is_managed(channel: ShellChannel, managed: bool) -> bool {
+    managed || channel == ShellChannel::GentleAiManaged
+}
+
 /// The rows shown beside the versions, always: the channel, Gentle Shell's
-/// state, the update command Gentle Shell gives (the app does not run it),
+/// state, the update command Gentle Shell reports,
 /// Pi's state, and when the answer was looked up. An `unknown` state is
 /// never shown as up to date. A managed install says gentle-ai updates it.
 pub fn status_rows(status: &UpdateStatus, managed: bool) -> Vec<(&'static str, String)> {
     let shell = &status.gentle_shell;
-    let managed = managed || shell.channel == ShellChannel::GentleAiManaged;
+    let managed = is_managed(shell.channel, managed);
     let mut rows = vec![("Channel", channel_label(shell.channel, managed).to_string())];
     let shell_state = match shell.state {
         _ if managed => "updated by gentle-ai".to_string(),
@@ -189,11 +208,11 @@ pub fn packages_with_updates(status: &UpdateStatus) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use pi_rpc::desktop_rpc::{DesktopRecord, SCHEMA, UpdateStatus, decode_payload};
+    use pi_rpc::desktop_rpc::{DesktopRecord, SCHEMA, UpdateState, UpdateStatus, decode_payload};
 
     use super::{
-        checked_at_label, offer_from_status, package_chip, package_status, packages_note,
-        packages_with_updates, status_rows,
+        checked_at_label, main_update_target, offer_from_status, package_chip, package_status,
+        packages_note, packages_with_updates, pi_update_available, status_rows,
     };
 
     fn status(data: serde_json::Value) -> UpdateStatus {
@@ -257,6 +276,45 @@ mod tests {
                 None
             )
             .is_some()
+        );
+    }
+
+    #[test]
+    fn update_action_main_requires_a_new_commit_on_unmanaged_main() {
+        let commit = "ce64a9a708e5";
+        let mut main = example("main", commit, "unknown").gentle_shell;
+        assert_eq!(main_update_target(&main, false), Some(commit));
+        assert_eq!(main_update_target(&main, true), None);
+        for state in [UpdateState::UpToDate, UpdateState::Unknown] {
+            main.state = state;
+            assert_eq!(main_update_target(&main, false), None, "{state:?}");
+        }
+        main.state = UpdateState::UpdateAvailable;
+        main.latest = None;
+        assert_eq!(main_update_target(&main, false), None);
+        for channel in ["release", "bundled", "gentle-ai-managed", "unknown"] {
+            let shell = example(channel, "4.9.0", "unknown").gentle_shell;
+            assert_eq!(main_update_target(&shell, false), None, "{channel}");
+        }
+    }
+
+    #[test]
+    fn update_action_pi_requires_reported_availability_and_an_unmanaged_install() {
+        let bundled = example("bundled", "4.9.0", "update_available");
+        // Pi can report an available update without naming the new version.
+        assert_eq!(bundled.pi.latest, None);
+        assert_eq!(
+            [
+                pi_update_available(&bundled, false),
+                pi_update_available(&bundled, true),
+                pi_update_available(
+                    &example("gentle-ai-managed", "4.9.0", "update_available"),
+                    false,
+                ),
+                pi_update_available(&example("bundled", "4.9.0", "up_to_date"), false),
+                pi_update_available(&example("bundled", "4.9.0", "unknown"), false),
+            ],
+            [true, false, false, false, false]
         );
     }
 

@@ -1,12 +1,12 @@
-//! Application, Gentle Shell and Engram update controls.
-//!
-//! The existing upgrade handlers, jobs and error reporting remain unchanged.
+//! Application, Gentle Shell, Pi and Engram update controls.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+
+use crate::features::updates::status::{main_update_target, pi_update_available, status_rows};
 
 use super::super::{
     SettingsView, app,
@@ -31,15 +31,15 @@ fn backend_updates_section(
     snapshot: &Snapshot,
     cx: &mut Context<SettingsView>,
 ) -> Div {
+    let status = view.shell_updates.status.as_ref();
+    let main = status.and_then(|status| main_update_target(&status.gentle_shell, snapshot.managed));
+    let pi = status.is_some_and(|status| pi_update_available(status, snapshot.managed));
     section(IconName::RefreshCw, "Gentle Shell and Engram")
         .child(row("Versions", snapshot.versions.join(" · ")))
         .children(
-            view.shell_updates
-                .status
-                .iter()
-                .flat_map(|status| {
-                    crate::features::updates::status::status_rows(status, snapshot.managed)
-                })
+            status
+                .into_iter()
+                .flat_map(|status| status_rows(status, snapshot.managed))
                 .map(|(label, text)| row(label, text)),
         )
         .when_some(view.shell_reports_updates(), |card, checking| {
@@ -63,11 +63,15 @@ fn backend_updates_section(
         .when_some(view.update_offer(snapshot), |card, offer| {
             card.child(view.render_update(offer, cx))
         })
+        .when_some(main, |card, commit| {
+            card.child(view.render_main_update(commit, cx))
+        })
         .children(
             view.shell_update
                 .result
                 .as_ref()
                 .map(upgrade::upgrade_result),
         )
+        .children(view.render_pi_update(pi, cx))
         .child(view.render_engram_update(snapshot.engram_update.clone(), cx))
 }
