@@ -9,6 +9,7 @@ use serde_json::{Map, Value, json};
 use super::diagram::{Errors, MAX_LABEL, MAX_TEXT, array, id_of, text, truncate, wire_enum};
 use super::edits::{Editable, fresh_id, plural};
 use super::layout::{Point, Rect};
+use super::style::{self, Tint};
 
 pub const MAX_PARTICIPANTS: usize = 30;
 pub const MAX_MESSAGES: usize = 300;
@@ -74,6 +75,9 @@ pub struct Participant {
     pub id: String,
     pub label: String,
     pub kind: ParticipantKind,
+    /// Overrides the kind's color and icon (`color`, `icon`).
+    pub color: Option<Tint>,
+    pub icon: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,7 +129,14 @@ pub struct Sequence {
 
 impl Participant {
     fn to_value(&self) -> Value {
-        json!({"id": self.id, "label": self.label, "kind": self.kind.name()})
+        let mut value = json!({"id": self.id, "label": self.label, "kind": self.kind.name()});
+        if let Some(color) = self.color {
+            value["color"] = json!(color.name());
+        }
+        if let Some(icon) = self.icon {
+            value["icon"] = json!(icon);
+        }
+        value
     }
 }
 
@@ -246,6 +257,8 @@ impl Sequence {
                     .and_then(Value::as_str)
                     .and_then(ParticipantKind::read)
                     .unwrap_or_default(),
+                color: Tint::field(raw),
+                icon: style::icon_field(raw),
                 id,
             });
         }
@@ -271,6 +284,8 @@ impl Sequence {
                             id: end.clone(),
                             label: end.clone(),
                             kind: ParticipantKind::default(),
+                            color: None,
+                            icon: None,
                         });
                     } else {
                         errors.push(format!(

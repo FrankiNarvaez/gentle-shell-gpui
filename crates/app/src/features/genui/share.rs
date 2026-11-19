@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use gentle_core::genui::export::{self, Format, Palette};
 use gentle_core::genui::refs::CodeRef;
+use gentle_core::genui::style::Tint;
 use gentle_core::genui::template::Template;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -122,6 +123,7 @@ fn palette() -> Palette {
         ]
         .map(hex)
         .to_vec(),
+        tints: Tint::ALL.map(|tint| hex(ui::tint(tint))),
         font: "sans-serif".into(),
     }
 }

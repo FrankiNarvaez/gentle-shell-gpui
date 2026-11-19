@@ -915,8 +915,17 @@ fn direction_toggle_minimap_and_lock(cx: &mut TestAppContext) {
 #[gpui::test]
 fn hovering_an_edge_highlights_it(cx: &mut TestAppContext) {
     let h = open(cx);
-    // Off the label pill: a little along the curve from its middle.
-    let p = h.read(cx, |v| v.layout.edges[0].point_at(0.3));
+    // Off the label pill: the point along the edge's middle stretch furthest
+    // from where the layout put its label.
+    let p = h.read(cx, |v| {
+        let path = &v.layout.edges[0];
+        let label = v.layout.labels[0].expect("the edge is labelled");
+        let away = |q: &layout::Point| (q.x - label.x).hypot(q.y - label.y);
+        (4..=16)
+            .map(|k| path.point_at(k as f32 / 20.))
+            .max_by(|a, b| away(a).total_cmp(&away(b)))
+            .unwrap()
+    });
     let at = h.on_window(cx, p);
     h.hover(cx, at);
     assert_eq!(h.read(cx, |v| v.hover_edge), Some(0));

@@ -1,14 +1,15 @@
-//! Paints what sits under a diagram's nodes: the dotted grid, group boxes,
-//! the edges with their arrowheads (async and data ones with marching
-//! dashes), the connection being drawn and the selection box; and the
-//! minimap. Nodes and labels are elements on top (text, hover, clicks).
-//! Only what the canvas shows is painted.
+//! Paints what sits under a diagram's nodes: the dotted grid, group boxes
+//! (tinted containers), the edges with their open chevron arrowheads (async
+//! and data ones with marching dashes), the connection being drawn and the
+//! selection box; and the minimap. Nodes, group tags and labels are elements
+//! on top (text, hover, clicks). Only what the canvas shows is painted.
 
 use gentle_core::genui::diagram::EdgeStyle;
 use gentle_core::genui::layout::{self, EdgePath, Rect};
 use gpui_kit::*;
 
 use super::diagram::GRID;
+use super::look;
 use crate::shared::ui;
 
 /// Dots closer than this (px) are thinned out to every other line.
@@ -26,13 +27,16 @@ pub(super) enum EdgeLook {
 pub(super) struct EdgeDraw {
     pub path: EdgePath,
     pub style: EdgeStyle,
+    /// The edge's `color` tone, which overrides its style's.
+    pub tone: Option<Hsla>,
     pub alpha: f32,
     pub look: EdgeLook,
 }
 
 /// What one frame paints, captured when the view renders.
 pub(super) struct Frame {
-    pub groups: Vec<(Rect, bool)>,
+    /// Group boxes: where, in which tone, and whether selected.
+    pub groups: Vec<(Rect, Hsla, bool)>,
     pub edges: Vec<EdgeDraw>,
     /// Pixels per diagram unit, and the pan (px).
     pub scale: f32,
@@ -73,7 +77,7 @@ impl Frame {
         let visible = self.visible(bounds);
         let s = self.scale;
         grid(bounds, self.scale, self.pan, window);
-        for (rect, selected) in &self.groups {
+        for (rect, tone, selected) in &self.groups {
             if !rect.intersects(&visible) {
                 continue;
             }
@@ -88,13 +92,13 @@ impl Frame {
                     ),
                     size(px(rect.w * s), px(rect.h * s)),
                 ),
-                px(14. * s),
-                ui::surface().opacity(0.55),
-                px(if *selected { 1.5 } else { 1. }),
+                px(look::GROUP_RADIUS * s),
+                look::group_fill(*tone),
+                px(1.5),
                 if *selected {
                     ui::accent()
                 } else {
-                    ui::border()
+                    look::group_border(*tone)
                 },
                 BorderStyle::Solid,
             ));
@@ -130,44 +134,36 @@ impl Frame {
 
     fn edge(&self, origin: Point<Pixels>, edge: &EdgeDraw, window: &mut Window) {
         let s = self.scale.max(0.4);
+        // Strokes and the arrowhead stop growing past 150 %.
+        let k = s.min(1.5);
+        // The style keeps its meaning (async, data, dependency); an edge's
+        // `color` recolors it without losing the dashes.
         let (color, width, dash): (Hsla, f32, Option<[f32; 2]>) = match edge.style {
-            EdgeStyle::Sync => (ui::muted(), 1.5, None),
-            EdgeStyle::Async => (ui::warning(), 1.5, Some([6., 4.])),
-            EdgeStyle::Data => (ui::info(), 2.25, Some([10., 5.])),
-            EdgeStyle::Dependency => (ui::faint(), 1.25, Some([2., 4.])),
+            EdgeStyle::Sync => (look::line(), look::EDGE_WIDTH, None),
+            EdgeStyle::Async => (ui::warning(), look::EDGE_WIDTH, Some([6., 4.])),
+            EdgeStyle::Data => (ui::info(), look::EDGE_WIDTH * 1.5, Some([10., 5.])),
+            EdgeStyle::Dependency => (ui::faint(), look::EDGE_WIDTH, Some([2., 4.])),
         };
         let color = match edge.look {
             EdgeLook::Selected => ui::accent(),
             EdgeLook::Hovered => ui::accent().opacity(0.75),
-            EdgeLook::Normal => color,
+            EdgeLook::Normal => edge.tone.unwrap_or(color),
         }
         .opacity(edge.alpha);
         let width = match edge.look {
             EdgeLook::Normal => width,
             _ => width + 1.,
-        } * s.min(1.5);
-        // Stop the line at the arrowhead's base so its end doesn't poke out.
-        let head = 9. * s.min(1.5);
-        let dir = edge.path.end_direction();
-        let tip = self.at(origin, edge.path.end());
-        let end = edge.path.end();
-        let base_world = layout::Point {
-            x: end.x - dir.x * head / self.scale,
-            y: end.y - dir.y * head / self.scale,
-        };
-        let base = self.at(origin, base_world);
-        let last = edge.path.segments.len() - 1;
+        } * k;
         let mut path = PathBuilder::stroke(px(width));
         match dash {
             None => {
                 path.move_to(self.at(origin, edge.path.start()));
-                for (i, seg) in edge.path.segments.iter().enumerate() {
-                    let to = if i == last {
-                        base
-                    } else {
-                        self.at(origin, seg.to)
-                    };
-                    path.cubic_bezier_to(to, self.at(origin, seg.c1), self.at(origin, seg.c2));
+                for seg in &edge.path.segments {
+                    path.cubic_bezier_to(
+                        self.at(origin, seg.to),
+                        self.at(origin, seg.c1),
+                        self.at(origin, seg.c2),
+                    );
                 }
             }
             Some([on, off]) => {
@@ -180,10 +176,9 @@ impl Frame {
                         let t = k as f32 / FLATTEN as f32;
                         let u = 1. - t;
                         let (a, b, c, d) = (u * u * u, 3. * u * u * t, 3. * u * t * t, t * t * t);
-                        let to = if i == last { base_world } else { seg.to };
                         let p = layout::Point {
-                            x: a * seg.from.x + b * seg.c1.x + c * seg.c2.x + d * to.x,
-                            y: a * seg.from.y + b * seg.c1.y + c * seg.c2.y + d * to.y,
+                            x: a * seg.from.x + b * seg.c1.x + c * seg.c2.x + d * seg.to.x,
+                            y: a * seg.from.y + b * seg.c1.y + c * seg.c2.y + d * seg.to.y,
                         };
                         points.push(self.at(origin, p));
                     }
@@ -199,9 +194,14 @@ impl Frame {
         if let Ok(path) = path.build() {
             window.paint_path(path, color);
         }
-        let side = point(px(-dir.y * head * 0.5), px(dir.x * head * 0.5));
-        let mut arrow = PathBuilder::fill();
-        arrow.add_polygon(&[tip, base + side, base - side], true);
+        // An open chevron at the end: the line runs into its tip, so the
+        // two read as one stroke.
+        let dir = edge.path.end_direction();
+        let [left, tip, right] = look::chevron(self.at(origin, edge.path.end()), (dir.x, dir.y), k);
+        let mut arrow = PathBuilder::stroke(px(width));
+        arrow.move_to(left);
+        arrow.line_to(tip);
+        arrow.line_to(right);
         if let Ok(arrow) = arrow.build() {
             window.paint_path(arrow, color);
         }

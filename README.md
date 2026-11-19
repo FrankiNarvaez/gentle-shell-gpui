@@ -298,7 +298,7 @@ App tabs follow Gentle Shell's `notifications.json` (the file `/gentle:customize
 
 ### Diagrams — Plan a system on a live canvas
 
-Not only a chat: when you plan an architecture, a data flow or anything with many interacting parts, the agent can show an interactive diagram right in the conversation (its `gentle_ui` tool, from a Pi extension the app ships and loads into every agent tab).
+Not only a chat: when you plan an architecture, a data flow or anything with many interacting parts, the agent can show an interactive diagram right in the conversation (its `gentle_ui` tool, from a Pi extension the app ships and loads into every agent tab). It is drawn in the style of Eraser's diagrams: each part tinted in its own color with an icon badge, groups as colored containers with a label tag, and right-angled connections with rounded corners; the agent picks a color (blue, green, yellow, red, purple, teal, pink, gold, gray) and an icon per part, or each kind brings its own, all in your theme's tones.
 
 <details>
 <summary><kbd>More</kbd> <strong>Canvas, editing and layout</strong></summary>

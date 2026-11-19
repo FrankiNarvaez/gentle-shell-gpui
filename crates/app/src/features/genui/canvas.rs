@@ -17,6 +17,7 @@ use gpui_kit::component::{Icon, Sizable as _, v_flex};
 use gpui_kit::*;
 
 use super::diagram::{MAX_ZOOM, MIN_ZOOM, READABLE_ZOOM};
+use super::look;
 use super::motion::{self, ViewTween};
 use super::paint::{self, MiniMap, minimap_fit};
 use super::panel::{Body, PanelView};
@@ -262,10 +263,10 @@ pub(super) fn moved(from: Point<Pixels>, to: Point<Pixels>) -> bool {
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Head {
     None,
-    /// A filled triangle (calls, transitions, dependencies).
-    Filled,
-    /// Two strokes (async messages and returns).
-    Open,
+    /// An open chevron (`look::chevron`), stroked at the curve's width:
+    /// every arrow on the canvases ends this way, as on the diagram; a
+    /// message's kind shows in its color and dash instead.
+    Arrow,
 }
 
 /// What a kind paints under its elements (diagram units; stroke widths
@@ -275,6 +276,8 @@ pub(super) enum Shape {
         rect: Rect,
         fill: Hsla,
         border: Option<Hsla>,
+        /// The border's width in px (a hairline is 1, a container's 1.5).
+        border_width: f32,
         radius: f32,
         dashed: bool,
     },
@@ -329,6 +332,7 @@ impl Scene {
                     rect,
                     fill,
                     border,
+                    border_width,
                     radius,
                     dashed,
                 } => window.paint_quad(quad(
@@ -344,7 +348,7 @@ impl Scene {
                     ),
                     px(radius * s),
                     *fill,
-                    px(if border.is_some() { 1. } else { 0. }),
+                    px(if border.is_some() { *border_width } else { 0. }),
                     border.unwrap_or(*fill),
                     if *dashed {
                         BorderStyle::Dashed
@@ -414,21 +418,10 @@ impl Scene {
         window: &mut Window,
     ) {
         let stroke = self.scale.clamp(0.4, 1.5);
-        let size = 9. * stroke;
         let dir = path.end_direction();
         let end = path.end();
-        // A filled head: the line stops at its base so it doesn't poke out.
-        let base = match head {
-            Head::Filled => layout::Point {
-                x: end.x - dir.x * size / self.scale,
-                y: end.y - dir.y * size / self.scale,
-            },
-            _ => end,
-        };
         let mut points: Vec<Point<Pixels>> = Vec::new();
-        let last = path.segments.len() - 1;
         for (i, seg) in path.segments.iter().enumerate() {
-            let to = if i == last { base } else { seg.to };
             for k in usize::from(i > 0)..=16 {
                 let t = k as f32 / 16.;
                 let u = 1. - t;
@@ -436,8 +429,8 @@ impl Scene {
                 points.push(self.at(
                     origin,
                     layout::Point {
-                        x: a * seg.from.x + b * seg.c1.x + c * seg.c2.x + d * to.x,
-                        y: a * seg.from.y + b * seg.c1.y + c * seg.c2.y + d * to.y,
+                        x: a * seg.from.x + b * seg.c1.x + c * seg.c2.x + d * seg.to.x,
+                        y: a * seg.from.y + b * seg.c1.y + c * seg.c2.y + d * seg.to.y,
                     },
                 ));
             }
@@ -457,26 +450,14 @@ impl Scene {
         if let Ok(line) = line.build() {
             window.paint_path(line, color);
         }
-        let tip = self.at(origin, end);
-        let back = point(px(-dir.x * size), px(-dir.y * size));
-        let side = point(px(-dir.y * size * 0.5), px(dir.x * size * 0.5));
-        match head {
-            Head::None => {}
-            Head::Filled => {
-                let mut arrow = PathBuilder::fill();
-                arrow.add_polygon(&[tip, tip + back + side, tip + back - side], true);
-                if let Ok(arrow) = arrow.build() {
-                    window.paint_path(arrow, color);
-                }
-            }
-            Head::Open => {
-                let mut arrow = PathBuilder::stroke(px(width));
-                arrow.move_to(tip + back + side);
-                arrow.line_to(tip);
-                arrow.line_to(tip + back - side);
-                if let Ok(arrow) = arrow.build() {
-                    window.paint_path(arrow, color);
-                }
+        if head == Head::Arrow {
+            let [left, tip, right] = look::chevron(self.at(origin, end), (dir.x, dir.y), stroke);
+            let mut arrow = PathBuilder::stroke(px(width));
+            arrow.move_to(left);
+            arrow.line_to(tip);
+            arrow.line_to(right);
+            if let Ok(arrow) = arrow.build() {
+                window.paint_path(arrow, color);
             }
         }
     }
@@ -949,7 +930,8 @@ impl PanelView {
     }
 }
 
-/// The details island's frame: a title row (icon in `tone`), then `rows`.
+/// The details island's frame: a title row (an icon badge in `tone`, as on
+/// the element's card), then `rows`.
 pub(super) fn details(
     icon: IconName,
     tone: Hsla,
@@ -967,7 +949,7 @@ pub(super) fn details(
             gpui_kit::component::h_flex()
                 .gap_1p5()
                 .min_w_0()
-                .child(Icon::new(icon).xsmall().text_color(tone))
+                .child(look::badge(tone, icon, 20., 1.))
                 .child(
                     div()
                         .flex_1()

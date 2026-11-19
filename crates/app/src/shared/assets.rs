@@ -158,11 +158,127 @@ gpui_kit::assets::icon_assets!(
     ]
 );
 
+// The icons a diagram element may name (`gentle_core::genui::style::ICONS`,
+// kept in step: `genui::look::icon` finds them by path).
+gpui_kit::assets::icon_assets!(
+    DiagramIcons,
+    [
+        Activity,
+        Archive,
+        BookOpen,
+        Bot,
+        Box,
+        Boxes,
+        Brain,
+        Bug,
+        Building,
+        Cable,
+        Calendar,
+        ChartColumn,
+        CircleCheck,
+        CircleX,
+        Clock,
+        Cloud,
+        CloudCog,
+        CloudDownload,
+        CloudUpload,
+        Code,
+        Container,
+        Cookie,
+        Cpu,
+        CreditCard,
+        Database,
+        DatabaseZap,
+        Download,
+        Eye,
+        File,
+        FileText,
+        FingerprintPattern,
+        Flag,
+        Folder,
+        Gauge,
+        GitBranch,
+        GitMerge,
+        GitPullRequest,
+        Globe,
+        GraduationCap,
+        Hammer,
+        HardDrive,
+        Heart,
+        Hourglass,
+        Image,
+        Inbox,
+        KeyRound,
+        Laptop,
+        Layers,
+        Lightbulb,
+        ListTodo,
+        Lock,
+        LogIn,
+        LogOut,
+        Mail,
+        MapPin,
+        MemoryStick,
+        Merge,
+        MessageSquare,
+        Monitor,
+        Network,
+        Package,
+        Pause,
+        Play,
+        Plug,
+        Puzzle,
+        Radio,
+        Receipt,
+        RefreshCw,
+        Repeat,
+        Rocket,
+        Router,
+        Satellite,
+        Scale,
+        ScanFace,
+        Search,
+        Send,
+        Server,
+        ServerCog,
+        Settings,
+        Shield,
+        ShieldCheck,
+        ShoppingCart,
+        Smartphone,
+        Sparkles,
+        Split,
+        SquareFunction,
+        Star,
+        Store,
+        Table,
+        Terminal,
+        Timer,
+        Trash,
+        TriangleAlert,
+        Truck,
+        Unplug,
+        Upload,
+        User,
+        Users,
+        Wallet,
+        Warehouse,
+        Webhook,
+        Wifi,
+        Workflow,
+        Wrench,
+        Zap
+    ]
+);
+
 pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if let Some(bytes) = ExtraIcons.load(path)? {
+            return Ok(Some(bytes));
+        }
+        if let Some(bytes) = DiagramIcons.load(path)? {
             return Ok(Some(bytes));
         }
         gpui_kit::assets::Assets.load(path)
@@ -171,6 +287,7 @@ impl AssetSource for AppAssets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = gpui_kit::assets::Assets.list(path)?;
         paths.extend(ExtraIcons.list(path)?);
+        paths.extend(DiagramIcons.list(path)?);
         paths.sort();
         paths.dedup();
         Ok(paths)

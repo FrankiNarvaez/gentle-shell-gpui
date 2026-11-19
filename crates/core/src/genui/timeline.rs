@@ -11,7 +11,8 @@ use serde_json::{Map, Value, json};
 use super::diagram::{Errors, MAX_LABEL, array, id_of, text, truncate};
 use super::edits::{Editable, fresh_id, list_names, plural};
 use super::form::is_date;
-use super::layout::{Cubic, EdgePath, Point, Rect};
+use super::layout::{self, EdgePath, Point, Rect};
+use super::style::Tint;
 use crate::usage::time::{civil_from_days, days_from_civil};
 
 pub const MAX_TASKS: usize = 200;
@@ -69,6 +70,8 @@ pub struct Task {
     pub depends_on: Vec<String>,
     /// A point in time (`end == start`), drawn as a diamond.
     pub milestone: bool,
+    /// The bar's color (`color`); its group's otherwise.
+    pub color: Option<Tint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -87,6 +90,7 @@ impl Task {
             group: None,
             depends_on: Vec::new(),
             milestone: false,
+            color: None,
         }
     }
 
@@ -111,6 +115,9 @@ impl Task {
         }
         if self.milestone {
             map.insert("milestone".into(), json!(true));
+        }
+        if let Some(color) = self.color {
+            map.insert("color".into(), json!(color.name()));
         }
         Value::Object(map)
     }
@@ -215,6 +222,7 @@ impl Timeline {
                 group: text(raw.get("group"), MAX_LABEL),
                 depends_on: Vec::new(),
                 milestone,
+                color: Tint::field(raw),
                 id,
             });
         }
@@ -885,8 +893,13 @@ pub fn layout_from(timeline: &Timeline, origin: Option<i64>) -> TimelineLayout {
     }
 }
 
-/// From a bar's end to another's start, leaving and arriving level.
+/// From a bar's end to another's start, leaving and arriving level, with
+/// rounded elbows: when the target starts far enough after, the run turns
+/// down (or up) just before it; otherwise it steps out, crosses on the
+/// target row's edge, back past the target's start, and in.
 pub fn link(from: &Rect, to: &Rect) -> EdgePath {
+    // Room for a corner and the arrowhead on each straight end.
+    const STUB: f32 = 20.;
     let a = Point {
         x: from.right(),
         y: from.y + from.h / 2.,
@@ -895,21 +908,24 @@ pub fn link(from: &Rect, to: &Rect) -> EdgePath {
         x: to.x,
         y: to.y + to.h / 2.,
     };
-    let reach = ((b.x - a.x).abs() / 2.).max(18.) + if b.x < a.x + 12. { 24. } else { 0. };
-    EdgePath {
-        segments: vec![Cubic {
-            from: a,
-            c1: Point {
-                x: a.x + reach,
-                y: a.y,
-            },
-            c2: Point {
-                x: b.x - reach,
-                y: b.y,
-            },
-            to: b,
-        }],
+    let level = (a.y - b.y).abs() < layout::ALIGNED;
+    if level && b.x >= a.x {
+        return layout::orthogonal(&[a, b]);
     }
+    if !level && b.x - a.x >= 2. * STUB {
+        let x = b.x - STUB;
+        return layout::orthogonal(&[a, Point { x, y: a.y }, Point { x, y: b.y }, b]);
+    }
+    let y = b.y + if a.y < b.y { -ROW / 2. } else { ROW / 2. };
+    let (out, back) = (a.x + STUB, b.x - STUB);
+    layout::orthogonal(&[
+        a,
+        Point { x: out, y: a.y },
+        Point { x: out, y },
+        Point { x: back, y },
+        Point { x: back, y: b.y },
+        b,
+    ])
 }
 
 /// The header's counts.
