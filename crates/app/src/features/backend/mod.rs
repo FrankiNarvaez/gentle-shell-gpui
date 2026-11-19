@@ -128,9 +128,13 @@ fn stage(choice: &Backend, file: &Path) -> Option<String> {
     Some(there)
 }
 
+/// How long a copy into the backend may take (Engram, uv, Tower's source:
+/// tens of MB); a backend that hangs fails the step instead of holding it.
+const COPY_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Copy `file` from this computer to `there` (absolute) in `choice`,
 /// executable when `executable`. Written beside and moved in, so whatever
-/// reads it meanwhile never sees half. Blocking.
+/// reads it meanwhile never sees half. Blocking, within [`COPY_TIMEOUT`].
 pub fn put_file(
     choice: &Backend,
     file: &Path,
@@ -144,18 +148,14 @@ pub fn put_file(
         .ok_or("Agents run on this computer.")?;
     command
         .stdin(std::fs::File::open(file).map_err(|e| format!("{}: {e}", file.display()))?)
-        .stderr(std::process::Stdio::piped());
-    let out = command
-        .output()
-        .map_err(|e| format!("Couldn't reach {}: {e}", choice.label()))?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "Couldn't write {there} on {}: {}",
-            choice.label(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        .stderr(std::process::Stdio::null());
+    match pi_rpc::output_within(&mut command, COPY_TIMEOUT) {
+        Some((true, _)) => Ok(()),
+        Some((false, _)) => Err(format!("Couldn't write {there} on {}.", choice.label())),
+        None => Err(format!(
+            "{} didn't answer while copying {there}.",
+            choice.label()
+        )),
     }
 }
 
@@ -311,9 +311,16 @@ pub fn git(cwd: &Path, env: &[(&str, &str)]) -> Command {
 }
 
 /// A path `git` printed for the repository at `cwd` (its top level, a
-/// worktree), as this computer reads it.
+/// worktree), as this computer reads it: in the same form as `cwd`, which
+/// Windows canonicalizes to `\\?\UNC\wsl.localhost\…`, so prefixes compare.
 pub fn host_path(cwd: &Path, printed: &str) -> PathBuf {
-    PathBuf::from(for_tab(cwd).host_path(printed))
+    let host = for_tab(cwd).host_path(printed);
+    match host.strip_prefix(r"\\") {
+        Some(share) if cwd.to_string_lossy().starts_with(r"\\?\UNC\") => {
+            PathBuf::from(format!(r"\\?\UNC\{share}"))
+        }
+        _ => PathBuf::from(host),
+    }
 }
 
 /// `host`, a path on this computer, as the backend that runs work rooted at
@@ -356,6 +363,9 @@ pub fn run(choice: &Backend, program: &str, args: &[&str]) -> Option<(bool, Stri
     run_in(choice, &argv)
 }
 
+/// The backend whose homes the app last pointed at ([`sync_homes`]).
+static SYNCED: Mutex<Option<Backend>> = Mutex::new(None);
+
 /// Point the app at the saved backend's Gentle Shell homes ([`use_home`]).
 /// Blocking: it asks `gentle-shell --version` there.
 pub fn sync_homes() {
@@ -365,6 +375,19 @@ pub fn sync_homes() {
         _ => crate::features::setup::launcher_home(),
     };
     use_home(&choice, home.as_deref());
+    if let Ok(mut synced) = SYNCED.lock() {
+        *synced = Some(choice);
+    }
+}
+
+/// [`sync_homes`] unless the app already reads the saved backend's homes,
+/// so a screen that reads them never shows this computer's by mistake.
+/// Blocking.
+pub fn ensure_homes() {
+    let current = SYNCED.lock().ok().and_then(|synced| synced.clone());
+    if current.as_ref() != Some(&saved()) {
+        sync_homes();
+    }
 }
 
 /// Use `home`, the agent dir `gentle-shell --version` names in `choice`, as
@@ -389,6 +412,30 @@ pub fn forget_paths() {
     if let Ok(mut paths) = PATHS.lock() {
         paths.clear();
     }
+    if let Ok(mut versions) = VERSIONS.lock() {
+        versions.clear();
+    }
+}
+
+/// Each backend's `gentle-shell` version, asked once: every `--version`
+/// there starts Node in the backend.
+static VERSIONS: LazyLock<Mutex<HashMap<Backend, Option<String>>>> = LazyLock::new(Mutex::default);
+
+/// The version of the `gentle-shell` `spec` runs on `choice`: cached per
+/// launcher here, per backend there (Setup's checks ask again).
+pub fn shell_version(choice: &Backend, spec: &pi_rpc::LaunchSpec) -> Option<String> {
+    if *choice == Backend::Local {
+        return pi_rpc::backend_version(spec);
+    }
+    if let Some(known) = VERSIONS.lock().ok()?.get(choice) {
+        return known.clone();
+    }
+    let version = pi_rpc::backend_version(spec);
+    VERSIONS
+        .lock()
+        .ok()?
+        .insert(choice.clone(), version.clone());
+    version
 }
 
 /// The backend's login PATH, asked once per backend and kept.
@@ -418,9 +465,19 @@ fn run_in(choice: &Backend, argv: &[String]) -> Option<(bool, String)> {
     pi_rpc::output_within(&mut command, PROBE_TIMEOUT)
 }
 
-/// Whether `gentle-shell` is on `choice`'s login PATH.
+/// Where `gentle-shell` is on `choice`'s login PATH; in WSL it may be a
+/// Windows install seen through interop ([`backend::is_windows_file`]).
+pub fn gentle_shell_path(choice: &Backend) -> Option<String> {
+    run(choice, "sh", &["-c", "command -v gentle-shell"])
+        .filter(|(ok, _)| *ok)
+        .map(|(_, out)| out.trim().to_string())
+        .filter(|path| !path.is_empty())
+}
+
+/// Whether `choice` has its own `gentle-shell` (a Windows one reached
+/// through WSL interop doesn't count).
 pub fn has_gentle_shell(choice: &Backend) -> bool {
-    run(choice, "sh", &["-c", "command -v gentle-shell"]).is_some_and(|(ok, _)| ok)
+    gentle_shell_path(choice).is_some_and(|path| !backend::is_windows_file(&path))
 }
 
 /// This computer's WSL distros (`wsl.exe --list --verbose`); empty without

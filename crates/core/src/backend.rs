@@ -86,12 +86,13 @@ impl Backend {
         match self {
             Self::Local | Self::Command { .. } => Some(host.to_string()),
             Self::Wsl { distro } => {
-                let host = host.strip_prefix(r"\\?\").unwrap_or(host);
                 if let Some((share, rest)) = wsl_share(host) {
                     return share
                         .eq_ignore_ascii_case(distro)
                         .then(|| format!("/{}", rest.replace('\\', "/")));
                 }
+                // A verbatim drive path (`\\?\C:\a`) reads as `C:\a`.
+                let host = host.strip_prefix(r"\\?\").unwrap_or(host);
                 if host.starts_with('/') {
                     return Some(host.to_string());
                 }
@@ -185,10 +186,12 @@ impl Backend {
 }
 
 /// `(distro, rest)` of `\\wsl.localhost\<distro>\<rest>` or
-/// `\\wsl$\<distro>\<rest>`, either slash.
+/// `\\wsl$\<distro>\<rest>`, either slash, also in the verbatim form
+/// Windows canonicalizes it to (`\\?\UNC\wsl.localhost\…`).
 fn wsl_share(path: &str) -> Option<(&str, &str)> {
     let rest = path
-        .strip_prefix(r"\\")
+        .strip_prefix(r"\\?\UNC\")
+        .or_else(|| path.strip_prefix(r"\\"))
         .or_else(|| path.strip_prefix("//"))?;
     let (host, rest) = rest.split_once(['\\', '/'])?;
     if !(host.eq_ignore_ascii_case("wsl.localhost") || host.eq_ignore_ascii_case("wsl$")) {
@@ -214,6 +217,17 @@ pub fn path_probe() -> Vec<String> {
     let script =
         format!(r#"{LOGIN_SHELL}; exec "$s" -l -i -c 'printf "{PATH_START}%s{PATH_END}" "$PATH"'"#);
     vec!["sh".to_string(), "-c".to_string(), script]
+}
+
+/// Whether `path`, as WSL prints it, is a Windows file reached through its
+/// interop (`/mnt/c/…`, Windows' PATH appended to the distro's): a Windows
+/// install, not the distro's own.
+pub fn is_windows_file(path: &str) -> bool {
+    path.strip_prefix("/mnt/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(drive, _)| {
+            drive.len() == 1 && drive.chars().all(|c| c.is_ascii_alphabetic())
+        })
 }
 
 /// The PATH [`path_probe`] printed, fenced from anything the rc files wrote.
@@ -298,12 +312,28 @@ mod tests {
             r"\\wsl.localhost\Ubuntu\home\ana\api",
             r"\\wsl$\Ubuntu\home\ana\api",
             "//wsl.localhost/Ubuntu/home/ana/api",
+            // What `canonicalize` makes of a share on Windows.
+            r"\\?\UNC\wsl.localhost\Ubuntu\home\ana\api",
+            r"\\?\UNC\wsl$\Ubuntu\home\ana\api",
         ] {
             assert_eq!(Backend::for_folder(folder), Some(wsl()), "{folder}");
         }
         assert_eq!(Backend::for_folder(r"C:\Users\ana\api"), None);
         assert_eq!(Backend::for_folder(r"\\server\share\api"), None);
         assert_eq!(Backend::for_folder("/home/ana/api"), None);
+    }
+
+    #[test]
+    fn windows_installs_seen_through_wsl_interop_are_told_apart() {
+        assert!(is_windows_file(
+            "/mnt/c/Users/ana/AppData/Local/pnpm/gentle-shell"
+        ));
+        assert!(!is_windows_file("/usr/local/bin/gentle-shell"));
+        assert!(!is_windows_file(
+            "/home/ana/.nvm/versions/node/v22/bin/gentle-shell"
+        ));
+        assert!(!is_windows_file("/mnt/wsl/shared/gentle-shell"));
+        assert!(!is_windows_file("/mnt/mac/Users/ana/gentle-shell"));
     }
 
     #[test]
@@ -319,6 +349,11 @@ mod tests {
                 Some("/home/ana/api"),
             ),
             (r"\\wsl$\ubuntu\home\ana", Some("/home/ana")),
+            (
+                r"\\?\UNC\wsl.localhost\Ubuntu\home\ana\api",
+                Some("/home/ana/api"),
+            ),
+            (r"\\?\UNC\server\share\api", None),
             (r"\\wsl.localhost\Ubuntu", Some("/")),
             ("/home/ana/api", Some("/home/ana/api")),
             (r"\\wsl.localhost\Debian\home\ana", None),

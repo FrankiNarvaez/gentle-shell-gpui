@@ -340,7 +340,7 @@ impl SessionView {
                         spec.args
                             .push(runs_on.path(&path).unwrap_or_else(|| path.into_owned()));
                     }
-                    let version = pi_rpc::backend_version(&spec);
+                    let version = crate::features::backend::shell_version(&runs_on, &spec);
                     let (process, rx) = PiProcess::spawn(&spec)?;
                     anyhow::Ok((process, rx, version, runs_on))
                 })

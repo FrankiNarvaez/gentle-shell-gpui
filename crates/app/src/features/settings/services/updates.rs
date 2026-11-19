@@ -32,6 +32,7 @@ pub(in crate::features::settings) fn upgrade_shell(
     // The upgrade can move the launcher: resolve it again before reporting
     // success, just as Configuration did before the extraction.
     pi_rpc::forget_cached();
+    crate::features::backend::forget_paths();
     let now = crate::features::backend::shell_spec(cwd).ok();
     let running = now.as_ref().and_then(pi_rpc::backend_version);
     (succeeded, text, running, now.map(|spec| spec.launcher))

@@ -58,6 +58,7 @@ pub(super) fn run_checks(choice: &Backend) -> Vec<Check> {
     backend::forget_paths();
     let label = choice.label();
     let launcher = gentle::launcher();
+    let shell_path = backend::gentle_shell_path(choice);
     let version = launcher.as_ref().ok().and_then(|l| l.version.clone());
     let home = version
         .as_ref()
@@ -92,12 +93,20 @@ pub(super) fn run_checks(choice: &Backend) -> Vec<Check> {
         .map(|id| {
             let (status, fix) = match id {
                 CheckId::Node => node(choice, &label),
-                CheckId::GentleShell => match &version {
-                    Some(_) => match gentle::check_gentle_shell(&launcher) {
+                CheckId::GentleShell => match (&version, &shell_path) {
+                    // WSL appends Windows' PATH: a Windows install answers, but
+                    // it isn't the distro's own.
+                    (_, Some(path)) if gentle_core::backend::is_windows_file(path) => (
+                        Status::Missing(format!(
+                            "Only Windows' gentle-shell is visible from {label} ({path})"
+                        )),
+                        terminal(INSTALL_SHELL),
+                    ),
+                    (Some(_), _) => match gentle::check_gentle_shell(&launcher) {
                         (Status::Ok(found), _) => (Status::Ok(found), Fix::None),
                         (status, _) => (status, terminal("gentle-shell upgrade")),
                     },
-                    None => (
+                    (None, _) => (
                         Status::Missing(format!("gentle-shell isn't installed in {label}")),
                         terminal(INSTALL_SHELL),
                     ),

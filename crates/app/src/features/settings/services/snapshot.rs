@@ -9,11 +9,22 @@ use std::path::Path;
 use super::super::snapshot::{Snapshot, probe, read_snapshot};
 
 pub(in crate::features::settings) fn load(cwd: &Path, shell_updates: bool) -> Snapshot {
+    // Where agents run in WSL, its homes; never this computer's by mistake
+    // while they are still being asked for.
+    crate::features::backend::ensure_homes();
     let homes = pi_rpc::resolve_homes();
     let mut snapshot = read_snapshot(&homes.agent, &homes.config, cwd);
-    let spec = crate::features::backend::shell_spec(cwd).ok();
+    let spec = crate::features::backend::shell_spec(cwd)
+        .or_else(|_| crate::features::backend::home_shell_spec())
+        .ok();
     if let Some(spec) = &spec {
         probe(spec, &mut snapshot);
+    }
+    // In a backend the launcher is its `gentle-shell`, named with where.
+    let choice = crate::features::backend::for_tab(cwd);
+    if choice != gentle_core::backend::Backend::Local {
+        snapshot.launcher = crate::features::backend::gentle_shell_path(&choice)
+            .map(|path| format!("{path} ({})", choice.label()).into());
     }
     // gentle-ai owns updates of installs it manages; a responding Shell
     // supplies update status in preference to the launcher registry check.
