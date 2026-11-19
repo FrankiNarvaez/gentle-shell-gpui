@@ -343,7 +343,7 @@ impl PanelView {
             .child(div().flex_1())
             .child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(11. / 16.))
                     .text_color(ui::faint())
                     .child(if visible.len() == table.rows.len() {
@@ -580,13 +580,13 @@ impl PanelView {
                 .truncate()
                 .into_any_element(),
             ColumnType::Number => div()
-                .font_family(ui::MONO)
+                .font_family(ui::mono())
                 .text_color(ui::fg())
                 .truncate()
                 .child(text)
                 .into_any_element(),
             ColumnType::Date => div()
-                .font_family(ui::MONO)
+                .font_family(ui::mono())
                 .text_color(ui::muted())
                 .truncate()
                 .child(text)

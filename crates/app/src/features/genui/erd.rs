@@ -306,7 +306,7 @@ impl PanelView {
                             .max_w_full()
                             .truncate()
                             .cursor_pointer()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .text_size(px(10.5 * scale))
                             .text_color(if picked { ui::accent() } else { ui::muted() })
                             .child(text)
@@ -410,7 +410,7 @@ impl PanelView {
             )
             .child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(px(10.5 * scale))
                     .text_color(ui::faint())
                     .child(t.columns.len().to_string()),
@@ -515,7 +515,7 @@ impl PanelView {
                         .flex_shrink_0()
                         .max_w(px(90. * scale))
                         .truncate()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_size(px(10.5 * scale))
                         .text_color(ui::faint())
                         .child(format!(
@@ -700,7 +700,7 @@ impl PanelView {
                 let gone = end.clone();
                 let mut rows = vec![
                     div()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_color(ui::muted())
                         .child(col.ty.clone().unwrap_or_else(|| "no type".into()))
                         .into_any_element(),

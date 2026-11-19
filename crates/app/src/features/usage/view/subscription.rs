@@ -272,7 +272,7 @@ impl UsageView {
                             .w(rems(44. / 16.))
                             .flex_shrink_0()
                             .text_xs()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .text_color(color)
                             .text_right()
                             .child(format!("{}%", percent.round() as i64)),

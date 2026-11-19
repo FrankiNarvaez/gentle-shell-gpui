@@ -397,7 +397,7 @@ impl DocsView {
                         div()
                             .truncate()
                             .text_xs()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .text_color(ui::faint())
                             .child(line),
                     ),

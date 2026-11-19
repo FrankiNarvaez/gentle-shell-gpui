@@ -648,7 +648,12 @@ impl PanelView {
         let state = self.live.as_ref()?;
         let gate = state.gate.as_ref()?;
         let command = state.spec.command.as_ref()?;
-        let code = |text: String| div().font_family(ui::MONO).text_color(ui::fg()).child(text);
+        let code = |text: String| {
+            div()
+                .font_family(ui::mono())
+                .text_color(ui::fg())
+                .child(text)
+        };
         let panel = div().absolute().left_2().right_2().top_2();
         match gate.consent() {
             Consent::Ask => Some(

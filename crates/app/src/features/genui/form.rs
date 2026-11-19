@@ -358,7 +358,7 @@ impl PanelView {
                     .when(error.is_some(), |d| {
                         d.border_color(ui::danger().opacity(0.6))
                     })
-                    .when(field.kind != FieldType::Text, |d| d.font_family(ui::MONO))
+                    .when(field.kind != FieldType::Text, |d| d.font_family(ui::mono()))
                     .child(Input::new(input).appearance(false).small())
                     .into_any_element(),
                 _ => div().into_any_element(),
@@ -384,7 +384,7 @@ impl PanelView {
                         .child(
                             div()
                                 .min_w(rems(40. / 16.))
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
                                 .text_size(rems(12. / 16.))
                                 .text_color(ui::fg())
                                 .child(field.display(&json!(value))),

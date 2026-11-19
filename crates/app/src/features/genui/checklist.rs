@@ -1025,7 +1025,7 @@ impl PanelView {
             .children(progress.map(|p| {
                 div()
                     .flex_shrink_0()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(11. / 16.))
                     .text_color(ui::faint())
                     .child(p)

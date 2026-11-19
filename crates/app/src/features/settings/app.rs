@@ -175,7 +175,7 @@ pub(super) fn app_section(cx: &App) -> Div {
                                 .text_color(ui::fg())
                                 .child(format!("Downloading Gentle Shell {}…", release.version)),
                         )
-                        .child(div().font_family(ui::MONO).text_color(ui::muted()).child(
+                        .child(div().font_family(ui::mono()).text_color(ui::muted()).child(
                             match total {
                                 Some(total) => format!("{} of {}", mb(*done), mb(*total)),
                                 None => mb(*done),

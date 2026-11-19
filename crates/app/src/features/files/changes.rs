@@ -679,7 +679,7 @@ impl ChangesView {
                     .px_1p5()
                     .rounded_md()
                     .bg(ui::well())
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(10.5 / 16.))
                     .text_color(ui::muted())
                     .child(count.to_string()),
@@ -702,7 +702,7 @@ impl ChangesView {
             .text_size(rems(12. / 16.))
             .child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_color(ui::success())
                     .child(count.to_string()),
             )
@@ -785,7 +785,7 @@ impl ChangesView {
             )
             .child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(10.5 / 16.))
                     .text_color(ui::faint())
                     .child(count.to_string()),
@@ -1140,7 +1140,7 @@ fn status_badge(badge: char) -> Div {
         .border_1()
         .border_color(color.opacity(0.5))
         .bg(color.opacity(0.1))
-        .font_family(ui::MONO)
+        .font_family(ui::mono())
         .text_size(rems(10. / 16.))
         .font_weight(FontWeight::BOLD)
         .text_color(color)

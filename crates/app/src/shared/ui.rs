@@ -234,13 +234,19 @@ pub fn backdrop() -> Hsla {
     themes::palette(|p| p.backdrop)
 }
 
-pub const MONO: &str = if cfg!(target_os = "macos") {
+/// The monospace family the app uses when the user hasn't chosen one.
+const DEFAULT_MONO: &str = if cfg!(target_os = "macos") {
     "Menlo"
 } else if cfg!(target_os = "windows") {
     "Consolas"
 } else {
     "DejaVu Sans Mono"
 };
+
+/// The monospace family for code, paths and numbers in the interface.
+pub fn mono() -> SharedString {
+    SharedString::new_static(DEFAULT_MONO)
+}
 
 /// Map the gpui-component theme onto the active palette so stock components
 /// match. Switches gpui-component's light/dark mode with the theme first.
@@ -366,7 +372,7 @@ pub fn well_box() -> Div {
         .bg(well())
         .border_1()
         .border_color(border())
-        .font_family(MONO)
+        .font_family(mono())
         .text_xs()
 }
 
@@ -446,7 +452,7 @@ pub fn kbd(text: impl Into<SharedString>) -> Div {
         .border_1()
         .border_color(border_strong())
         .bg(surface())
-        .font_family(MONO)
+        .font_family(mono())
         .text_size(rems(10.5 / 16.))
         .text_color(muted())
         .child(text.into())

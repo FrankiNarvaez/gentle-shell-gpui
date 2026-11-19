@@ -174,7 +174,7 @@ impl SettingsView {
                             .min_w_0()
                             .truncate()
                             .text_xs()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .text_color(ui::fg())
                             .child(p.source.clone()),
                     )
@@ -234,7 +234,7 @@ impl SettingsView {
                                         div()
                                             .truncate()
                                             .text_xs()
-                                            .font_family(ui::MONO)
+                                            .font_family(ui::mono())
                                             .text_color(ui::accent())
                                             .child(*src),
                                     )

@@ -80,7 +80,7 @@ pub fn chip<V: EventEmitter<DiagramEvent>>(
         .px_1()
         .rounded_md()
         .cursor_pointer()
-        .font_family(ui::MONO)
+        .font_family(ui::mono())
         .text_size(rems(11. / 16.))
         .text_color(color)
         .hover(|d| d.bg(ui::surface_hover()))

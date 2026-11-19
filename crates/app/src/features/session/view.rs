@@ -461,7 +461,7 @@ impl SessionView {
             .child(crate::shared::banner::banner(self.banner, scale, self.banner_reveal))
             .child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_xs()
                     .text_color(ui::faint())
                     .child(if version.is_empty() { String::new() } else { format!("v{version}") }),
@@ -826,7 +826,7 @@ impl SessionView {
                     .when_some(elapsed, |this, d| {
                         this.child(
                             div()
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
                                 .text_size(rems(11. / 16.))
                                 .text_color(ui::faint())
                                 .child(ui::format_duration(d.as_millis() as u64)),
@@ -911,7 +911,7 @@ impl SessionView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_size(rems(12. / 16.))
                         .text_color(color)
                         .whitespace_normal()
@@ -937,7 +937,7 @@ impl SessionView {
                         div()
                             .min_w_0()
                             .truncate()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .text_size(rems(13. / 16.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::champagne())
@@ -1207,7 +1207,7 @@ impl SessionView {
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(12. / 16.))
                     .text_color(subject_color)
                     .child(spec.subject.clone()),
@@ -1215,7 +1215,7 @@ impl SessionView {
             .when_some(spec.added, |this, n| {
                 this.child(
                     div()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_size(rems(12. / 16.))
                         .text_color(ui::success())
                         .child(format!("+{n}")),
@@ -1224,7 +1224,7 @@ impl SessionView {
             .when_some(spec.removed, |this, n| {
                 this.child(
                     div()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_size(rems(12. / 16.))
                         .text_color(ui::danger())
                         .child(format!("−{n}")),
@@ -1233,7 +1233,7 @@ impl SessionView {
             .when_some(duration, |this, d| {
                 this.child(
                     div()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_size(rems(11. / 16.))
                         .text_color(ui::faint())
                         .child(ui::format_duration(d.as_millis() as u64)),
@@ -1376,7 +1376,7 @@ impl SessionView {
                     .px_3()
                     .py_1()
                     .overflow_hidden()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_xs()
                     .text_color(ui::muted())
                     .when(open && hidden > 0, |this| {
@@ -2130,7 +2130,7 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         .when_some(duration, |this, d| {
             this.child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(11. / 16.))
                     .text_color(ui::faint())
                     .child(ui::format_duration(d.as_millis() as u64)),
@@ -2222,7 +2222,7 @@ fn number_badge(n: usize) -> Div {
         .px_1()
         .rounded_sm()
         .bg(ui::well())
-        .font_family(ui::MONO)
+        .font_family(ui::mono())
         .text_size(rems(10. / 16.))
         .text_color(ui::info())
         .child(format!("#{n}"))
@@ -2283,7 +2283,7 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
         .when_some(elapsed, |this, d| {
             this.child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(11. / 16.))
                     .text_color(ui::faint())
                     .child(clock(d)),

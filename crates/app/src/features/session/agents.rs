@@ -515,7 +515,7 @@ pub(super) fn job_row(
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .font_family(ui::MONO)
+                .font_family(ui::mono())
                 .text_color(ui::fg())
                 .child(row.label.clone()),
         )
@@ -593,7 +593,7 @@ fn job_output_well(output: Option<(String, bool)>, failure: Option<Failure>) -> 
         .border_1()
         .border_color(ui::border())
         .overflow_hidden()
-        .font_family(ui::MONO)
+        .font_family(ui::mono())
         .text_xs()
         .text_color(ui::muted());
     let note = |text: &'static str| div().text_color(ui::faint()).child(text);
@@ -836,7 +836,7 @@ impl SessionView {
                 div()
                     .flex_shrink_0()
                     .text_xs()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_color(ui::faint())
                     .child(count.to_string()),
             )
@@ -1175,7 +1175,7 @@ impl SessionView {
                                 .max_w(rems(200. / 16.))
                                 .truncate()
                                 .text_sm()
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
                                 .text_color(ui::fg())
                                 .child(name),
                         )
@@ -1187,7 +1187,7 @@ impl SessionView {
                                     .max_w(rems(220. / 16.))
                                     .truncate()
                                     .text_xs()
-                                    .font_family(ui::MONO)
+                                    .font_family(ui::mono())
                                     .text_color(ui::info())
                                     .child(model),
                             )
@@ -1211,19 +1211,19 @@ impl SessionView {
                 .child(
                     column(56., duration(helper.elapsed_ms(now)))
                         .text_xs()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_color(ui::muted()),
                 )
                 .child(
                     column(40., count(helper.turns()))
                         .text_xs()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_color(ui::muted()),
                 )
                 .child(
                     column(40., count(helper.tool_calls()))
                         .text_xs()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_color(ui::muted()),
                 );
             ui::appear(("agent-row-in", ix), div().child(row))
@@ -1241,7 +1241,7 @@ impl SessionView {
                 div()
                     .text_sm()
                     .text_color(ui::fg())
-                    .when(mono, |d| d.font_family(ui::MONO).text_xs())
+                    .when(mono, |d| d.font_family(ui::mono()).text_xs())
                     .child(value),
             )
         };
@@ -1257,7 +1257,7 @@ impl SessionView {
                     div()
                         .truncate()
                         .text_sm()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_color(ui::fg())
                         .child(value),
                 )
@@ -1374,7 +1374,7 @@ impl SessionView {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .font_family(ui::MONO)
+                                        .font_family(ui::mono())
                                         .text_color(ui::danger())
                                         .child(error),
                                 ),
@@ -1506,7 +1506,7 @@ impl SessionView {
                                             .overflow_hidden()
                                             .text_ellipsis()
                                             .whitespace_nowrap()
-                                            .font_family(ui::MONO)
+                                            .font_family(ui::mono())
                                             .text_color(ui::muted())
                                             .child(ThreadItem::tool_subject(args)),
                                     )
@@ -1521,7 +1521,7 @@ impl SessionView {
                                         .border_color(ui::border())
                                         .bg(ui::well())
                                         .overflow_hidden()
-                                        .font_family(ui::MONO)
+                                        .font_family(ui::mono())
                                         .text_xs()
                                         .text_color(ui::muted())
                                         .when(hidden > 0, |d| {

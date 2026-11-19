@@ -763,7 +763,7 @@ impl PanelView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(12. / 16.))
                     .text_color(ui::muted())
                     .children(self.body.as_ref().map(Body::stats)),
@@ -925,7 +925,7 @@ impl PanelView {
                         )
                         .child(
                             div()
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
                                 .text_size(rems(11. / 16.))
                                 .text_color(ui::muted())
                                 .whitespace_normal()

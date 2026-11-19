@@ -80,7 +80,7 @@ impl ProvidersView {
                         ui::well_box().items_center().py_3().child(
                             div()
                                 .text_2xl()
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
                                 .text_color(ui::champagne())
                                 .child(code.clone()),
                         ),

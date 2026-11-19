@@ -371,7 +371,7 @@ impl PanelView {
                     .text_size(px(11. * scale))
                     .child(
                         div()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::accent())
                             .child(fragment_name(f.kind)),

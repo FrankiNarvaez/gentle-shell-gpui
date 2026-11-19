@@ -482,7 +482,7 @@ impl PanelView {
                     .left(x + px(4.))
                     .top(rems(5. / 16.))
                     .whitespace_nowrap()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(10.5 / 16.))
                     .text_color(ui::faint())
                     .child(label),
@@ -660,7 +660,7 @@ impl PanelView {
                         .bottom_0()
                         .flex()
                         .items_center()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_size(px(10. * scale))
                         .text_color(ui::fg())
                         .child(format!("{}%", (p * 100.).round())),

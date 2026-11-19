@@ -430,7 +430,7 @@ pub(crate) fn rasterize_at(
 ) -> Result<tiny_skia::Pixmap, String> {
     let options = usvg::Options {
         fontdb: FONTS.clone(),
-        font_family: crate::shared::ui::MONO.to_string(),
+        font_family: crate::shared::ui::mono().to_string(),
         ..usvg::Options::default()
     };
     let tree = usvg::Tree::from_str(svg, &options).map_err(|e| e.to_string())?;

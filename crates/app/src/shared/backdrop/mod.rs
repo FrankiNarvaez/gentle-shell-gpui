@@ -625,7 +625,7 @@ fn glyph(ch: char, size: f32, bold: bool, window: &mut Window) -> Option<Glyph> 
     }
     let mut text = [0u8; 4];
     let text = ch.encode_utf8(&mut text);
-    let mut font = font(ui::MONO);
+    let mut font = font(ui::mono());
     if bold {
         font.weight = FontWeight::BOLD;
     }

@@ -220,7 +220,7 @@ impl DiagramView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(12. / 16.))
                     .text_color(ui::muted())
                     .child(format!(
@@ -483,7 +483,7 @@ impl DiagramView {
 
         // Edge labels: the phrase on the curve, up to two lines, on the
         // canvas color so the line doesn't run through the text; the
-        // style (async, data flow, dependency) under it in MONO.
+        // style (async, data flow, dependency) under it in `ui::mono()`.
         if s >= DETAIL_ZOOM {
             for (ix, (edge, (path, alpha))) in
                 self.working.edges.iter().zip(&shown.edges).enumerate()
@@ -534,7 +534,7 @@ impl DiagramView {
                                 .when_some(style, |d, style| {
                                     d.child(
                                         div()
-                                            .font_family(ui::MONO)
+                                            .font_family(ui::mono())
                                             .text_size(px(9. * s))
                                             .text_color(ui::faint())
                                             .child(style),
@@ -661,7 +661,7 @@ impl DiagramView {
                         )
                         .child(
                             div()
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
                                 .text_size(rems(11. / 16.))
                                 .text_color(ui::muted())
                                 .whitespace_normal()
@@ -1039,7 +1039,7 @@ impl DiagramView {
 }
 
 /// A node's card, read top to bottom: the kind tile and title, what the node
-/// does (its description, at most two lines) and `KIND · tech` in `MONO`.
+/// does (its description, at most two lines) and `KIND · tech` in `ui::mono()`.
 /// The kind sets its weight: a client is an actor (its icon in a badge above
 /// the card, on `raised`), an external system sits sunken on `well` with a
 /// lighter border, a note has no tile. Status changes the border (risk),
@@ -1148,7 +1148,7 @@ fn node_card(node: &gentle_core::genui::diagram::Node, rect: Rect, s: f32) -> Di
                     .w_full()
                     .truncate()
                     .when(actor, |d| d.text_center())
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(px(9.5 * s))
                     .line_height(px(12. * s))
                     .text_color(ui::faint())
@@ -1238,7 +1238,7 @@ pub(super) fn failed_card(title: &str, error: &str) -> AnyElement {
             div()
                 .px_3()
                 .pb_2()
-                .font_family(ui::MONO)
+                .font_family(ui::mono())
                 .text_size(rems(12. / 16.))
                 .text_color(ui::muted())
                 .whitespace_normal()

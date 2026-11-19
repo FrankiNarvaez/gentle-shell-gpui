@@ -669,7 +669,7 @@ impl HtmlView {
             warning,
         ] = &colors;
         let font_sans = format!("\"{}\", system-ui, sans-serif", cx.theme().font_family);
-        let font_mono = format!("\"{}\", ui-monospace, monospace", ui::MONO);
+        let font_mono = format!("\"{}\", ui-monospace, monospace", ui::mono());
         let palette = apps::Palette {
             dark: cx.theme().is_dark(),
             background,
@@ -929,7 +929,7 @@ impl HtmlView {
             (None, Some(error), _) => page.child(
                 div()
                     .p_3()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(12. / 16.))
                     .text_color(ui::danger())
                     .whitespace_normal()
@@ -982,7 +982,7 @@ impl HtmlView {
                     .py_1()
                     .rounded_md()
                     .bg(ui::raised())
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_size(rems(12. / 16.))
                     .text_color(ui::muted())
                     .truncate()

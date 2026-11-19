@@ -109,7 +109,7 @@ impl UsageView {
                             .truncate()
                             .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .text_color(color)
                             .child(value),
                     ),
@@ -124,7 +124,7 @@ impl UsageView {
                 .child(
                     div()
                         .text_color(ui::muted())
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .child(format_tokens(value)),
                 )
         };
@@ -268,7 +268,7 @@ impl UsageView {
                     .text_color(ui::faint())
                     .child(first)
                     .child(div().flex_1())
-                    .child(div().font_family(ui::MONO).child(format!(
+                    .child(div().font_family(ui::mono()).child(format!(
                         "peak {}",
                         match metric {
                             Metric::Tokens => format_tokens(max as u64),
@@ -306,7 +306,7 @@ impl UsageView {
             .flex_shrink_0()
             .text_right()
             .text_xs()
-            .font_family(ui::MONO)
+            .font_family(ui::mono())
             .text_color(ui::muted())
             .child(text)
     }

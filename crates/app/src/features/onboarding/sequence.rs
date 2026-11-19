@@ -111,7 +111,7 @@ impl OnboardingView {
                 div()
                     .flex_none()
                     .text_xs()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_color(if complete { ui::success() } else { ui::muted() })
                     .child(format!("{done} of {steps} ready")),
             )
@@ -211,7 +211,7 @@ impl OnboardingView {
             .child(
                 div()
                     .text_xs()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
                     .text_color(ui::faint())
                     .truncate()
                     .child(status_text(&check.status).to_string()),

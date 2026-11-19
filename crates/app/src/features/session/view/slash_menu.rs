@@ -150,7 +150,7 @@ impl SessionView {
                                     .child(
                                         div()
                                             .flex_shrink_0()
-                                            .font_family(ui::MONO)
+                                            .font_family(ui::mono())
                                             .text_size(rems(12. / 16.))
                                             .text_color(ui::accent())
                                             .child(format!("/{name}")),

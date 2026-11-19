@@ -69,7 +69,7 @@ impl SessionView {
                                 .text_color(ui::muted())
                                 .whitespace_normal()
                                 .when(look.body == CustomBody::Tail, |d| {
-                                    d.font_family(ui::MONO).text_size(rems(12. / 16.))
+                                    d.font_family(ui::mono()).text_size(rems(12. / 16.))
                                 })
                                 .child(shown),
                         )

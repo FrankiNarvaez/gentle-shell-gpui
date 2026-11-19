@@ -199,7 +199,7 @@ fn spawn_pty(
 }
 
 fn mono_font() -> Font {
-    font(ui::MONO)
+    font(ui::mono())
 }
 
 impl TerminalView {
@@ -1012,7 +1012,7 @@ impl Render for TerminalView {
             .relative()
             .size_full()
             .p(rems(PADDING / 16.))
-            .font_family(ui::MONO)
+            .font_family(ui::mono())
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))

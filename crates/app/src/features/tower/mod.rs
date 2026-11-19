@@ -280,7 +280,7 @@ impl Render for TowerView {
                 .child(
                     div()
                         .text_xs()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
                         .text_color(ui::muted())
                         .child(line.clone()),
                 ),
@@ -306,7 +306,9 @@ impl Render for TowerView {
                                      and adds it to your install. It takes a few minutes, once.",
                                 )
                             })
-                            .when(!missing_web, |d| d.font_family(ui::MONO).child(why.clone())),
+                            .when(!missing_web, |d| {
+                                d.font_family(ui::mono()).child(why.clone())
+                            }),
                     )
                     .child(
                         h_flex()
