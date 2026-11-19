@@ -3,8 +3,12 @@
 //! This is the public integration contract. Keep it separate from how a page
 //! renders or persists preferences.
 
+use crate::features::workspaces::TabLayout;
+
 pub enum SettingsEvent {
     Close,
+    /// Switch the current window's persisted tab placement.
+    TabLayoutChanged(TabLayout),
     /// Open the application's full profile-routing editor.
     OpenProfiles,
     /// Packages or sign-ins changed: tabs should reload their backend.

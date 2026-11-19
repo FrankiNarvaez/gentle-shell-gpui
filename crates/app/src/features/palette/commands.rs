@@ -7,9 +7,9 @@ use gentle_core::commands::{self, SlashCommand};
 
 use crate::shared::ui;
 
-use super::{PaletteAction, Row};
+use super::{PaletteAction, Row, TabLayout};
 
-pub(super) fn screen_rows() -> Vec<Row> {
+pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
     let row = |icon, title: &str, detail: &str, action| Row {
         icon,
         title: title.into(),
@@ -183,10 +183,27 @@ pub(super) fn screen_rows() -> Vec<Row> {
             ),
             PaletteAction::ReopenClosed,
         ),
+        match tab_layout {
+            TabLayout::Horizontal => row(
+                IconName::PanelLeft,
+                "View: Show tabs vertically",
+                "Move tabs from the top bar into the left sidebar",
+                PaletteAction::SetTabLayout(TabLayout::Vertical),
+            ),
+            TabLayout::Vertical => row(
+                IconName::List,
+                "View: Show tabs horizontally",
+                "Move tabs from the sidebar back into the top bar",
+                PaletteAction::SetTabLayout(TabLayout::Horizontal),
+            ),
+        },
         row(
-            IconName::PanelLeft,
-            "Toggle sidebar",
-            &format!("Files and the left panel ({})", ui::shortcut("B")),
+            IconName::PanelRight,
+            "Toggle Files sidebar",
+            &format!(
+                "Show or hide Files / Changes / Branches on the right ({})",
+                ui::shortcut("B")
+            ),
             PaletteAction::ToggleSidebar,
         ),
     ]
@@ -235,8 +252,8 @@ pub(super) fn command_row(command: SlashCommand) -> Option<Row> {
 mod tests {
     use gentle_core::commands::{Screen, SlashCommand};
 
-    use super::super::PaletteAction;
-    use super::command_row;
+    use super::super::{PaletteAction, TabLayout};
+    use super::{command_row, screen_rows};
 
     fn command(name: &str, detail: &str, terminal: bool) -> SlashCommand {
         SlashCommand {
@@ -248,6 +265,30 @@ mod tests {
 
     fn action(name: &str) -> Option<PaletteAction> {
         command_row(command(name, "detail", false)).map(|row| row.action)
+    }
+
+    #[test]
+    fn tab_placement_command_matches_current_layout() {
+        for (current, expected_title, target, absent) in [
+            (
+                TabLayout::Horizontal,
+                "View: Show tabs vertically",
+                TabLayout::Vertical,
+                "View: Show tabs horizontally",
+            ),
+            (
+                TabLayout::Vertical,
+                "View: Show tabs horizontally",
+                TabLayout::Horizontal,
+                "View: Show tabs vertically",
+            ),
+        ] {
+            let rows = screen_rows(current);
+            assert!(rows.iter().any(|row| {
+                row.title == expected_title && row.action == PaletteAction::SetTabLayout(target)
+            }));
+            assert!(!rows.iter().any(|row| row.title == absent));
+        }
     }
 
     #[test]

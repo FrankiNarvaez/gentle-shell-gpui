@@ -107,6 +107,21 @@ Tabs split into panes: agent, terminal or file. Panes tile like Hyprland's dwind
 
 ---
 
+### Optional vertical tabs — Projects and agents at a glance
+
+Tabs remain horizontal by default. To move them to the left, choose **Configuration → Appearance → Tab placement**, use the title-bar layout button, right-click a tab, or search **View: Show tabs vertically** in the command palette. The selection is saved across launches. **Files / Changes / Branches** always occupies a separate right sidebar; ⌘B (Ctrl+B on Windows/Linux) toggles Files without affecting tab placement.
+
+<details>
+<summary><kbd>More</kbd> <strong>Project navigator, pinning and tab actions</strong></summary>
+
+<br>
+
+The vertical navigator is built like the Files sidebar: a header with **+** (the title bar's new-tab menu: Agent, Terminal, Canvas, Tower) and the button that moves tabs back to the title bar, a search field, and the projects as a tree. Each project shows its letter badge, its tab count and its agents' activity (a dot: accent while working, amber when one needs you); the current one unfolds to its tabs, and search filters them. **Agent** and **Terminal** at the bottom of the sidebar open a tab in the current project. A tab's icon takes the same colors. Hover a tab for its grip (drag to reorder) and its ⋯ menu (pin/unpin, rename, move up/down, close). Pinned tabs stay at the top with a pin. Moving tabs back to the title bar leaves the Files sidebar and the pane tiling as they are.
+
+</details>
+
+---
+
 ### Terminal panes — Your login shell, in a real PTY
 
 Your login shell in a real PTY (alacritty_terminal) with the Gentleman colors; ⌘⇧T opens a terminal tab.
