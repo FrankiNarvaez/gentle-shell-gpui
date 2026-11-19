@@ -268,6 +268,65 @@ fn the_session_feed_drives_the_todo_list_and_the_command_menu(cx: &mut TestAppCo
     });
 }
 
+/// A tab under the window's text-selection layer, as the app's Root draws it.
+struct Selectable(Entity<SessionView>);
+
+impl gpui_kit::Render for Selectable {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _};
+        gpui_kit::div()
+            .size_full()
+            .child(gpui_kit::base::TextSelectionLayer)
+            .child(self.0.clone())
+    }
+}
+
+/// A message you sent can be selected with the mouse, like an answer, and
+/// what is selected is its text.
+#[gpui::test]
+fn a_sent_prompt_can_be_selected(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, MouseButton, base::TextSelection};
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            view.transcript
+                .items
+                .push(gentle_core::transcript::Item::User {
+                    text: "fix the parser".into(),
+                    images: Vec::new(),
+                });
+            view.sync_view(cx);
+            view
+        });
+        Selectable(session)
+    });
+    cx.run_until_parked();
+    let bounds = cx
+        .debug_bounds("user-text-0")
+        .expect("the sent prompt is drawn");
+    let (start, end) = (
+        gpui_kit::point(bounds.left() + gpui_kit::px(1.), bounds.center().y),
+        gpui_kit::point(bounds.right() - gpui_kit::px(1.), bounds.center().y),
+    );
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert_eq!(TextSelection::selected_text(window, cx), "fix the parser");
+    });
+}
+
 /// ↑ and ↓ in the composer walk the prompts sent before and come back to
 /// the draft; inside a multi-line prompt ↑ moves the cursor first.
 #[gpui::test]
