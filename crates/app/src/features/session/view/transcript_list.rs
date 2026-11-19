@@ -1,7 +1,7 @@
 //! Filas, mediciones y cachés de presentación de la lista virtualizada.
 
 use std::cell::OnceCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::*;
 
 use super::rail::preview;
-use super::{BubbleText, CardSpec, card_spec, line_count};
+use super::{BubbleText, CardSpec, card_spec, follows_step, line_count};
 use crate::shared::ui;
 use gentle_core::scroll::{self, Estimate, RailMark};
 use gentle_core::transcript::{Block, Dirty, Item};
@@ -130,6 +130,12 @@ pub(in crate::features::session) struct TranscriptList {
     /// Each item's size from its content (`gentle_core::scroll::item_weight`),
     /// by transcript index: how the rail sizes rows it hasn't seen.
     weights: Vec<f32>,
+    /// Items folded to their quiet one-line step row, by transcript index:
+    /// they estimate as [`STEP_LINE_WEIGHT`] instead of their full weight.
+    step_collapsed: HashSet<usize>,
+    /// Items that render a step row right after another step row (see
+    /// `follows_step`): their row drops the top padding.
+    step_tight: HashSet<usize>,
     /// Every row's weight, in row order: the estimate's input.
     row_weights: Vec<f32>,
     /// Where the pane is along the whole conversation; its row tops are
@@ -150,6 +156,26 @@ pub(in crate::features::session) struct TranscriptList {
 const HEADER_WEIGHT: f32 = 4.;
 const TAIL_WEIGHT: f32 = 2.5;
 const FOOTER_WEIGHT: f32 = 1.4;
+/// A step folded to its quiet one-line row (`Item::Tool`, `Item::Custom`):
+/// the line's padding and text. The full weight stays in `weights`, so
+/// unfolding restores the estimate without re-reading the item.
+const STEP_LINE_WEIGHT: f32 = 2.;
+/// A row's top padding (24 px) in weight units: what a step row that
+/// follows another step row drops (padding before and after a run of
+/// steps only).
+const ROW_PAD_WEIGHT: f32 = 24. / 17.;
+
+/// An item's estimate weight: its content weight, folded to the step-line
+/// weight when its quiet line shows, minus the top padding a step row
+/// that follows another step row drops.
+fn item_row_weight(weight: Option<f32>, step_collapsed: bool, tight: bool) -> f32 {
+    let base = if step_collapsed {
+        STEP_LINE_WEIGHT
+    } else {
+        weight.unwrap_or(TAIL_WEIGHT)
+    };
+    if tight { base - ROW_PAD_WEIGHT } else { base }
+}
 
 impl TranscriptList {
     pub(in crate::features::session) fn new() -> Self {
@@ -162,6 +188,8 @@ impl TranscriptList {
             born: HashMap::new(),
             heights: HashMap::new(),
             weights: Vec::new(),
+            step_collapsed: HashSet::new(),
+            step_tight: HashSet::new(),
             row_weights: Vec::new(),
             estimate: Estimate::default(),
             stale: true,
@@ -178,6 +206,8 @@ impl TranscriptList {
         self.born.clear();
         self.heights.clear();
         self.weights.clear();
+        self.step_collapsed.clear();
+        self.step_tight.clear();
         self.marks.clear();
         self.stale = true;
     }
@@ -227,10 +257,13 @@ impl TranscriptList {
             self.rail_for = None;
             self.row_weights.clear();
             self.row_weights.push(HEADER_WEIGHT);
-            self.row_weights.extend(
-                (0..self.shape.items)
-                    .map(|ix| self.weights.get(ix).copied().unwrap_or(TAIL_WEIGHT)),
-            );
+            self.row_weights.extend((0..self.shape.items).map(|ix| {
+                item_row_weight(
+                    self.weights.get(ix).copied(),
+                    self.step_collapsed.contains(&ix),
+                    self.step_tight.contains(&ix),
+                )
+            }));
             self.row_weights
                 .extend(self.shape.tail.iter().map(|_| TAIL_WEIGHT));
             self.row_weights.push(FOOTER_WEIGHT);
@@ -279,11 +312,19 @@ impl TranscriptList {
     pub(super) fn prepare(&mut self, items: &[Item], from: usize) {
         self.stale = true;
         self.weights.resize(from.min(items.len()), TAIL_WEIGHT);
+        // Items from `from` on are re-derived; the view re-states their fold.
+        self.step_collapsed.retain(|&ix| ix < from);
+        self.step_tight.retain(|&ix| ix < from);
         let kept = self.marks.partition_point(|(ix, _)| *ix < from);
         self.marks.truncate(kept);
         let changed = items.get(from..).unwrap_or_default();
         for (ix, item) in (from..).zip(changed) {
             self.weights.push(scroll::item_weight(item));
+            if follows_step(items, ix) {
+                self.step_tight.insert(ix);
+            } else {
+                self.step_tight.remove(&ix);
+            }
             let prepared = match item {
                 Item::Tool { .. } | Item::Shell { .. } => card_spec(item).map(Prepared::Card),
                 Item::Custom { text, .. } => Some(Prepared::Lines(line_count(text))),
@@ -361,6 +402,17 @@ impl TranscriptList {
         }
     }
 
+    /// Whether item `ix` sits folded to its quiet one-line step row; a
+    /// change re-lays the estimate (the row's weight moved).
+    pub(super) fn set_step_collapsed(&mut self, ix: usize, collapsed: bool) {
+        let changed = if collapsed {
+            self.step_collapsed.insert(ix)
+        } else {
+            self.step_collapsed.remove(&ix)
+        };
+        self.stale |= changed;
+    }
+
     pub(super) fn prepared(&self, ix: usize) -> Option<&Prepared> {
         self.prepared.get(&ix)
     }
@@ -403,7 +455,32 @@ impl TranscriptList {
 
 #[cfg(test)]
 mod tests {
-    use super::{ListUpdate, Row, Shape, Tail, list_update};
+    use super::{
+        ListUpdate, ROW_PAD_WEIGHT, Row, STEP_LINE_WEIGHT, Shape, TAIL_WEIGHT, Tail,
+        item_row_weight, list_update,
+    };
+
+    #[test]
+    fn a_step_row_that_follows_another_drops_its_padding_from_the_estimate() {
+        // The run's first row keeps its top padding.
+        assert_eq!(item_row_weight(Some(13.), true, false), STEP_LINE_WEIGHT);
+        assert_eq!(item_row_weight(Some(13.), false, false), 13.);
+        // A step row that follows another step row weighs its content
+        // without the top padding it drops.
+        assert_eq!(
+            item_row_weight(Some(13.), true, true),
+            STEP_LINE_WEIGHT - ROW_PAD_WEIGHT
+        );
+        assert_eq!(
+            item_row_weight(Some(13.), false, true),
+            13. - ROW_PAD_WEIGHT
+        );
+        // Unmeasured rows estimate from the default tail weight.
+        assert_eq!(
+            item_row_weight(None, false, true),
+            TAIL_WEIGHT - ROW_PAD_WEIGHT
+        );
+    }
 
     #[test]
     fn rows_map_to_header_items_tail_and_footer() {

@@ -19,7 +19,7 @@ use super::state::BackendStatus;
 use super::{CONTEXT, SessionView};
 use crate::shared::ui;
 use gentle_core::tools;
-use gentle_core::transcript::{Block, Item, NoticeLevel, ToolStatus};
+use gentle_core::transcript::{Block, Item, NoticeLevel, ToolStatus, assistant_visible};
 
 mod activity;
 mod cards;
@@ -50,6 +50,8 @@ const ANSWER_FADE: Duration = Duration::from_millis(500);
 const OUTPUT: usize = 0;
 const INPUT: usize = 1;
 const THINKING: usize = 2;
+/// The whole step: a finished tool (or helper) row folds to its quiet line.
+const STEP: usize = 3;
 
 fn fold_key(ix: usize, sub: usize, slot: usize) -> usize {
     (ix << 16) | (sub << 2) | slot
@@ -150,6 +152,13 @@ impl SessionView {
             self.sync_markdown(from, cx);
             self.track_live(from);
             self.list.prepare(&self.transcript.items, from);
+            // Steps fold to their quiet line by default; keep the list's
+            // estimate weights in step (a running step that fails opens).
+            let items = self.transcript.items.get(from..).unwrap_or_default();
+            for (ix, item) in (from..).zip(items) {
+                let collapsed = self.step_collapsed(ix, item);
+                self.list.set_step_collapsed(ix, collapsed);
+            }
             self.request_images(from, dirty.reset, cx);
             self.genui.set_root(&self.cwd, cx);
             self.genui
@@ -415,8 +424,23 @@ impl SessionView {
             self.expanded.insert(key);
         }
         // Fold keys carry their item index.
-        self.list.remeasure_item(key >> 16);
+        let ix = key >> 16;
+        // A whole-step fold changes the row's estimate too.
+        if key & 3 == STEP
+            && let Some(item) = self.transcript.items.get(ix)
+        {
+            let collapsed = self.step_collapsed(ix, item);
+            self.list.set_step_collapsed(ix, collapsed);
+        }
+        self.list.remeasure_item(ix);
         cx.notify();
+    }
+
+    /// Whether step `ix` shows its quiet one-line row (`Item::Shell` never
+    /// does). A failed tool starts open, every other step starts folded;
+    /// a click flips whichever it was (the key inverts the default).
+    fn step_collapsed(&self, ix: usize, item: &Item) -> bool {
+        gentle_core::transcript::step_folded(item, self.expanded.contains(&fold_key(ix, 0, STEP)))
     }
 
     // ── Empty and error states ─────────────────────────────────────────────
@@ -433,7 +457,7 @@ impl SessionView {
             .overflow_hidden()
             .items_center()
             .gap_1()
-            .pt(rems(96. / 16.))
+            .pt(rems(80. / 16.))
             .child(crate::shared::banner::banner(self.banner, scale, self.banner_reveal))
             .child(
                 div()
@@ -594,7 +618,7 @@ impl SessionView {
                 streaming,
                 error,
             } => {
-                let mut column = v_flex().w_full().gap_2();
+                let mut column = v_flex().w_full().gap_3();
                 let has_text = blocks
                     .iter()
                     .any(|b| matches!(b, Block::Text(t) if !t.is_empty()));
@@ -830,8 +854,6 @@ impl SessionView {
                     div()
                         .ml(rems(5. / 16.))
                         .pl_3()
-                        .border_l_2()
-                        .border_color(ui::border_strong())
                         .text_size(rems(13. / 16.))
                         .italic()
                         .text_color(ui::muted())
@@ -1020,79 +1042,26 @@ impl SessionView {
         let show_output =
             has_output && (spec.always_output || open || spec.status != ToolStatus::Done);
         let foldable = has_output && !spec.always_output;
+        // A finished tool step shows its quiet line first; a click unfolds
+        // the whole card. What you ran yourself (`Shell`) always shows it.
+        let step_key = fold_key(ix, 0, STEP);
+        let step_open = !self.step_collapsed(ix, item);
+        if !step_open {
+            return self
+                .step_line(ix, spec, duration, step_key, false, cx)
+                .into_any_element();
+        }
+        let header = if matches!(item, Item::Shell { .. }) {
+            self.card_header(ix, spec, out_key, foldable, cx)
+                .into_any_element()
+        } else {
+            self.step_line(ix, spec, duration, step_key, true, cx)
+                .into_any_element()
+        };
         ui::card()
             .w_full()
             .overflow_hidden()
-            .child(
-                h_flex()
-                    .id(("tool", ix))
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .when(foldable, |this| {
-                        this.cursor_pointer()
-                            .hover(|s| s.bg(ui::surface_hover()))
-                            .on_click(cx.listener(move |this, _, _, cx| this.toggle(out_key, cx)))
-                    })
-                    .child(Icon::new(spec.icon).small().text_color(ui::muted()))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_shrink(1.)
-                            .max_w(rems(420. / 16.))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .text_size(rems(13. / 16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(ui::champagne())
-                            .child(spec.title.clone()),
-                    )
-                    .when_some(spec.chip.clone(), |this, chip| {
-                        this.child(ui::chip(chip, ui::info()).flex_shrink_0())
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .whitespace_nowrap()
-                            .font_family(ui::MONO)
-                            .text_size(rems(12. / 16.))
-                            .text_color(ui::muted())
-                            .child(spec.subject.clone()),
-                    )
-                    .when_some(spec.added, |this, n| {
-                        this.child(
-                            div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(12. / 16.))
-                                .text_color(ui::success())
-                                .child(format!("+{n}")),
-                        )
-                    })
-                    .when_some(spec.removed, |this, n| {
-                        this.child(
-                            div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(12. / 16.))
-                                .text_color(ui::danger())
-                                .child(format!("−{n}")),
-                        )
-                    })
-                    .when(foldable, |this| {
-                        this.child(
-                            Icon::new(if open {
-                                IconName::ChevronUp
-                            } else {
-                                IconName::ChevronDown
-                            })
-                            .xsmall()
-                            .text_color(ui::faint()),
-                        )
-                    }),
-            )
+            .child(header)
             .when_some(
                 input.zip(spec.input_lines),
                 |this, ((text, diff), lines)| {
@@ -1117,6 +1086,170 @@ impl SessionView {
             })
             .child(status_footer(spec.status, duration))
             .into_any_element()
+    }
+
+    /// A collapsed step: one quiet line, no card around it. The icon is
+    /// faint (danger's cross when the step failed, pulsing while it runs),
+    /// the rest is today's header restyled: title, subject, +n/−n, duration
+    /// and a chevron. Clicking it unfolds the whole step.
+    fn step_line(
+        &self,
+        ix: usize,
+        spec: &CardSpec,
+        duration: Option<Duration>,
+        key: usize,
+        up: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let failed = spec.status == ToolStatus::Failed;
+        let running = spec.status == ToolStatus::Running;
+        let icon = if failed { IconName::CircleX } else { spec.icon };
+        let icon_color = if failed { ui::danger() } else { ui::faint() };
+        let icon = if running {
+            ui::pulse(div().child(Icon::new(icon).small().text_color(icon_color)))
+                .into_any_element()
+        } else {
+            Icon::new(icon)
+                .small()
+                .text_color(icon_color)
+                .into_any_element()
+        };
+        self.step_row(
+            ("step", ix),
+            spec,
+            icon,
+            StepRowStyle::Quiet,
+            duration,
+            Some((key, up)),
+            cx,
+        )
+        .w_full()
+    }
+
+    /// Today's tool card header: icon, title, subject, +n/−n and a chevron
+    /// when the output folds. Kept for `Item::Shell`, which never folds as
+    /// a whole step.
+    fn card_header(
+        &self,
+        ix: usize,
+        spec: &CardSpec,
+        out_key: usize,
+        foldable: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        self.step_row(
+            ("tool", ix),
+            spec,
+            Icon::new(spec.icon)
+                .small()
+                .text_color(ui::muted())
+                .into_any_element(),
+            StepRowStyle::Card,
+            None,
+            foldable.then(|| (out_key, self.expanded.contains(&out_key))),
+            cx,
+        )
+    }
+
+    /// The row both a step's quiet line and a card's header build from:
+    /// icon, title, chip, subject, +n/−n, duration and chevron, so the two
+    /// can't drift. The callers pass their differences: `icon` (the quiet
+    /// line pulses it and tones failure), `style` (title and subject tone),
+    /// `duration`, and `fold` — a toggling row's key and whether its
+    /// chevron points up.
+    #[allow(clippy::too_many_arguments)]
+    fn step_row(
+        &self,
+        id: impl Into<ElementId>,
+        spec: &CardSpec,
+        icon: AnyElement,
+        style: StepRowStyle,
+        duration: Option<Duration>,
+        fold: Option<(usize, bool)>,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let (title_color, title_weight, subject_color) = match style {
+            StepRowStyle::Quiet => (ui::muted(), FontWeight::NORMAL, ui::faint()),
+            StepRowStyle::Card => (ui::champagne(), FontWeight::SEMIBOLD, ui::muted()),
+        };
+        h_flex()
+            .id(id)
+            .px_3()
+            .py_2()
+            .gap_2()
+            .min_w_0()
+            .when_some(fold, |this, (key, _)| {
+                this.cursor_pointer()
+                    .hover(|s| s.bg(ui::surface_hover()))
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(key, cx)))
+            })
+            .child(icon)
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.)
+                    .max_w(rems(420. / 16.))
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .text_size(rems(13. / 16.))
+                    .font_weight(title_weight)
+                    .text_color(title_color)
+                    .child(spec.title.clone()),
+            )
+            .when_some(spec.chip.clone(), |this, chip| {
+                this.child(ui::chip(chip, ui::info()).flex_shrink_0())
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .whitespace_nowrap()
+                    .font_family(ui::MONO)
+                    .text_size(rems(12. / 16.))
+                    .text_color(subject_color)
+                    .child(spec.subject.clone()),
+            )
+            .when_some(spec.added, |this, n| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(12. / 16.))
+                        .text_color(ui::success())
+                        .child(format!("+{n}")),
+                )
+            })
+            .when_some(spec.removed, |this, n| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(12. / 16.))
+                        .text_color(ui::danger())
+                        .child(format!("−{n}")),
+                )
+            })
+            .when_some(duration, |this, d| {
+                this.child(
+                    div()
+                        .font_family(ui::MONO)
+                        .text_size(rems(11. / 16.))
+                        .text_color(ui::faint())
+                        .child(ui::format_duration(d.as_millis() as u64)),
+                )
+            })
+            .when_some(fold, |this, (_, up)| {
+                this.child(
+                    Icon::new(if up {
+                        IconName::ChevronUp
+                    } else {
+                        IconName::ChevronDown
+                    })
+                    .xsmall()
+                    .text_color(ui::faint()),
+                )
+            })
     }
 
     /// A command, file body or diff (`lines` long), clipped from the bottom with a fade.
@@ -1224,9 +1357,8 @@ impl SessionView {
         let more = lines.saturating_sub(OUTPUT_LINES);
         v_flex()
             .w_full()
-            .border_t_1()
-            .border_color(ui::border())
-            .py_1()
+            .pt_1p5()
+            .pb_1()
             .when(more > 0, |this| {
                 this.child(self.fold_toggle(
                     key,
@@ -1345,6 +1477,12 @@ impl SessionView {
                 let Some(item) = self.transcript.items.get(i) else {
                     return div().into_any_element();
                 };
+                // A finished assistant message with nothing to show (it only
+                // announced tool calls) renders no row at all: no padding, no
+                // gap, and a run of steps flows across it.
+                if !assistant_visible(item) {
+                    return div().into_any_element();
+                }
                 let element = self.render_item(i, item, narrow, cx);
                 // Keyed by index: items animate in once, never again.
                 self.list
@@ -1382,10 +1520,13 @@ impl SessionView {
                     .appear(("between", count), now, div().w_full().child(indicator))
             }
             // The column's bottom padding.
-            Row::Footer => return div().h(rems(24. / 16.)).into_any_element(),
+            Row::Footer => return div().h(rems(32. / 16.)).into_any_element(),
         };
-        // The column's top padding before the first row, its gap after.
-        let first = matches!(row, Row::Header) || (ix == 1 && !header);
+        let narrow = self.pane_width.get() < NARROW;
+        // Rows of consecutive steps sit close together: the top padding
+        // stays before and after a run of steps, not between its rows.
+        let tight = matches!(row, Row::Item(i)
+            if follows_step(&self.transcript.items, i));
         h_flex()
             .w_full()
             .justify_center()
@@ -1395,7 +1536,8 @@ impl SessionView {
                     .min_w_0()
                     .max_w(rems(760. / 16.))
                     .map(|d| if narrow { d.px_3() } else { d.px_6() })
-                    .pt(rems((if first { 24. } else { 16. }) / 16.))
+                    // The column's top padding before each row.
+                    .when(!tight, |d| d.pt(rems(24. / 16.)))
                     .child(content),
             )
             .into_any_element()
@@ -1637,6 +1779,31 @@ impl BubbleText {
     }
 }
 
+/// How the shared step row ([`SessionView::step_row`]) styles its text:
+/// the quiet collapsed line or the unfolded card's header.
+enum StepRowStyle {
+    Quiet,
+    Card,
+}
+
+/// Whether item `ix` renders a step row right after another step row: it
+/// is a step ([`step_open_by_default`]) and the first visible item before
+/// it is too — invisible assistant messages in between don't count (they
+/// render no row). Such rows drop their top padding; the padding stays
+/// before and after a run of steps.
+fn follows_step(items: &[Item], ix: usize) -> bool {
+    let is_step = |item: &Item| gentle_core::transcript::step_open_by_default(item).is_some();
+    match items.get(ix) {
+        Some(item) if is_step(item) => {}
+        _ => return false,
+    }
+    items[..ix]
+        .iter()
+        .rev()
+        .find(|item| assistant_visible(item))
+        .is_some_and(is_step)
+}
+
 /// The card data of a tool or shell item.
 fn card_spec(item: &Item) -> Option<CardSpec> {
     let (input, output) = card_texts(item);
@@ -1671,11 +1838,20 @@ fn card_spec(item: &Item) -> Option<CardSpec> {
                 Some(description) if command_like => gentle_core::text::first_line(description, 80),
                 _ => summary.title,
             };
-            let subject = if command_like && input.is_some() {
-                String::new()
+            // The quiet step line shows what the step was about: the command
+            // for command tools, the path for file tools. The card body shows
+            // the same thing when the step unfolds.
+            let subject = if command_like {
+                match input {
+                    Some((command, _)) => gentle_core::text::first_line(command, 120),
+                    None => summary.subject,
+                }
             } else {
                 summary.subject
             };
+            // A chip that only repeats the title ("bash" next to "Bash") is
+            // noise; one that adds information stays.
+            let chip = chip.filter(|chip| !chip.eq_ignore_ascii_case(&title));
             Some(CardSpec {
                 icon: tool_icon(name),
                 title: title.into(),
@@ -1944,8 +2120,6 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         .px_3()
         .py_1p5()
         .gap_1p5()
-        .border_t_1()
-        .border_color(ui::border())
         .text_size(rems(12. / 16.))
         .text_color(color)
         .map(|this| match icon {
@@ -1988,8 +2162,6 @@ fn user_bubble(
             .py_2p5()
             .rounded_2xl()
             .bg(ui::raised())
-            .border_1()
-            .border_color(ui::border())
             .text_size(rems(14. / 16.))
             .text_color(ui::fg())
             .when(!images.is_empty(), |this| {
@@ -2122,9 +2294,68 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
 #[cfg(test)]
 mod tests {
     use super::{
-        BubbleText, USER_LINES, USER_SLACK, command_language, head_slice, language_for_path,
-        line_count, parse_diff_line, tail_slice,
+        BubbleText, USER_LINES, USER_SLACK, command_language, follows_step, head_slice,
+        language_for_path, line_count, parse_diff_line, tail_slice,
     };
+    use gentle_core::transcript::{Block, Item, ToolStatus};
+
+    fn step(name: &str, status: ToolStatus) -> Item {
+        Item::Tool {
+            call_id: format!("{name}-1"),
+            name: name.into(),
+            args: serde_json::json!({}),
+            status,
+            output: String::new(),
+            details: serde_json::json!({}),
+            duration_ms: None,
+        }
+    }
+
+    fn textless() -> Item {
+        Item::Assistant {
+            blocks: vec![Block::ToolCall],
+            streaming: false,
+            error: None,
+        }
+    }
+
+    fn text(text: &str) -> Item {
+        Item::Assistant {
+            blocks: vec![Block::Text(text.into())],
+            streaming: false,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn consecutive_step_rows_sit_close_together() {
+        let items = vec![
+            text("A"),
+            step("bash", ToolStatus::Done),
+            textless(),
+            step("read", ToolStatus::Done),
+            step("edit", ToolStatus::Done),
+            text("B"),
+        ];
+        // The first step after text keeps its padding; the steps that follow
+        // it (even across an invisible assistant message) sit close.
+        assert!(!follows_step(&items, 1));
+        assert!(follows_step(&items, 3));
+        assert!(follows_step(&items, 4));
+        // The run's end gets its padding back.
+        assert!(!follows_step(&items, 5));
+        // What you ran yourself is not a step row.
+        let shell = vec![
+            step("bash", ToolStatus::Done),
+            Item::Shell {
+                command: "ls".into(),
+                output: String::new(),
+                exit_code: Some(0),
+                running: false,
+            },
+        ];
+        assert!(!follows_step(&shell, 1));
+    }
 
     #[test]
     fn long_messages_fold_to_their_first_lines() {

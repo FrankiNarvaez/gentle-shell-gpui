@@ -64,6 +64,8 @@ pub fn image_key(data: &str) -> u64 {
     hasher.finish()
 }
 
+/// One entry of a conversation: what you or the model wrote, a tool call
+/// with its result, a `!command`, a notice or an extension message.
 #[derive(Debug, Clone)]
 pub enum Item {
     User {
@@ -108,6 +110,53 @@ pub enum Item {
         command: String,
         notices: Vec<(NoticeLevel, String)>,
     },
+}
+
+/// Whether a step starts open, from its kind and status: a failed tool
+/// step does (its error is why you'd look at it), every other collapsible
+/// step starts folded to its quiet one-line row. `None` for items that
+/// never fold this way — `Shell` (what you ran yourself) keeps its output
+/// visible, the generative-UI tool and its event cards are rendered by the
+/// genui views as their own live cards (content, not collapsible steps),
+/// and the other items are not steps.
+pub fn step_open_by_default(item: &Item) -> Option<bool> {
+    match item {
+        Item::Tool { name, .. } if name == crate::genui::TOOL => None,
+        Item::Tool { status, .. } => Some(*status == ToolStatus::Failed),
+        Item::Custom { kind, .. } if kind == crate::genui::EVENT_MESSAGE => None,
+        Item::Custom { .. } => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether an assistant message shows anything to the user: text beyond
+/// whitespace, thinking (kept as today), an error — or it is still
+/// streaming ("Working…"). A finished message that only announced tool
+/// calls shows nothing: it renders no row, and a run of steps flows
+/// across it as if it weren't there.
+pub fn assistant_visible(item: &Item) -> bool {
+    match item {
+        Item::Assistant {
+            blocks,
+            streaming,
+            error,
+        } => {
+            *streaming
+                || error.is_some()
+                || blocks.iter().any(|b| match b {
+                    Block::Text(text) | Block::Thinking(text) => !text.trim().is_empty(),
+                    Block::ToolCall => false,
+                })
+        }
+        _ => true,
+    }
+}
+
+/// Whether a step shows its quiet one-line row instead of its card: its
+/// default ([`step_open_by_default`]) flipped once by the user's click
+/// (`toggled`). Items that never fold this way always show their card.
+pub fn step_folded(item: &Item, toggled: bool) -> bool {
+    step_open_by_default(item).is_some_and(|open| open == toggled)
 }
 
 /// Token usage reported while the latest assistant message streams.
@@ -693,6 +742,155 @@ pub fn format_tokens(tokens: u64) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_textless_assistant_message_shows_nothing() {
+        let assistant =
+            |blocks: Vec<Block>, streaming: bool, error: Option<&str>| Item::Assistant {
+                blocks,
+                streaming,
+                error: error.map(String::from),
+            };
+        // A message that only announced tool calls shows nothing.
+        assert!(!assistant_visible(&assistant(
+            vec![Block::ToolCall, Block::ToolCall],
+            false,
+            None
+        )));
+        // Whitespace text alone is no content either.
+        assert!(!assistant_visible(&assistant(
+            vec![Block::Text("  \n\t".into())],
+            false,
+            None
+        )));
+        // Text, thinking, an error and a live message all show.
+        assert!(assistant_visible(&assistant(
+            vec![Block::Text("hi".into())],
+            false,
+            None
+        )));
+        assert!(assistant_visible(&assistant(
+            vec![Block::Thinking("hmm".into())],
+            false,
+            None
+        )));
+        assert!(assistant_visible(&assistant(vec![], false, Some("boom"))));
+        assert!(assistant_visible(&assistant(vec![], true, None)));
+        // Anything else always shows.
+        assert!(assistant_visible(&Item::User {
+            text: "hi".into(),
+            images: vec![],
+        }));
+    }
+
+    #[test]
+    fn a_step_shows_its_line_until_a_click_unfolds_it() {
+        let tool = |status| Item::Tool {
+            call_id: "a".into(),
+            name: "bash".into(),
+            args: json!({}),
+            status,
+            output: "out".into(),
+            details: json!({}),
+            duration_ms: Some(10),
+        };
+        // A finished step is folded; a click unfolds it, another folds it.
+        assert!(step_folded(&tool(ToolStatus::Done), false));
+        assert!(!step_folded(&tool(ToolStatus::Done), true));
+        // A failed step starts open; a click folds it.
+        assert!(!step_folded(&tool(ToolStatus::Failed), false));
+        assert!(step_folded(&tool(ToolStatus::Failed), true));
+        // A helper card folds like a finished step.
+        let helper = Item::Custom {
+            kind: "gentle-agents.result".into(),
+            text: "done".into(),
+            details: json!({}),
+        };
+        assert!(step_folded(&helper, false));
+        // What never folds stays open whatever the toggle says.
+        let shell = Item::Shell {
+            command: "ls".into(),
+            output: String::new(),
+            exit_code: Some(0),
+            running: false,
+        };
+        assert!(!step_folded(&shell, false));
+        assert!(!step_folded(&shell, true));
+    }
+
+    #[test]
+    fn steps_open_by_default_only_when_failed() {
+        let tool = |status| Item::Tool {
+            call_id: "a".into(),
+            name: "bash".into(),
+            args: json!({}),
+            status,
+            output: String::new(),
+            details: json!({}),
+            duration_ms: None,
+        };
+        // Running and done steps fold to their quiet line.
+        assert_eq!(
+            step_open_by_default(&tool(ToolStatus::Running)),
+            Some(false)
+        );
+        assert_eq!(step_open_by_default(&tool(ToolStatus::Done)), Some(false));
+        // A failed one starts open, so you see why it broke.
+        assert_eq!(step_open_by_default(&tool(ToolStatus::Failed)), Some(true));
+        // Helper cards fold; what you ran yourself keeps its output, and
+        // the generative-UI cards stay as their own live views.
+        assert_eq!(
+            step_open_by_default(&Item::Custom {
+                kind: "gentle-agents.result".into(),
+                text: "done".into(),
+                details: json!({}),
+            }),
+            Some(false)
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Tool {
+                call_id: "g".into(),
+                name: crate::genui::TOOL.into(),
+                args: json!({}),
+                status: ToolStatus::Done,
+                output: String::new(),
+                details: json!({}),
+                duration_ms: None,
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Custom {
+                kind: crate::genui::EVENT_MESSAGE.into(),
+                text: String::new(),
+                details: json!({}),
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Shell {
+                command: "ls".into(),
+                output: String::new(),
+                exit_code: Some(0),
+                running: false,
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::Notice {
+                level: NoticeLevel::Info,
+                text: "hi".into(),
+            }),
+            None
+        );
+        assert_eq!(
+            step_open_by_default(&Item::User {
+                text: "hi".into(),
+                images: vec![],
+            }),
+            None
+        );
+    }
 
     fn apply_all(t: &mut Transcript, events: &[Value]) -> Vec<Effects> {
         events.iter().map(|e| t.apply(e)).collect()
