@@ -192,7 +192,9 @@ impl Workspace {
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_visible = !self.sidebar_visible;
-        cx.emit(WorkspaceEvent::FilesVisibilityChanged(self.files_sidebar_visible()));
+        cx.emit(WorkspaceEvent::FilesVisibilityChanged(
+            self.files_sidebar_visible(),
+        ));
         self.schedule_save(cx);
         cx.notify();
     }

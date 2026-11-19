@@ -285,8 +285,7 @@ mod tests {
         ] {
             let rows = screen_rows(current);
             assert!(rows.iter().any(|row| {
-                row.title == expected_title
-                    && row.action == PaletteAction::SetTabLayout(target)
+                row.title == expected_title && row.action == PaletteAction::SetTabLayout(target)
             }));
             assert!(!rows.iter().any(|row| row.title == absent));
         }

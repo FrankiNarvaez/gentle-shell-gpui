@@ -160,7 +160,15 @@ impl Workspace {
                 } else {
                     closed.index.max(boundary).min(tabs.len())
                 };
-                tabs.insert(index, Tab { id, tree, focused, pinned: closed.pinned });
+                tabs.insert(
+                    index,
+                    Tab {
+                        id,
+                        tree,
+                        focused,
+                        pinned: closed.pinned,
+                    },
+                );
                 self.show_reopened(index, &reopened, window, cx);
             }
         }

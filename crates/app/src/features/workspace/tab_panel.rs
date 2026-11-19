@@ -46,24 +46,23 @@ impl Workspace {
                 .icon(Icon::new(IconName::PanelLeft))
                 .checked(layout == TabLayout::Vertical)
                 .on_click(move |_, _, cx| {
-                    let _ = workspace.update(cx, |this, cx| {
-                        this.set_tab_layout(TabLayout::Vertical, cx)
-                    });
+                    let _ = workspace
+                        .update(cx, |this, cx| this.set_tab_layout(TabLayout::Vertical, cx));
                 }),
         )
     }
 
     /// Keep the selected tab stable when rows move, and pins ahead of other tabs.
-    fn with_reordered_tabs(
-        &mut self,
-        change: impl FnOnce(&mut Vec<Tab>),
-        cx: &mut Context<Self>,
-    ) {
+    fn with_reordered_tabs(&mut self, change: impl FnOnce(&mut Vec<Tab>), cx: &mut Context<Self>) {
         let space = self.space_mut();
         let active = space.tabs.get(space.active).map(|tab| tab.id);
         change(&mut space.tabs);
         if let Some(active) = active {
-            space.active = space.tabs.iter().position(|tab| tab.id == active).unwrap_or(0);
+            space.active = space
+                .tabs
+                .iter()
+                .position(|tab| tab.id == active)
+                .unwrap_or(0);
         }
         self.schedule_save(cx);
         cx.notify();
@@ -133,7 +132,12 @@ impl Workspace {
                             })),
                     ),
             )
-            .child(div().flex_1().min_h_0().child(self.render_vertical_tabs(cx)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .child(self.render_vertical_tabs(cx)),
+            )
     }
 
     fn render_vertical_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -192,18 +196,8 @@ impl Workspace {
                                 h_flex()
                                     .gap_1()
                                     .items_center()
-                                    .child(
-                                        div()
-                                            .size(rems(6. / 16.))
-                                            .rounded_full()
-                                            .bg(color),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(color)
-                                            .child(label),
-                                    )
+                                    .child(div().size(rems(6. / 16.)).rounded_full().bg(color))
+                                    .child(div().text_xs().text_color(color).child(label))
                             }))
                             .child(
                                 div()
@@ -258,15 +252,13 @@ impl Workspace {
         v_flex()
             .size_full()
             .child(
-                h_flex()
-                    .p_2()
-                    .child(
-                        ui::field()
-                            .flex_1()
-                            .min_w_0()
-                            .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
-                            .child(Input::new(&self.tab_search).appearance(false).small()),
-                    ),
+                h_flex().p_2().child(
+                    ui::field()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
+                        .child(Input::new(&self.tab_search).appearance(false).small()),
+                ),
             )
             .child(list)
             .child(
@@ -325,9 +317,8 @@ impl Workspace {
                                     PopupMenuItem::new("Tower tab")
                                         .icon(Icon::new(IconName::Building2))
                                         .on_click(move |_, window, cx| {
-                                            let _ = tower.update(cx, |this, cx| {
-                                                this.open_tower(window, cx)
-                                            });
+                                            let _ = tower
+                                                .update(cx, |this, cx| this.open_tower(window, cx));
                                         }),
                                 )
                             })
@@ -401,9 +392,11 @@ impl Workspace {
                 }
             }))
             .drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
-            .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
-                this.reorder_tab_at(drag.tab, id, cx)
-            }))
+            .on_drop(
+                cx.listener(move |this, drag: &TabDrag, _, cx| {
+                    this.reorder_tab_at(drag.tab, id, cx)
+                }),
+            )
             .context_menu(move |menu, _, _| {
                 Self::tab_placement_menu(menu, TabLayout::Vertical, placement.clone())
             })
@@ -413,10 +406,17 @@ impl Workspace {
                     .flex_none()
                     .cursor_grab()
                     .on_drag(
-                        TabDrag { tab: id, title: title.clone() },
+                        TabDrag {
+                            tab: id,
+                            title: title.clone(),
+                        },
                         |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
                     )
-                    .child(Icon::new(IconName::GripHorizontal).xsmall().text_color(ui::faint())),
+                    .child(
+                        Icon::new(IconName::GripHorizontal)
+                            .xsmall()
+                            .text_color(ui::faint()),
+                    ),
             )
             .child(
                 div()
@@ -455,7 +455,11 @@ impl Workspace {
                 },
             )
             .when(pinned, |d| {
-                d.child(Icon::new(IconName::Star).xsmall().text_color(ui::champagne()))
+                d.child(
+                    Icon::new(IconName::Star)
+                        .xsmall()
+                        .text_color(ui::champagne()),
+                )
             })
             .when(running || needs_you, |d| {
                 d.child(div().size(rems(6. / 16.)).rounded_full().bg(color))
@@ -482,9 +486,8 @@ impl Workspace {
                                     .on_click({
                                         let pin = pin.clone();
                                         move |_, _, cx| {
-                                            let _ = pin.update(cx, |this, cx| {
-                                                this.toggle_tab_pin(id, cx)
-                                            });
+                                            let _ = pin
+                                                .update(cx, |this, cx| this.toggle_tab_pin(id, cx));
                                         }
                                     }),
                                 )

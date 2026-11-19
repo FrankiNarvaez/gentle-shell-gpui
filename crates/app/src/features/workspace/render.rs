@@ -221,7 +221,11 @@ impl Render for Workspace {
                                                 }))
                                                 .tooltip(format!(
                                                     "{} Files sidebar ({})",
-                                                    if self.sidebar_visible { "Hide" } else { "Show" },
+                                                    if self.sidebar_visible {
+                                                        "Hide"
+                                                    } else {
+                                                        "Show"
+                                                    },
                                                     ui::shortcut("B")
                                                 ))
                                                 .on_click(cx.listener(|this, _, _, cx| {

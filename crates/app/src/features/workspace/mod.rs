@@ -35,7 +35,9 @@ use crate::features::settings::{SettingsEvent, SettingsView};
 use crate::features::tower::TowerView;
 use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
-use crate::features::workspaces::{self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout};
+use crate::features::workspaces::{
+    self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
+};
 use crate::shared::pane::{
     CloseViewer, PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
@@ -320,9 +322,8 @@ impl Workspace {
                 saved: Some((w.tabs, w.active_tab)),
             })
             .collect();
-        let tab_search = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("Find tabs in this workspace…")
-        });
+        let tab_search =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Find tabs in this workspace…"));
         let music = cx.new(|cx| Music::new(window, cx));
         let devices = cx.new(DevicePanel::new);
         let mut lifecycle = vec![
@@ -368,11 +369,11 @@ impl Workspace {
                 },
             ),
         ];
-        lifecycle.push(cx.subscribe_in(
-            &tab_search,
-            window,
-            |_, _, _: &InputEvent, _, cx| cx.notify(),
-        ));
+        lifecycle.push(
+            cx.subscribe_in(&tab_search, window, |_, _, _: &InputEvent, _, cx| {
+                cx.notify()
+            }),
+        );
         let mut this = Self {
             current: saved.current.min(spaces.len().saturating_sub(1)),
             spaces,
