@@ -32,9 +32,10 @@ const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 const PADDING: f32 = 10.;
 
-/// The terminal's font size at the window's rem size (the interface size).
+/// The terminal's font size: its own chosen size at the interface zoom,
+/// independent of the interface font size (which sets the rem).
 fn font_size(window: &Window) -> Pixels {
-    rems(FONT_SIZE / 16.).to_pixels(window.rem_size())
+    ui::terminal_px(FONT_SIZE, window.rem_size())
 }
 
 /// Events a terminal pane reports to its host.

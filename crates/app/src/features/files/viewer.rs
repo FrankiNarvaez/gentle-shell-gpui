@@ -881,7 +881,7 @@ impl FileView {
                             .flex_none()
                             .gap_1()
                             .font_family(ui::mono())
-                            .text_size(rems(11.5 / 16.))
+                            .text_size(ui::code_rems(11.5))
                             .when(added > 0, |d| {
                                 d.child(div().text_color(ui::success()).child(format!("+{added}")))
                             })
@@ -934,7 +934,7 @@ impl FileView {
                     div()
                         .flex_none()
                         .font_family(ui::mono())
-                        .text_size(rems(11.5 / 16.))
+                        .text_size(ui::code_rems(11.5))
                         .text_color(ui::faint())
                         .child(SAVE_HINT),
                 )
@@ -1094,7 +1094,7 @@ impl Render for FileView {
                     Editor::new(editor)
                         .appearance(false)
                         .font_family(ui::mono())
-                        .text_size(rems(12.5 / 16.))
+                        .text_size(ui::code_rems(12.5))
                         .size_full()
                 };
                 match self.markdown.as_ref() {

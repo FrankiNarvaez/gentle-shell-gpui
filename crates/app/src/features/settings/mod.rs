@@ -28,6 +28,7 @@ mod navigation;
 mod notifications;
 mod packages;
 mod pages;
+mod reading_desk;
 mod services;
 mod snapshot;
 mod theme;

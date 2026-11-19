@@ -5,6 +5,7 @@
 //!
 //! Views use these instead of ad-hoc colors so every screen looks alike.
 
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
@@ -14,8 +15,8 @@ use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationElement, AnimationExt as _, App, BoxShadow, Div, ElementId, EntityId,
-    FontWeight, Hsla, IntoElement, ParentElement as _, SharedString, Stateful, Styled, Window,
-    canvas, div, ease_out_quint, point, px, rems, rgb,
+    FontWeight, Hsla, IntoElement, ParentElement as _, Pixels, Rems, SharedString, Stateful,
+    Styled, Window, canvas, div, ease_out_quint, point, px, rems, rgb,
 };
 
 use crate::shared::themes::{self, Theme, mix};
@@ -253,11 +254,50 @@ static KIT_FAMILIES: OnceLock<(SharedString, SharedString)> = OnceLock::new();
 static CODE_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
 static TERMINAL_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
 
+/// The code and terminal sizes in px at 100 % zoom, and the interface size
+/// (f32 bits), set by `apply_theme`. Render code reads them without a `cx`.
+static CODE_SIZE: AtomicU32 = AtomicU32::new(gentle_core::fonts::DEFAULT_CODE_SIZE.to_bits());
+static TERMINAL_SIZE: AtomicU32 =
+    AtomicU32::new(gentle_core::fonts::DEFAULT_TERMINAL_SIZE.to_bits());
+static INTERFACE_SIZE: AtomicU32 =
+    AtomicU32::new(gentle_core::fonts::DEFAULT_INTERFACE_SIZE.to_bits());
+
+/// Code text of `px_at_100` px (at the default code size and 100 % zoom) as
+/// rems: follows the code size and the zoom, never the interface font size
+/// (which sets the rem).
+pub fn code_rems(px_at_100: f32) -> Rems {
+    let code = f32::from_bits(CODE_SIZE.load(Ordering::Relaxed));
+    let interface = f32::from_bits(INTERFACE_SIZE.load(Ordering::Relaxed));
+    rems(px_at_100 * (code / gentle_core::fonts::DEFAULT_CODE_SIZE) / interface)
+}
+
+/// The terminal font size in px for a window whose rem size is `rem`: the
+/// chosen terminal size times the interface zoom, independent of the
+/// interface font size.
+pub fn terminal_px(px_at_100: f32, rem: Pixels) -> Pixels {
+    let terminal = f32::from_bits(TERMINAL_SIZE.load(Ordering::Relaxed));
+    let interface = f32::from_bits(INTERFACE_SIZE.load(Ordering::Relaxed));
+    let zoom = f32::from(rem) / interface;
+    px(px_at_100 * (terminal / gentle_core::fonts::DEFAULT_TERMINAL_SIZE) * zoom)
+}
+
 fn chosen_or_default(slot: &RwLock<Option<SharedString>>) -> SharedString {
     slot.read()
         .ok()
         .and_then(|chosen| chosen.clone())
-        .unwrap_or_else(|| SharedString::new_static(DEFAULT_MONO))
+        .unwrap_or_else(default_mono)
+}
+
+pub(crate) fn default_mono() -> SharedString {
+    SharedString::new_static(DEFAULT_MONO)
+}
+
+/// The kit's interface family before any app font override.
+pub(crate) fn default_interface(cx: &App) -> SharedString {
+    KIT_FAMILIES.get().map_or_else(
+        || cx.theme().font_family.clone(),
+        |(family, _)| family.clone(),
+    )
 }
 
 fn store_font(slot: &RwLock<Option<SharedString>>, family: Option<SharedString>) {
@@ -287,10 +327,12 @@ pub fn apply_theme(cx: &mut App) {
     let scale = f32::from(cx.global::<themes::Themes>().interface_size) / 100.;
     let fonts = cx.global::<themes::Themes>().fonts.clone();
     store_font(&CODE_FONT, fonts.code.clone());
-    store_font(
-        &TERMINAL_FONT,
-        fonts.terminal.clone().or_else(|| fonts.code.clone()),
-    );
+    store_font(&TERMINAL_FONT, fonts.terminal_family().cloned());
+    use themes::FontSlot;
+    let (interface_size, code_size) = (fonts.size(FontSlot::Interface), fonts.size(FontSlot::Code));
+    INTERFACE_SIZE.store(interface_size.to_bits(), Ordering::Relaxed);
+    CODE_SIZE.store(code_size.to_bits(), Ordering::Relaxed);
+    TERMINAL_SIZE.store(fonts.size(FontSlot::Terminal).to_bits(), Ordering::Relaxed);
     let mode = if p.light {
         ThemeMode::Light
     } else {
@@ -383,8 +425,8 @@ pub fn apply_theme(cx: &mut App) {
         c.sidebar_primary = p.accent;
         c.sidebar_primary_foreground = p.on_accent;
         // 16 px at 100 %: the rem every `rems(px_at_100 / 16.)` is written for.
-        theme.font_size = px(16. * scale);
-        theme.mono_font_size = px(13. * scale);
+        theme.font_size = px(interface_size * scale);
+        theme.mono_font_size = px(code_size * scale);
         theme.radius = px(8. * scale);
         theme.radius_lg = px(12. * scale);
     });

@@ -24,6 +24,32 @@ pub fn installed<'a>(choice: &str, installed: &'a [String]) -> Option<&'a str> {
         .map(String::as_str)
 }
 
+/// Size limits of a font slot, in px at 100 % interface zoom.
+pub const MIN_SIZE: f32 = 8.;
+pub const MAX_SIZE: f32 = 32.;
+/// Defaults that reproduce the sizes the app used before they were chosen.
+pub const DEFAULT_INTERFACE_SIZE: f32 = 16.;
+pub const DEFAULT_CODE_SIZE: f32 = 13.;
+pub const DEFAULT_TERMINAL_SIZE: f32 = 13.;
+
+/// A stored size: finite and within limits, rounded to a tenth of a px.
+/// Anything else (NaN, zero, negative, out of range) is `None`: the default.
+pub fn normalize_size(size: f64) -> Option<f32> {
+    if !size.is_finite() || size < f64::from(MIN_SIZE) || size > f64::from(MAX_SIZE) {
+        return None;
+    }
+    Some(((size * 10.).round() / 10.) as f32)
+}
+
+/// A size typed or stepped by the user: out-of-range values clamp, NaN is
+/// `None` (the default).
+pub fn clamp_size(size: f64) -> Option<f32> {
+    if size.is_nan() {
+        return None;
+    }
+    normalize_size(size.clamp(f64::from(MIN_SIZE), f64::from(MAX_SIZE)))
+}
+
 /// The families the picker lists for `query`, in order. Names are deduped
 /// (case-insensitively), hidden ones (starting with `.`) dropped and the
 /// rest sorted case-insensitively; a query keeps the fuzzy matches, best
@@ -60,6 +86,26 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn stored_sizes_must_be_finite_and_in_range() {
+        assert_eq!(normalize_size(14.), Some(14.));
+        assert_eq!(normalize_size(13.04), Some(13.));
+        assert_eq!(normalize_size(8.), Some(8.));
+        assert_eq!(normalize_size(32.), Some(32.));
+        for bad in [0., -3., 7.9, 32.1, f64::NAN, f64::INFINITY] {
+            assert_eq!(normalize_size(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn typed_sizes_clamp_but_nan_is_the_default() {
+        assert_eq!(clamp_size(2.), Some(MIN_SIZE));
+        assert_eq!(clamp_size(99.), Some(MAX_SIZE));
+        assert_eq!(clamp_size(f64::INFINITY), Some(MAX_SIZE));
+        assert_eq!(clamp_size(12.5), Some(12.5));
+        assert_eq!(clamp_size(f64::NAN), None);
     }
 
     #[test]

@@ -731,6 +731,24 @@ impl FontSlot {
             FontSlot::Terminal => "terminalFont",
         }
     }
+
+    /// The key of the slot's size in the app's settings file.
+    pub fn size_key(self) -> &'static str {
+        match self {
+            FontSlot::Interface => "interfaceFontSize",
+            FontSlot::Code => "codeFontSize",
+            FontSlot::Terminal => "terminalFontSize",
+        }
+    }
+
+    /// The size, in px at 100 % zoom, the app used before sizes were chosen.
+    pub fn default_size(self) -> f32 {
+        match self {
+            FontSlot::Interface => fonts::DEFAULT_INTERFACE_SIZE,
+            FontSlot::Code => fonts::DEFAULT_CODE_SIZE,
+            FontSlot::Terminal => fonts::DEFAULT_TERMINAL_SIZE,
+        }
+    }
 }
 
 /// The persisted family for `slot`, trimmed; absent, blank or not a string
@@ -742,22 +760,43 @@ pub fn read_font(path: &Path, slot: FontSlot) -> Option<String> {
     }
 }
 
-/// Set the family of `slot` in the app's settings file, keeping every other
-/// key. `None` or a blank name is the default: the key is removed.
-pub fn write_font(path: &Path, slot: FontSlot, family: Option<&str>) -> std::io::Result<()> {
-    match family.and_then(fonts::normalize) {
-        Some(name) => write_key(path, slot.key(), Value::String(name)),
-        None => remove_key(path, slot.key()),
+/// The persisted families and sizes (families not yet checked against the
+/// installed ones); invalid values are the defaults.
+pub fn read_fonts(path: &Path) -> Fonts {
+    let mut fonts = Fonts::default();
+    for slot in FontSlot::ALL {
+        fonts.set(slot, read_font(path, slot).map(SharedString::from));
+        let size = read_key(path, slot.size_key())
+            .and_then(|v| v.as_f64())
+            .and_then(fonts::normalize_size)
+            .filter(|s| *s != slot.default_size());
+        *fonts.size_mut(slot) = size;
     }
+    fonts
 }
 
-/// Drop `key` from the app's settings file, keeping every other key.
-fn remove_key(path: &Path, key: &str) -> std::io::Result<()> {
-    let Some(mut value) = read_settings(path).filter(Value::is_object) else {
-        return Ok(());
-    };
-    if value.as_object_mut().and_then(|o| o.remove(key)).is_none() {
-        return Ok(());
+/// Write every font family and size in one read-modify-write, keeping every
+/// other key. Defaults remove their keys.
+pub fn write_fonts(path: &Path, fonts: &Fonts) -> std::io::Result<()> {
+    let mut value = read_settings(path)
+        .filter(Value::is_object)
+        .unwrap_or_else(|| Value::Object(Default::default()));
+    let object = value.as_object_mut().expect("filtered to an object");
+    for slot in FontSlot::ALL {
+        match fonts.get(slot).and_then(|f| fonts::normalize(f)) {
+            Some(name) => object.insert(slot.key().to_string(), Value::String(name)),
+            None => object.remove(slot.key()),
+        };
+        match fonts
+            .size_ref(slot)
+            .and_then(|s| fonts::normalize_size(f64::from(s)))
+        {
+            Some(size) => object.insert(slot.size_key().to_string(), Value::from(size)),
+            None => object.remove(slot.size_key()),
+        };
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
     }
     let text = serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?;
     std::fs::write(path, text + "\n")
@@ -858,11 +897,17 @@ pub struct Themes {
 }
 
 /// The effective font choices; `None` is the default of each surface.
+/// Family and size are independent per slot: only the terminal *family*
+/// follows the code font when unset, never its size.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Fonts {
     pub interface: Option<SharedString>,
     pub code: Option<SharedString>,
     pub terminal: Option<SharedString>,
+    /// Sizes in px at 100 % zoom; `None` is the slot's default.
+    pub interface_size: Option<f32>,
+    pub code_size: Option<f32>,
+    pub terminal_size: Option<f32>,
 }
 
 impl Fonts {
@@ -871,6 +916,44 @@ impl Fonts {
             FontSlot::Interface => self.interface.as_ref(),
             FontSlot::Code => self.code.as_ref(),
             FontSlot::Terminal => self.terminal.as_ref(),
+        }
+    }
+
+    /// Choose the family of `slot`; `None` is the default.
+    pub fn set(&mut self, slot: FontSlot, family: Option<SharedString>) {
+        *self.slot_mut(slot) = family;
+    }
+
+    /// The terminal family: its own, else the code font's.
+    pub fn terminal_family(&self) -> Option<&SharedString> {
+        self.terminal.as_ref().or(self.code.as_ref())
+    }
+
+    /// The size of `slot` in px at 100 % zoom (its default when unset).
+    pub fn size(&self, slot: FontSlot) -> f32 {
+        self.size_ref(slot).unwrap_or_else(|| slot.default_size())
+    }
+
+    /// Choose the size of `slot`. Out-of-range sizes clamp to the limits;
+    /// NaN and the slot's default size both mean the default.
+    pub fn set_size(&mut self, slot: FontSlot, size: f32) {
+        let size = fonts::clamp_size(f64::from(size)).filter(|s| *s != slot.default_size());
+        *self.size_mut(slot) = size;
+    }
+
+    fn size_ref(&self, slot: FontSlot) -> Option<f32> {
+        match slot {
+            FontSlot::Interface => self.interface_size,
+            FontSlot::Code => self.code_size,
+            FontSlot::Terminal => self.terminal_size,
+        }
+    }
+
+    fn size_mut(&mut self, slot: FontSlot) -> &mut Option<f32> {
+        match slot {
+            FontSlot::Interface => &mut self.interface_size,
+            FontSlot::Code => &mut self.code_size,
+            FontSlot::Terminal => &mut self.terminal_size,
         }
     }
 
@@ -906,13 +989,14 @@ pub fn init(cx: &mut App) {
         .as_deref()
         .and_then(read_interface_size)
         .unwrap_or(interface_size::DEFAULT);
-    let mut chosen = Fonts::default();
+    let mut chosen = store.as_deref().map(read_fonts).unwrap_or_default();
     let mut names = None;
     for slot in FontSlot::ALL {
-        if let Some(stored) = store.as_deref().and_then(|p| read_font(p, slot)) {
+        if let Some(stored) = chosen.get(slot).cloned() {
             let names = names.get_or_insert_with(|| cx.text_system().all_font_names());
-            *chosen.slot_mut(slot) =
+            let found =
                 fonts::installed(&stored, names).map(|name| SharedString::from(name.to_string()));
+            chosen.set(slot, found);
         }
     }
     let pi = read_pi_setting(&agent);
@@ -1198,21 +1282,31 @@ pub fn set_interface_size(percent: u16, cx: &mut App) {
     }
 }
 
-/// Apply and persist the installed family selected by the picker, or `None`
-/// for the default font.
-pub fn set_font(slot: FontSlot, family: Option<&str>, cx: &mut App) {
-    let family = family.map(|name| SharedString::from(name.to_string()));
+/// Serial of the latest `apply_fonts`; a queued write that is no longer the
+/// latest is skipped, since the newer one carries the complete state.
+static FONTS_WRITE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static FONTS_WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Apply `fonts` to the whole app and persist them: one global refresh and
+/// one grouped write, however many slots changed. A no-op when nothing
+/// changed. The caller passes only installed families.
+pub fn apply_fonts(fonts: Fonts, cx: &mut App) {
+    use std::sync::atomic::Ordering;
     let themes = cx.global_mut::<Themes>();
-    if themes.fonts.get(slot) == family.as_ref() {
+    if themes.fonts == fonts {
         return;
     }
-    *themes.fonts.slot_mut(slot) = family.clone();
+    themes.fonts = fonts.clone();
     ui::apply_theme(cx);
     cx.refresh_windows();
     if let Some(path) = store_path() {
+        let serial = FONTS_WRITE.fetch_add(1, Ordering::SeqCst) + 1;
         cx.background_executor()
             .spawn(async move {
-                let _ = write_font(&path, slot, family.as_deref());
+                let _guard = FONTS_WRITING.lock().unwrap_or_else(|e| e.into_inner());
+                if FONTS_WRITE.load(Ordering::SeqCst) == serial {
+                    let _ = write_fonts(&path, &fonts);
+                }
             })
             .detach();
     }
@@ -1502,6 +1596,77 @@ mod tests {
     }
 
     #[test]
+    fn fonts_roundtrip_through_one_grouped_write_keeping_other_keys() {
+        let dir = scratch("fonts-group");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"theme": "cute", "codeFontSize": 99}"#).unwrap();
+        let mut fonts = Fonts::default();
+        fonts.set(FontSlot::Code, Some("Fira Code".into()));
+        fonts.set_size(FontSlot::Code, 15.);
+        fonts.set_size(FontSlot::Terminal, 11.5);
+        write_fonts(&path, &fonts).unwrap();
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value["theme"], "cute");
+        assert_eq!(value["codeFont"], "Fira Code");
+        assert_eq!(value["codeFontSize"], 15.0);
+        assert_eq!(value["terminalFontSize"], 11.5);
+        assert!(value.get("interfaceFontSize").is_none());
+        assert!(value.get("interfaceFont").is_none());
+        let back = read_fonts(&path);
+        assert_eq!(back.size(FontSlot::Code), 15.);
+        assert_eq!(back.size(FontSlot::Terminal), 11.5);
+        assert_eq!(
+            back.get(FontSlot::Code).map(|s| s.as_ref()),
+            Some("Fira Code")
+        );
+        // Back to the defaults removes the keys again.
+        write_fonts(&path, &Fonts::default()).unwrap();
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value, serde_json::json!({"theme": "cute"}));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn invalid_persisted_sizes_fall_back_to_the_defaults() {
+        let dir = scratch("fonts-bad-size");
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"interfaceFontSize": "big", "codeFontSize": -4, "terminalFontSize": 500}"#,
+        )
+        .unwrap();
+        let fonts = read_fonts(&path);
+        assert_eq!(fonts.size(FontSlot::Interface), 16.);
+        assert_eq!(fonts.size(FontSlot::Code), 13.);
+        assert_eq!(fonts.size(FontSlot::Terminal), 13.);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sizes_are_independent_and_only_the_family_is_inherited() {
+        let mut fonts = Fonts::default();
+        fonts.set_size(FontSlot::Code, 20.);
+        assert_eq!(fonts.size(FontSlot::Interface), 16.);
+        assert_eq!(fonts.size(FontSlot::Terminal), 13.);
+        fonts.set(FontSlot::Code, Some("Fira Code".into()));
+        assert_eq!(
+            fonts.terminal_family(),
+            Some(&SharedString::from("Fira Code"))
+        );
+        assert_eq!(fonts.size(FontSlot::Terminal), 13.);
+        fonts.set(FontSlot::Terminal, Some("Menlo".into()));
+        assert_eq!(fonts.terminal_family(), Some(&SharedString::from("Menlo")));
+        // Clamping and NaN.
+        fonts.set_size(FontSlot::Code, 400.);
+        assert_eq!(fonts.size(FontSlot::Code), 32.);
+        fonts.set_size(FontSlot::Code, f32::NAN);
+        assert_eq!(fonts.size(FontSlot::Code), 13.);
+        // Equal to the default is the same as unset (so drafts compare equal).
+        fonts.set_size(FontSlot::Code, 13.);
+        assert_eq!(fonts.code_size, Fonts::default().code_size);
+    }
+
+    #[test]
     fn fonts_persist_per_slot_and_default_removes_the_key() {
         let dir = scratch("fonts");
         let path = dir.join("settings.json");
@@ -1509,13 +1674,13 @@ mod tests {
         for slot in FontSlot::ALL {
             assert_eq!(read_font(&path, slot), None);
         }
-        write_font(
-            &path,
+        let mut fonts = Fonts::default();
+        fonts.set(
             FontSlot::Terminal,
-            Some("  JetBrainsMono Nerd Font "),
-        )
-        .unwrap();
-        write_font(&path, FontSlot::Code, Some("Fira Code")).unwrap();
+            Some("  JetBrainsMono Nerd Font ".into()),
+        );
+        fonts.set(FontSlot::Code, Some("Fira Code".into()));
+        write_fonts(&path, &fonts).unwrap();
         assert_eq!(
             read_font(&path, FontSlot::Terminal).as_deref(),
             Some("JetBrainsMono Nerd Font")
@@ -1529,8 +1694,9 @@ mod tests {
         assert_eq!(value["keep"], 1);
         assert_eq!(value["interfaceScale"], 1.25);
         assert_eq!(value["terminalFont"], "JetBrainsMono Nerd Font");
-        write_font(&path, FontSlot::Code, None).unwrap();
-        write_font(&path, FontSlot::Terminal, Some("   ")).unwrap();
+        fonts.set(FontSlot::Code, None);
+        fonts.set(FontSlot::Terminal, Some("   ".into()));
+        write_fonts(&path, &fonts).unwrap();
         let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert!(value.get("codeFont").is_none());
         assert!(value.get("terminalFont").is_none());
