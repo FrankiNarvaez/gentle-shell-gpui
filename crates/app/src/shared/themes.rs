@@ -897,6 +897,7 @@ fn watch_user_themes(agent: PathBuf, cx: &mut App) {
         let mut last = stamp(&dirs);
         loop {
             cx.background_executor().timer(THEME_POLL).await;
+            crate::shared::diagnostics::tick();
             let (dirs_now, agent_now) = (dirs.clone(), agent.clone());
             let last_seen = last.clone();
             // Only a change re-reads (and re-parses) the themes.

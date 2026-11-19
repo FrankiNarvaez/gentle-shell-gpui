@@ -15,6 +15,7 @@ mod app;
 mod background;
 mod claude;
 mod devices;
+mod diagnostics;
 mod events;
 mod hydration;
 mod layout;

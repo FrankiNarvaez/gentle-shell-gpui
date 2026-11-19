@@ -4,7 +4,6 @@
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
-use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -115,9 +114,16 @@ impl SessionView {
         self.transcript.running || self.live.pending.is_some()
     }
 
-    /// Something the Stop button or ⌘. can stop: a turn or a `!command`.
+    /// Something the Stop button, ⌘. or Esc can stop: a turn or a `!command`.
     pub(super) fn stoppable(&self) -> bool {
         self.busy() || self.transcript.shells_running()
+    }
+
+    /// When the running turn, or the prompt not picked up yet, began.
+    pub(super) fn turn_since(&self) -> Option<Instant> {
+        self.live
+            .turn
+            .or_else(|| self.live.pending.as_ref().map(|p| p.since))
     }
 
     /// The empty state (hero and banner) shows.
@@ -307,6 +313,7 @@ impl SessionView {
         self.live.ticker = Some(cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
+                crate::shared::diagnostics::tick();
                 match this.update(cx, |this, cx| this.tick(cx)) {
                     Ok(true) => {}
                     _ => break,
@@ -595,7 +602,7 @@ impl SessionView {
                 let key = fold_key(ix, 0, OUTPUT);
                 let open = self.expanded.contains(&key);
                 let toggle = self.bubble_toggle(shown, key, open, cx);
-                let bubble = user_bubble(shown, images, open, toggle);
+                let bubble = user_bubble(ix, shown, images, open, toggle);
                 if text.trim().is_empty() {
                     return bubble.into_any_element();
                 }
@@ -1491,6 +1498,7 @@ impl SessionView {
                 let open = self.expanded.contains(&key);
                 let toggle = self.bubble_toggle(&shown, key, open, cx);
                 let bubble = user_bubble(
+                    base,
                     &shown,
                     pending.images.iter().cloned().map(Some).collect(),
                     open,
@@ -1538,6 +1546,7 @@ impl SessionView {
 
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::shared::diagnostics::render("SessionView");
         // A tab starts its backend once shown.
         self.ensure_started(window, cx);
         self.sync_view(cx);
@@ -1547,7 +1556,7 @@ impl Render for SessionView {
         // frame only while they play.
         let composing = self.composer_animating();
         if self.fade_answers() || composing {
-            window.request_animation_frame();
+            ui::request_animation_frame(window);
         }
         let rem_size = window.rem_size();
         self.list.follow_rem_size(rem_size);
@@ -1738,11 +1747,10 @@ impl CodeLine {
     }
 }
 
-/// A message's text as its bubble shows it: image tokens as `🖼 #N` chips,
-/// with their ranges, and a long one's folded start.
+/// A message's text as its bubble shows it: image tokens as `🖼 #N`, and a
+/// long one's folded start.
 struct BubbleText {
     text: SharedString,
-    chips: Vec<Range<usize>>,
     /// The first [`USER_LINES`] lines of `text` and how many more it has,
     /// when it is long enough to fold.
     folded: Option<(SharedString, usize)>,
@@ -1750,7 +1758,7 @@ struct BubbleText {
 
 impl BubbleText {
     fn new(text: &str) -> Self {
-        let (shown, chips) = attachments::chip_text(text);
+        let shown = attachments::chip_text(text);
         let lines = line_count(&shown);
         let folded = (lines > USER_LINES + USER_SLACK).then(|| {
             let (head, hidden) = head_slice(&shown, lines, USER_LINES);
@@ -1758,20 +1766,16 @@ impl BubbleText {
         });
         Self {
             text: shown.into(),
-            chips,
             folded,
         }
     }
 
-    /// What the bubble shows, `open` or not, and its chips.
-    fn visible(&self, open: bool) -> (SharedString, impl Iterator<Item = Range<usize>> + '_) {
-        let text = match &self.folded {
+    /// What the bubble shows, `open` or not.
+    fn visible(&self, open: bool) -> SharedString {
+        match &self.folded {
             Some((head, _)) if !open => head.clone(),
             _ => self.text.clone(),
-        };
-        let end = text.len();
-        let chips = self.chips.iter().filter(move |r| r.end <= end).cloned();
-        (text, chips)
+        }
     }
 }
 
@@ -2135,21 +2139,18 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
 }
 
 /// A user message: its images (numbered like their `[Image #N]` tokens)
-/// over the text, tokens shown as `🖼 #N` chips, a long text folded unless
+/// over the text, tokens shown as `🖼 #N`, a long text folded unless
 /// `open`, with its `toggle`. `None` is an image that could not be decoded.
+/// The text is selectable and copies with the platform shortcut, like an
+/// answer's; `ix` keys its selection.
 fn user_bubble(
+    ix: usize,
     shown: &BubbleText,
     images: Vec<Option<Arc<Image>>>,
     open: bool,
     toggle: Option<Stateful<Div>>,
 ) -> Div {
-    let chip = HighlightStyle {
-        color: Some(ui::info()),
-        font_weight: Some(FontWeight::SEMIBOLD),
-        background_color: Some(ui::info().opacity(0.14)),
-        ..Default::default()
-    };
-    let (text, chips) = shown.visible(open);
+    let text = shown.visible(open);
     // min_w_0 on both levels: without it the bubble's minimum width is its
     // unwrapped text, so in a narrow pane it overflows (clipped on the left).
     h_flex().w_full().min_w_0().justify_end().child(
@@ -2172,7 +2173,11 @@ fn user_bubble(
                 ))
             })
             .when(!text.trim().is_empty(), |this| {
-                this.child(StyledText::new(text).with_highlights(chips.map(|r| (r, chip))))
+                this.child(
+                    div()
+                        .debug_selector(move || format!("user-text-{ix}"))
+                        .child(gpui_kit::base::SelectableText::new(("user-text", ix), text)),
+                )
             })
             // The toggle's own padding, undone so its label lines up with the text.
             .children(
@@ -2377,22 +2382,8 @@ mod tests {
         assert_eq!(head.as_ref(), message(USER_LINES, "\r\n"));
         assert!(!head.ends_with('\r'));
         // Open, the whole text shows; folded, the head.
-        assert_eq!(bubble.visible(true).0, bubble.text);
-        assert_eq!(bubble.visible(false).0, head);
-    }
-
-    #[test]
-    fn folded_messages_keep_only_the_chips_they_show() {
-        let mut lines: Vec<String> = (1..=20).map(|i| format!("line {i}")).collect();
-        lines[0] = "see [Image #1]".into();
-        lines[15] = "and [Image #2]".into();
-        let bubble = BubbleText::new(&lines.join("\n"));
-        let (text, chips) = bubble.visible(false);
-        let shown: Vec<_> = chips.map(|r| text[r].to_string()).collect();
-        assert_eq!(shown, vec!["🖼 #1"]);
-        let (text, chips) = bubble.visible(true);
-        let shown: Vec<_> = chips.map(|r| text[r].to_string()).collect();
-        assert_eq!(shown, vec!["🖼 #1", "🖼 #2"]);
+        assert_eq!(bubble.visible(true), bubble.text);
+        assert_eq!(bubble.visible(false), head);
     }
 
     #[test]

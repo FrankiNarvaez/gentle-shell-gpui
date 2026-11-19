@@ -11,10 +11,15 @@ use super::super::{
     snapshot::Snapshot,
 };
 
-pub(super) fn render(view: &SettingsView, snapshot: &Snapshot) -> Div {
+pub(super) fn render(
+    view: &SettingsView,
+    snapshot: &Snapshot,
+    cx: &mut Context<SettingsView>,
+) -> Div {
     v_flex()
         .gap_3()
         .child(gentle_shell_section(snapshot))
+        .child(view.diagnostics_section(cx))
         .child(section(IconName::CircleCheck, "Setup & requirements").child(view.setup.clone()))
 }
 

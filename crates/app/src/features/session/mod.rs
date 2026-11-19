@@ -36,6 +36,10 @@ actions!(session, [Abort, Stop, ToggleAgents, NewSession]);
 
 pub const CONTEXT: &str = "GentleSession";
 
+/// After an Esc that closed something, how long further Esc presses only
+/// close things and never stop the turn.
+const ESCAPE_SETTLE: std::time::Duration = std::time::Duration::from_millis(600);
+
 /// Requests a tab makes of its window.
 pub enum SessionEvent {
     OpenProviders,
@@ -150,6 +154,8 @@ pub struct SessionView {
     models: state::Models,
     usage: state::Usage,
     commands: Vec<(String, String)>,
+    /// The prompts sent from this tab, for ↑/↓ in the composer.
+    prompt_history: gentle_core::prompt_history::PromptHistory,
     /// Each skill's folder, by name (without `skill:`).
     skill_dirs: Vec<(String, PathBuf)>,
     session_name: Option<String>,
@@ -209,6 +215,7 @@ impl SessionView {
         })
         .detach();
         let weak = cx.entity().downgrade();
+        crate::features::diagnostics::watch_tab(weak.clone());
         let subscriptions = vec![
             cx.subscribe_in(
                 &composer,
@@ -262,6 +269,7 @@ impl SessionView {
                 let consumed = weak
                     .update(cx, |this, cx| {
                         this.model_picker_key(&event.keystroke, window, cx)
+                            || this.history_key(&event.keystroke, window, cx)
                             || this.slash_menu_key(&event.keystroke, window, cx)
                     })
                     .unwrap_or(false);
@@ -308,6 +316,7 @@ impl SessionView {
             usage: state::Usage::default(),
             pane_width: std::rc::Rc::new(std::cell::Cell::new(10_000.)),
             commands: Vec::new(),
+            prompt_history: Default::default(),
             skill_dirs: Vec::new(),
             session_name: None,
             session_file: None,
@@ -495,24 +504,40 @@ impl SessionView {
     }
 
     /// Esc: close what's open (the Agents panel, then a dialog, then an
-    /// expanded generative UI surface that doesn't have the keyboard). It
-    /// never stops the turn: a few Esc presses to close things used to abort
-    /// the agent once nothing was left open. Stopping is ⌘. or the Stop button.
+    /// expanded generative UI surface that doesn't have the keyboard; the
+    /// `/` menu and the model picker close earlier, from the composer), and
+    /// with nothing open stop the running turn or `!command`, as in Gentle
+    /// Shell's terminal. An Esc right after one that closed something only
+    /// propagates: a quick run of presses to close things never stops the
+    /// agent by accident.
     fn abort(&mut self, _: &Abort, window: &mut Window, cx: &mut Context<Self>) {
-        if self.agents_panel.open {
+        let now = std::time::Instant::now();
+        let closed = if self.agents_panel.open {
             self.close_agents(cx);
-            return;
-        }
-        if !self.extension.dialogs.is_empty() {
+            true
+        } else if !self.extension.dialogs.is_empty() {
             self.answer_dialog(UiAnswer::Cancelled, window, cx);
-            return;
-        }
-        // The `/` menu, open over an expanded surface, closes first.
-        if !self.slash_menu_open(cx) && self.genui.collapse_on_escape(window, cx) {
+            true
+        } else if !self.slash_menu_open(cx) && self.genui.collapse_on_escape(window, cx) {
+            // The `/` menu, open over an expanded surface, closes first.
             cx.notify();
+            true
+        } else {
+            false
+        };
+        if closed {
+            self.live.escape_closed = Some(now);
             return;
         }
-        cx.propagate();
+        let settling = self
+            .live
+            .escape_closed
+            .is_some_and(|at| now.duration_since(at) < ESCAPE_SETTLE);
+        if self.stoppable() && !settling {
+            self.stop(cx);
+        } else {
+            cx.propagate();
+        }
     }
 
     /// ⌘. (Ctrl+. elsewhere): stop the running turn or `!command`.

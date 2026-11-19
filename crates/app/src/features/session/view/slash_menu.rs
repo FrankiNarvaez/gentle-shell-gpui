@@ -79,7 +79,10 @@ impl SessionView {
                 }
                 self.insert_command(picked, window, cx);
             }
-            "escape" => self.live.slash_dismissed = Some(text),
+            "escape" => {
+                self.live.slash_dismissed = Some(text);
+                self.live.escape_closed = Some(std::time::Instant::now());
+            }
             _ => return false,
         }
         cx.notify();

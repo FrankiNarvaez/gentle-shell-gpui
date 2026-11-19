@@ -197,6 +197,7 @@ pub fn init(cx: &mut App) {
     cx.spawn(async move |cx| {
         loop {
             cx.background_executor().timer(POWER_POLL).await;
+            crate::shared::diagnostics::tick();
             let now = cx
                 .background_executor()
                 .spawn(async { power::current() })

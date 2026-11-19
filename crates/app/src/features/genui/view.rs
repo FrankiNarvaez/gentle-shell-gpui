@@ -407,7 +407,7 @@ impl DiagramView {
                 if (old.size.width - bounds.size.width).abs() > px(1.)
                     || (old.size.height - bounds.size.height).abs() > px(1.)
                 {
-                    window.request_animation_frame();
+                    ui::request_animation_frame(window);
                 }
             },
             move |bounds, _, window, _| frame.paint(bounds, window),

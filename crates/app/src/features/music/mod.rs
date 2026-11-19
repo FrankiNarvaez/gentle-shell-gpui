@@ -167,6 +167,7 @@ impl Music {
                     return;
                 };
                 cx.background_executor().timer(wait).await;
+                crate::shared::diagnostics::tick();
                 let Some(action) = poll else { continue };
                 let result = cx
                     .background_executor()

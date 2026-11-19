@@ -950,7 +950,7 @@ impl HtmlView {
                             area.set(bounds);
                             // Lay the page out for this size on the next
                             // frame (notifying from prepaint draws it stale).
-                            window.request_animation_frame();
+                            ui::request_animation_frame(window);
                         }
                     },
                     |_, _, _, _| {},

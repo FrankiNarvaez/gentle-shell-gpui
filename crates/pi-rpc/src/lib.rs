@@ -57,6 +57,16 @@ pub struct PiProcess {
     /// Set by the first [`Self::shutdown`], so Drop after an explicit
     /// shutdown doesn't signal and reap twice.
     stopping: AtomicBool,
+    pid: u32,
+    traffic: Arc<Traffic>,
+}
+
+/// What a backend has sent so far, for the app's diagnostics: two relaxed
+/// counters per stdout line.
+#[derive(Debug, Default)]
+struct Traffic {
+    records: AtomicU64,
+    bytes: AtomicU64,
 }
 
 impl PiProcess {
@@ -87,6 +97,8 @@ impl PiProcess {
         let stdin = child.stdin.take().context("child stdin unavailable")?;
         let stdout = child.stdout.take().context("child stdout unavailable")?;
         let stderr = child.stderr.take().context("child stderr unavailable")?;
+        let pid = child.id();
+        let traffic = Arc::new(Traffic::default());
 
         let (tx, rx) = async_channel::unbounded();
         let pending: Pending = Arc::default();
@@ -107,11 +119,12 @@ impl PiProcess {
         }
         {
             let pending = pending.clone();
+            let traffic = traffic.clone();
             let child = child.clone();
             std::thread::Builder::new()
                 .name("pi-rpc-stdout".into())
                 .spawn(move || {
-                    read_records(stdout, &pending, &tx);
+                    read_records(stdout, &pending, &traffic, &tx);
                     // Unblock every caller still waiting for a response.
                     pending.lock().unwrap().clear();
                     let code = wait_child(&child);
@@ -125,8 +138,23 @@ impl PiProcess {
             pending,
             next_id: AtomicU64::new(1),
             stopping: AtomicBool::new(false),
+            pid,
+            traffic,
         });
         Ok((process, rx))
+    }
+
+    /// The backend's process id (the root of its process tree).
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Records and bytes received from the backend since it started.
+    pub fn traffic(&self) -> (u64, u64) {
+        (
+            self.traffic.records.load(Ordering::Relaxed),
+            self.traffic.bytes.load(Ordering::Relaxed),
+        )
     }
 
     /// Send a command; the future resolves to its correlated response.
@@ -263,14 +291,22 @@ pub enum UiAnswer {
     Cancelled,
 }
 
-fn read_records(stdout: impl Read, pending: &Pending, tx: &async_channel::Sender<Incoming>) {
+fn read_records(
+    stdout: impl Read,
+    pending: &Pending,
+    traffic: &Traffic,
+    tx: &async_channel::Sender<Incoming>,
+) {
     let mut reader = BufReader::new(stdout);
     let mut line = Vec::with_capacity(4096);
     loop {
         line.clear();
         match reader.read_until(b'\n', &mut line) {
             Ok(0) | Err(_) => return,
-            Ok(_) => {}
+            Ok(n) => {
+                traffic.records.fetch_add(1, Ordering::Relaxed);
+                traffic.bytes.fetch_add(n as u64, Ordering::Relaxed);
+            }
         }
         let incoming = match parse_record(&line) {
             Ok(Record::Response(response)) => {

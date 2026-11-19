@@ -386,6 +386,7 @@ impl FileView {
             let mut checked = Instant::now();
             loop {
                 cx.background_executor().timer(POLL).await;
+                crate::shared::diagnostics::tick();
                 let Ok(due) = this.update_in(cx, |this, window, cx| {
                     let every = if this.focus.contains_focused(window, cx) {
                         POLL

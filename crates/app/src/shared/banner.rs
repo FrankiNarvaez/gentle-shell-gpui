@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use gpui_kit::*;
 
-use crate::shared::{themes, ui};
+use crate::shared::themes;
 
 const TEXT_LOGO: &[&str] = &[
     "              ▄▄▄▀▀▀▀▀██                              ▄▄▀▄▄          ▄▄█▀▀▀██         ▄▄▀▄▄           ▄▄▀▄▄    ▄▄▀▄▄",
@@ -345,14 +345,12 @@ const PEN_FROM: f32 = 0.14;
 const WET: f32 = 0.09;
 /// Pen time past the last pixel, so the final strokes dry too.
 const PEN_TAIL: f32 = WET + 0.03;
-/// The rose's float: a slow rise and fall (in wordmark pixels), a sway (in
-/// radians), each with its period in seconds, and a glint crossing it.
+/// The rose's float while the banner writes itself: a slow rise and fall
+/// (in wordmark pixels) and a sway (in radians), each with its period in
+/// seconds, easing to rest from this share of `reveal` on.
 const BOB: (f32, f32) = (0.9, 5.2);
 const SWAY: (f32, f32) = (0.022, 7.3);
-const GLINT_PERIOD: f32 = 6.5;
-/// The float's redraw rate: slow motion needs no more, and a frame repaints
-/// the whole view the banner sits in.
-const FLOAT_FRAME: Duration = Duration::from_millis(50);
+const SETTLE_FROM: f32 = 0.6;
 
 fn smoothstep(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -371,9 +369,10 @@ fn lighten(color: Hsla, by: f32) -> Hsla {
 /// The banner at `scale` px per wordmark pixel. With `reveal` going 0 → 1
 /// over [`WRITE`], the rose blooms from its heart outward while a pen writes
 /// the wordmark in cursive, each stroke glowing like wet ink before it dries
-/// and its shadow settles. The rose floats the whole time: it rises and falls,
-/// sways, and a glint crosses its petals (still with reduced motion, and
-/// paused while the window is in the background).
+/// and its shadow settles. Meanwhile the rose floats (it rises, sways, and a
+/// glint crosses its petals) and comes to rest as the writing ends. Every
+/// motion follows `reveal`, so a finished banner is still and asks for no
+/// frames; with reduced motion the rose doesn't float at all.
 pub fn banner(config: BannerConfig, scale: f32, reveal: f32) -> impl IntoElement {
     let art = &*ART;
     // A solid theme tints the banner in its own colors; every other theme
@@ -402,28 +401,22 @@ pub fn banner(config: BannerConfig, scale: f32, reveal: f32) -> impl IntoElement
     let reveal = reveal.clamp(0.0, 1.0);
 
     let rose = canvas(
-        |_, window, cx| {
-            if !cx.reduce_motion() && window.is_window_active() {
-                ui::request_frame_in(FLOAT_FRAME, window, cx);
-            }
-        },
+        |_, _, _| {},
         move |bounds, _, window, cx| {
             use std::f32::consts::TAU;
             let still = cx.reduce_motion();
-            let t = if still { 0.0 } else { ui::live_clock() };
-            let bob = if still {
+            let t = reveal * WRITE.as_secs_f32();
+            let float = if still {
                 0.0
             } else {
-                (t * TAU / BOB.1).sin() * BOB.0 * scale
+                1.0 - smoothstep((reveal - SETTLE_FROM) / (1.0 - SETTLE_FROM))
             };
-            let sway = if still {
-                0.0
-            } else {
-                (t * TAU / SWAY.1 + 0.6).sin() * SWAY.0
-            };
+            let bob = (t * TAU / BOB.1).sin() * BOB.0 * scale * float;
+            let sway = (t * TAU / SWAY.1).sin() * SWAY.0 * float;
             let (sin, cos) = sway.sin_cos();
-            // The glint sweeps the diagonal from off one corner to past the other.
-            let glint = (t / GLINT_PERIOD).fract() * 1.8 - 0.4;
+            // One glint sweeps the diagonal, from off one corner to past the
+            // other, as the banner writes.
+            let glint = reveal * 1.8 - 0.4;
             let (w, h) = (ART.rose_size.0 as f32, ART.rose_size.1 as f32);
             // It sways about the bloom, like a flower held by its stem.
             let (pivot_x, pivot_y) = (w * 0.5, h * 0.32);

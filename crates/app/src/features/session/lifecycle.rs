@@ -35,6 +35,7 @@ impl SessionView {
             let frames = (crate::shared::banner::WRITE.as_millis() / FRAME.as_millis()) as u32;
             for frame in 1..=frames {
                 cx.background_executor().timer(FRAME).await;
+                crate::shared::diagnostics::tick();
                 let t = frame as f32 / frames as f32;
                 if this
                     .update(cx, |this, cx| {

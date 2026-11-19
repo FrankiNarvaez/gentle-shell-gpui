@@ -29,7 +29,7 @@ impl SettingsView {
         // Only the selected page renders, so existing async actions remain
         // scoped to the selected configuration section.
         let sections: Div = match page {
-            SettingsPage::General => general::render(self, snapshot),
+            SettingsPage::General => general::render(self, snapshot, cx),
             SettingsPage::Appearance => appearance::render(self, snapshot, cx),
             SettingsPage::Agents => agents::render(self, snapshot, cx),
             SettingsPage::Models => models::render(self, snapshot, cx),
