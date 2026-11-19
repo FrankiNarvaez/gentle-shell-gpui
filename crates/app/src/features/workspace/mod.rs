@@ -322,8 +322,7 @@ impl Workspace {
                 saved: Some((w.tabs, w.active_tab)),
             })
             .collect();
-        let tab_search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Find tabs in this workspace…"));
+        let tab_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tabs"));
         let music = cx.new(|cx| Music::new(window, cx));
         let devices = cx.new(DevicePanel::new);
         let mut lifecycle = vec![

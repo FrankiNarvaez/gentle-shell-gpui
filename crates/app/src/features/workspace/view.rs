@@ -51,12 +51,6 @@ impl Workspace {
 
     pub(super) fn render_workspace_chip(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let name = self.space().name.clone();
-        let color = avatar_color(&name);
-        let initial = name
-            .chars()
-            .find(|c| c.is_alphanumeric())
-            .map(|c| c.to_uppercase().collect::<String>())
-            .unwrap_or_else(|| "·".into());
         // Agents in the other workspaces: a dot here, details in the switcher.
         let elsewhere = self.elsewhere_activity();
         let (tip, dot) = if elsewhere.needs_you > 0 {
@@ -94,21 +88,7 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_palette(Category::Workspaces, window, cx)
             }))
-            .child(
-                div()
-                    .size(rems(18. / 16.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(rems(5. / 16.))
-                    .bg(color.opacity(0.18))
-                    .text_color(color)
-                    .text_size(rems(10.5 / 16.))
-                    .font_weight(FontWeight::BOLD)
-                    .line_height(relative(1.))
-                    .child(initial),
-            )
+            .child(workspace_avatar(&name))
             .child(
                 div()
                     .max_w(rems(160. / 16.))
@@ -315,86 +295,7 @@ impl Workspace {
                     .child(
                         title_button("new-tab", IconName::Plus)
                             .dropdown_menu(move |menu, window, _| {
-                                let item =
-                                    |icon: IconName,
-                                     label: &'static str,
-                                     detail: &'static str,
-                                     keys: &'static str| {
-                                        PopupMenuItem::element(move |_, _| {
-                                            menu_row(icon, label, detail, keys)
-                                        })
-                                    };
-                                let (agent, terminal, canvas, tower) =
-                                    (weak.clone(), weak.clone(), weak.clone(), weak.clone());
-                                menu.min_w(rems(260. / 16.).to_pixels(window.rem_size()))
-                                    .item(
-                                        item(
-                                            IconName::Bot,
-                                            "Agent tab",
-                                            "Gentle Shell in this folder",
-                                            ui::platform_shortcut("⌘T", "Ctrl+T"),
-                                        )
-                                        .on_click(
-                                            move |_, window, cx| {
-                                                let _ = agent.update(cx, |this, cx| {
-                                                    this.on_new_tab(&NewTab, window, cx)
-                                                });
-                                            },
-                                        ),
-                                    )
-                                    .item(
-                                        item(
-                                            IconName::SquareTerminal,
-                                            "Terminal tab",
-                                            "A shell in this folder",
-                                            ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T"),
-                                        )
-                                        .on_click(
-                                            move |_, window, cx| {
-                                                let _ = terminal.update(cx, |this, cx| {
-                                                    this.on_new_terminal_tab(
-                                                        &NewTerminalTab,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-                                            },
-                                        ),
-                                    )
-                                    .item(
-                                        item(
-                                            IconName::PenTool,
-                                            "Canvas tab",
-                                            "A whiteboard: ink, shapes, notes",
-                                            ui::platform_shortcut("⌘⇧E", "Ctrl+Alt+Shift+E"),
-                                        )
-                                        .on_click(
-                                            move |_, window, cx| {
-                                                let _ = canvas.update(cx, |this, cx| {
-                                                    this.on_new_canvas_tab(
-                                                        &NewCanvasTab,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                });
-                                            },
-                                        ),
-                                    )
-                                    .item(
-                                        item(
-                                            IconName::Building2,
-                                            "Tower tab",
-                                            "Gentle Tower: every session as a floor",
-                                            "",
-                                        )
-                                        .on_click(
-                                            move |_, window, cx| {
-                                                let _ = tower.update(cx, |this, cx| {
-                                                    this.open_tower(window, cx)
-                                                });
-                                            },
-                                        ),
-                                    )
+                                new_tab_menu(menu, weak.clone(), window)
                             })
                             .on_open_change(|open, window, cx| {
                                 crate::features::browser::popover_open("new-tab", *open, window, cx)
@@ -878,11 +779,97 @@ pub(super) fn title_button(id: &'static str, icon: IconName) -> Button {
 }
 
 /// A stable hue per workspace name, for its letter badge.
-pub(super) fn avatar_color(name: &str) -> Hsla {
+fn avatar_color(name: &str) -> Hsla {
     let hash = name
         .bytes()
         .fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b));
     hsla((hash % 360) as f32 / 360., 0.55, 0.65, 1.)
+}
+
+/// A workspace's letter badge: its first letter on its own hue, as in the
+/// title bar's workspace chip and the vertical tab navigator.
+pub(super) fn workspace_avatar(name: &str) -> Div {
+    let color = avatar_color(name);
+    let initial = name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().collect::<String>())
+        .unwrap_or_else(|| "·".into());
+    div()
+        .size(rems(18. / 16.))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(rems(5. / 16.))
+        .bg(color.opacity(0.18))
+        .text_color(color)
+        .text_size(rems(10.5 / 16.))
+        .font_weight(FontWeight::BOLD)
+        .line_height(relative(1.))
+        .child(initial)
+}
+
+/// The new-tab menu (Agent, Terminal, Canvas, Tower), shared by the title
+/// bar's + and the vertical navigator's.
+pub(super) fn new_tab_menu(
+    menu: PopupMenu,
+    weak: WeakEntity<Workspace>,
+    window: &Window,
+) -> PopupMenu {
+    let item = |icon: IconName, label: &'static str, detail: &'static str, keys: &'static str| {
+        PopupMenuItem::element(move |_, _| menu_row(icon, label, detail, keys))
+    };
+    let (agent, terminal, canvas, tower) = (weak.clone(), weak.clone(), weak.clone(), weak);
+    menu.min_w(rems(260. / 16.).to_pixels(window.rem_size()))
+        .item(
+            item(
+                IconName::Bot,
+                "Agent tab",
+                "Gentle Shell in this folder",
+                ui::platform_shortcut("⌘T", "Ctrl+T"),
+            )
+            .on_click(move |_, window, cx| {
+                let _ = agent.update(cx, |this, cx| this.on_new_tab(&NewTab, window, cx));
+            }),
+        )
+        .item(
+            item(
+                IconName::SquareTerminal,
+                "Terminal tab",
+                "A shell in this folder",
+                ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T"),
+            )
+            .on_click(move |_, window, cx| {
+                let _ = terminal.update(cx, |this, cx| {
+                    this.on_new_terminal_tab(&NewTerminalTab, window, cx)
+                });
+            }),
+        )
+        .item(
+            item(
+                IconName::PenTool,
+                "Canvas tab",
+                "A whiteboard: ink, shapes, notes",
+                ui::platform_shortcut("⌘⇧E", "Ctrl+Alt+Shift+E"),
+            )
+            .on_click(move |_, window, cx| {
+                let _ = canvas.update(cx, |this, cx| {
+                    this.on_new_canvas_tab(&NewCanvasTab, window, cx)
+                });
+            }),
+        )
+        .item(
+            item(
+                IconName::Building2,
+                "Tower tab",
+                "Gentle Tower: every session as a floor",
+                "",
+            )
+            .on_click(move |_, window, cx| {
+                let _ = tower.update(cx, |this, cx| this.open_tower(window, cx));
+            }),
+        )
 }
 
 /// A two-line menu entry: icon, label, muted description, shortcut (none

@@ -1,7 +1,14 @@
 //! Optional vertical tab navigator. It shares the window's existing tabs,
 //! panes and persisted workspaces; no second tab model is created.
 
+use super::view::{new_tab_menu, workspace_avatar};
 use super::*;
+
+/// A navigator row, as tall as a Files tree row.
+const TREE_ROW: f32 = 26.;
+/// The tab rows' indent under their workspace: the chevron and its gap, so
+/// a tab's icon lines up with the workspace's letter badge.
+const TREE_INDENT: f32 = 18.;
 
 impl Workspace {
     pub(super) fn toggle_tab_layout(&mut self, cx: &mut Context<Self>) {
@@ -107,37 +114,70 @@ impl Workspace {
         }
     }
 
-    /// The dedicated left navigator is independent of the right Files sidebar.
+    /// The dedicated left navigator, shaped like the Files sidebar on the
+    /// right: a 40 px header with its actions, a compact search field, then
+    /// the workspaces as a tree with the current one's tabs under it.
     pub(super) fn render_vertical_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .size_full()
-            .child(
-                h_flex()
-                    .h(rems(40. / 16.))
-                    .flex_none()
-                    .items_center()
-                    .px_3()
-                    .gap_2()
-                    .child(Icon::new(IconName::List).xsmall().text_color(ui::faint()))
-                    .child(ui::section_label("Tabs"))
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("tab-sidebar-horizontal")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::PanelLeftClose))
-                            .tooltip("Move tabs back to the top bar")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.set_tab_layout(TabLayout::Horizontal, cx)
-                            })),
-                    ),
-            )
+        let weak = cx.entity().downgrade();
+        let header = h_flex()
+            .h(rems(40. / 16.))
+            .flex_none()
+            .pl_3()
+            .pr_1p5()
+            .gap_0p5()
+            .child(Icon::new(IconName::List).small().text_color(ui::muted()))
             .child(
                 div()
                     .flex_1()
-                    .min_h_0()
-                    .child(self.render_vertical_tabs(cx)),
+                    .min_w_0()
+                    .ml_1()
+                    .truncate()
+                    .text_size(rems(13.5 / 16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(ui::fg())
+                    .child("Tabs"),
             )
+            .child(
+                Button::new("vertical-new-tab")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::Plus))
+                    .tooltip("New tab")
+                    .dropdown_menu(move |menu, window, _| new_tab_menu(menu, weak.clone(), window))
+                    .on_open_change(|open, window, cx| {
+                        crate::features::browser::popover_open(
+                            "vertical-new-tab",
+                            *open,
+                            window,
+                            cx,
+                        )
+                    }),
+            )
+            .child(
+                Button::new("tab-sidebar-horizontal")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::PanelLeftClose))
+                    .tooltip("Move tabs to the title bar")
+                    .on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.set_tab_layout(TabLayout::Horizontal, cx)
+                        }),
+                    ),
+            );
+        let search = h_flex().flex_none().px_2().pb_1p5().child(
+            ui::field()
+                .flex_1()
+                .min_w_0()
+                .h(rems(30. / 16.))
+                .child(Icon::new(IconName::Search).small().text_color(ui::faint()))
+                .child(Input::new(&self.tab_search).appearance(false).small()),
+        );
+        v_flex()
+            .size_full()
+            .child(header)
+            .child(search)
+            .child(self.render_vertical_tabs(cx))
     }
 
     fn render_vertical_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -149,85 +189,81 @@ impl Workspace {
             .overflow_y_scroll()
             .px_2()
             .pb_2()
-            .gap_0p5();
+            .gap_px();
         for (index, space) in self.spaces.iter().enumerate() {
-            let active_space = index == self.current;
-            let name = space.name.clone();
-            let count = space.tab_count();
-            // Mirror the activity shown by the horizontal workspace switcher.
+            let current = index == self.current;
+            // The workspace switcher's dot: amber when an agent needs you,
+            // the accent while one works.
             let activity = self.space_activity(space);
-            let status = if activity.needs_you > 0 {
-                Some(("needs you", ui::warning()))
+            let dot = if activity.needs_you > 0 {
+                Some((ui::warning(), "An agent here needs you"))
             } else if activity.working > 0 {
-                Some(("working", ui::accent()))
+                Some((ui::accent(), "Agents are working here"))
             } else {
                 None
             };
             list = list.child(
                 h_flex()
                     .id(("vertical-space", index))
-                    .mt_2()
-                    .px_2()
-                    .h(rems(27. / 16.))
+                    .flex_none()
+                    .h(rems(TREE_ROW / 16.))
+                    .pl(rems(4. / 16.))
+                    .pr_2()
+                    .gap_1p5()
                     .rounded_md()
-                    .gap_2()
                     .cursor_pointer()
-                    .when(active_space, |d| d.bg(ui::surface_hover()))
-                    .hover(|d| d.bg(ui::raised()))
+                    .hover(|d| d.bg(ui::surface_hover()))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.switch_workspace(index, window, cx)
                     }))
-                    .child(Icon::new(IconName::Folder).xsmall().text_color(ui::muted()))
+                    .child(
+                        Icon::new(if current {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .xsmall()
+                        .text_color(ui::faint()),
+                    )
+                    .child(workspace_avatar(&space.name))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_xs()
+                            .text_size(rems(12.5 / 16.))
                             .font_weight(FontWeight::MEDIUM)
-                            .child(name),
+                            .text_color(if current { ui::fg() } else { ui::muted() })
+                            .child(space.name.clone()),
                     )
+                    .when_some(dot, |d, (color, tip)| {
+                        d.child(
+                            div()
+                                .id(("vertical-space-activity", index))
+                                .size(rems(6. / 16.))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(color)
+                                .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx)),
+                        )
+                    })
                     .child(
-                        h_flex()
+                        div()
                             .flex_none()
-                            .gap_2()
-                            .items_center()
-                            .children(status.map(|(label, color)| {
-                                h_flex()
-                                    .gap_1()
-                                    .items_center()
-                                    .child(div().size(rems(6. / 16.)).rounded_full().bg(color))
-                                    .child(div().text_xs().text_color(color).child(label))
-                            }))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(ui::faint())
-                                    .child(count.to_string()),
-                            ),
+                            .font_family(ui::MONO)
+                            .text_size(rems(10.5 / 16.))
+                            .text_color(ui::faint())
+                            .child(space.tab_count().to_string()),
                     ),
             );
-            if !active_space {
+            if !current {
                 continue;
             }
             let mut shown = 0;
-            let mut last_pinned = None;
             for (tab_index, tab) in space.tabs.iter().enumerate() {
                 let title = self.pane_title(tab.focused);
                 if !query.is_empty() && !title.to_lowercase().contains(&query) {
                     continue;
-                }
-                if last_pinned != Some(tab.pinned) {
-                    last_pinned = Some(tab.pinned);
-                    list = list.child(
-                        div()
-                            .px_2()
-                            .pt_2()
-                            .pb_1()
-                            .text_xs()
-                            .text_color(ui::faint())
-                            .child(if tab.pinned { "Pinned" } else { "Open tabs" }),
-                    );
                 }
                 shown += 1;
                 list = list.child(self.render_vertical_tab(tab_index, tab, title, cx));
@@ -235,10 +271,12 @@ impl Workspace {
             if shown == 0 {
                 list = list.child(
                     div()
-                        .py_4()
-                        .text_center()
+                        .h(rems(TREE_ROW / 16.))
+                        .flex()
+                        .items_center()
+                        .pl(rems((4. + TREE_INDENT) / 16.))
                         .text_xs()
-                        .text_color(ui::muted())
+                        .text_color(ui::faint())
                         .child(if query.is_empty() {
                             "No open tabs"
                         } else {
@@ -247,91 +285,7 @@ impl Workspace {
                 );
             }
         }
-        let canvas = cx.entity().downgrade();
-        let tower = canvas.clone();
-        v_flex()
-            .size_full()
-            .child(
-                h_flex().p_2().child(
-                    ui::field()
-                        .flex_1()
-                        .min_w_0()
-                        .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
-                        .child(Input::new(&self.tab_search).appearance(false).small()),
-                ),
-            )
-            .child(list)
-            .child(
-                h_flex()
-                    .flex_none()
-                    .p_2()
-                    .gap_1()
-                    .child(
-                        Button::new("vertical-new-agent")
-                            .small()
-                            .ghost()
-                            .icon(Icon::new(IconName::Bot))
-                            .label("Agent")
-                            .tooltip(format!(
-                                "New agent tab ({})",
-                                ui::platform_shortcut("⌘T", "Ctrl+T")
-                            ))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_new_tab(&NewTab, window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("vertical-new-terminal")
-                            .small()
-                            .ghost()
-                            .icon(Icon::new(IconName::SquareTerminal))
-                            .label("Terminal")
-                            .tooltip(format!(
-                                "New terminal tab ({})",
-                                ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T")
-                            ))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_new_terminal_tab(&NewTerminalTab, window, cx)
-                            })),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        Button::new("vertical-more-tabs")
-                            .small()
-                            .ghost()
-                            .icon(Icon::new(IconName::Plus))
-                            .tooltip("New Canvas or Tower tab")
-                            .dropdown_menu(move |menu, _, _| {
-                                let canvas = canvas.clone();
-                                let tower = tower.clone();
-                                menu.item(
-                                    PopupMenuItem::new("Canvas tab")
-                                        .icon(Icon::new(IconName::PenTool))
-                                        .on_click(move |_, window, cx| {
-                                            let _ = canvas.update(cx, |this, cx| {
-                                                this.on_new_canvas_tab(&NewCanvasTab, window, cx)
-                                            });
-                                        }),
-                                )
-                                .item(
-                                    PopupMenuItem::new("Tower tab")
-                                        .icon(Icon::new(IconName::Building2))
-                                        .on_click(move |_, window, cx| {
-                                            let _ = tower
-                                                .update(cx, |this, cx| this.open_tower(window, cx));
-                                        }),
-                                )
-                            })
-                            .on_open_change(|open, window, cx| {
-                                crate::features::browser::popover_open(
-                                    "vertical-more-tabs",
-                                    *open,
-                                    window,
-                                    cx,
-                                )
-                            }),
-                    ),
-            )
+        list
     }
 
     fn render_vertical_tab(
@@ -350,13 +304,17 @@ impl Workspace {
             .iter()
             .any(|pane| self.panes.get(pane).is_some_and(|pane| pane.needs_you));
         let running = self.tab_running(tab);
-        let color = if needs_you {
+        // The kind icon carries the tab's state, like the horizontal strip.
+        let tone = if needs_you {
             ui::warning()
         } else if running {
             ui::accent()
+        } else if active {
+            ui::muted()
         } else {
             ui::faint()
         };
+        let group = SharedString::from(format!("vertical-tab-{id}"));
         let kind = self
             .panes
             .get(&tab.focused)
@@ -374,16 +332,16 @@ impl Workspace {
         let can_down = index + 1 < total && self.space().tabs[index + 1].pinned == pinned;
         h_flex()
             .id(("vertical-tab", id))
-            .h(rems(36. / 16.))
-            .px_2()
-            .gap_2()
+            .group(group.clone())
+            .flex_none()
+            .h(rems(TREE_ROW / 16.))
+            .pl(rems(4. / 16.))
+            .pr_1()
+            .gap_1p5()
             .rounded_md()
             .cursor_pointer()
-            .when(active, |d| d.bg(ui::raised()).text_color(ui::fg()))
-            .when(!active, |d| {
-                d.text_color(ui::muted())
-                    .hover(|s| s.bg(ui::surface_hover()).text_color(ui::fg()))
-            })
+            .when(active, |d| d.bg(ui::raised()))
+            .when(!active, |d| d.hover(|s| s.bg(ui::surface_hover())))
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.click_count() >= 2 {
                     this.start_tab_rename(index, window, cx);
@@ -400,11 +358,17 @@ impl Workspace {
             .context_menu(move |menu, _, _| {
                 Self::tab_placement_menu(menu, TabLayout::Vertical, placement.clone())
             })
+            // The grip only shows on hover, in the tree's indent.
             .child(
                 div()
                     .id(("vertical-tab-grip", id))
                     .flex_none()
+                    .w(rems(TREE_INDENT / 16.))
+                    .flex()
+                    .justify_center()
                     .cursor_grab()
+                    .invisible()
+                    .group_hover(group.clone(), |s| s.visible())
                     .on_drag(
                         TabDrag {
                             tab: id,
@@ -413,26 +377,20 @@ impl Workspace {
                         |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
                     )
                     .child(
-                        Icon::new(IconName::GripHorizontal)
+                        Icon::new(IconName::GripVertical)
                             .xsmall()
                             .text_color(ui::faint()),
                     ),
             )
-            .child(
-                div()
-                    .size(rems(17. / 16.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::new(kind.icon()).xsmall().text_color(color)),
-            )
+            .child(Icon::new(kind.icon()).small().text_color(tone))
             .child(
                 match self.renaming.as_ref().filter(|r| r.pane == tab.focused) {
                     Some(rename) => div()
                         .flex_1()
                         .min_w_0()
-                        .h(rems(24. / 16.))
+                        .h(rems(20. / 16.))
+                        .px_1()
+                        .rounded_md()
                         .bg(ui::well())
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .on_action(cx.listener(Self::cancel_tab_rename))
@@ -445,7 +403,8 @@ impl Workspace {
                         .overflow_hidden()
                         .text_ellipsis()
                         .whitespace_nowrap()
-                        .text_xs()
+                        .text_size(rems(12.5 / 16.))
+                        .text_color(if active { ui::fg() } else { ui::muted() })
                         .tooltip({
                             let title = title.clone();
                             move |window, cx| Tooltip::new(title.clone()).build(window, cx)
@@ -455,18 +414,24 @@ impl Workspace {
                 },
             )
             .when(pinned, |d| {
-                d.child(
-                    Icon::new(IconName::Star)
-                        .xsmall()
-                        .text_color(ui::champagne()),
-                )
+                d.child(Icon::new(IconName::Pin).xsmall().text_color(ui::faint()))
             })
             .when(running || needs_you, |d| {
-                d.child(div().size(rems(6. / 16.)).rounded_full().bg(color))
+                d.child(
+                    div()
+                        .size(rems(6. / 16.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(tone),
+                )
             })
             .child(
                 div()
                     .id(("vertical-tab-actions-wrapper", id))
+                    .flex_none()
+                    .when(!active, |d| {
+                        d.invisible().group_hover(group.clone(), |s| s.visible())
+                    })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
@@ -482,7 +447,11 @@ impl Workspace {
                                     } else {
                                         "Pin tab"
                                     })
-                                    .icon(Icon::new(IconName::Star))
+                                    .icon(Icon::new(if pinned {
+                                        IconName::PinOff
+                                    } else {
+                                        IconName::Pin
+                                    }))
                                     .on_click({
                                         let pin = pin.clone();
                                         move |_, _, cx| {

@@ -116,7 +116,7 @@ Tabs remain horizontal by default. To move them to the left, choose **Configurat
 
 <br>
 
-The vertical navigator groups tabs by project and shows agent activity per project (accent while working, amber when attention is needed). Selecting a project shows its tabs, and search filters the current project's open tabs. Drag a tab by its grip to reorder; its ⋯ menu offers pin/unpin, move up/down, rename and close. Pinned tabs stay at the top. The footer offers **Agent** and **Terminal** actions, and the + menu retains **Canvas** and **Tower**. The tab layout button switches back to horizontal without disturbing the Files sidebar or any pane tiling.
+The vertical navigator is built like the Files sidebar: a header with **+** (the title bar's new-tab menu: Agent, Terminal, Canvas, Tower) and the button that moves tabs back to the title bar, a search field, and the projects as a tree. Each project shows its letter badge, its tab count and its agents' activity (a dot: accent while working, amber when one needs you); the current one unfolds to its tabs, and search filters them. A tab's icon takes the same colors. Hover a tab for its grip (drag to reorder) and its ⋯ menu (pin/unpin, rename, move up/down, close). Pinned tabs stay at the top with a pin. Moving tabs back to the title bar leaves the Files sidebar and the pane tiling as they are.
 
 </details>
 
