@@ -100,13 +100,15 @@ pub fn limit_tone(percent: f64) -> LimitTone {
 }
 
 /// The canonical provider id behind a model's provider name: Codex reports
-/// as `codex` or `openai-codex` and Claude as `claude` or `anthropic`, so
-/// either side of a model-provider → subscription-provider match uses this;
-/// anything else has no subscription windows to match.
+/// as `codex` or `openai-codex` and Claude as `claude`, `anthropic` or
+/// `claude-bridge` (Claude Code's subscription through the bridge, whose
+/// 5h/7d windows Gentle Shell files under the provider that served the
+/// response), so either side of a model-provider → subscription-provider
+/// match uses this; anything else has no subscription windows to match.
 pub fn provider_alias(provider: &str) -> Option<&'static str> {
     match provider {
         "codex" | "openai-codex" => Some("codex"),
-        "claude" | "anthropic" => Some("claude"),
+        "claude" | "anthropic" | "claude-bridge" => Some("claude"),
         "openai" => Some("openai"),
         "nan" => Some("nan"),
         _ => None,
@@ -517,6 +519,7 @@ mod tests {
         assert_eq!(provider_alias("openai-codex"), Some("codex"));
         assert_eq!(provider_alias("claude"), Some("claude"));
         assert_eq!(provider_alias("anthropic"), Some("claude"));
+        assert_eq!(provider_alias("claude-bridge"), Some("claude"));
         assert_eq!(provider_alias("openai"), Some("openai"));
         assert_eq!(provider_alias("nan"), Some("nan"));
         assert_eq!(provider_alias("deepseek"), None);

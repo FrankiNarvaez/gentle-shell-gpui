@@ -145,6 +145,7 @@ fn rpc_provider_title(id: &str) -> SharedString {
         "codex" | "openai-codex" => "ChatGPT · Codex".into(),
         "openai" => "OpenAI · ChatGPT".into(),
         "claude" | "anthropic" => "Anthropic · Claude".into(),
+        "claude-bridge" => "Claude Code · bridge".into(),
         "nan" => "NaN Cloud".into(),
         _ => id.to_string().into(),
     }
