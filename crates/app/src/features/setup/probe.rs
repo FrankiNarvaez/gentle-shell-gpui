@@ -91,11 +91,14 @@ fn pump(stream: impl Read, log: &Log) {
     }
 }
 
-/// Run `command` (stdin closed, merged PATH), streaming stdout and stderr
-/// lines into `log`; an error names `what` and the exit code.
+/// Run `command` (stdin closed, the merged PATH unless it sets its own),
+/// streaming stdout and stderr lines into `log`; an error names `what` and
+/// the exit code.
 pub fn run_logged(mut command: Command, what: &str, log: &Log) -> Result<(), String> {
+    if !command.get_envs().any(|(key, _)| key == "PATH") {
+        command.env("PATH", pi_rpc::child_path());
+    }
     command
-        .env("PATH", pi_rpc::child_path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

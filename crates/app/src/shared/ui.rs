@@ -693,15 +693,35 @@ fn live_phase(period: f32) -> f32 {
     (live_clock() / period).fract()
 }
 
+/// `window.request_animation_frame()`, counted by the resource diagnostics
+/// under the caller's line. Views call this rather than GPUI's directly.
+#[track_caller]
+pub(crate) fn request_animation_frame(window: &Window) {
+    crate::shared::diagnostics::frame_at(std::panic::Location::caller());
+    window.request_animation_frame();
+}
+
 /// Redraw the view being drawn after [`SLOW_FRAME`], once however many
 /// indicators it holds. Nothing with reduced motion.
+#[track_caller]
 pub(crate) fn request_slow_frame(window: &mut Window, cx: &mut App) {
-    request_frame_in(SLOW_FRAME, window, cx);
+    request_frame_from(std::panic::Location::caller(), SLOW_FRAME, window, cx);
 }
 
 /// Redraw the view being drawn after `delay`, once however many elements
 /// ask. Nothing with reduced motion.
+#[track_caller]
 pub(crate) fn request_frame_in(delay: Duration, window: &mut Window, cx: &mut App) {
+    request_frame_from(std::panic::Location::caller(), delay, window, cx);
+}
+
+/// [`request_frame_in`], counted under `at`.
+fn request_frame_from(
+    at: &'static std::panic::Location<'static>,
+    delay: Duration,
+    window: &mut Window,
+    cx: &mut App,
+) {
     thread_local! {
         static PENDING: std::cell::RefCell<std::collections::HashSet<EntityId>> =
             Default::default();
@@ -709,6 +729,7 @@ pub(crate) fn request_frame_in(delay: Duration, window: &mut Window, cx: &mut Ap
     if cx.reduce_motion() {
         return;
     }
+    crate::shared::diagnostics::frame_at(at);
     let view = window.current_view();
     if !PENDING.with(|pending| pending.borrow_mut().insert(view)) {
         return;
@@ -722,16 +743,19 @@ pub(crate) fn request_frame_in(delay: Duration, window: &mut Window, cx: &mut Ap
 }
 
 /// A zero-size element that keeps its view redrawing at the slow rate while
-/// it's on screen.
+/// it's on screen, counted under the line that placed the indicator.
+#[track_caller]
 fn slow_frames() -> impl IntoElement {
+    let at = std::panic::Location::caller();
     canvas(
-        |_, window, cx| request_slow_frame(window, cx),
+        move |_, window, cx| request_frame_from(at, SLOW_FRAME, window, cx),
         |_, _, _, _| {},
     )
     .size_0()
 }
 
 /// A soft breathing pulse for live indicators.
+#[track_caller]
 pub fn pulse(element: Div) -> Div {
     let breath = gpui_kit::pulsating_between(0.35, 1.0)(live_phase(1.4));
     element.opacity(breath).child(slow_frames())
@@ -739,6 +763,7 @@ pub fn pulse(element: Div) -> Div {
 
 /// A loading spinner (the Loader icon turning), for rows that stay on screen
 /// while work runs.
+#[track_caller]
 pub fn spinner(size: impl Into<gpui_kit::component::Size>, color: Hsla) -> Div {
     div()
         .flex_none()
@@ -755,6 +780,7 @@ pub fn spinner(size: impl Into<gpui_kit::component::Size>, color: Hsla) -> Div {
 
 /// `text` with a soft highlight sweeping across it, from `base` to
 /// `highlight` and back.
+#[track_caller]
 pub fn shimmer(text: impl Into<SharedString>, base: Hsla, highlight: Hsla) -> Div {
     const SPREAD: f32 = 0.3;
     let text: SharedString = text.into();

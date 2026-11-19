@@ -49,10 +49,12 @@ impl Workspace {
             kind: pane.item.kind,
             cwd: self.pane_cwd(pane, cx),
             path: pane.path.clone(),
-            session: pane
-                .session
-                .as_ref()
-                .and_then(|s| s.read(cx).session_file()),
+            // A canvas keeps its floating agent's conversation.
+            session: match &pane.session {
+                Some(session) => session.read(cx).session_file(),
+                None if pane.item.kind == PaneKind::Canvas => pane.session_file.clone(),
+                None => None,
+            },
         })
     }
 

@@ -1,4 +1,4 @@
-//! Tab lookup and inline tab rename.
+//! Tab lookup, inline tab rename and reordering tabs by dragging.
 
 use super::*;
 
@@ -97,6 +97,30 @@ impl Workspace {
     pub(super) fn tab_mut(&mut self) -> Option<&mut Tab> {
         let space = self.space_mut();
         space.tabs.get_mut(space.active)
+    }
+
+    /// Tab `tab_id` dropped on the tab at `to`: it takes that place, the
+    /// tabs between shift over, and the shown tab stays shown.
+    pub(super) fn move_tab(&mut self, tab_id: usize, to: usize, cx: &mut Context<Self>) {
+        let space = self.space_mut();
+        let Some(from) = space.tabs.iter().position(|t| t.id == tab_id) else {
+            return;
+        };
+        if from == to || to >= space.tabs.len() {
+            return;
+        }
+        // Pinned tabs form a separate group in both horizontal and vertical layouts.
+        if space.tabs[from].pinned != space.tabs[to].pinned {
+            return;
+        }
+        let shown = space.tabs.get(space.active).map(|t| t.id);
+        let tab = space.tabs.remove(from);
+        space.tabs.insert(to, tab);
+        if let Some(shown) = shown {
+            space.active = space.tabs.iter().position(|t| t.id == shown).unwrap_or(0);
+        }
+        self.schedule_save(cx);
+        cx.notify();
     }
 
     pub(super) fn focused_pane(&self) -> Option<PaneId> {

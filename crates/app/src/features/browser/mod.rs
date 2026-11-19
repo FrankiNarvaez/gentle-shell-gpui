@@ -111,6 +111,33 @@ pub fn reclaim_keyboard(window: &Window) {
     native::reclaim_keyboard(window);
 }
 
+/// The window's own popovers and menus that are open (the bell, the music
+/// player, the instance tray, title-bar menus), by id. Native web views draw
+/// above everything GPUI draws, so they step aside while any is open.
+#[derive(Default)]
+struct OpenPopovers(std::collections::HashSet<&'static str>);
+
+impl Global for OpenPopovers {}
+
+/// Popover `id` opened or closed: pass it as the popover's `on_open_change`.
+pub fn popover_open(id: &'static str, open: bool, window: &mut Window, cx: &mut App) {
+    let popovers = &mut cx.default_global::<OpenPopovers>().0;
+    let changed = if open {
+        popovers.insert(id)
+    } else {
+        popovers.remove(id)
+    };
+    if changed {
+        window.refresh();
+    }
+}
+
+/// A popover registered with [`popover_open`] is open.
+pub fn popovers_open(cx: &App) -> bool {
+    cx.try_global::<OpenPopovers>()
+        .is_some_and(|popovers| !popovers.0.is_empty())
+}
+
 // The native web view, one module per system with the same interface:
 // `host` (the window to build in, taken during a frame), `NativeView::{new,
 // place, load_url, reload}`, plus `pump` for a toolkit loop GPUI doesn't run

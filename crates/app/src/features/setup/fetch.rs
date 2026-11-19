@@ -203,7 +203,7 @@ const DOWNLOAD_ATTEMPTS: u32 = 5;
 /// Stream `url` into `dest`, hashing on the way; returns the sha256 hex.
 /// A stalled or dropped connection resumes from the last byte received
 /// (HTTP Range), so a slow link doesn't lose a big download to one stall.
-fn download(url: &str, dest: &Path, log: &Log) -> Result<String, String> {
+pub(super) fn download(url: &str, dest: &Path, log: &Log) -> Result<String, String> {
     use sha2::{Digest as _, Sha256};
     let agent = agent(true);
     let mut file =
@@ -301,10 +301,10 @@ fn extract(archive: &Path, dest: &Path) -> Result<(), String> {
 }
 
 /// A scratch folder inside the toolchain dir (same volume as the target).
-struct Staging(PathBuf);
+pub(super) struct Staging(pub(super) PathBuf);
 
 impl Staging {
-    fn new(toolchain: &Path, tag: &str) -> Result<Self, String> {
+    pub(super) fn new(toolchain: &Path, tag: &str) -> Result<Self, String> {
         let dir = toolchain.join(format!(".{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;

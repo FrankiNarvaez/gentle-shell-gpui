@@ -109,14 +109,14 @@ Tabs split into panes: agent, terminal or file. Panes tile like Hyprland's dwind
 
 ### Optional vertical tabs — Projects and agents at a glance
 
-Tabs remain horizontal by default. To move them to the left, choose **Configuration → Interface → Tabs**, use the title-bar layout button, right-click a tab, or search **View: Show tabs vertically** in the command palette. The selection is saved across launches. **Files / Changes / Branches** always occupies a separate right sidebar; ⌘B (Ctrl+B on Windows/Linux) toggles Files without affecting tab placement.
+Tabs remain horizontal by default. To move them to the left, choose **Configuration → Appearance → Tab placement**, use the title-bar layout button, right-click a tab, or search **View: Show tabs vertically** in the command palette. The selection is saved across launches. **Files / Changes / Branches** always occupies a separate right sidebar; ⌘B (Ctrl+B on Windows/Linux) toggles Files without affecting tab placement.
 
 <details>
 <summary><kbd>More</kbd> <strong>Project navigator, pinning and tab actions</strong></summary>
 
 <br>
 
-The vertical navigator groups tabs by project and shows agent activity per project (accent while working, amber when attention is needed). Selecting a project shows its tabs, and search filters the current project's open tabs. Drag a tab by its grip to reorder; its ⋯ menu offers pin/unpin, move up/down, rename and close. Pinned tabs stay at the top. The tab layout button switches back to horizontal without disturbing the Files sidebar or any pane tiling.
+The vertical navigator groups tabs by project and shows agent activity per project (accent while working, amber when attention is needed). Selecting a project shows its tabs, and search filters the current project's open tabs. Drag a tab by its grip to reorder; its ⋯ menu offers pin/unpin, move up/down, rename and close. Pinned tabs stay at the top. The footer offers **Agent** and **Terminal** actions, and the + menu retains **Canvas** and **Tower**. The tab layout button switches back to horizontal without disturbing the Files sidebar or any pane tiling.
 
 </details>
 
@@ -223,7 +223,7 @@ Streaming Markdown, collapsible thinking, and tool cards (`Edit path +12 −3`, 
 
 <br>
 
-A slash command's text output appears as one result card. Hover an answer, or a message you sent, for Copy. When the conversation is longer than the pane, a rail on the right edge marks every message you sent, placed by the heights it has seen (rows not shown yet count as the average), and shows a scroll thumb while you scroll or point at it (the one you are reading highlighted, its first line on hover); click a mark to glide to it, and a ↓ button glides back to the latest output. Both hide when everything fits.
+A slash command's text output appears as one result card. Hover an answer, or a message you sent, for Copy; the text of both can also be selected with the mouse and copied with ⌘C (Ctrl+C elsewhere). When the conversation is longer than the pane, a rail on the right edge marks every message you sent, placed by the heights it has seen (rows not shown yet count as the average), and shows a scroll thumb while you scroll or point at it (the one you are reading highlighted, its first line on hover); click a mark to glide to it, and a ↓ button glides back to the latest output. Both hide when everything fits.
 
 </details>
 
@@ -231,7 +231,9 @@ A slash command's text output appears as one result card. Hover an answer, or a 
 
 ### Composer — Steer, stop and run commands
 
-Enter sends; while the agent runs, Enter steers it and ⌘. (Ctrl+. elsewhere) or the Stop button stops it. `!cmd` / `!!cmd` run shell commands; the Stop button and ⌘. stop a running one too (`abort_bash`). `/` lists commands (↑/↓ move through them, Tab or Enter fills one in, Esc closes the list), including Pi's built-ins: `/compact [what to keep]`, `/name <title>`, `/copy`, `/export [path]` (HTML) and `/reload` (restarts the backend and resumes the conversation).
+Enter sends; while the agent runs, Enter steers it and Esc, ⌘. (Ctrl+. elsewhere) or the Stop button stops it, as in Gentle Shell's terminal ("stopping…" shows until the turn ends; the conversation and your draft stay). Esc closes what is open first (the `/` menu, the model picker, the Agents panel, a dialog, an expanded surface), and an Esc right after one that closed something doesn't stop. `!cmd` / `!!cmd` run shell commands; the Stop button, Esc and ⌘. stop a running one too (`abort_bash`). `/` lists commands (↑/↓ move through them, Tab or Enter fills one in, Esc closes the list), including Pi's built-ins: `/compact [what to keep]`, `/name <title>`, `/copy`, `/export [path]` (HTML) and `/reload` (restarts the backend and resumes the conversation).
+
+↑ on the composer's first line brings back the prompts you sent before, newest first, as in Gentle Shell's terminal (a resumed conversation's prompts included); ↓ on its last line walks back to the newest and then to what you were writing. A recalled prompt is only put in the composer, never sent. Inside a multi-line prompt the arrows move the cursor as usual, and while attachments or long pastes are in the composer they stay out of it.
 
 <details>
 <summary><kbd>More</kbd> <strong>Slash commands, context and effort</strong></summary>
@@ -268,7 +270,7 @@ As in Tern, what a session tracks sits in chips over the composer instead of a s
 
 <br>
 
-Click a chip for its card. The task list is a Dynamic-Island-style pill at the top of the conversation: when a session has tasks, **Todos 2/7** appears there with a small progress equalizer. Click it to unfold the task list downward over the conversation, then click again to fold it; the list shows each task's status (done, in progress, pending, blocked, dropped) and note. It floats over the chat, so the conversation never moves, and nothing is added around the composer.
+Click a chip for its card. The task list is a Dynamic-Island-style pill at the top of the conversation: when a session has tasks, **Todos 2/7** appears there with a small progress equalizer. Click it to unfold the task list downward over the conversation, then click again to fold it; the list shows each task's status (done, in progress, pending, blocked, dropped) and note. It floats over the chat, so the conversation never moves, and nothing is added around the composer. While a generative UI surface is expanded the island steps aside, and Esc takes you back to the conversation.
 
 </details>
 
@@ -596,7 +598,7 @@ It installs what is missing (the skill into Gentle Shell, the diagram renderer i
 
 ### Configuration — Your Gentle Shell setup, in one place
 
-Your existing Gentle Shell setup: home, models, profiles, sign-ins, permission mode, persona, MCP, packages (install and remove), Claude bridge plan, and the theme picker: Gentle Shell's themes, your Pi themes (`<agent dir>/themes/`), popular terminal schemes, the solid **Studio** and **Studio Light** (a sober, high-contrast pair whose panes stay opaque at any transparency, for a professional, glass-free look), the warm solid **Clay** and **Clay Light** (a calm, cream-and-terracotta pair with an amber accent, also opaque at any transparency) and **OLED Black** (true black that stays solid at any transparency, so an OLED screen keeps those pixels off; soft pearl text and the Gentle rose), applied app-wide and to terminals, remembered across launches.
+Your existing Gentle Shell setup: home, models, profiles, sign-ins, permission mode, persona, MCP, packages (install and remove), Claude bridge plan, and the theme picker: Gentle Shell's themes, your Pi themes (`<agent dir>/themes/`), popular terminal schemes, the solid **Studio** and **Studio Light** (a sober, high-contrast pair whose panes stay opaque at any transparency, for a professional, glass-free look), the warm solid **Clay** and **Clay Light** (a calm, cream-and-graphite pair with a terracotta accent, also opaque at any transparency) and **OLED Black** (true black that stays solid at any transparency, so an OLED screen keeps those pixels off; soft pearl text and the Gentle rose), applied app-wide and to terminals, remembered across launches.
 
 <details>
 <summary><kbd>More</kbd> <strong>Themes, transparency, interface size and more</strong></summary>
@@ -618,7 +620,7 @@ Like Claude Desktop's custom themes: an app theme can put an animated scene behi
 
 <br>
 
-13 themes ship with scenes (Aurora, Petals, and Moonlit, Koi Pond, Sakura Dusk, Neon Rain, Jellyfish, Lantern Night, Fireflies, Snow Cabin, Star Voyage, Honu Lagoon and Cloud Drift adapted from [claude-desktop-themes](https://github.com/0toshigami/claude-desktop-themes), MIT), whose live wallpapers also run unchanged. Ask any agent for one ("a theme with koi in a pond, in my colors"): every agent is pointed at `<data dir>/gentle-shell-gpui/themes/GUIDE.md` and writes the theme and its scene there; a failing scene leaves `scene-error.txt` with the error and line. Theme folders are watched, so new or edited themes appear within seconds. **Share** saves a theme as one `.gentletheme` file (scene and image inside); import one with **Import…**, a link, or by dropping it on Configuration › Theme. Cost: a scene's script runs on its own thread and is held under 8% of one core (heavier scenes show fewer frames, down to 8 fps); scenes move only while the window is in front and hold still with reduced motion. **Scene motion**: Calm (default, up to 12 fps; about 10% of one core on an M-series Mac, measured), Smooth (up to 24 fps; about 16%), Still (no cost).
+13 themes ship with scenes (Aurora, Petals, and Moonlit, Koi Pond, Sakura Dusk, Neon Rain, Jellyfish, Lantern Night, Fireflies, Snow Cabin, Star Voyage, Honu Lagoon and Cloud Drift adapted from [claude-desktop-themes](https://github.com/0toshigami/claude-desktop-themes), MIT), whose live wallpapers also run unchanged. Ask any agent for one ("a theme with koi in a pond, in my colors"): every agent is pointed at `<data dir>/gentle-shell-gpui/themes/GUIDE.md` and writes the theme and its scene there; a failing scene leaves `scene-error.txt` with the error and line. Theme folders are watched, so new or edited themes appear within seconds. **Share** saves a theme as one `.gentletheme` file (scene and image inside); import one with **Import…**, a link, or by dropping it on Configuration › Appearance › Theme. Cost: a scene's script runs on its own thread and is held under 8% of one core (heavier scenes show fewer frames, down to 8 fps); scenes move only while the window is in front and hold still with reduced motion. **Scene motion**: Calm (default, up to 12 fps; about 10% of one core on an M-series Mac, measured), Smooth (up to 24 fps; about 16%), Still (no cost).
 
 </details>
 

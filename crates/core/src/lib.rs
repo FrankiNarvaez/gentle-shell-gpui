@@ -4,8 +4,10 @@
 
 pub mod activity;
 pub mod alert_timing;
+pub mod canvas;
 pub mod commands;
 pub mod devices;
+pub mod diagnostics;
 pub mod docs;
 pub mod engram;
 pub mod fuzzy;
@@ -19,8 +21,10 @@ pub mod markdown;
 pub mod music;
 pub mod notifications;
 pub mod profiles;
+pub mod prompt_history;
 pub mod scroll;
 pub mod sessions;
+pub mod setup;
 pub mod text;
 pub mod tools;
 pub mod transcript;

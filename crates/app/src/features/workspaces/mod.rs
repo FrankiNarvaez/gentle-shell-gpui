@@ -23,7 +23,7 @@ pub use store::{load, save};
 pub struct SavedPane {
     pub kind: PaneKind,
     pub cwd: PathBuf,
-    /// The file a file pane shows.
+    /// The file a file or canvas pane shows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
     /// The conversation an agent pane had, resumed when it still exists.

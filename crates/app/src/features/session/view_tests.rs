@@ -267,3 +267,129 @@ fn the_session_feed_drives_the_todo_list_and_the_command_menu(cx: &mut TestAppCo
         ));
     });
 }
+
+/// A tab under the window's text-selection layer, as the app's Root draws it.
+struct Selectable(Entity<SessionView>);
+
+impl gpui_kit::Render for Selectable {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _};
+        gpui_kit::div()
+            .size_full()
+            .child(gpui_kit::base::TextSelectionLayer)
+            .child(self.0.clone())
+    }
+}
+
+/// A message you sent can be selected with the mouse, like an answer, and
+/// what is selected is its text.
+#[gpui::test]
+fn a_sent_prompt_can_be_selected(cx: &mut TestAppContext) {
+    use gpui_kit::{AppContext as _, MouseButton, base::TextSelection};
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            view.transcript
+                .items
+                .push(gentle_core::transcript::Item::User {
+                    text: "fix the parser".into(),
+                    images: Vec::new(),
+                });
+            view.sync_view(cx);
+            view
+        });
+        Selectable(session)
+    });
+    cx.run_until_parked();
+    let bounds = cx
+        .debug_bounds("user-text-0")
+        .expect("the sent prompt is drawn");
+    let (start, end) = (
+        gpui_kit::point(bounds.left() + gpui_kit::px(1.), bounds.center().y),
+        gpui_kit::point(bounds.right() - gpui_kit::px(1.), bounds.center().y),
+    );
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        assert_eq!(TextSelection::selected_text(window, cx), "fix the parser");
+    });
+}
+
+/// ↑ and ↓ in the composer walk the prompts sent before and come back to
+/// the draft; inside a multi-line prompt ↑ moves the cursor first.
+#[gpui::test]
+fn arrows_recall_sent_prompts_and_return_to_the_draft(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, _| {
+        view.prompt_history.record("first");
+        view.prompt_history.record("second\nline two");
+    });
+    cx.update(|window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.set_value("draft", window, cx);
+        });
+    });
+    let composer = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string())
+    };
+    assert_eq!(composer(cx), "draft");
+
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "second\nline two");
+    // The cursor sits at the end, on the second line: ↑ moves it up first.
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "second\nline two");
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "first");
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "first", "nothing older than the oldest");
+    cx.simulate_keystrokes("down");
+    assert_eq!(composer(cx), "second\nline two");
+    cx.simulate_keystrokes("down");
+    assert_eq!(composer(cx), "draft");
+}
+
+/// Esc closes what is open first; with nothing open it stops the running
+/// turn, unless it comes right after an Esc that closed something.
+#[gpui::test]
+fn escape_closes_first_then_stops_the_turn(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let escape = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.abort(&super::Abort, window, cx));
+        });
+    };
+    let stopping = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.live.stopping);
+    view.update(cx, |view, cx| {
+        view.transcript.running = true;
+        view.sync_view(cx);
+        view.agents_panel.open = true;
+    });
+    assert!(view.read_with(cx, |view, _| view.turn_since().is_some()));
+
+    escape(cx);
+    assert!(view.read_with(cx, |view, _| !view.agents_panel.open));
+    assert_eq!(stopping(cx), None, "the first Esc only closed the panel");
+    escape(cx);
+    assert_eq!(stopping(cx), None, "a quick second Esc doesn't stop");
+
+    view.update(cx, |view, _| view.live.escape_closed = None);
+    escape(cx);
+    let turn = view.read_with(cx, |view, _| view.turn_since());
+    assert_eq!(stopping(cx), turn, "with nothing open, Esc stops the turn");
+}

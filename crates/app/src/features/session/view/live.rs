@@ -65,6 +65,12 @@ pub(in crate::features::session) struct Live {
     /// The "Changed in this session" card's diff area, built when the
     /// selected file's diff arrives.
     pub(super) changes_viewer: Option<super::session_changes::Viewer>,
+    /// When the turn (or prompt in flight) a stop was asked for began: the
+    /// activity line reads "stopping…" while that turn lasts.
+    pub(in crate::features::session) stopping: Option<Instant>,
+    /// When Esc last closed something (a panel, a dialog, a surface), so a
+    /// quick run of Esc presses closing things doesn't go on to stop the turn.
+    pub(in crate::features::session) escape_closed: Option<Instant>,
 }
 
 /// How often live timers are re-checked.

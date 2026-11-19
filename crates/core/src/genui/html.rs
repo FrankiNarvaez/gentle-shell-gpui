@@ -213,16 +213,27 @@ impl HtmlSpec {
 
     /// The page as served: the policy as a `<meta>` first thing in the
     /// document, so it holds even where the response header isn't applied,
-    /// then `base_css` (the host's defaults: text color, font, color
-    /// scheme), which any style of the page overrides.
+    /// then the Esc relay ([`ESCAPE_RELAY`]) and `base_css` (the host's
+    /// defaults: text color, font, color scheme), which any style of the
+    /// page overrides.
     pub fn document(&self, base_css: &str) -> String {
         let policy = self.csp.policy();
         let head = format!(
-            r#"<meta http-equiv="Content-Security-Policy" content="{policy}"><style>{}</style>"#,
+            r#"<meta http-equiv="Content-Security-Policy" content="{policy}">{ESCAPE_RELAY}<style>{}</style>"#,
             base_css.replace("</", "<\\/")
         );
         with_head(&self.html, &head)
     }
+}
+
+/// The web view keeps the keyboard, so Esc inside the page never reaches the
+/// app: this tells the host instead, unless the page handled Esc itself
+/// (`preventDefault`, to close its own menu for example).
+const ESCAPE_RELAY: &str = r#"<script>addEventListener("keydown",function(e){if(e.key==="Escape"&&!e.defaultPrevented)parent.postMessage({gentle:"escape"},"*")})</script>"#;
+
+/// Whether a message relayed from the page is the Esc relay's.
+pub fn is_escape(raw: &str) -> bool {
+    serde_json::from_str::<Value>(raw).is_ok_and(|v| v == serde_json::json!({"gentle": "escape"}))
 }
 
 /// `html` with `head` before any of its content: right after the doctype
@@ -450,5 +461,15 @@ mod tests {
             r#"<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none';"#
         ));
         assert!(page.contains("<style>body{color:#fff}<\\/style><script></style><p>"));
+        assert!(page.contains(ESCAPE_RELAY));
+    }
+
+    #[test]
+    fn only_the_escape_relay_message_is_an_escape() {
+        assert!(is_escape(r#"{"gentle":"escape"}"#));
+        assert!(is_escape(r#"{ "gentle" : "escape" }"#));
+        assert!(!is_escape(r#"{"gentle":"escape","id":1}"#));
+        assert!(!is_escape(r#"{"jsonrpc":"2.0","method":"ui/message"}"#));
+        assert!(!is_escape("escape"));
     }
 }

@@ -18,6 +18,7 @@ use gpui_kit::component::{Icon, Sizable as _, TitleBar, WindowExt as _, h_flex, 
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::features::canvas::{CanvasEvent, CanvasView};
 use crate::features::docs::{DocsEvent, DocsView};
 use crate::features::files::FileTreeView;
 use crate::features::memory::{MemoryEvent, MemoryView};
@@ -31,6 +32,7 @@ use crate::features::providers::{ProvidersEvent, ProvidersView};
 use crate::features::session::{AgentsTab, SessionEvent, SessionView};
 use crate::features::sessions::{SessionsEvent, SessionsView};
 use crate::features::settings::{SettingsEvent, SettingsView};
+use crate::features::tower::TowerView;
 use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
 use crate::features::workspaces::{self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout};
@@ -57,13 +59,13 @@ use crate::features::devices::{DevicePanel, DevicePanelEvent};
 use crate::features::music::{Music, MusicChanged};
 use layout::*;
 use stages::Stage;
-use view::*;
 
 actions!(
     gentle,
     [
         NewTab,
         NewTerminalTab,
+        NewCanvasTab,
         CloseTab,
         NextTab,
         PrevTab,
@@ -81,6 +83,7 @@ actions!(
         OpenSessions,
         OpenPalette,
         OpenWorkspaces,
+        OpenSettings,
         CloseOverlay,
         Quit
     ]
@@ -92,7 +95,7 @@ pub const SIDEBAR_WIDTH: f32 = 260.;
 pub enum WorkspaceEvent {
     /// The shown workspace changed; its root folder.
     RootChanged(PathBuf),
-    /// Whether the files pane is actually in view (not hidden behind Tabs).
+    /// Whether the right-side Files panel is shown.
     FilesVisibilityChanged(bool),
 }
 
@@ -154,13 +157,6 @@ struct Tab {
     pinned: bool,
 }
 
-/// A tab dragged onto another tab in the vertical navigator.
-#[derive(Clone)]
-struct TabDrag {
-    tab: usize,
-    title: SharedString,
-}
-
 /// One named workspace.
 struct Space {
     name: String,
@@ -205,6 +201,13 @@ struct DividerDrag {
 #[derive(Clone)]
 struct PaneDrag {
     pane: PaneId,
+    title: SharedString,
+}
+
+/// Dragged by a tab: dropped on another tab it takes that tab's place.
+#[derive(Clone)]
+struct TabDrag {
+    tab: usize,
     title: SharedString,
 }
 
@@ -285,9 +288,6 @@ pub struct Workspace {
     drop_hint: Option<(PaneId, DropZone)>,
     /// Panes and tabs closed, most recent last, to reopen.
     closed: Vec<closed::Closed>,
-    /// The pointer is on the title bar's close button: the pane it would
-    /// close is marked.
-    close_hover: bool,
     /// gentle-stream, behind the title bar's ♪ button.
     music: Entity<Music>,
     /// Simulators and emulators, docked at the right or floating.
@@ -394,13 +394,13 @@ impl Workspace {
             resume_welcome: None,
             drop_hint: None,
             closed: Vec::new(),
-            close_hover: false,
             music,
             devices,
             _surge_end: None,
             _title_poll: cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
+                    crate::shared::diagnostics::tick();
                     let Ok(()) = this.update(cx, |this, cx| this.refresh_titles(cx)) else {
                         break;
                     };

@@ -75,6 +75,11 @@ impl Workspace {
         self.ensure_open(index, true, window, cx);
         let changed = index != self.current;
         self.current = index;
+        if changed {
+            // A search in the previous project must not hide this one's tabs.
+            self.tab_search
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
         self.space_mut().last_active = workspaces::now();
         self.focus_active(window, cx);
         self.start_shown(window, cx);

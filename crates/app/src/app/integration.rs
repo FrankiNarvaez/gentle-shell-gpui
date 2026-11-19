@@ -8,9 +8,11 @@ use gpui_kit::component::WindowExt as _;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 
+use crate::features::canvas::CanvasView;
 use crate::features::files::FileView;
 use crate::features::history::HistoryView;
 use crate::features::terminal::TerminalView;
+use crate::features::tower::TowerView;
 use crate::shared::pane::{PaneFactories, PaneItem, PaneKind};
 
 /// The git work tree containing `path` (FileView::diff runs git there).
@@ -88,11 +90,39 @@ pub fn register(cx: &mut App) {
                 unsaved: None,
             }
         });
+    let canvas: crate::shared::pane::PaneFactory =
+        Rc::new(|path: PathBuf, window: &mut Window, cx: &mut App| {
+            let view = cx.new(|cx| CanvasView::open(path, window, cx));
+            let focus = view.focus_handle(cx);
+            let title_view = view.clone();
+            PaneItem {
+                kind: PaneKind::Canvas,
+                view: view.into(),
+                focus,
+                title: Rc::new(move |cx: &App| title_view.read(cx).title()),
+                unsaved: None,
+            }
+        });
+    let tower: crate::shared::pane::PaneFactory =
+        Rc::new(|cwd: PathBuf, _: &mut Window, cx: &mut App| {
+            let view = cx.new(|cx| TowerView::new(cwd, cx));
+            let focus = view.focus_handle(cx);
+            let title_view = view.clone();
+            PaneItem {
+                kind: PaneKind::Tower,
+                view: view.into(),
+                focus,
+                title: Rc::new(move |cx: &App| title_view.read(cx).title()),
+                unsaved: None,
+            }
+        });
     cx.set_global(PaneFactories {
         terminal: Some(terminal),
         file: Some(file),
         diff: Some(diff),
         history: Some(history),
+        canvas: Some(canvas),
+        tower: Some(tower),
     });
 }
 

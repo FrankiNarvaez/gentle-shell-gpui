@@ -156,7 +156,7 @@ impl SessionView {
         if done {
             self.live.glide = None;
         }
-        window.request_animation_frame();
+        ui::request_animation_frame(window);
     }
 
     /// The thumb was grabbed at `mouse_y`.

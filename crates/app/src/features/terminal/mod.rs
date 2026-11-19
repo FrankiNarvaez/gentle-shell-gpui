@@ -967,6 +967,7 @@ fn paint_frame(frame: Frame, font_size: Pixels, window: &mut Window, cx: &mut Ap
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::shared::diagnostics::render("TerminalView");
         let cell = self.cell_size(window);
         let font_size = font_size(window);
         let focused = self.focus_handle.is_focused(window);

@@ -10,8 +10,9 @@ use gpui_kit::component::{Theme, ThemeMode, TitleBar};
 use gpui_kit::*;
 
 use crate::features::workspace::{
-    ClosePane, CloseTab, FocusNextPane, FocusPrevPane, NewTab, NewTerminalTab, NextTab, PrevTab,
-    Quit, ReopenClosed, SplitDown, SplitRight, TilePane, ToggleSidebar, Workspace,
+    ClosePane, CloseTab, FocusNextPane, FocusPrevPane, NewCanvasTab, NewTab, NewTerminalTab,
+    NextTab, PrevTab, Quit, ReopenClosed, SplitDown, SplitRight, TilePane, ToggleSidebar,
+    Workspace,
 };
 use crate::{
     features::app_update, features::files, features::session, features::workspace,
@@ -39,6 +40,7 @@ pub fn run(
             app_update::init(cx);
             crate::features::hydration::init(cx);
             crate::features::genui::mode::init(cx);
+            crate::features::diagnostics::start(cx);
 
             bind_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
@@ -135,6 +137,15 @@ fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new(key!("t"), NewTab, None),
         KeyBinding::new(key!("shift-t"), NewTerminalTab, None),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-e"
+            } else {
+                "ctrl-alt-shift-e"
+            },
+            NewCanvasTab,
+            None,
+        ),
         KeyBinding::new(key!("w"), ClosePane, None),
         KeyBinding::new(key!("shift-w"), CloseTab, None),
         KeyBinding::new(reopen, ReopenClosed, None),
@@ -158,6 +169,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("k"), workspace::OpenPalette, None),
         KeyBinding::new(workspaces, workspace::OpenWorkspaces, None),
         KeyBinding::new(key!("shift-o"), workspace::OpenSessions, None),
+        KeyBinding::new(key!(","), workspace::OpenSettings, None),
         // Interface size. Bindings run before a terminal sees the keys. ⌘+
         // is shift-= on most layouts; the platforms report it either way.
         KeyBinding::new(key!("="), ZoomIn, None),
@@ -167,6 +179,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("0"), ActualSize, None),
     ]);
     files::FileView::bind_keys(cx);
+    crate::features::canvas::bind_keys(cx);
 }
 
 fn set_menus(cx: &mut App) {
@@ -175,6 +188,7 @@ fn set_menus(cx: &mut App) {
         items: vec![
             MenuItem::action("New Tab", NewTab),
             MenuItem::action("New Terminal Tab", NewTerminalTab),
+            MenuItem::action("New Canvas Tab", NewCanvasTab),
             MenuItem::action("New Pane (Tiled)", TilePane),
             MenuItem::action("Split Right", SplitRight),
             MenuItem::action("Split Down", SplitDown),
@@ -183,6 +197,7 @@ fn set_menus(cx: &mut App) {
             MenuItem::action("Reopen Closed Pane", ReopenClosed),
             MenuItem::separator(),
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Configuration…", workspace::OpenSettings),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn),
             MenuItem::action("Zoom Out", ZoomOut),

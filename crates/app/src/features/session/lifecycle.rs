@@ -35,6 +35,7 @@ impl SessionView {
             let frames = (crate::shared::banner::WRITE.as_millis() / FRAME.as_millis()) as u32;
             for frame in 1..=frames {
                 cx.background_executor().timer(FRAME).await;
+                crate::shared::diagnostics::tick();
                 let t = frame as f32 / frames as f32;
                 if this
                     .update(cx, |this, cx| {
@@ -309,6 +310,7 @@ impl SessionView {
         // Agent UI: the extension loads in the app's mode (a change made
         // while it starts is sent once it is ready).
         let genui_mode = crate::features::genui::mode::mode(cx);
+        let canvas = self.canvas.clone();
         self._io = cx.spawn_in(window, async move |this, cx| {
             let spawned = cx
                 .background_executor()
@@ -320,6 +322,11 @@ impl SessionView {
                     }
                     spec.env
                         .push(crate::features::genui::mode::launch_env(genui_mode));
+                    // The canvas this agent works on: its extension's tools.
+                    if let Some(canvas) = canvas {
+                        spec.env
+                            .push((crate::features::canvas::AGENT_ENV.into(), canvas.into()));
+                    }
                     let version = pi_rpc::backend_version(&spec);
                     let (process, rx) = PiProcess::spawn(&spec)?;
                     anyhow::Ok((process, rx, version))

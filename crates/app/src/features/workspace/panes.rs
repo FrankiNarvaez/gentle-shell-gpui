@@ -134,76 +134,8 @@ impl Workspace {
         let subscriptions = vec![cx.subscribe_in(
             &session,
             window,
-            move |this, session, event: &SessionEvent, window, cx| match event {
-                // Tab titles, running dots and the saved conversation follow
-                // each session; its other changes don't touch the chrome.
-                SessionEvent::ChromeChanged => {
-                    let file = session.read(cx).session_file();
-                    let Some(pane) = this.panes.get_mut(&id) else {
-                        return;
-                    };
-                    let changed = pane.sync_chrome(cx);
-                    if pane.session_file != file {
-                        pane.session_file = file;
-                        this.schedule_save(cx);
-                    }
-                    // An agent that just started may have the docs skill.
-                    if let Some((Overlay::Docs(view), _)) = &this.overlay {
-                        let (view, dir) = (view.clone(), this.docs_skill_dir(cx));
-                        view.update(cx, |view, cx| view.set_skill_dir(dir, cx));
-                    }
-                    if changed {
-                        // An open switcher lists every workspace's activity.
-                        if let Some((Overlay::Palette(view), _)) = &this.overlay {
-                            let (view, rows) = (view.clone(), this.workspace_rows());
-                            view.update(cx, |view, cx| view.set_workspaces(rows, cx));
-                        }
-                        cx.notify();
-                    }
-                }
-                SessionEvent::OpenProviders => this.open_providers(window, cx),
-                SessionEvent::OpenScreen(screen) => {
-                    this.open_screen(*screen, Some(session.clone()), window, cx)
-                }
-                SessionEvent::Effort(level) => {
-                    if let Some(level) = crate::shared::surge::Level::of(level) {
-                        this.play_surge(level, cx)
-                    }
-                }
-                SessionEvent::DesignCanvas(canvas) => {
-                    this.show_design_canvas(canvas.clone(), id, window, cx)
-                }
-                SessionEvent::Device(intent) => {
-                    // A device an agent starts itself still shows in the app.
-                    if crate::features::devices::hub(cx).read(cx).prefs().enabled {
-                        let intent = intent.clone();
-                        this.devices
-                            .update(cx, |panel, cx| panel.follow(intent, cx));
-                    }
-                }
-                SessionEvent::DeviceCommand(command) => {
-                    let command = command.clone();
-                    this.devices
-                        .update(cx, |panel, cx| panel.activity(command, cx));
-                }
-                SessionEvent::OpenWeb(url) => {
-                    this.open_web(url.clone(), Some(id), true, window, cx)
-                }
-                SessionEvent::OpenFile { path, line } => {
-                    this.open_file_at(path.clone(), *line, window, cx)
-                }
-                SessionEvent::AgentWeb(url) => {
-                    this.open_web(url.clone(), Some(id), false, window, cx)
-                }
-                SessionEvent::Notice { level, message } => {
-                    let source = this.pane_title(id);
-                    let (level, message) = (*level, message.clone());
-                    this.notices.update(cx, |store, cx| {
-                        store.push(level, message, source, Some(id), std::time::Instant::now());
-                        cx.notify();
-                    });
-                    cx.notify();
-                }
+            move |this, session, event: &SessionEvent, window, cx| {
+                this.on_session_event(id, session, event, window, cx)
             },
         )];
         let mut pane = Pane {
@@ -228,8 +160,88 @@ impl Workspace {
         id
     }
 
-    /// A terminal or history (`target` = folder) or file (`target` = file)
-    /// pane from the registered factory; a notice when there is none.
+    /// What an agent asks of the window: pane `id` shows it (its own pane, or
+    /// the canvas it floats in).
+    pub(super) fn on_session_event(
+        &mut self,
+        id: PaneId,
+        session: &Entity<SessionView>,
+        event: &SessionEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            // Tab titles, running dots and the saved conversation follow
+            // each session; its other changes don't touch the chrome.
+            SessionEvent::ChromeChanged => {
+                let file = session.read(cx).session_file();
+                let Some(pane) = self.panes.get_mut(&id) else {
+                    return;
+                };
+                let changed = pane.sync_chrome(cx);
+                if pane.session_file != file {
+                    pane.session_file = file;
+                    self.schedule_save(cx);
+                }
+                // An agent that just started may have the docs skill.
+                if let Some((Overlay::Docs(view), _)) = &self.overlay {
+                    let (view, dir) = (view.clone(), self.docs_skill_dir(cx));
+                    view.update(cx, |view, cx| view.set_skill_dir(dir, cx));
+                }
+                if changed {
+                    // An open switcher lists every workspace's activity.
+                    if let Some((Overlay::Palette(view), _)) = &self.overlay {
+                        let (view, rows) = (view.clone(), self.workspace_rows());
+                        view.update(cx, |view, cx| view.set_workspaces(rows, cx));
+                    }
+                    cx.notify();
+                }
+            }
+            SessionEvent::OpenProviders => self.open_providers(window, cx),
+            SessionEvent::OpenScreen(screen) => {
+                self.open_screen(*screen, Some(session.clone()), window, cx)
+            }
+            SessionEvent::Effort(level) => {
+                if let Some(level) = crate::shared::surge::Level::of(level) {
+                    self.play_surge(level, cx)
+                }
+            }
+            SessionEvent::DesignCanvas(canvas) => {
+                self.show_design_canvas(canvas.clone(), id, window, cx)
+            }
+            SessionEvent::Device(intent) => {
+                // A device an agent starts itself still shows in the app.
+                if crate::features::devices::hub(cx).read(cx).prefs().enabled {
+                    let intent = intent.clone();
+                    self.devices
+                        .update(cx, |panel, cx| panel.follow(intent, cx));
+                }
+            }
+            SessionEvent::DeviceCommand(command) => {
+                let command = command.clone();
+                self.devices
+                    .update(cx, |panel, cx| panel.activity(command, cx));
+            }
+            SessionEvent::OpenWeb(url) => self.open_web(url.clone(), Some(id), true, window, cx),
+            SessionEvent::OpenFile { path, line } => {
+                self.open_file_at(path.clone(), *line, window, cx)
+            }
+            SessionEvent::AgentWeb(url) => self.open_web(url.clone(), Some(id), false, window, cx),
+            SessionEvent::Notice { level, message } => {
+                let source = self.pane_title(id);
+                let (level, message) = (*level, message.clone());
+                self.notices.update(cx, |store, cx| {
+                    store.push(level, message, source, Some(id), std::time::Instant::now());
+                    cx.notify();
+                });
+                cx.notify();
+            }
+        }
+    }
+
+    /// A terminal or history (`target` = folder), file (`target` = file) or
+    /// canvas (`target` = its file, or a folder for a new one) pane from the
+    /// registered factory; a notice when there is none.
     pub(super) fn new_factory_pane(
         &mut self,
         kind: PaneKind,
@@ -242,6 +254,8 @@ impl Workspace {
             PaneKind::Terminal => factories.terminal,
             PaneKind::File => factories.file,
             PaneKind::History => factories.history,
+            PaneKind::Canvas => factories.canvas,
+            PaneKind::Tower => factories.tower,
             PaneKind::Agent => None,
         };
         let Some(factory) = factory else {
@@ -251,12 +265,22 @@ impl Workspace {
                     match kind {
                         PaneKind::File => "File",
                         PaneKind::History => "History",
+                        PaneKind::Canvas => "Canvas",
+                        PaneKind::Tower => "Tower",
                         _ => "Terminal",
                     }
                 )),
                 cx,
             );
             return None;
+        };
+        // A canvas started from a folder gets a new file; the folder stays
+        // its cwd, so splitting from it opens the next one there too.
+        let (canvas_cwd, target) = match kind {
+            PaneKind::Canvas if target.extension().is_none_or(|e| e != "json") => {
+                (Some(target), crate::features::canvas::new_canvas_path())
+            }
+            _ => (None, target),
         };
         let item = factory(target.clone(), window, cx);
         let id = self.alloc_id();
@@ -266,6 +290,10 @@ impl Workspace {
                     .parent()
                     .map(Path::to_path_buf)
                     .unwrap_or_else(|| self.space().root.clone()),
+                Some(target),
+            ),
+            PaneKind::Canvas => (
+                canvas_cwd.unwrap_or_else(|| self.space().root.clone()),
                 Some(target),
             ),
             _ => (target, None),
@@ -282,8 +310,38 @@ impl Workspace {
             _subscriptions: Vec::new(),
         };
         pane.sync_chrome(cx);
+        if kind == PaneKind::Canvas
+            && let Ok(canvas) = pane.item.view.clone().downcast::<CanvasView>()
+        {
+            canvas.update(cx, |canvas, _| canvas.set_cwd(pane.cwd.clone()));
+            pane._subscriptions.push(cx.subscribe_in(
+                &canvas,
+                window,
+                move |this, _, event: &CanvasEvent, window, cx| match event {
+                    // Its agent's asks go where an agent pane's do, shown
+                    // as this canvas pane.
+                    CanvasEvent::AgentStarted(session) => {
+                        let subscription = cx.subscribe_in(
+                            session,
+                            window,
+                            move |this, session, event: &SessionEvent, window, cx| {
+                                this.on_session_event(id, session, event, window, cx)
+                            },
+                        );
+                        if let Some(pane) = this.panes.get_mut(&id) {
+                            pane._subscriptions.push(subscription);
+                        }
+                    }
+                },
+            ));
+        }
         self.panes.insert(id, pane);
         Some(id)
+    }
+
+    /// The canvas pane `id` shows, if it is one.
+    pub(super) fn canvas_view(&self, id: PaneId) -> Option<Entity<CanvasView>> {
+        self.panes.get(&id)?.item.view.clone().downcast().ok()
     }
 
     /// A pane for an already built file view of `path`.
@@ -320,9 +378,11 @@ impl Workspace {
     ) -> Option<PaneId> {
         match kind {
             PaneKind::Agent => Some(self.new_agent_pane(target, prompt, resume, true, window, cx)),
-            PaneKind::Terminal | PaneKind::File | PaneKind::History => {
-                self.new_factory_pane(kind, target, window, cx)
-            }
+            PaneKind::Terminal
+            | PaneKind::File
+            | PaneKind::History
+            | PaneKind::Canvas
+            | PaneKind::Tower => self.new_factory_pane(kind, target, window, cx),
         }
     }
 
@@ -354,9 +414,34 @@ impl Workspace {
                 PaneFactories::get(cx).file.as_ref()?;
                 self.new_factory_pane(PaneKind::File, path, window, cx)
             }
+            PaneKind::Tower => {
+                PaneFactories::get(cx).tower.as_ref()?;
+                self.new_factory_pane(PaneKind::Tower, cwd, window, cx)
+            }
             PaneKind::History => {
                 PaneFactories::get(cx).history.as_ref()?;
                 self.new_factory_pane(PaneKind::History, cwd, window, cx)
+            }
+            PaneKind::Canvas => {
+                let path = saved.path.clone()?;
+                PaneFactories::get(cx).canvas.as_ref()?;
+                let id = self.new_factory_pane(PaneKind::Canvas, path, window, cx)?;
+                // Its agent works in the folder it had and picks up its
+                // conversation the next time it opens.
+                let resume = saved.session.clone().filter(|p| p.exists());
+                if let Some(pane) = self.panes.get_mut(&id) {
+                    pane.cwd = cwd.clone();
+                    pane.session_file = resume.clone();
+                }
+                if let Some(canvas) = self.canvas_view(id) {
+                    canvas.update(cx, |canvas, _| {
+                        canvas.set_cwd(cwd);
+                        if let Some(resume) = resume {
+                            canvas.resume_agent(resume);
+                        }
+                    });
+                }
+                Some(id)
             }
         }
     }

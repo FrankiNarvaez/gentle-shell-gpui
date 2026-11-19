@@ -774,6 +774,11 @@ impl SessionView {
                 let messages = data["messages"].as_array().cloned().unwrap_or_default();
                 if !messages.is_empty() {
                     this.transcript.load_messages(&messages);
+                    this.prompt_history
+                        .seed(this.transcript.items.iter().filter_map(|item| match item {
+                            gentle_core::transcript::Item::User { text, .. } => Some(text.as_str()),
+                            _ => None,
+                        }));
                     this.markdown.clear();
                     this.sync_todo_from_history();
                 }
@@ -883,7 +888,8 @@ impl SessionView {
     }
 
     /// Stop what is running: a `!command` with `abort_bash` (its `bash`
-    /// response then settles the card), the turn with `abort`.
+    /// response then settles the card), the turn with `abort` (the activity
+    /// line reads "stopping…" until it ends).
     pub(super) fn stop(&mut self, cx: &mut Context<Self>) {
         if self.transcript.shells_running() {
             self.request(json!({"type": "abort_bash"}), cx, |this, result, _| {
@@ -891,6 +897,8 @@ impl SessionView {
             });
         }
         if self.busy() {
+            self.live.stopping = self.turn_since();
+            cx.notify();
             // Pi's Esc: drop queued messages first so abort does not resume them.
             self.request(json!({"type": "clear_queue"}), cx, |_, _, _| {});
             self.request(json!({"type": "abort"}), cx, |this, result, _| {

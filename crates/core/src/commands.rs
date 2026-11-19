@@ -18,6 +18,8 @@ pub enum Screen {
     Palette,
     /// Files sidebar › Changes tab.
     Changes,
+    /// Gentle Tower, in a tab of its own instead of the system browser.
+    Tower,
 }
 
 /// The native screen for a typed or picked slash command. `text` is what
@@ -38,6 +40,7 @@ pub fn route(text: &str) -> Option<Screen> {
         "gentle:profiles" if args.is_empty() => Screen::Profiles,
         "gentle:commands" => Screen::Palette,
         "gentle:changes" => Screen::Changes,
+        "gentle:tower" => Screen::Tower,
         _ => return None,
     })
 }
@@ -198,6 +201,7 @@ mod tests {
         assert_eq!(route("gentle:profiles"), Some(Screen::Profiles));
         assert_eq!(route("gentle:commands"), Some(Screen::Palette));
         assert_eq!(route("gentle:changes"), Some(Screen::Changes));
+        assert_eq!(route("gentle:tower"), Some(Screen::Tower));
     }
 
     #[test]

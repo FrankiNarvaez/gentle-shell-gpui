@@ -40,6 +40,7 @@ impl SessionView {
         }
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
+        self.prompt_history.record(&text);
         let pasted = !std::mem::take(&mut self.pasted).is_empty();
         self.list.scroll_to_end();
 
@@ -477,6 +478,63 @@ impl SessionView {
             state.set_value(content, window, cx);
             state.set_cursor_position(position, window, cx);
         });
+    }
+
+    /// ↑ on the composer's first line recalls the prompt sent before, newest
+    /// first; ↓ on its last line walks back toward the newest, then to the
+    /// draft that was being written. Nothing is sent. Lines in between move
+    /// the cursor as usual, the `/` menu keeps its ↑/↓ until history is
+    /// entered, and a composer holding attachments or long pastes is left
+    /// alone (a recalled prompt would drop their tokens).
+    pub(in crate::features::session) fn history_key(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let m = &keystroke.modifiers;
+        if m.platform || m.control || m.alt || m.shift {
+            return false;
+        }
+        let up = match keystroke.key.as_str() {
+            "up" => true,
+            "down" => false,
+            _ => return false,
+        };
+        if !self.composer.focus_handle(cx).is_focused(window)
+            || !self.attachments.is_empty()
+            || !self.pasted.is_empty()
+        {
+            return false;
+        }
+        let (text, line) = {
+            let state = self.composer.read(cx);
+            (state.value().to_string(), state.cursor_position().line)
+        };
+        let browsing = self.prompt_history.browsing();
+        if !browsing && self.slash_menu_open(cx) {
+            return false;
+        }
+        let recalled = if up {
+            if line != 0 {
+                return false;
+            }
+            self.prompt_history.older(&text)
+        } else {
+            if !browsing || line as usize != text.matches('\n').count() {
+                return false;
+            }
+            self.prompt_history.newer()
+        };
+        let Some(recalled) = recalled.map(str::to_string) else {
+            // At the oldest prompt ↑ stays put; with no history it's the
+            // composer's own.
+            return browsing;
+        };
+        let end = recalled.len();
+        self.set_composer_text(recalled, end, window, cx);
+        cx.notify();
+        true
     }
 }
 

@@ -1,5 +1,5 @@
-//! Interface preferences shown in Configuration.
-//! Tab placement lives in the workspace's existing saved state, not a second file.
+//! Tab placement controls for Configuration → Appearance.
+//! State belongs to the workspace's existing saved layout.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -12,9 +12,8 @@ use crate::features::workspaces::TabLayout;
 use crate::shared::ui;
 
 impl SettingsView {
-    /// A user-facing home for the same choice available in the tab context menu.
     pub(super) fn interface_section(&self, cx: &mut Context<Self>) -> Div {
-        section(IconName::PanelLeft, "Interface")
+        section(IconName::PanelLeft, "Tab placement")
             .child(
                 h_flex()
                     .pt_2()

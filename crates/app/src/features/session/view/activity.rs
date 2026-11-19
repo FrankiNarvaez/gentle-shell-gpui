@@ -26,10 +26,9 @@ impl SessionView {
     ) -> impl IntoElement {
         let busy = self.busy();
         let waiting = self.live.pending.as_ref().filter(|p| !p.started);
-        let since = self
-            .live
-            .turn
-            .or_else(|| self.live.pending.as_ref().map(|p| p.since));
+        let since = self.turn_since();
+        // A stop was asked for this very turn: say so until it ends.
+        let stopping = since.is_some() && self.live.stopping == since;
         // Only shown while busy; with no tool running there is nothing to find.
         let scan = busy && self.transcript.running_tools() > 0;
         let current_tool = self
@@ -119,6 +118,7 @@ impl SessionView {
                 })
                 .child(div().h(rems(10. / 16.)).w(px(1.)).bg(ui::border_strong()))
                 .map(|this| match (waiting, feed_phase, self.activity.phase) {
+                    _ if stopping => this.child(div().text_color(ui::muted()).child("✿ stopping…")),
                     (Some(_), _, _) => this.child(
                         div()
                             .text_color(ui::petal())
@@ -148,6 +148,12 @@ impl SessionView {
 
         let width = self.pane_width.get();
         let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
+        let window_tokens = self
+            .models
+            .current
+            .as_ref()
+            .map(|m| m.context_window)
+            .unwrap_or(0);
         let statuses: Vec<(String, String)> = self
             .extension
             .statuses
@@ -237,6 +243,17 @@ impl SessionView {
                         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 },
             ))
+            .child(self.render_context_chip(cx))
+            .when(window_tokens > 0, |this| {
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .font_family(ui::MONO)
+                        .text_size(rems(10. / 16.))
+                        .text_color(ui::faint())
+                        .child(format_tokens(window_tokens)),
+                )
+            })
             // The review switch sits with the permission chip: both are this
             // workspace's rules for the agent (Gentle Shell `main`).
             .when(!collapse, |this| this.children(self.render_review_chip(cx)))

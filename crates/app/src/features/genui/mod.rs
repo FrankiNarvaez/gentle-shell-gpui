@@ -54,6 +54,7 @@ mod view;
 
 pub use diagram::{DiagramEvent, DiagramView};
 pub use extension::install;
+pub(crate) use extension::write_if_changed;
 pub use html::HtmlView;
 use live::SharedEnv;
 pub use live::todo_records;
@@ -123,6 +124,17 @@ impl Surface {
             Self::Diagram(view) => view.update(cx, |view, cx| view.set_expanded(expanded, cx)),
             Self::Panel(view) => view.update(cx, |view, cx| view.set_expanded(expanded, cx)),
             Self::Html(view) => view.update(cx, |view, cx| view.set_expanded(expanded, cx)),
+        }
+    }
+
+    /// Whether the keyboard is inside the surface: a diagram or panel then
+    /// handles Esc itself (clearing a selection first). An HTML page never
+    /// is, for GPUI: its keys go to the web view.
+    fn has_focus(&self, window: &Window, cx: &App) -> bool {
+        match self {
+            Self::Diagram(view) => view.read(cx).focus.contains_focused(window, cx),
+            Self::Panel(view) => view.read(cx).focus.contains_focused(window, cx),
+            Self::Html(_) => false,
         }
     }
 
@@ -595,6 +607,19 @@ impl GenUi {
             Some(surface) => Some(surface.clone()),
             None if id == TODO_SURFACE => self.todo.clone(),
             None => None,
+        }
+    }
+
+    /// Esc in the session: back to the conversation when a surface is
+    /// expanded and doesn't have the keyboard (one that has it collapses on
+    /// its own Esc). Whether it collapsed one.
+    pub fn collapse_on_escape(&mut self, window: &Window, cx: &mut App) -> bool {
+        match self.expanded() {
+            Some(surface) if !surface.has_focus(window, cx) => {
+                self.set_expanded(None, cx);
+                true
+            }
+            _ => false,
         }
     }
 

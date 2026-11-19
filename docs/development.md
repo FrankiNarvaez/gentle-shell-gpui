@@ -57,6 +57,8 @@ cargo build --profile dist -p gentle-shell-gpui   # as in a release
 | `FOLDER` | Selects (or creates) the workspace with that root. Ignored if it is not a directory. Without a folder, the last workspace is restored. |
 | `-p TEXT`, `--prompt TEXT` | Opens a new agent tab and, once the backend starts, runs the text as if it had been typed in the composer (`SessionView::run_text` in `features/session/submit.rs`). |
 | `-p "!cmd"` | Runs `cmd` as a shell command in that tab; `-p "!!cmd"` keeps it out of the context (Pi convention). |
+| `--diagnostics` | Records resource diagnostics for this run, like `GENTLE_SHELL_GPUI_DIAGNOSTICS=1` (see [Diagnostics](#diagnostics)). |
+| `--diagnostics-report [FILE]` | Prints the ranking of a recording (the newest one without `FILE`) and exits. |
 
 `-p` is useful during development to bring the app to a specific state without typing into it.
 
@@ -68,7 +70,7 @@ Practical consequence: with your installed app open, `cargo run` **does not open
 
 ### Data dir
 
-Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`:
+Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`, or under `GENTLE_SHELL_GPUI_DATA_DIR` when it is set (`shared/data_dir.rs`, see [Isolated testing](#isolated-testing)):
 
 | File | Owner |
 | --- | --- |
@@ -77,6 +79,7 @@ Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`:
 | `settings.json` | `shared/themes.rs` (`store_path`): theme, transparency, the interface size (`interfaceScale`, a factor such as `1.25`), the water reminder (`hydration`: `{ "enabled": true, "everyMinutes": 60 }`, written by `features/hydration`), Agent UI (`genuiMode`: `"proactive"`, `"asked"` or `"off"`, written by `features/genui/mode.rs`) and the `onboarding` key (`{ "done": true, "version": … }`) that decides the first run (`features/setup/mod.rs`: `first_run`, `mark_done`). |
 | `app-update.json` | `features/app_update/cache.rs` |
 | `toolchain/` | `features/setup/mod.rs` (Node, npm prefix, Engram, Maestro and its Java, and the diagram renderer `bin/merman-cli`, installed by the app) |
+| `diagnostics/` | `features/diagnostics/`: resource recordings (`diagnostics-<UTC>.jsonl`), only when diagnostics are on; the newest 10 are kept. |
 
 `dirs::data_dir()` is `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or `~/.local/share` on Linux and `%APPDATA%` on Windows. On macOS and Linux it is derived from `HOME`.
 
@@ -96,6 +99,8 @@ Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`:
 | `ENGRAM_BIN` | `features/setup/extras.rs` | Engram binary for the check. |
 | `SHELL` | `launch.rs` (`login_shell_path`), `features/terminal/mod.rs` | Login shell whose PATH is combined (Unix), and the shell for terminal panels. |
 | `GOBIN`, `GOPATH` | `launch.rs` (`go_bin_dir`) | Where `go install` puts programs (default `~/go/bin`), added at the end of the combined PATH when it exists. |
+| `GENTLE_SHELL_GPUI_DATA_DIR` | `shared/data_dir.rs` | Replaces the app's data folder (`<data dir>/gentle-shell-gpui`). Gentle Shell's homes still come from `HOME`. |
+| `GENTLE_SHELL_GPUI_DIAGNOSTICS` | `shared/diagnostics.rs` | Any value but empty or `0` records resource diagnostics from launch (see [Diagnostics](#diagnostics)). |
 | `HOME` / `USERPROFILE` | `home.rs` (`home_dir`), `dirs` | Base of all homes and, on macOS/Linux, of the data dir. |
 
 The app always passes `GENTLE_SHELL_INTERACTIVE_HOST=1` and the combined `PATH` to the backend (`LaunchSpec.env`), plus, for gentle-ai's managed install, the environment its supervisor would set (`docs/integrations.md`). The rest of the environment (provider keys, `GENTLE_SHELL_NO_AUTO_SETUP`, …) is inherited.
@@ -114,6 +119,24 @@ It is cached until `pi_rpc::forget_cached()`. Every child process that needs the
 ## Isolated testing
 
 Rule: **never** test against the real app or data. Do not send keystrokes or clicks to an app the user has open, and do not edit their `workspaces.json`/`settings.json`.
+
+### Your real setup, a separate app (trying a pull request)
+
+To try a branch with your Gentle Shell, providers and sign-ins as they are, change only the app's data folder. The build gets its own window next to your installed app, with its own workspaces and settings:
+
+```bash
+git fetch origin pull/<N>/head:pr-<N> && git switch pr-<N>
+cargo build --release
+sandbox="$(mktemp -d)"
+cp "$HOME/Library/Application Support/gentle-shell-gpui/settings.json" "$sandbox/"  # optional: your theme, no welcome screen
+GENTLE_SHELL_GPUI_DATA_DIR="$sandbox" ./target/release/gentle-shell-gpui "$(mktemp -d)"
+```
+
+The branch must contain `shared/data_dir.rs`: an older one ignores the variable and opens your real data (or hands off to your running app and exits). Merge `main` into a local copy first (`git switch -c try-<N> pr-<N> && git merge origin/main`), or use a temporary `HOME` instead.
+
+On Linux the settings are in `~/.local/share/gentle-shell-gpui/`; on Windows (PowerShell) `$env:APPDATA\gentle-shell-gpui\`, with `$env:GENTLE_SHELL_GPUI_DATA_DIR = "<folder>"` before running the exe. Unlike a temporary `HOME`, this also isolates the app on Windows.
+
+What stays shared: agent tabs run your real Gentle Shell, so sessions, memories and sign-ins are the real ones, and an agent edits the folder you open (hence the empty `mktemp -d` folder above). The toolchain the app installs (Maestro, Java, music, the diagram renderer) isn't in the new folder; link it if a test needs it: `ln -s "$HOME/Library/Application Support/gentle-shell-gpui/toolchain" "$sandbox/toolchain"`.
 
 ### Temporary HOME (first run)
 
@@ -206,6 +229,17 @@ The app must idle at ~0 % CPU and stay cheap during a long agent turn on any mac
 - **Every process the app starts has an owner that stops it**, on close and on quit, with a bound on how long quitting waits: backends get SIGTERM first (the launcher forwards it to Pi, which stops its agents' detached jobs), then a kill of their process group; the device hub reclaims a hub orphaned by a crash; `agent-device`'s daemon stops on quit. Always `wait()` after `kill()`.
 
 To measure, run the release build in an isolated `HOME` and sample it: `ps -o %cpu=,rss= -p <pid>` every couple of seconds for CPU and memory, `sample <pid> 10` (macOS) for where the main thread spends its time. A long conversation can be loaded by a temporary scaffold that calls `Transcript::load_messages` with synthetic messages and leaves a turn running; remove it before committing.
+
+### Diagnostics
+
+For a report from someone else's machine ("it eats CPU with many agents", "this theme is heavy"), the app records itself. In **Configuration › General › Diagnostics** the person presses *Start recording*, reproduces the problem, and presses *Stop and show file*, which reveals the file in Finder or Explorer to drag into the issue (`features/settings/diagnostics.rs`). To record from launch instead, quit the app and start it with `GENTLE_SHELL_GPUI_DIAGNOSTICS=1` or `--diagnostics` (a launch while it runs is forwarded and records nothing). Every second `features/diagnostics/` appends one JSON line to `<data dir>/gentle-shell-gpui/diagnostics/diagnostics-<UTC>.jsonl`:
+
+- **The app process:** CPU, memory, windows, the active theme and its scene motion.
+- **Frames requested by source line:** `ui::request_animation_frame` (call it instead of `window.request_animation_frame`), `ui::request_frame_in`, `ui::request_slow_frame` and the live indicators (`ui::pulse`, `ui::spinner`, `ui::shimmer`), counted with `#[track_caller]`; renders of `Workspace`, `SessionView` and `TerminalView`; wakeups of the poll loops that call `shared::diagnostics::tick()`. A repeating `with_animation` isn't counted by line; it shows in the renders.
+- **Every tab:** its subagents and jobs (total and running), conversation items, the RPC records and kilobytes its backend sends per second, and the whole process tree under the backend (subagents, jobs, tools): process count, summed CPU and memory, the heaviest executables.
+- **The app's other children** (terminals, the device hub) with their trees.
+
+A line holds numbers, source locations and executable names only: no prompts, paths, arguments or project names, so the file can be attached to an issue as is. It stops at 64 MB; the newest 10 recordings are kept. Off, each hook is one relaxed load of an atomic flag. `gentle-shell-gpui --diagnostics-report [FILE]` prints the ranking (`gentle_core::diagnostics::report`).
 
 ## Commits and pull requests
 

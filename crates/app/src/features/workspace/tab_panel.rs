@@ -101,27 +101,11 @@ impl Workspace {
         );
     }
 
-    /// Called by the drag-and-drop targets in the sidebar.
+    /// Use the same tab-reordering operation as the horizontal strip.
     fn reorder_tab_at(&mut self, moving: usize, target: usize, cx: &mut Context<Self>) {
-        if moving == target {
-            return;
+        if let Some(index) = self.space().tabs.iter().position(|tab| tab.id == target) {
+            self.move_tab(moving, index, cx);
         }
-        self.with_reordered_tabs(
-            |tabs| {
-                let Some(from) = tabs.iter().position(|tab| tab.id == moving) else {
-                    return;
-                };
-                let Some(to) = tabs.iter().position(|tab| tab.id == target) else {
-                    return;
-                };
-                if tabs[from].pinned != tabs[to].pinned {
-                    return;
-                }
-                let tab = tabs.remove(from);
-                tabs.insert(to, tab);
-            },
-            cx,
-        );
     }
 
     /// The dedicated left navigator is independent of the right Files sidebar.
@@ -200,27 +184,33 @@ impl Workspace {
                             .child(name),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(ui::faint())
-                            .children(status.map(|(label, color)| {
                         h_flex()
-                            .gap_1()
+                            .flex_none()
+                            .gap_2()
                             .items_center()
-                            .child(div().size(rems(6. / 16.)).rounded_full().bg(color))
+                            .children(status.map(|(label, color)| {
+                                h_flex()
+                                    .gap_1()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .size(rems(6. / 16.))
+                                            .rounded_full()
+                                            .bg(color),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(color)
+                                            .child(label),
+                                    )
+                            }))
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(color)
-                                    .child(label),
-                            )
-                    }))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(ui::faint())
-                            .child(count.to_string()),
-                    ),
+                                    .text_color(ui::faint())
+                                    .child(count.to_string()),
+                            ),
                     ),
             );
             if !active_space {
@@ -263,28 +253,19 @@ impl Workspace {
                 );
             }
         }
+        let canvas = cx.entity().downgrade();
+        let tower = canvas.clone();
         v_flex()
             .size_full()
             .child(
                 h_flex()
                     .p_2()
-                    .gap_1()
                     .child(
                         ui::field()
                             .flex_1()
                             .min_w_0()
                             .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
                             .child(Input::new(&self.tab_search).appearance(false).small()),
-                    )
-                    .child(
-                        Button::new("vertical-new-agent")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::Plus))
-                            .tooltip("New agent tab")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.on_new_tab(&NewTab, window, cx)
-                            })),
                     ),
             )
             .child(list)
@@ -292,23 +273,72 @@ impl Workspace {
                 h_flex()
                     .flex_none()
                     .p_2()
-                    .gap_2()
+                    .gap_1()
+                    .child(
+                        Button::new("vertical-new-agent")
+                            .small()
+                            .ghost()
+                            .icon(Icon::new(IconName::Bot))
+                            .label("Agent")
+                            .tooltip(format!(
+                                "New agent tab ({})",
+                                ui::platform_shortcut("⌘T", "Ctrl+T")
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.on_new_tab(&NewTab, window, cx)
+                            })),
+                    )
                     .child(
                         Button::new("vertical-new-terminal")
                             .small()
                             .ghost()
                             .icon(Icon::new(IconName::SquareTerminal))
                             .label("Terminal")
+                            .tooltip(format!(
+                                "New terminal tab ({})",
+                                ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T")
+                            ))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.on_new_terminal_tab(&NewTerminalTab, window, cx)
                             })),
                     )
                     .child(div().flex_1())
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(ui::faint())
-                            .child("Drag to reorder"),
+                        Button::new("vertical-more-tabs")
+                            .small()
+                            .ghost()
+                            .icon(Icon::new(IconName::Plus))
+                            .tooltip("New Canvas or Tower tab")
+                            .dropdown_menu(move |menu, _, _| {
+                                let canvas = canvas.clone();
+                                let tower = tower.clone();
+                                menu.item(
+                                    PopupMenuItem::new("Canvas tab")
+                                        .icon(Icon::new(IconName::PenTool))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = canvas.update(cx, |this, cx| {
+                                                this.on_new_canvas_tab(&NewCanvasTab, window, cx)
+                                            });
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Tower tab")
+                                        .icon(Icon::new(IconName::Building2))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = tower.update(cx, |this, cx| {
+                                                this.open_tower(window, cx)
+                                            });
+                                        }),
+                                )
+                            })
+                            .on_open_change(|open, window, cx| {
+                                crate::features::browser::popover_open(
+                                    "vertical-more-tabs",
+                                    *open,
+                                    window,
+                                    cx,
+                                )
+                            }),
                     ),
             )
     }
@@ -323,9 +353,11 @@ impl Workspace {
         let id = tab.id;
         let active = self.space().active == index;
         let pinned = tab.pinned;
-        let needs_you = tab.tree.leaves().iter().any(|pane| {
-            self.panes.get(pane).is_some_and(|pane| pane.needs_you)
-        });
+        let needs_you = tab
+            .tree
+            .leaves()
+            .iter()
+            .any(|pane| self.panes.get(pane).is_some_and(|pane| pane.needs_you));
         let running = self.tab_running(tab);
         let color = if needs_you {
             ui::warning()
@@ -334,7 +366,9 @@ impl Workspace {
         } else {
             ui::faint()
         };
-        let kind = self.panes.get(&tab.focused)
+        let kind = self
+            .panes
+            .get(&tab.focused)
             .map(|p| p.item.kind)
             .unwrap_or(PaneKind::Agent);
         let weak = cx.entity().downgrade();
@@ -366,6 +400,7 @@ impl Workspace {
                     this.activate(index, window, cx);
                 }
             }))
+            .drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
             .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
                 this.reorder_tab_at(drag.tab, id, cx)
             }))
@@ -432,76 +467,96 @@ impl Workspace {
                     .on_click(|_, _, cx| cx.stop_propagation())
                     .child(
                         Button::new(("vertical-tab-actions", id))
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::new(IconName::Ellipsis))
-                    .tooltip("Tab actions")
-                    .dropdown_menu(move |menu, _, _| {
-                        menu.item(
-                            PopupMenuItem::new(if pinned { "Unpin tab" } else { "Pin tab" })
-                                .icon(Icon::new(IconName::Star))
-                                .on_click({
-                                    let pin = pin.clone();
-                                    move |_, _, cx| {
-                                        let _ = pin.update(cx, |this, cx| this.toggle_tab_pin(id, cx));
-                                    }
-                                }),
-                        )
-                        .item(
-                            PopupMenuItem::new("Rename")
-                                .icon(Icon::new(IconName::Pencil))
-                                .disabled(kind != PaneKind::Agent)
-                                .on_click({
-                                    let rename = rename.clone();
-                                    move |_, window, cx| {
-                                        let _ = rename.update(cx, |this, cx| {
-                                            if let Some(i) = this.space().tabs.iter().position(|t| t.id == id) {
-                                                this.start_tab_rename(i, window, cx);
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::Ellipsis))
+                            .tooltip("Tab actions")
+                            .dropdown_menu(move |menu, _, _| {
+                                menu.item(
+                                    PopupMenuItem::new(if pinned {
+                                        "Unpin tab"
+                                    } else {
+                                        "Pin tab"
+                                    })
+                                    .icon(Icon::new(IconName::Star))
+                                    .on_click({
+                                        let pin = pin.clone();
+                                        move |_, _, cx| {
+                                            let _ = pin.update(cx, |this, cx| {
+                                                this.toggle_tab_pin(id, cx)
+                                            });
+                                        }
+                                    }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Rename")
+                                        .icon(Icon::new(IconName::Pencil))
+                                        .disabled(kind != PaneKind::Agent)
+                                        .on_click({
+                                            let rename = rename.clone();
+                                            move |_, window, cx| {
+                                                let _ = rename.update(cx, |this, cx| {
+                                                    if let Some(i) = this
+                                                        .space()
+                                                        .tabs
+                                                        .iter()
+                                                        .position(|t| t.id == id)
+                                                    {
+                                                        this.start_tab_rename(i, window, cx);
+                                                    }
+                                                });
                                             }
-                                        });
-                                    }
-                                }),
-                        )
-                        .separator()
-                        .item(
-                            PopupMenuItem::new("Move up")
-                                .icon(Icon::new(IconName::ArrowUp))
-                                .disabled(!can_up)
-                                .on_click({
-                                    let up = up.clone();
-                                    move |_, _, cx| {
-                                        let _ = up.update(cx, |this, cx| this.move_tab_by(id, -1, cx));
-                                    }
-                                }),
-                        )
-                        .item(
-                            PopupMenuItem::new("Move down")
-                                .icon(Icon::new(IconName::ArrowDown))
-                                .disabled(!can_down)
-                                .on_click({
-                                    let down = down.clone();
-                                    move |_, _, cx| {
-                                        let _ = down.update(cx, |this, cx| this.move_tab_by(id, 1, cx));
-                                    }
-                                }),
-                        )
-                        .separator()
-                        .item(
-                            PopupMenuItem::new("Close tab")
-                                .icon(Icon::new(IconName::X))
-                                .on_click({
-                                    let close = close.clone();
-                                    move |_, window, cx| {
-                                        let _ = close.update(cx, |this, cx| {
-                                            if let Some(i) = this.space().tabs.iter().position(|t| t.id == id) {
-                                                this.close_tab(i, window, cx);
+                                        }),
+                                )
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Move up")
+                                        .icon(Icon::new(IconName::ArrowUp))
+                                        .disabled(!can_up)
+                                        .on_click({
+                                            let up = up.clone();
+                                            move |_, _, cx| {
+                                                let _ = up.update(cx, |this, cx| {
+                                                    this.move_tab_by(id, -1, cx)
+                                                });
                                             }
-                                        });
-                                    }
-                                }),
-                        )
-                    }),
-                ),
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Move down")
+                                        .icon(Icon::new(IconName::ArrowDown))
+                                        .disabled(!can_down)
+                                        .on_click({
+                                            let down = down.clone();
+                                            move |_, _, cx| {
+                                                let _ = down.update(cx, |this, cx| {
+                                                    this.move_tab_by(id, 1, cx)
+                                                });
+                                            }
+                                        }),
+                                )
+                                .separator()
+                                .item(
+                                    PopupMenuItem::new("Close tab")
+                                        .icon(Icon::new(IconName::X))
+                                        .on_click({
+                                            let close = close.clone();
+                                            move |_, window, cx| {
+                                                let _ = close.update(cx, |this, cx| {
+                                                    if let Some(i) = this
+                                                        .space()
+                                                        .tabs
+                                                        .iter()
+                                                        .position(|t| t.id == id)
+                                                    {
+                                                        this.close_tab(i, window, cx);
+                                                    }
+                                                });
+                                            }
+                                        }),
+                                )
+                            }),
+                    ),
             )
     }
 }

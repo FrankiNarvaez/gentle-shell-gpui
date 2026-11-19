@@ -136,7 +136,22 @@ gpui_kit::assets::icon_assets!(
         ArrowLeftRight,
         CircleDot,
         ChartGantt,
-        Flag
+        Flag,
+        // Canvas tabs: tools and the style panel.
+        MousePointer2,
+        Lasso,
+        Hand,
+        Pen,
+        Highlighter,
+        Eraser,
+        WandSparkles,
+        MoveUpRight,
+        Slash,
+        Type,
+        PenTool,
+        Signature,
+        Spline,
+        Hash
     ]
 );
 
