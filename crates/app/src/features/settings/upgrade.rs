@@ -60,6 +60,14 @@ impl SettingsView {
         }
     }
 
+    /// Configuration reads Gentle Shell's own update status (not the npm
+    /// path), and whether a refresh is in flight.
+    pub(super) fn shell_reports_updates(&self) -> Option<bool> {
+        let checking = matches!(self.shell_updates.pending, Some((_, true)));
+        (self.shell_updates.status.is_some() || self.shell_updates.pending.is_some())
+            .then_some(checking)
+    }
+
     /// The tab changed: take Gentle Shell's answer once it arrived. A plain
     /// read that knows nothing yet (no launcher record, no earlier refresh)
     /// is looked up once, as the npm path would on a stale cache. A Shell

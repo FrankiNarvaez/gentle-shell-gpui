@@ -160,6 +160,20 @@ impl SettingsView {
                         }),
                 )
             })
+            .children(
+                updates
+                    .and_then(|status| {
+                        crate::features::updates::status::packages_note(status, available)
+                    })
+                    .map(|note| {
+                        div()
+                            .px_2()
+                            .pb_1()
+                            .text_xs()
+                            .text_color(ui::muted())
+                            .child(note)
+                    }),
+            )
             .children(s.packages.iter().enumerate().map(|(i, p)| {
                 let source = p.source.clone();
                 h_flex()
@@ -181,7 +195,7 @@ impl SettingsView {
                     .when_some(p.version.clone(), |d, v| {
                         d.child(ui::chip(v, ui::info()).flex_shrink_0())
                     })
-                    .when(
+                    .children(
                         updates
                             .and_then(|status| {
                                 crate::features::updates::status::package_status(
@@ -189,11 +203,14 @@ impl SettingsView {
                                     &status.packages.items,
                                 )
                             })
-                            .is_some_and(|item| {
-                                item.state
-                                    == pi_rpc::desktop_rpc::PackageUpdateState::UpdateAvailable
+                            .and_then(|item| {
+                                let update = item.state
+                                    == pi_rpc::desktop_rpc::PackageUpdateState::UpdateAvailable;
+                                crate::features::updates::status::package_chip(item).map(|text| {
+                                    let color = if update { ui::accent() } else { ui::muted() };
+                                    ui::chip(text, color).flex_shrink_0()
+                                })
                             }),
-                        |d| d.child(ui::chip("update", ui::accent()).flex_shrink_0()),
                     )
                     .child(
                         Button::new(("remove-package", i))

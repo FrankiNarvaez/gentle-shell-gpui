@@ -3,7 +3,8 @@
 //! The existing upgrade handlers, jobs and error reporting remain unchanged.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::v_flex;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -37,10 +38,28 @@ fn backend_updates_section(
                 .status
                 .iter()
                 .flat_map(|status| {
-                    crate::features::updates::status::status_notes(status, snapshot.managed)
+                    crate::features::updates::status::status_rows(status, snapshot.managed)
                 })
                 .map(|(label, text)| row(label, text)),
         )
+        .when_some(view.shell_reports_updates(), |card, checking| {
+            card.child(
+                h_flex().pt_2().child(
+                    Button::new("shell-update-check")
+                        .small()
+                        .ghost()
+                        .icon(Icon::new(IconName::RefreshCw))
+                        .label(if checking {
+                            "Checking Gentle Shell for updates…"
+                        } else {
+                            "Check for updates"
+                        })
+                        .loading(checking)
+                        .disabled(checking)
+                        .on_click(cx.listener(|this, _, _, cx| this.reload_with(true, cx))),
+                ),
+            )
+        })
         .when_some(view.update_offer(snapshot), |card, offer| {
             card.child(view.render_update(offer, cx))
         })
