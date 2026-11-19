@@ -413,6 +413,11 @@ static FONTS: LazyLock<Arc<usvg::fontdb::Database>> = LazyLock::new(|| {
     Arc::new(db)
 });
 
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn system_font_db() -> &'static usvg::fontdb::Database {
+    &FONTS
+}
+
 fn rasterize(svg: &str) -> Result<tiny_skia::Pixmap, String> {
     let size = (
         (WINDOW.0 * TILE_SCALE) as u32,

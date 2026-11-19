@@ -2,8 +2,8 @@
 //! font families for the interface, the code and the terminal, with
 //! ↑/↓/Enter/Esc. Monospace families come first for code and terminal.
 
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::collections::HashSet;
+use std::rc::Rc;
 
 use gentle_core::fonts;
 use gpui_kit::assets::IconName;
@@ -15,34 +15,33 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::SettingsView;
+use crate::platform::font_metadata;
 use crate::shared::themes::{self, FontSlot};
 use crate::shared::ui;
 
-/// Whether each family is monospace, asked of the text system once per
-/// session: the picker never measures a family twice.
-static MONOSPACE_CACHE: LazyLock<Mutex<HashMap<String, bool>>> = LazyLock::new(Mutex::default);
+/// `None` is the Default row, shown only with a blank search.
+fn picker_entries(
+    names: &[String],
+    query: &str,
+    monospace: Option<&HashSet<String>>,
+) -> Vec<Option<String>> {
+    let rows = fonts::picker_rows(names, query, monospace.is_some(), |name| {
+        monospace.is_some_and(|families| families.contains(&name.to_lowercase()))
+    });
+    query
+        .trim()
+        .is_empty()
+        .then_some(None)
+        .into_iter()
+        .chain(rows.into_iter().map(Some))
+        .collect()
+}
 
-/// A family is monospace when 'i' and 'W' advance the same.
-fn is_monospace(family: &str, cx: &App) -> bool {
-    if let Some(known) = MONOSPACE_CACHE
-        .lock()
-        .ok()
-        .and_then(|m| m.get(family).copied())
-    {
-        return known;
-    }
-    let text_system = cx.text_system();
-    let id = text_system.resolve_font(&font(SharedString::from(family.to_string())));
-    let size = px(16.);
-    let width = |c| text_system.advance(id, size, c).map(|s| s.width);
-    let mono = match (width('i'), width('W')) {
-        (Ok(i), Ok(w)) => (f32::from(i) - f32::from(w)).abs() < 0.01,
-        _ => false,
-    };
-    if let Ok(mut cache) = MONOSPACE_CACHE.lock() {
-        cache.insert(family.to_string(), mono);
-    }
-    mono
+fn entry_cursor(entries: &[Option<String>], selected: Option<&Option<String>>) -> usize {
+    entries
+        .iter()
+        .position(|entry| Some(entry) == selected)
+        .unwrap_or(0)
 }
 
 /// The picker's state: which slot's list is open, the search, the cursor.
@@ -54,6 +53,9 @@ pub(super) struct FontsUi {
     scroll: ScrollHandle,
     /// The installed families, read when the picker opens.
     names: Vec<String>,
+    entries: Rc<[Option<String>]>,
+    query: String,
+    waiting_for_metadata: bool,
     _subscriptions: [Subscription; 2],
 }
 
@@ -63,10 +65,17 @@ impl FontsUi {
         let weak = cx.entity().downgrade();
         let subscriptions = [
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| {
-                if let InputEvent::Change = event {
-                    this.fonts.cursor = 0;
-                    this.fonts.scroll.scroll_to_item(0);
-                    cx.notify();
+                if let InputEvent::Change = event
+                    && this.fonts.open.is_some()
+                {
+                    let query = this.fonts.search.read(cx).value().to_string();
+                    // Opening the picker also clears the input programmatically.
+                    if query != this.fonts.query {
+                        this.fonts.query = query;
+                        this.fonts.rebuild_entries();
+                        this.fonts.select_cursor(0);
+                        cx.notify();
+                    }
                 }
             }),
             // ↑/↓/Enter/Esc in the open picker beat its focused search field
@@ -86,8 +95,24 @@ impl FontsUi {
             cursor: 0,
             scroll: ScrollHandle::new(),
             names: Vec::new(),
+            entries: Rc::from([]),
+            query: String::new(),
+            waiting_for_metadata: false,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn rebuild_entries(&mut self) {
+        let monospace = match self.open {
+            Some(FontSlot::Code | FontSlot::Terminal) => font_metadata::cached_monospace(),
+            _ => None,
+        };
+        self.entries = picker_entries(&self.names, &self.query, monospace).into();
+    }
+
+    fn select_cursor(&mut self, cursor: usize) {
+        self.cursor = cursor;
+        self.scroll.scroll_to_item(cursor);
     }
 }
 
@@ -108,23 +133,30 @@ fn default_label(slot: FontSlot) -> &'static str {
 }
 
 impl SettingsView {
-    /// The picker's entries for the current search: `None` is the Default
-    /// entry (only while not searching), then the matching families.
-    fn font_entries(&self, slot: FontSlot, cx: &App) -> Vec<Option<String>> {
-        let query = self.fonts.search.read(cx).value().to_string();
-        let mut entries = Vec::new();
-        if query.trim().is_empty() {
-            entries.push(None);
+    fn request_font_metadata(&mut self, cx: &mut Context<Self>) {
+        if self.fonts.waiting_for_metadata || font_metadata::cached_monospace().is_some() {
+            return;
         }
-        let mono_first = slot != FontSlot::Interface;
-        entries.extend(
-            fonts::picker_rows(&self.fonts.names, &query, mono_first, |name| {
-                is_monospace(name, cx)
-            })
-            .into_iter()
-            .map(Some),
-        );
-        entries
+        self.fonts.waiting_for_metadata = true;
+        let task = cx.background_executor().spawn(async {
+            font_metadata::load_monospace();
+        });
+        cx.spawn(async move |this, cx| {
+            task.await;
+            let _ = this.update(cx, |this, cx| {
+                let fonts = &mut this.fonts;
+                fonts.waiting_for_metadata = false;
+                if matches!(fonts.open, Some(FontSlot::Code | FontSlot::Terminal)) {
+                    // The user may have searched, navigated, or switched slots
+                    // while the metadata was loading. Keep the current row by value.
+                    let selected = fonts.entries.get(fonts.cursor).cloned();
+                    fonts.rebuild_entries();
+                    fonts.select_cursor(entry_cursor(&fonts.entries, selected.as_ref()));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Open the picker for `slot` (closing any other), or close it.
@@ -140,6 +172,7 @@ impl SettingsView {
         self.fonts.open = slot;
         if let Some(slot) = slot {
             self.fonts.names = cx.text_system().all_font_names();
+            self.fonts.query.clear();
             self.fonts.search.update(cx, |state, cx| {
                 state.set_value("", window, cx);
                 state.focus(window, cx);
@@ -150,9 +183,12 @@ impl SettingsView {
                 .fonts
                 .get(slot)
                 .map(|f| f.to_string());
-            let entries = self.font_entries(slot, cx);
-            self.fonts.cursor = entries.iter().position(|e| *e == current).unwrap_or(0);
-            self.fonts.scroll.scroll_to_item(self.fonts.cursor);
+            if slot != FontSlot::Interface {
+                self.request_font_metadata(cx);
+            }
+            self.fonts.rebuild_entries();
+            self.fonts
+                .select_cursor(entry_cursor(&self.fonts.entries, Some(&current)));
         }
         cx.notify();
     }
@@ -171,25 +207,32 @@ impl SettingsView {
         if m.platform || m.control || m.alt {
             return false;
         }
-        let entries = self.font_entries(slot, cx);
+        let key = keystroke.key.as_str();
+        if key == "escape" {
+            self.set_fonts_menu(None, window, cx);
+            return true;
+        }
+        if !matches!(key, "up" | "down" | "enter") {
+            return false;
+        }
+        let entries = &self.fonts.entries;
         let n = entries.len();
         let cursor = self.fonts.cursor.min(n.saturating_sub(1));
-        match keystroke.key.as_str() {
+        match key {
             "up" | "down" if n > 0 => {
-                self.fonts.cursor = if keystroke.key == "up" {
+                let cursor = if key == "up" {
                     (cursor + n - 1) % n
                 } else {
                     (cursor + 1) % n
                 };
-                self.fonts.scroll.scroll_to_item(self.fonts.cursor);
+                self.fonts.select_cursor(cursor);
             }
             "up" | "down" => {}
             "enter" => {
-                if let Some(entry) = entries.get(cursor) {
+                if let Some(entry) = entries.get(cursor).cloned() {
                     self.choose_font(slot, entry.as_deref(), window, cx);
                 }
             }
-            "escape" => self.set_fonts_menu(None, window, cx),
             _ => return false,
         }
         cx.notify();
@@ -248,11 +291,11 @@ impl SettingsView {
                 ui::muted()
             })
             .dropdown_caret(true);
-        // Only the open picker builds its rows.
+        // Share the cached entries with the popover without copying the list.
         let entries = if open {
-            self.font_entries(slot, cx)
+            self.fonts.entries.clone()
         } else {
-            Vec::new()
+            Rc::from([])
         };
         let cursor = self.fonts.cursor;
         let search = self.fonts.search.clone();
@@ -323,7 +366,7 @@ impl SettingsView {
                             }),
                     );
                 }
-                if entries.iter().all(Option::is_none) {
+                if entries.is_empty() || entries.as_ref() == [None] {
                     list = list.child(
                         div()
                             .px_3()
@@ -359,5 +402,32 @@ impl SettingsView {
                     ))
                     .into_any_element()
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HashSet, entry_cursor, picker_entries};
+
+    #[test]
+    fn metadata_promotes_monospace_without_moving_selection_to_another_family() {
+        let names = ["Menlo".to_string(), "Arial".to_string()];
+        let before = picker_entries(&names, "", None);
+        assert_eq!(before, [None, Some("Arial".into()), Some("Menlo".into())]);
+
+        let monospace = HashSet::from(["menlo".to_string()]);
+        let after = picker_entries(&names, "", Some(&monospace));
+        assert_eq!(after, [None, Some("Menlo".into()), Some("Arial".into())]);
+        assert_eq!(entry_cursor(&after, before.get(1)), 2);
+        assert_eq!(entry_cursor(&after, before.first()), 0);
+    }
+
+    #[test]
+    fn metadata_respects_the_active_search() {
+        let names = ["Arial".to_string(), "Menlo".to_string()];
+        let monospace = HashSet::from(["menlo".to_string()]);
+        let rows = picker_entries(&names, "ari", Some(&monospace));
+        assert_eq!(rows, [Some("Arial".into())]);
+        assert!(picker_entries(&names, "zzz", Some(&monospace)).is_empty());
     }
 }
