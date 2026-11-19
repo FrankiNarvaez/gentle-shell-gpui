@@ -49,9 +49,11 @@ flowchart TD
 | `usage`: subscription window models and parsers (Codex, NaN), grouping, account claim; session records, statistics aggregation, ISO dates and civil days | `usage/`: reading `auth.json`, resolving keys (`$VAR`, `!command`), HTTP requests, walking and caching session files, clock and local time offset. |
 | `profiles`: routing model, `profiles.json` format, pins, agent frontmatter, notes | `profiles/`: homes and agent discovery, atomic writes, saved and materialized routing, Pi settings, pin and worktree files, Make default. |
 | `hydration`: the water reminder's settings (`hydration` in the app's `settings.json`) and when the next one is due | `hydration/`: the clock from launch, the timer, saving the setting, the drops animation. |
+| `diagnostics`: a recording's lines (header, sample per tab and process tree), grouping a process table into the trees under the app, rates, file names and retention, and the report that ranks a recording | `diagnostics/`: the sampler (`sysinfo`, the tabs, writing the file), `--diagnostics-report`; `shared/diagnostics.rs`: the frame, render and poll counters every view calls. |
 | `markdown`: where the Mermaid blocks are in a document | `files/mermaid.rs`: drawing them with merman's CLI (installed on demand by `setup`), measured with the system sans font, light or dark theme, and swapping them for images in the preview. |
 | `docs`: the skill's `docs-check` report, each document's standing and front-matter title | `docs/`: the Architecture docs screen, installing the skill (`gentle-shell install`), running `docs-check` with Node, listing `docs/`. |
 | `fuzzy`: fuzzy scoring and file ranking | `palette/`: walking files, reading branches with git. |
+| `prompt_history`: the composer's sent prompts and where ↑/↓ are in them (draft kept, seeded from a resumed conversation) | `session/submit.rs`: recording at send, the ↑/↓ keystrokes (first and last line, `/` menu first) and putting a prompt in the composer. |
 | `ides`: code editors and IDEs (VS Code and its forks, Zed, Sublime Text, Xcode, Visual Studio, Android Studio, JetBrains, …), where each installs per OS, versioned-folder matching and the launch command | `platform/ides.rs`: probing those folders and the PATH, launching the editor; `files/tree.rs`: the ⋯ menu's "Open in …". |
 | `sessions`: session summary, folder name from cwd, ordering, ISO dates and relative time | `sessions/`: finding and reading `.jsonl` files (line scanning is tied to reading), cache. |
 | `git`: status parsers (v1 and v2), numstat, refs, stash, worktrees (and where a new one goes), submodules, ahead/behind; `log` records and the commit graph's lanes; diff trimming | `git/`: running `git`, counting lines of untracked files, stage, commit, push and branch operations, reading a branch's history; `history/`: the Commit History pane and painting the graph. |
@@ -59,6 +61,8 @@ flowchart TD
 | `engram`: observation model and query encoding | `memory/`: HTTP requests to Engram. |
 | `workspaces`: unique workspace names | `workspaces/`: saved model (uses `PaneTree`), reading and writing `workspaces.json`. |
 | `genui`: the `gentle_ui` diagram spec (parsing, limits, normalization), its layered auto-layout and hit testing, the change list between two versions (diff, apply, human-readable sentences), the `/gentle-ui:event` command line and the Agent UI mode (`mode`: saved value, launch variable, mode command) | `genui/`: the Pi extension it ships (`gentle-ui.ts`, written by `extension.rs`), surfaces rebuilt from the transcript (`GenUi`), the diagram view (`DiagramView`: viewport, pointer and keyboard edits, undo, send) and its painting; `mode.rs`: the Agent UI choice every tab follows. |
+| `canvas`: canvas tabs' whiteboard model after Tern's canvas blocks (shapes, Tern's 16-color palette, fill, pen types and sizes, the file format), perfect-freehand ink outlines (`freehand`), geometry, hit testing, lasso and box selection, the camera, copy and paste, the undo history, and what its agent reads, edits and sees of it (`agent`: the flat shape form, ops applied all or nothing, the SVG of an area) | `canvas/`: the view (`CanvasView`: tools, gestures, keys, saving the file), painting (shapes tessellated once in page units, only moved onto the screen each frame), the tool bar, zoom pill, style panel and minimap, and the agent floating over it (`agent.rs`: a `SessionView` in a card, started with the `gentle-canvas.ts` extension it installs; answering its requests, rasterizing shots). The workspace handles that agent's events as an agent pane's (`on_session_event`) and saves its conversation with the canvas pane. |
+| `commands`: `/gentle:tower` routes to the Tower tab (`Screen::Tower`) | `tower/`: Gentle Tower in a tab (`TowerView`): runs `gentle-shell tower --no-open`, shows its page in a `WebSurface`, shown or hidden by the workspace's `sync_web_views` like agents' web views. |
 
 ## Layout
 
@@ -72,7 +76,7 @@ crates/
 │       ├── features/            # one folder per feature; its entry point is mod.rs
 │       │   ├── session/  workspace/  workspaces/  sessions/  palette/  profiles/  settings/  usage/  setup/
 │       │   ├── browser/  devices/  music/  files/  terminal/  git/  history/  providers/  memory/  onboarding/  notices/  alerts/  hydration/  docs/
-│       │   └── app_update/  updates/  welcome/  genui/
+│       │   └── app_update/  updates/  welcome/  genui/  diagnostics/  canvas/
 │       ├── platform/            # OS integration: single instance, agent command shims, Dock and window icons, installed editors, power state
 │       └── shared/              # pieces used by several features, with no logic of their own:
 │                                # ui, floating, themes, backdrop (theme scenes), assets, banner, surge, pane, gentle_state

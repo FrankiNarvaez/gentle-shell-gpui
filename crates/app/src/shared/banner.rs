@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use gpui_kit::*;
 
-use crate::shared::ui;
+use crate::shared::themes;
 
 const TEXT_LOGO: &[&str] = &[
     "              ▄▄▄▀▀▀▀▀██                              ▄▄▀▄▄          ▄▄█▀▀▀██         ▄▄▀▄▄           ▄▄▀▄▄    ▄▄▀▄▄",
@@ -268,6 +268,20 @@ impl Default for BannerConfig {
     }
 }
 
+/// A solid theme's banner colors: the rose blooms in `petal` (the theme's
+/// accent — what `ui::petal()` reads), the wordmark is written in its
+/// `fg`, and the shadow dims from the ink (like the fixed palettes: dimmer
+/// and grayer than the ink). Other themes keep the palette `banner.json`
+/// chose, so this only runs for solid ones.
+fn solid_colors(petal: Hsla, fg: Hsla) -> (Hsla, Hsla, Hsla) {
+    let shadow = Hsla {
+        l: fg.l * 0.44,
+        s: fg.s * 0.45,
+        ..fg
+    };
+    (petal, fg, shadow)
+}
+
 /// `<config>/banner.json`, tolerant like the launcher's own read: missing or
 /// malformed fields fall back to the defaults.
 pub fn read_config(config_home: &Path) -> BannerConfig {
@@ -331,14 +345,12 @@ const PEN_FROM: f32 = 0.14;
 const WET: f32 = 0.09;
 /// Pen time past the last pixel, so the final strokes dry too.
 const PEN_TAIL: f32 = WET + 0.03;
-/// The rose's float: a slow rise and fall (in wordmark pixels), a sway (in
-/// radians), each with its period in seconds, and a glint crossing it.
+/// The rose's float while the banner writes itself: a slow rise and fall
+/// (in wordmark pixels) and a sway (in radians), each with its period in
+/// seconds, easing to rest from this share of `reveal` on.
 const BOB: (f32, f32) = (0.9, 5.2);
 const SWAY: (f32, f32) = (0.022, 7.3);
-const GLINT_PERIOD: f32 = 6.5;
-/// The float's redraw rate: slow motion needs no more, and a frame repaints
-/// the whole view the banner sits in.
-const FLOAT_FRAME: Duration = Duration::from_millis(50);
+const SETTLE_FROM: f32 = 0.6;
 
 fn smoothstep(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
@@ -357,13 +369,23 @@ fn lighten(color: Hsla, by: f32) -> Hsla {
 /// The banner at `scale` px per wordmark pixel. With `reveal` going 0 → 1
 /// over [`WRITE`], the rose blooms from its heart outward while a pen writes
 /// the wordmark in cursive, each stroke glowing like wet ink before it dries
-/// and its shadow settles. The rose floats the whole time: it rises and falls,
-/// sways, and a glint crosses its petals (still with reduced motion, and
-/// paused while the window is in the background).
+/// and its shadow settles. Meanwhile the rose floats (it rises, sways, and a
+/// glint crosses its petals) and comes to rest as the writing ends. Every
+/// motion follows `reveal`, so a finished banner is still and asks for no
+/// frames; with reduced motion the rose doesn't float at all.
 pub fn banner(config: BannerConfig, scale: f32, reveal: f32) -> impl IntoElement {
     let art = &*ART;
-    let (rose_color, ink, shadow) = config.palette.colors();
-    let (rose_base, ink, shadow) = (Hsla::from(rose_color), Hsla::from(ink), Hsla::from(shadow));
+    // A solid theme tints the banner in its own colors; every other theme
+    // keeps the palette banner.json chose (which stays read-only).
+    let (rose_base, ink, shadow) = if themes::solid() {
+        // The petal is the theme's accent (the same color; the palette only
+        // carries it under `accent`).
+        let (petal, fg) = themes::palette(|p| (p.accent, p.fg));
+        solid_colors(petal, fg)
+    } else {
+        let (rose_color, ink, shadow) = config.palette.colors();
+        (Hsla::from(rose_color), Hsla::from(ink), Hsla::from(shadow))
+    };
     let logo_size = size(
         px(art.logo_size.0 as f32 * scale),
         px(art.logo_size.1 as f32 * scale),
@@ -379,28 +401,22 @@ pub fn banner(config: BannerConfig, scale: f32, reveal: f32) -> impl IntoElement
     let reveal = reveal.clamp(0.0, 1.0);
 
     let rose = canvas(
-        |_, window, cx| {
-            if !cx.reduce_motion() && window.is_window_active() {
-                ui::request_frame_in(FLOAT_FRAME, window, cx);
-            }
-        },
+        |_, _, _| {},
         move |bounds, _, window, cx| {
             use std::f32::consts::TAU;
             let still = cx.reduce_motion();
-            let t = if still { 0.0 } else { ui::live_clock() };
-            let bob = if still {
+            let t = reveal * WRITE.as_secs_f32();
+            let float = if still {
                 0.0
             } else {
-                (t * TAU / BOB.1).sin() * BOB.0 * scale
+                1.0 - smoothstep((reveal - SETTLE_FROM) / (1.0 - SETTLE_FROM))
             };
-            let sway = if still {
-                0.0
-            } else {
-                (t * TAU / SWAY.1 + 0.6).sin() * SWAY.0
-            };
+            let bob = (t * TAU / BOB.1).sin() * BOB.0 * scale * float;
+            let sway = (t * TAU / SWAY.1).sin() * SWAY.0 * float;
             let (sin, cos) = sway.sin_cos();
-            // The glint sweeps the diagonal from off one corner to past the other.
-            let glint = (t / GLINT_PERIOD).fract() * 1.8 - 0.4;
+            // One glint sweeps the diagonal, from off one corner to past the
+            // other, as the banner writes.
+            let glint = reveal * 1.8 - 0.4;
             let (w, h) = (ART.rose_size.0 as f32, ART.rose_size.1 as f32);
             // It sways about the bloom, like a flower held by its stem.
             let (pivot_x, pivot_y) = (w * 0.5, h * 0.32);
@@ -541,6 +557,20 @@ mod tests {
                 assert_eq!(dots, shade.is_ascii_digit(), "{line:?} at {ch:?}");
             }
         }
+    }
+
+    #[test]
+    fn solid_banner_colors_bloom_the_rose_and_dim_the_shadow_from_the_ink() {
+        use gpui_kit::hsla;
+        let petal = hsla(330. / 360., 0.85, 0.62, 1.);
+        let fg = hsla(240. / 360., 0.03, 0.93, 1.);
+        // The rose blooms in the petal passed in, the wordmark is written in
+        // the fg, and the shadow dims from the ink.
+        let (rose, ink, shadow) = super::solid_colors(petal, fg);
+        assert_eq!((rose.h, rose.s, rose.l), (petal.h, petal.s, petal.l));
+        assert_eq!((ink.h, ink.s, ink.l), (fg.h, fg.s, fg.l));
+        assert!((shadow.l - fg.l * 0.44).abs() < 1e-5);
+        assert!((shadow.s - fg.s * 0.45).abs() < 1e-5);
     }
 
     #[test]

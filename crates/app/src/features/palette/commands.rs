@@ -118,6 +118,21 @@ pub(super) fn screen_rows() -> Vec<Row> {
             PaletteAction::NewTerminalTab,
         ),
         row(
+            IconName::PenTool,
+            "New canvas tab",
+            &format!(
+                "A whiteboard for ink, shapes, notes and images ({})",
+                ui::platform_shortcut("⌘⇧E", "Ctrl+Alt+Shift+E")
+            ),
+            PaletteAction::NewCanvasTab,
+        ),
+        row(
+            IconName::Building2,
+            "Gentle Tower",
+            "Every session as a floor of its project's building: tasks, talk, artifacts, cost",
+            PaletteAction::Screen(gentle_core::commands::Screen::Tower),
+        ),
+        row(
             IconName::LayoutDashboard,
             "New pane (tiled)",
             &format!(

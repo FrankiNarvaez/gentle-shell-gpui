@@ -486,6 +486,7 @@ impl PanelView {
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
+                crate::shared::diagnostics::tick();
                 let Ok(window) = this.read_with(cx, |this, _| this.live.as_ref()?.window) else {
                     break;
                 };

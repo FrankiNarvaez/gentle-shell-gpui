@@ -6,7 +6,7 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{INPUT_LINES, OUTPUT, fold_key, head_slice, tail_slice};
+use super::{INPUT_LINES, OUTPUT, STEP, fold_key, head_slice, tail_slice};
 use crate::features::session::SessionView;
 use crate::shared::ui;
 
@@ -78,33 +78,21 @@ impl SessionView {
             }
         };
         let color = look.tone.color();
+        // A helper card folds to its quiet line like a tool step; the
+        // header click unfolds it again.
+        let step_key = fold_key(ix, 0, STEP);
+        if !self.expanded.contains(&step_key) {
+            return self
+                .custom_step_line(ix, &look, step_key, false, cx)
+                .into_any_element();
+        }
         ui::card()
             .w_full()
             .overflow_hidden()
             .when(matches!(look.tone, Tone::Danger | Tone::Warning), |this| {
                 this.border_color(color.opacity(0.35))
             })
-            .child(
-                h_flex()
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .min_w_0()
-                    .child(Icon::new(look.icon).small().text_color(color))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rems(13. / 16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(ui::champagne())
-                            .child(look.title),
-                    )
-                    .child(div().flex_1())
-                    .when_some(look.badge, |this, (badge, tone)| {
-                        this.child(ui::chip(badge, tone.color()).flex_shrink_0())
-                    }),
-            )
+            .child(self.custom_step_line(ix, &look, step_key, true, cx))
             .children(body)
             .when(more > 0, |this| {
                 this.child(div().pb_1().child(self.fold_toggle(
@@ -119,6 +107,54 @@ impl SessionView {
                 )))
             })
             .into_any_element()
+    }
+
+    /// A helper card's quiet one-line row (its folded step): faint icon —
+    /// the tone's when it is danger or warning — title, badge and chevron.
+    fn custom_step_line(
+        &self,
+        ix: usize,
+        look: &CustomLook,
+        key: usize,
+        up: bool,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let color = match look.tone {
+            Tone::Danger | Tone::Warning => look.tone.color(),
+            _ => ui::faint(),
+        };
+        h_flex()
+            .id(("custom-step", ix))
+            .w_full()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .min_w_0()
+            .cursor_pointer()
+            .hover(|s| s.bg(ui::surface_hover()))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle(key, cx)))
+            .child(Icon::new(look.icon).small().text_color(color))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(rems(13. / 16.))
+                    .text_color(ui::muted())
+                    .child(look.title.clone()),
+            )
+            .when_some(look.badge.clone(), |this, (badge, tone)| {
+                this.child(ui::chip(badge, tone.color()).flex_shrink_0())
+            })
+            .child(div().flex_1())
+            .child(
+                Icon::new(if up {
+                    IconName::ChevronUp
+                } else {
+                    IconName::ChevronDown
+                })
+                .xsmall()
+                .text_color(ui::faint()),
+            )
     }
 }
 

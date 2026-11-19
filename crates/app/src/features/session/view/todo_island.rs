@@ -250,6 +250,7 @@ impl SessionView {
                 cx.background_executor()
                     .timer(Duration::from_millis(16))
                     .await;
+                crate::shared::diagnostics::tick();
                 let moving = this
                     .update(cx, |this, cx| {
                         let moving = this.todo.motion_at.elapsed() < TODO_MOTION;

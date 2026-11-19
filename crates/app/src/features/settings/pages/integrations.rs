@@ -50,4 +50,5 @@ pub(super) fn render(
             ),
         )
         .child(view.music_section(cx))
+        .child(view.tower_section(cx))
 }

@@ -35,6 +35,7 @@ fn shared_pump(cx: &App) -> Rc<Task<()>> {
                     PUMP_IDLE
                 };
                 cx.background_executor().timer(every).await;
+                crate::shared::diagnostics::tick();
                 native::pump();
             }
         }));

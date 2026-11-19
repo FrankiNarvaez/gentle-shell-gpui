@@ -59,6 +59,16 @@ impl Workspace {
         self.open_tab(PaneKind::Terminal, cwd, None, None, window, cx);
     }
 
+    pub(super) fn on_new_canvas_tab(
+        &mut self,
+        _: &NewCanvasTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self.active_cwd(cx);
+        self.open_tab(PaneKind::Canvas, cwd, None, None, window, cx);
+    }
+
     pub(super) fn on_close_tab(
         &mut self,
         _: &CloseTab,
@@ -263,6 +273,20 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.open_palette(Category::All, window, cx);
+    }
+
+    /// ⌘, (Ctrl+, elsewhere): Configuration, or closes it when it's open.
+    pub(super) fn on_open_settings(
+        &mut self,
+        _: &OpenSettings,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.overlay, Some((Overlay::Settings(_), _))) {
+            self.close_overlay(window, cx);
+        } else {
+            self.open_settings(window, cx);
+        }
     }
 
     pub(super) fn on_open_workspaces(

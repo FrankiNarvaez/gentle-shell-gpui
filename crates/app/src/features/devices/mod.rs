@@ -87,6 +87,7 @@ impl Hub {
                     return;
                 };
                 cx.background_executor().timer(wait).await;
+                crate::shared::diagnostics::tick();
                 let Some(port) = port else { continue };
                 let listed = cx
                     .background_executor()

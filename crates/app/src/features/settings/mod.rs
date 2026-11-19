@@ -15,6 +15,7 @@ mod app;
 mod background;
 mod claude;
 mod devices;
+mod diagnostics;
 mod events;
 mod hydration;
 mod layout;
@@ -28,6 +29,7 @@ mod pages;
 mod services;
 mod snapshot;
 mod theme;
+mod tower;
 mod upgrade;
 mod view;
 
@@ -69,6 +71,8 @@ pub struct SettingsView {
     maestro: maestro::Maestro,
     /// Music (gentle-stream): what was found, the job running and its log.
     music: music::Music,
+    /// Gentle Tower: whether its web app is there, building it.
+    tower: tower::Tower,
     /// Devices: the switches, what this machine has, an install running.
     devices: devices::Devices,
     /// Engram's own update.
@@ -152,6 +156,7 @@ impl SettingsView {
             _setup: setup_sub,
             maestro: maestro::Maestro::default(),
             music: music::Music::default(),
+            tower: tower::Tower::default(),
             devices: devices::Devices::default(),
             engram: upgrade::EngramUpdate::default(),
             theme_share: theme::ThemeShare::new(window, cx),
@@ -164,6 +169,7 @@ impl SettingsView {
         this.reload(cx);
         this.refresh_maestro(cx);
         this.refresh_music(cx);
+        this.refresh_tower(cx);
         this.refresh_devices(cx);
         this
     }

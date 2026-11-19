@@ -281,6 +281,7 @@ impl FileTreeView {
                     }
                 }
                 cx.background_executor().timer(POLL).await;
+                crate::shared::diagnostics::tick();
             }
         });
         this
