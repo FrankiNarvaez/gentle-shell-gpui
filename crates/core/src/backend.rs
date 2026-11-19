@@ -131,8 +131,9 @@ impl Backend {
     }
 
     /// The argv of an interactive terminal in `cwd`, a path as the backend
-    /// sees it: the user's login shell there. `wsl.exe` without `--exec`
-    /// starts the distro's own. `None` for [`Backend::Local`].
+    /// sees it, or `~` for the user's home there: the user's login shell.
+    /// `wsl.exe` without `--exec` starts the distro's own (its `--cd` takes
+    /// `~` too). `None` for [`Backend::Local`].
     pub fn terminal(&self, cwd: &str) -> Option<Vec<String>> {
         match self {
             Self::Local => None,
@@ -142,7 +143,9 @@ impl Backend {
                     .to_vec(),
             ),
             Self::Command { prefix } => {
-                let script = format!(r#"cd "$1" 2>/dev/null; {LOGIN_SHELL}; exec "$s" -l"#);
+                let script = format!(
+                    r#"if [ "$1" = "~" ]; then cd; else cd "$1" 2>/dev/null; fi; {LOGIN_SHELL}; exec "$s" -l"#
+                );
                 let mut argv = prefix.clone();
                 argv.extend(["sh", "-c", &script, "sh", cwd].map(str::to_string));
                 Some(argv)

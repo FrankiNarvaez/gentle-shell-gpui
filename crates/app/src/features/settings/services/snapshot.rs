@@ -20,11 +20,18 @@ pub(in crate::features::settings) fn load(cwd: &Path, shell_updates: bool) -> Sn
     if let Some(spec) = &spec {
         probe(spec, &mut snapshot);
     }
-    // In a backend the launcher is its `gentle-shell`, named with where.
+    // In a backend the launcher is its own `gentle-shell`, named with where;
+    // a Windows one WSL sees through interop isn't (as Setup says).
     let choice = crate::features::backend::for_tab(cwd);
     if choice != gentle_core::backend::Backend::Local {
-        snapshot.launcher = crate::features::backend::gentle_shell_path(&choice)
-            .map(|path| format!("{path} ({})", choice.label()).into());
+        let label = choice.label();
+        snapshot.launcher = crate::features::backend::gentle_shell_path(&choice).map(|path| {
+            if gentle_core::backend::is_windows_file(&path) {
+                format!("not found in {label} (only Windows' {path})").into()
+            } else {
+                format!("{path} ({label})").into()
+            }
+        });
     }
     // gentle-ai owns updates of installs it manages; a responding Shell
     // supplies update status in preference to the launcher registry check.

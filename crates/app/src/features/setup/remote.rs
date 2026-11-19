@@ -49,8 +49,15 @@ pub(super) fn install_engram(choice: &Backend, log: &Log) -> Result<String, Stri
 
 /// Node.js 22 through nvm, which needs only curl and no admin rights.
 const INSTALL_NODE: &str = r#"curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . "$HOME/.nvm/nvm.sh" && nvm install 22"#;
-const INSTALL_SHELL: &str = "npm install -g gentle-pi";
-const INSTALL_CLAUDE: &str = "npm install -g @anthropic-ai/claude-code && claude auth login";
+
+/// `npm install -g <package>`, into `~/.local` when npm's global prefix
+/// isn't the user's (a distro's Node puts it in root-owned `/usr/local`;
+/// Ubuntu's login profile puts `~/.local/bin` on the PATH).
+fn npm_global(package: &str) -> String {
+    format!(
+        r#"p="$(npm prefix -g)"; if [ -w "$p/lib/node_modules" ] || [ -w "$p/lib" ]; then npm install -g {package}; else npm install -g --prefix "$HOME/.local" {package}; fi"#
+    )
+}
 
 /// Blocking: every check, run in `choice`.
 pub(super) fn run_checks(choice: &Backend) -> Vec<Check> {
@@ -100,7 +107,7 @@ pub(super) fn run_checks(choice: &Backend) -> Vec<Check> {
                         Status::Missing(format!(
                             "Only Windows' gentle-shell is visible from {label} ({path})"
                         )),
-                        terminal(INSTALL_SHELL),
+                        terminal(&npm_global("gentle-pi")),
                     ),
                     (Some(_), _) => match gentle::check_gentle_shell(&launcher) {
                         (Status::Ok(found), _) => (Status::Ok(found), Fix::None),
@@ -108,7 +115,7 @@ pub(super) fn run_checks(choice: &Backend) -> Vec<Check> {
                     },
                     (None, _) => (
                         Status::Missing(format!("gentle-shell isn't installed in {label}")),
-                        terminal(INSTALL_SHELL),
+                        terminal(&npm_global("gentle-pi")),
                     ),
                 },
                 CheckId::Setup => setup(choice, version.as_ref(), home.as_deref(), &settings),
@@ -170,7 +177,10 @@ pub(super) fn run_checks(choice: &Backend) -> Vec<Check> {
                     ),
                     (None, _) => (
                         Status::Missing(format!("Claude Code isn't installed in {label}")),
-                        terminal(INSTALL_CLAUDE),
+                        terminal(&format!(
+                            "{} && claude auth login",
+                            npm_global("@anthropic-ai/claude-code")
+                        )),
                     ),
                 },
                 CheckId::Engram => match engram_version_text(choice) {

@@ -100,7 +100,32 @@ pub fn launch_spec(
         all.push((key.clone(), reach(choice, file)?));
     }
     let path = login_path(choice);
+    // WSL appends Windows' PATH: an agent there must not start Windows'
+    // install through interop (its packages load over 9P, minutes slower).
+    if let Some(found) = own_shell(choice)
+        && backend::is_windows_file(&found)
+    {
+        return Err(anyhow!(
+            "Only Windows' gentle-shell is visible from {} ({found}). Install it there: \
+             Setup & requirements has the command.",
+            choice.label()
+        ));
+    }
     pi_rpc::remote_backend(&launch, path.as_deref(), &all, |file| stage(choice, file))
+}
+
+/// Where `gentle-shell` is in each backend, for tab starts.
+static SHELLS: LazyLock<Mutex<HashMap<Backend, Option<String>>>> = LazyLock::new(Mutex::default);
+
+/// Where `gentle-shell` is in `choice`, asked once per backend for tab
+/// starts ([`forget_paths`] asks again).
+fn own_shell(choice: &Backend) -> Option<String> {
+    if let Some(known) = SHELLS.lock().ok()?.get(choice) {
+        return known.clone();
+    }
+    let found = gentle_shell_path(choice);
+    SHELLS.lock().ok()?.insert(choice.clone(), found.clone());
+    found
 }
 
 /// A file the app gives every agent (its instructions, its extensions),
@@ -334,9 +359,14 @@ pub fn there(cwd: &Path, host: &Path) -> String {
 }
 
 /// The argv of a terminal in `cwd` where its agents run: the backend's
-/// login shell there; `None` on this computer.
+/// login shell there; `None` on this computer. The user's home here (where
+/// Setup opens its terminal) is the user's home there, not
+/// `/mnt/c/Users/…`.
 pub fn terminal(cwd: &Path) -> Option<Vec<String>> {
     let choice = for_tab(cwd);
+    if dirs::home_dir().as_deref() == Some(cwd) {
+        return choice.terminal("~");
+    }
     choice.terminal(&reach(&choice, cwd).ok()?)
 }
 
@@ -407,10 +437,14 @@ pub fn use_home(choice: &Backend, home: Option<&str>) {
 /// Each backend's login PATH, asked once and kept.
 static PATHS: LazyLock<Mutex<HashMap<Backend, Option<String>>>> = LazyLock::new(Mutex::default);
 
-/// Ask the login PATHs again: something was installed there.
+/// Ask the login PATHs (and what they find) again: something was
+/// installed there.
 pub fn forget_paths() {
     if let Ok(mut paths) = PATHS.lock() {
         paths.clear();
+    }
+    if let Ok(mut shells) = SHELLS.lock() {
+        shells.clear();
     }
     if let Ok(mut versions) = VERSIONS.lock() {
         versions.clear();
