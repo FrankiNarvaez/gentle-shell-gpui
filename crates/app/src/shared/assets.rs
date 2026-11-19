@@ -137,6 +137,9 @@ gpui_kit::assets::icon_assets!(
         CircleDot,
         ChartGantt,
         Flag,
+        // Pinned tabs and pinned generative UI surfaces.
+        Pin,
+        PinOff,
         // Canvas tabs: tools and the style panel.
         MousePointer2,
         Lasso,

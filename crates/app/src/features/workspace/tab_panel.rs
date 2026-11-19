@@ -268,7 +268,7 @@ impl Workspace {
                 shown += 1;
                 list = list.child(self.render_vertical_tab(tab_index, tab, title, cx));
             }
-            if shown == 0 {
+            if shown == 0 && !query.is_empty() {
                 list = list.child(
                     div()
                         .h(rems(TREE_ROW / 16.))
@@ -277,15 +277,68 @@ impl Workspace {
                         .pl(rems((4. + TREE_INDENT) / 16.))
                         .text_xs()
                         .text_color(ui::faint())
-                        .child(if query.is_empty() {
-                            "No open tabs"
-                        } else {
-                            "No matching tabs"
-                        }),
+                        .child("No matching tabs"),
+                );
+            }
+            // Under the tabs, where the next one will appear: new agent and
+            // new terminal, one click each (the header's + has every kind).
+            if query.is_empty() {
+                list = list.child(
+                    h_flex()
+                        .flex_none()
+                        .gap_1()
+                        .pl(rems(TREE_INDENT / 16.))
+                        .child(Self::new_tab_row(
+                            "vertical-add-agent",
+                            IconName::Bot,
+                            "Agent",
+                            format!("New agent tab ({})", ui::platform_shortcut("⌘T", "Ctrl+T")),
+                            cx.listener(|this, _, window, cx| this.on_new_tab(&NewTab, window, cx)),
+                        ))
+                        .child(Self::new_tab_row(
+                            "vertical-add-terminal",
+                            IconName::SquareTerminal,
+                            "Terminal",
+                            format!(
+                                "New terminal tab ({})",
+                                ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T")
+                            ),
+                            cx.listener(|this, _, window, cx| {
+                                this.on_new_terminal_tab(&NewTerminalTab, window, cx)
+                            }),
+                        )),
                 );
             }
         }
         list
+    }
+
+    /// A quiet "+ Agent" / "+ Terminal" action at the end of the tab list:
+    /// faint until hovered, like a tree row.
+    fn new_tab_row(
+        id: &'static str,
+        icon: IconName,
+        label: &'static str,
+        tooltip: String,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let tooltip = SharedString::from(tooltip);
+        h_flex()
+            .id(id)
+            .h(rems(TREE_ROW / 16.))
+            .pl(rems(4. / 16.))
+            .pr_2()
+            .gap_1p5()
+            .rounded_md()
+            .cursor_pointer()
+            .text_size(rems(12.5 / 16.))
+            .text_color(ui::faint())
+            .hover(|s| s.bg(ui::surface_hover()).text_color(ui::fg()))
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .on_click(on_click)
+            .child(Icon::new(IconName::Plus).xsmall())
+            .child(Icon::new(icon).small())
+            .child(label)
     }
 
     fn render_vertical_tab(
