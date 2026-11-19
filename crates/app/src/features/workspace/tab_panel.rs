@@ -173,11 +173,36 @@ impl Workspace {
                 .child(Icon::new(IconName::Search).small().text_color(ui::faint()))
                 .child(Input::new(&self.tab_search).appearance(false).small()),
         );
+        // New agent and new terminal, pinned to the bottom of the sidebar
+        // where the eye ends; the header's + keeps every kind.
+        let footer = h_flex()
+            .flex_none()
+            .p_2()
+            .gap_1p5()
+            .child(Self::new_tab_tile(
+                "vertical-add-agent",
+                IconName::Bot,
+                "Agent",
+                ui::platform_shortcut("⌘T", "Ctrl+T"),
+                "New agent tab",
+                cx.listener(|this, _, window, cx| this.on_new_tab(&NewTab, window, cx)),
+            ))
+            .child(Self::new_tab_tile(
+                "vertical-add-terminal",
+                IconName::SquareTerminal,
+                "Terminal",
+                ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T"),
+                "New terminal tab",
+                cx.listener(|this, _, window, cx| {
+                    this.on_new_terminal_tab(&NewTerminalTab, window, cx)
+                }),
+            ));
         v_flex()
             .size_full()
             .child(header)
             .child(search)
             .child(self.render_vertical_tabs(cx))
+            .child(footer)
     }
 
     fn render_vertical_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -280,65 +305,40 @@ impl Workspace {
                         .child("No matching tabs"),
                 );
             }
-            // Under the tabs, where the next one will appear: new agent and
-            // new terminal, one click each (the header's + has every kind).
-            if query.is_empty() {
-                list = list.child(
-                    h_flex()
-                        .flex_none()
-                        .gap_1()
-                        .pl(rems(TREE_INDENT / 16.))
-                        .child(Self::new_tab_row(
-                            "vertical-add-agent",
-                            IconName::Bot,
-                            "Agent",
-                            format!("New agent tab ({})", ui::platform_shortcut("⌘T", "Ctrl+T")),
-                            cx.listener(|this, _, window, cx| this.on_new_tab(&NewTab, window, cx)),
-                        ))
-                        .child(Self::new_tab_row(
-                            "vertical-add-terminal",
-                            IconName::SquareTerminal,
-                            "Terminal",
-                            format!(
-                                "New terminal tab ({})",
-                                ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T")
-                            ),
-                            cx.listener(|this, _, window, cx| {
-                                this.on_new_terminal_tab(&NewTerminalTab, window, cx)
-                            }),
-                        )),
-                );
-            }
         }
         list
     }
 
-    /// A quiet "+ Agent" / "+ Terminal" action at the end of the tab list:
-    /// faint until hovered, like a tree row.
-    fn new_tab_row(
+    /// One of the footer's two new-tab tiles: a `surface` button the height
+    /// of a field with its icon and label, lifting to `fg` on hover; the
+    /// tooltip names the tab and its shortcut.
+    fn new_tab_tile(
         id: &'static str,
         icon: IconName,
         label: &'static str,
-        tooltip: String,
+        keys: &'static str,
+        tooltip: &'static str,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> impl IntoElement {
-        let tooltip = SharedString::from(tooltip);
+        let tooltip = SharedString::from(format!("{tooltip} ({keys})"));
         h_flex()
             .id(id)
-            .h(rems(TREE_ROW / 16.))
-            .pl(rems(4. / 16.))
-            .pr_2()
-            .gap_1p5()
-            .rounded_md()
+            .flex_1()
+            .min_w_0()
+            .h(rems(34. / 16.))
+            .px_2()
+            .gap_2()
+            .justify_center()
+            .rounded_lg()
+            .bg(ui::surface())
             .cursor_pointer()
             .text_size(rems(12.5 / 16.))
-            .text_color(ui::faint())
+            .text_color(ui::muted())
             .hover(|s| s.bg(ui::surface_hover()).text_color(ui::fg()))
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .on_click(on_click)
-            .child(Icon::new(IconName::Plus).xsmall())
             .child(Icon::new(icon).small())
-            .child(label)
+            .child(div().min_w_0().truncate().child(label))
     }
 
     fn render_vertical_tab(
