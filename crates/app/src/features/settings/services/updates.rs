@@ -10,12 +10,13 @@ use std::path::{Path, PathBuf};
 /// The tuple is (process success, stdout+stderr, resolved version, launcher).
 pub(in crate::features::settings) fn upgrade_shell(
     cwd: &Path,
+    args: &[&str],
 ) -> (bool, String, Option<String>, Option<PathBuf>) {
     let spec = match pi_rpc::resolve_backend(cwd) {
         Ok(spec) => spec,
         Err(error) => return (false, format!("{error:#}"), None, None),
     };
-    let mut command = spec.launcher_command(["upgrade"]);
+    let mut command = spec.launcher_command(std::iter::once("upgrade").chain(args.iter().copied()));
     command.stdin(std::process::Stdio::null());
     let (succeeded, text) = match command.output() {
         Ok(out) => (

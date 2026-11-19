@@ -50,7 +50,7 @@ impl PackageUiState {
             |this, input, event: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
                     let source = input.read(cx).value().trim().to_string();
-                    if !source.is_empty() {
+                    if !source.is_empty() && !this.shell_update.blocks_packages() {
                         input.update(cx, |s, cx| s.set_value("", window, cx));
                         this.run_package("install", source, cx);
                     }
@@ -76,7 +76,7 @@ impl SettingsView {
         source: String,
         cx: &mut Context<Self>,
     ) {
-        if self.package.running.is_some() {
+        if self.package.running.is_some() || self.shell_update.blocks_packages() {
             return;
         }
         self.package.running = Some(format!("{verb} {source}"));
@@ -119,6 +119,7 @@ impl SettingsView {
     /// installed, and a field to install any source.
     pub(super) fn packages_section(&self, s: &Snapshot, cx: &mut Context<Self>) -> Div {
         let updates = self.shell_updates.status.as_ref();
+        let updating_shell = self.shell_update.blocks_packages();
         let available = updates.map_or(0, crate::features::updates::status::packages_with_updates);
         // gentle-ai updates the packages of an install it manages.
         let managed = s.managed
@@ -152,7 +153,7 @@ impl SettingsView {
                                     .icon(Icon::new(IconName::ArrowUp))
                                     .label("Update packages")
                                     .tooltip("gentle-shell update --extensions")
-                                    .disabled(self.package.running.is_some())
+                                    .disabled(self.package.running.is_some() || updating_shell)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.run_package("update", "--extensions".into(), cx)
                                     })),
@@ -160,6 +161,20 @@ impl SettingsView {
                         }),
                 )
             })
+            .children(
+                updates
+                    .and_then(|status| {
+                        crate::features::updates::status::packages_note(status, available)
+                    })
+                    .map(|note| {
+                        div()
+                            .px_2()
+                            .pb_1()
+                            .text_xs()
+                            .text_color(ui::muted())
+                            .child(note)
+                    }),
+            )
             .children(s.packages.iter().enumerate().map(|(i, p)| {
                 let source = p.source.clone();
                 h_flex()
@@ -181,7 +196,7 @@ impl SettingsView {
                     .when_some(p.version.clone(), |d, v| {
                         d.child(ui::chip(v, ui::info()).flex_shrink_0())
                     })
-                    .when(
+                    .children(
                         updates
                             .and_then(|status| {
                                 crate::features::updates::status::package_status(
@@ -189,11 +204,14 @@ impl SettingsView {
                                     &status.packages.items,
                                 )
                             })
-                            .is_some_and(|item| {
-                                item.state
-                                    == pi_rpc::desktop_rpc::PackageUpdateState::UpdateAvailable
+                            .and_then(|item| {
+                                let update = item.state
+                                    == pi_rpc::desktop_rpc::PackageUpdateState::UpdateAvailable;
+                                crate::features::updates::status::package_chip(item).map(|text| {
+                                    let color = if update { ui::accent() } else { ui::muted() };
+                                    ui::chip(text, color).flex_shrink_0()
+                                })
                             }),
-                        |d| d.child(ui::chip("update", ui::accent()).flex_shrink_0()),
                     )
                     .child(
                         Button::new(("remove-package", i))
@@ -201,6 +219,7 @@ impl SettingsView {
                             .ghost()
                             .icon(Icon::new(IconName::Trash))
                             .tooltip("gentle-shell remove")
+                            .disabled(updating_shell)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.run_package("remove", source.clone(), cx)
                             })),
@@ -246,6 +265,7 @@ impl SettingsView {
                                     .ghost()
                                     .icon(Icon::new(IconName::Plus))
                                     .label("Install")
+                                    .disabled(updating_shell)
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.run_package("install", src.to_string(), cx)
                                     })),
@@ -268,7 +288,7 @@ impl SettingsView {
                             .primary()
                             .icon(Icon::new(IconName::ArrowDown))
                             .label("Install")
-                            .disabled(self.package.running.is_some())
+                            .disabled(self.package.running.is_some() || updating_shell)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let source = this.package.input.read(cx).value().trim().to_string();
                                 if !source.is_empty() {

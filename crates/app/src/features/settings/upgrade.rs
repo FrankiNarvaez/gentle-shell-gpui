@@ -60,6 +60,14 @@ impl SettingsView {
         }
     }
 
+    /// Configuration reads Gentle Shell's own update status (not the npm
+    /// path), and whether a refresh is in flight.
+    pub(super) fn shell_reports_updates(&self) -> Option<bool> {
+        let checking = matches!(self.shell_updates.pending, Some((_, true)));
+        (self.shell_updates.status.is_some() || self.shell_updates.pending.is_some())
+            .then_some(checking)
+    }
+
     /// The tab changed: take Gentle Shell's answer once it arrived. A plain
     /// read that knows nothing yet (no launcher record, no earlier refresh)
     /// is looked up once, as the npm path would on a stale cache. A Shell
@@ -130,17 +138,41 @@ pub(super) struct UpgradeResult {
     lines: Vec<String>,
 }
 
+#[derive(Clone, Copy)]
+enum UpgradeChannel {
+    Default,
+    Main,
+}
+
+impl UpgradeChannel {
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Self::Default => &[],
+            Self::Main => &["--channel", "main"],
+        }
+    }
+
+    fn matches_version(self, target: &str, running: &str) -> bool {
+        running == target
+            || (matches!(self, Self::Main)
+                && running
+                    .split_once("-main.")
+                    .is_some_and(|(_, build)| build.rsplit('.').next() == Some(target)))
+    }
+}
+
 /// Decide the outcome from the upgrade's exit and what the launcher the app
 /// now resolves (`launcher`) reports as its version (`running`).
 fn upgrade_outcome(
     succeeded: bool,
     target: &str,
+    channel: UpgradeChannel,
     running: Option<&str>,
     launcher: Option<&Path>,
 ) -> UpgradeOutcome {
     match (succeeded, running) {
         (false, _) | (true, None) => UpgradeOutcome::Failed,
-        (true, Some(running)) if running == target => {
+        (true, Some(running)) if channel.matches_version(target, running) => {
             UpgradeOutcome::Installed(running.to_string())
         }
         (true, Some(running)) => UpgradeOutcome::Stale {
@@ -153,49 +185,72 @@ fn upgrade_outcome(
     }
 }
 
-/// Gentle Shell update UI state. The actual upgrade and skip operations still
-/// run through their existing handlers and continue using the same config.
+/// Gentle Shell and Pi update progress and output.
 #[derive(Default)]
 pub(super) struct ShellUpdateUiState {
-    pub(super) upgrading: bool,
+    upgrading: Option<UpgradeChannel>,
     pub(super) result: Option<UpgradeResult>,
-    pub(super) skip_error: Option<String>,
+    skip_error: Option<String>,
+    pi_running: bool,
+    pi_result: Option<(Vec<String>, bool)>,
+}
+
+impl ShellUpdateUiState {
+    /// The new update commands share the package task slot.
+    pub(super) fn blocks_packages(&self) -> bool {
+        matches!(self.upgrading, Some(UpgradeChannel::Main)) || self.pi_running
+    }
 }
 
 impl SettingsView {
+    fn update_running(&self) -> bool {
+        self.shell_update.upgrading.is_some() || self.shell_update.pi_running
+    }
+
+    fn shell_job_running(&self) -> bool {
+        self.update_running() || self.package.running.is_some()
+    }
+
+    fn upgrade_disabled(&self, channel: UpgradeChannel) -> bool {
+        match channel {
+            UpgradeChannel::Default => self.update_running(),
+            UpgradeChannel::Main => self.shell_job_running(),
+        }
+    }
+
     /// Gentle Shell's own `upgrade` toward `target` (it knows how it was
     /// installed; since 4.7 it moves to its self-contained install), then ask
     /// the launcher the app resolves now which version it runs: that's the
     /// result shown.
-    fn run_upgrade(&mut self, target: String, cx: &mut Context<Self>) {
-        if self.shell_update.upgrading {
+    fn run_upgrade(&mut self, target: String, channel: UpgradeChannel, cx: &mut Context<Self>) {
+        if self.upgrade_disabled(channel) {
             return;
         }
-        self.shell_update.upgrading = true;
+        self.shell_update.upgrading = Some(channel);
         self.shell_update.result = None;
         let cwd = self.cwd.clone();
         self._job = cx.spawn(async move |this, cx| {
             let (succeeded, text, running, launcher) = cx
                 .background_executor()
-                .spawn(async move { super::services::updates::upgrade_shell(&cwd) })
+                .spawn(async move { super::services::updates::upgrade_shell(&cwd, channel.args()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.shell_update.upgrading = false;
+                this.shell_update.upgrading = None;
                 forget_claude_auth();
-                let lines: Vec<String> = text
-                    .lines()
-                    .filter(|l| !l.trim().is_empty())
-                    .map(str::to_string)
-                    .collect();
-                let outcome =
-                    upgrade_outcome(succeeded, &target, running.as_deref(), launcher.as_deref());
+                let outcome = upgrade_outcome(
+                    succeeded,
+                    &target,
+                    channel,
+                    running.as_deref(),
+                    launcher.as_deref(),
+                );
                 if matches!(outcome, UpgradeOutcome::Installed(_)) {
                     cx.emit(SettingsEvent::BackendUpdated);
                 }
                 this.shell_update.result = Some(UpgradeResult {
                     target,
                     outcome,
-                    lines: lines[lines.len().saturating_sub(8)..].to_vec(),
+                    lines: last_output_lines(&text),
                 });
                 this.reload(cx);
                 cx.notify();
@@ -220,15 +275,103 @@ impl SettingsView {
     ) -> impl IntoElement + use<> {
         let target = offer.latest.clone();
         let skipped = offer.latest.clone();
+        let upgrading = self.shell_update.upgrading.is_some();
         update_card(
             "update",
             "Gentle Shell",
             "Runs gentle-shell upgrade. Open agent tabs then restart on the new version and keep their conversations; a tab mid-turn switches when the turn ends.",
             &offer,
-            self.shell_update.upgrading,
-            cx.listener(move |this, _, _, cx| this.run_upgrade(target.clone(), cx)),
+            update_now_button("update", upgrading)
+                .disabled(self.upgrade_disabled(UpgradeChannel::Default))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.run_upgrade(target.clone(), UpgradeChannel::Default, cx)
+                })),
+            upgrading,
             cx.listener(move |this, _, _, cx| this.skip_update(skipped.clone(), cx)),
             self.shell_update.skip_error.clone(),
+        )
+    }
+
+    pub(super) fn render_main_update(&self, commit: &str, cx: &mut Context<Self>) -> Div {
+        let target = commit.to_string();
+        update_card_body(
+            format!("Gentle Shell main has a newer commit {commit}"),
+            None,
+            "Runs gentle-shell upgrade --channel main. Open agent tabs then restart on the new build and keep their conversations; a tab mid-turn switches when the turn ends.",
+        )
+        .child(
+            h_flex().child(
+                update_now_button("update-main", self.shell_update.upgrading.is_some())
+                    .disabled(self.upgrade_disabled(UpgradeChannel::Main))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.run_upgrade(target.clone(), UpgradeChannel::Main, cx)
+                    })),
+            ),
+        )
+    }
+
+    fn run_pi_update(&mut self, cx: &mut Context<Self>) {
+        if self.shell_job_running() {
+            return;
+        }
+        self.shell_update.pi_running = true;
+        self.shell_update.pi_result = None;
+        let cwd = self.cwd.clone();
+        self._job = cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::features::setup::run_gentle_shell(&cwd, &["update"]) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                let (text, failed) = match result {
+                    Ok(text) => (text, false),
+                    Err(text) => (text, true),
+                };
+                let mut lines = last_output_lines(&text);
+                if lines.is_empty() {
+                    lines.push(if failed {
+                        "The Pi update didn't finish.".into()
+                    } else {
+                        "The Pi update finished.".into()
+                    });
+                }
+                this.shell_update.pi_running = false;
+                this.shell_update.pi_result = Some((lines, failed));
+                this.reload_with(true, cx);
+                cx.notify();
+            });
+        });
+        cx.notify();
+    }
+
+    pub(super) fn render_pi_update(&self, available: bool, cx: &mut Context<Self>) -> Option<Div> {
+        let running = self.shell_update.pi_running;
+        let output = self.shell_update.pi_result.as_ref();
+        if !available && output.is_none() {
+            return None;
+        }
+        Some(
+            v_flex()
+                .when(available, |d| {
+                    d.child(
+                        h_flex().pt_2().child(
+                            Button::new("update-pi")
+                                .xsmall()
+                                .ghost()
+                                .icon(Icon::new(IconName::ArrowUp))
+                                .label(if running {
+                                    "Updating Pi…"
+                                } else {
+                                    "Update Pi"
+                                })
+                                .tooltip("gentle-shell update")
+                                .loading(running)
+                                .disabled(self.shell_job_running())
+                                .on_click(cx.listener(|this, _, _, cx| this.run_pi_update(cx))),
+                        ),
+                    )
+                })
+                .children(output.map(|(lines, failed)| upgrade_output(lines.clone(), *failed))),
         )
     }
 
@@ -282,8 +425,10 @@ impl SettingsView {
                 "Engram",
                 "Updates Engram the way it was installed (Homebrew, or the release the app downloaded). Your memories stay.",
                 &offer,
+                update_now_button("engram-update", self.engram.upgrading)
+                    .disabled(self.engram.upgrading)
+                    .on_click(cx.listener(|this, _, _, cx| this.run_engram_upgrade(cx))),
                 self.engram.upgrading,
-                cx.listener(|this, _, _, cx| this.run_engram_upgrade(cx)),
                 cx.listener(move |this, _, _, cx| this.skip_engram(skipped.clone(), cx)),
                 self.engram.skip_error.clone(),
             )
@@ -324,12 +469,50 @@ fn update_card(
     tool: &str,
     what_it_does: &'static str,
     offer: &crate::features::updates::UpdateOffer,
+    update_button: Button,
     busy: bool,
-    on_update: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     on_skip: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     error: Option<String>,
 ) -> Div {
     let notes = offer.notes_url.clone();
+    update_card_body(
+        format!("{tool} {} is available", offer.latest),
+        Some(&offer.current),
+        what_it_does,
+    )
+    .child(
+        h_flex()
+            .gap_2()
+            .child(update_button)
+            .child(
+                Button::new((id, 1usize))
+                    .ghost()
+                    .small()
+                    .icon(Icon::new(IconName::ExternalLink))
+                    .label("Release notes")
+                    .on_click(move |_, _, cx| cx.open_url(&notes)),
+            )
+            .child(
+                Button::new((id, 2usize))
+                    .ghost()
+                    .small()
+                    .label("Skip this version")
+                    .disabled(busy)
+                    .on_click(on_skip),
+            ),
+    )
+    .children(error.map(|error| upgrade_output(vec![error], true)))
+}
+
+fn update_now_button(id: &'static str, busy: bool) -> Button {
+    Button::new((id, 0usize))
+        .primary()
+        .small()
+        .label(if busy { "Updating…" } else { "Update now" })
+        .loading(busy)
+}
+
+fn update_card_body(title: String, current: Option<&str>, what_it_does: &'static str) -> Div {
     v_flex()
         .mt_2()
         .p_3()
@@ -349,46 +532,16 @@ fn update_card(
                         .text_sm()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(ui::fg())
-                        .child(format!("{tool} {} is available", offer.latest)),
+                        .child(title),
                 )
-                .child(
+                .children(current.map(|version| {
                     div()
                         .text_xs()
                         .text_color(ui::muted())
-                        .child(format!("you have {}", offer.current)),
-                ),
+                        .child(format!("you have {version}"))
+                })),
         )
         .child(div().text_xs().text_color(ui::muted()).child(what_it_does))
-        .child(
-            h_flex()
-                .gap_2()
-                .child(
-                    Button::new((id, 0usize))
-                        .primary()
-                        .small()
-                        .label(if busy { "Updating…" } else { "Update now" })
-                        .loading(busy)
-                        .disabled(busy)
-                        .on_click(on_update),
-                )
-                .child(
-                    Button::new((id, 1usize))
-                        .ghost()
-                        .small()
-                        .icon(Icon::new(IconName::ExternalLink))
-                        .label("Release notes")
-                        .on_click(move |_, _, cx| cx.open_url(&notes)),
-                )
-                .child(
-                    Button::new((id, 2usize))
-                        .ghost()
-                        .small()
-                        .label("Skip this version")
-                        .disabled(busy)
-                        .on_click(on_skip),
-                ),
-        )
-        .children(error.map(|error| upgrade_output(vec![error], true)))
 }
 
 /// The upgrade's result: what happened and what's left to do, then
@@ -445,7 +598,19 @@ pub(super) fn upgrade_result(result: &UpgradeResult) -> Div {
         })
 }
 
-/// The last lines `gentle-shell upgrade` printed, tinted by outcome.
+fn last_output_lines(text: &str) -> Vec<String> {
+    let mut lines: Vec<_> = text
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .map(str::to_string)
+        .collect();
+    lines.reverse();
+    lines
+}
+
+/// The update command's last lines, tinted by outcome.
 fn upgrade_output(lines: Vec<String>, failed: bool) -> Div {
     v_flex()
         .mt_1()
@@ -460,33 +625,60 @@ fn upgrade_output(lines: Vec<String>, failed: bool) -> Div {
 
 #[cfg(test)]
 mod tests {
-    use super::{UpgradeOutcome, upgrade_outcome};
+    use super::{UpgradeChannel, UpgradeOutcome, upgrade_outcome};
 
     #[test]
-    fn upgrade_result_follows_what_the_app_runs_afterwards() {
+    fn update_action_release_upgrade_result_follows_what_the_app_runs_afterwards() {
         use std::path::Path;
         let old = Path::new("/fnm/bin/gentle-shell");
-        // The app now runs the new version.
+        assert_eq!(UpgradeChannel::Default.args(), &[] as &[&str]);
+        let outcome =
+            |ok, running| upgrade_outcome(ok, "4.7.0", UpgradeChannel::Default, running, Some(old));
         assert_eq!(
-            upgrade_outcome(true, "4.7.0", Some("4.7.0"), Some(old)),
+            outcome(true, Some("4.7.0")),
             UpgradeOutcome::Installed("4.7.0".into())
         );
-        // It installed, but an older launcher still comes first.
-        assert_eq!(
-            upgrade_outcome(true, "4.7.0", Some("4.6.0"), Some(old)),
-            UpgradeOutcome::Stale {
-                running: "4.6.0".into(),
-                launcher: "/fnm/bin/gentle-shell".into()
-            }
-        );
-        // A failed run, or no launcher answering afterwards, is a failure.
-        assert_eq!(
-            upgrade_outcome(false, "4.7.0", Some("4.7.0"), Some(old)),
-            UpgradeOutcome::Failed
-        );
-        assert_eq!(
-            upgrade_outcome(true, "4.7.0", None, None),
-            UpgradeOutcome::Failed
-        );
+        for running in ["4.6.0", "4.9.0-main.4.7.0"] {
+            assert_eq!(
+                outcome(true, Some(running)),
+                UpgradeOutcome::Stale {
+                    running: running.into(),
+                    launcher: "/fnm/bin/gentle-shell".into(),
+                }
+            );
+        }
+        assert_eq!(outcome(false, Some("4.7.0")), UpgradeOutcome::Failed);
+        assert_eq!(outcome(true, None), UpgradeOutcome::Failed);
+    }
+
+    #[test]
+    fn update_action_main_upgrade_accepts_the_commit_or_its_main_build_only() {
+        let commit = "ce64a9a708e5";
+        let build = "4.9.0-main.ce64a9a708e5";
+        assert_eq!(UpgradeChannel::Main.args(), &["--channel", "main"]);
+        let outcome =
+            |ok, running| upgrade_outcome(ok, commit, UpgradeChannel::Main, running, None);
+        for running in [commit, build] {
+            assert_eq!(
+                outcome(true, Some(running)),
+                UpgradeOutcome::Installed(running.into())
+            );
+        }
+        for running in [
+            "4.9.0-main.d00000000000",
+            "4.9.0-beta.ce64a9a708e5",
+            "4.9.0-main.0ce64a9a708e5",
+            "4.9.0-main.ce64a9a708e5.1",
+        ] {
+            assert_eq!(
+                outcome(true, Some(running)),
+                UpgradeOutcome::Stale {
+                    running: running.into(),
+                    launcher: "gentle-shell".into(),
+                }
+            );
+        }
+        assert_eq!(outcome(false, Some(build)), UpgradeOutcome::Failed);
+        assert_eq!(outcome(true, None), UpgradeOutcome::Failed);
     }
 }

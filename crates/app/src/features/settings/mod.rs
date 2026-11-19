@@ -8,7 +8,7 @@ use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::*;
 
-use crate::{features::app_update, shared::themes};
+use crate::{features::app_update, features::workspaces::TabLayout, shared::themes};
 
 mod agent_ui;
 mod app;
@@ -18,6 +18,7 @@ mod devices;
 mod diagnostics;
 mod events;
 mod hydration;
+mod interface;
 mod layout;
 mod maestro;
 mod models;
@@ -42,6 +43,8 @@ use snapshot::Snapshot;
 
 pub struct SettingsView {
     cwd: PathBuf,
+    /// Tab placement is owned and persisted by the workspace.
+    tab_layout: TabLayout,
     page: SettingsPage,
     body_scroll: ScrollHandle,
     settings_search: Entity<InputState>,
@@ -51,14 +54,14 @@ pub struct SettingsView {
     /// Package input, progress, output and event subscription.
     package: packages::PackageUiState,
     _load: Task<()>,
-    /// Existing shared lifecycle for package and Gentle Shell upgrade commands.
+    /// Shared task for package, Gentle Shell and Pi commands.
     _job: Task<()>,
     /// Window transparency, 0–100 %.
     transparency: Entity<SliderState>,
     _transparency: Subscription,
     /// Pending background-helper policy command and its feedback.
     background: background::BackgroundUiState,
-    /// Gentle Shell upgrade status and its feedback.
+    /// Gentle Shell and Pi update progress and feedback.
     shell_update: upgrade::ShellUpdateUiState,
     /// Re-render as this app's own update moves along.
     _app_update: Subscription,
@@ -91,6 +94,7 @@ impl EventEmitter<SettingsEvent> for SettingsView {}
 impl SettingsView {
     pub fn new(
         cwd: PathBuf,
+        tab_layout: TabLayout,
         session: Option<Entity<crate::features::session::SessionView>>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -137,6 +141,7 @@ impl SettingsView {
         });
         let mut this = Self {
             cwd,
+            tab_layout,
             page: SettingsPage::default(),
             body_scroll: ScrollHandle::new(),
             settings_search,

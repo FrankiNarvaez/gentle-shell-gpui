@@ -18,6 +18,7 @@ pub(super) fn render(
 ) -> Div {
     v_flex()
         .gap_3()
+        .child(view.interface_section(cx))
         .child(
             div()
                 .id("theme-drop")
