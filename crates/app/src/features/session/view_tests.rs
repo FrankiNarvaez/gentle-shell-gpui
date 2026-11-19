@@ -267,3 +267,33 @@ fn the_session_feed_drives_the_todo_list_and_the_command_menu(cx: &mut TestAppCo
         ));
     });
 }
+
+/// Esc closes what is open first; with nothing open it stops the running
+/// turn, unless it comes right after an Esc that closed something.
+#[gpui::test]
+fn escape_closes_first_then_stops_the_turn(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let escape = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| view.abort(&super::Abort, window, cx));
+        });
+    };
+    let stopping = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.live.stopping);
+    view.update(cx, |view, cx| {
+        view.transcript.running = true;
+        view.sync_view(cx);
+        view.agents_panel.open = true;
+    });
+    assert!(view.read_with(cx, |view, _| view.turn_since().is_some()));
+
+    escape(cx);
+    assert!(view.read_with(cx, |view, _| !view.agents_panel.open));
+    assert_eq!(stopping(cx), None, "the first Esc only closed the panel");
+    escape(cx);
+    assert_eq!(stopping(cx), None, "a quick second Esc doesn't stop");
+
+    view.update(cx, |view, _| view.live.escape_closed = None);
+    escape(cx);
+    let turn = view.read_with(cx, |view, _| view.turn_since());
+    assert_eq!(stopping(cx), turn, "with nothing open, Esc stops the turn");
+}

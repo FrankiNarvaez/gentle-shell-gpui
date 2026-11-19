@@ -101,7 +101,10 @@ impl SessionView {
                     self.pick_model(model.clone(), window, cx);
                 }
             }
-            "escape" => self.set_model_picker(false, window, cx),
+            "escape" => {
+                self.set_model_picker(false, window, cx);
+                self.live.escape_closed = Some(std::time::Instant::now());
+            }
             _ => return false,
         }
         cx.notify();
