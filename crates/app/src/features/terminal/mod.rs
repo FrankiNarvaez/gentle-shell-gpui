@@ -42,7 +42,7 @@ fn font_size(window: &Window) -> Pixels {
 pub enum TerminalEvent {
     /// The OSC title changed (or was reset); re-read [`TerminalView::title`].
     TitleChanged,
-    /// The shell process exited; the pane keeps its last screen.
+    /// The shell process exited; the workspace closes the pane.
     Exited,
 }
 

@@ -109,6 +109,10 @@ impl Workspace {
         if from == to || to >= space.tabs.len() {
             return;
         }
+        // Pinned tabs form a separate group in both horizontal and vertical layouts.
+        if space.tabs[from].pinned != space.tabs[to].pinned {
+            return;
+        }
         let shown = space.tabs.get(space.active).map(|t| t.id);
         let tab = space.tabs.remove(from);
         space.tabs.insert(to, tab);

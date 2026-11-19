@@ -1,7 +1,7 @@
 //! The window, after Tern: named workspaces (one shown at a time), each with
 //! its own tabs; every tab tiles panes (agents, terminals, files) in a split
-//! tree with draggable dividers. A left sidebar slot, the screens drawn over
-//! everything, and the layout saved to disk as it changes.
+//! tree with draggable dividers. Vertical tabs live on the left, Files / Changes /
+//! Branches on the right, and the layout is saved to disk as it changes.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _, TitleBar, WindowExt as _, h_flex, v_flex};
@@ -35,7 +35,9 @@ use crate::features::settings::{SettingsEvent, SettingsView};
 use crate::features::tower::TowerView;
 use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
-use crate::features::workspaces::{self, SavedPane, SavedState, SavedTab, SavedWorkspace};
+use crate::features::workspaces::{
+    self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
+};
 use crate::shared::pane::{
     CloseViewer, PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
@@ -51,6 +53,7 @@ mod persistence;
 mod render;
 mod spaces;
 mod stages;
+mod tab_panel;
 mod tabs;
 mod view;
 
@@ -94,8 +97,8 @@ pub const SIDEBAR_WIDTH: f32 = 260.;
 pub enum WorkspaceEvent {
     /// The shown workspace changed; its root folder.
     RootChanged(PathBuf),
-    /// The left sidebar was shown or hidden.
-    SidebarToggled(bool),
+    /// Whether the right-side Files panel is shown.
+    FilesVisibilityChanged(bool),
 }
 
 /// A window-level screen drawn over the active tab.
@@ -153,6 +156,7 @@ struct Tab {
     id: usize,
     tree: PaneTree<PaneId>,
     focused: PaneId,
+    pinned: bool,
 }
 
 /// One named workspace.
@@ -259,6 +263,8 @@ pub struct Workspace {
     web_shown: std::collections::HashSet<PaneId>,
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
+    tab_layout: TabLayout,
+    tab_search: Entity<InputState>,
     save_task: Option<Task<()>>,
     /// Re-reads every pane's title and busy state once a second (non-agent
     /// views can't be observed through `AnyView`), redrawing only on change.
@@ -316,9 +322,10 @@ impl Workspace {
                 saved: Some((w.tabs, w.active_tab)),
             })
             .collect();
+        let tab_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tabs"));
         let music = cx.new(|cx| Music::new(window, cx));
         let devices = cx.new(DevicePanel::new);
-        let lifecycle = vec![
+        let mut lifecycle = vec![
             cx.on_app_quit(|this, cx| {
                 this.music.read(cx).shutdown();
                 this.save_now(cx);
@@ -361,6 +368,11 @@ impl Workspace {
                 },
             ),
         ];
+        lifecycle.push(
+            cx.subscribe_in(&tab_search, window, |_, _, _: &InputEvent, _, cx| {
+                cx.notify()
+            }),
+        );
         let mut this = Self {
             current: saved.current.min(spaces.len().saturating_sub(1)),
             spaces,
@@ -370,6 +382,8 @@ impl Workspace {
             web_shown: Default::default(),
             sidebar: None,
             sidebar_visible: saved.sidebar,
+            tab_layout: saved.tab_layout,
+            tab_search,
             save_task: None,
             notices: cx.new(|_| Notices::default()),
             renaming: None,
@@ -488,7 +502,7 @@ impl Workspace {
         });
     }
 
-    /// Put `view` in the left sidebar slot (cmd-b toggles it).
+    /// Put `view` in the right Files sidebar (Cmd/Ctrl+B toggles it).
     pub fn set_sidebar(&mut self, view: AnyView, cx: &mut Context<Self>) {
         self.sidebar = Some(view);
         cx.notify();

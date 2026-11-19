@@ -3,7 +3,7 @@
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::popover::Popover;
+use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -226,12 +226,13 @@ impl SessionView {
             })
             .children(self.extension.rate_limits.iter().filter(|_| !collapse).map(
                 |(window, limit)| {
-                    let color = if limit.percent >= 95 {
-                        ui::danger()
-                    } else if limit.percent >= 80 {
-                        ui::warning()
-                    } else {
-                        ui::muted()
+                    use gentle_core::usage::subscription::LimitTone;
+                    let color = match gentle_core::usage::subscription::limit_tone(f64::from(
+                        limit.percent,
+                    )) {
+                        LimitTone::Danger => ui::danger(),
+                        LimitTone::Warning => ui::warning(),
+                        LimitTone::Calm => ui::muted(),
                     };
                     let tip = limit.text.clone();
                     div()
@@ -327,12 +328,9 @@ impl SessionView {
         let weak = cx.entity().downgrade();
         let closing = weak.clone();
         chip_popover(
-            "jobs",
-            IconName::Activity,
-            color,
-            label,
-            "Background jobs",
-            format!("{running}/{total}"),
+            ChipPopoverOptions::new("jobs", IconName::Activity, color, label)
+                .title("Background jobs")
+                .count(format!("{running}/{total}")),
             move || {
                 rows.iter()
                     .map(|(row, tail)| job_row(row, cancel, tail.clone(), &weak))
@@ -357,14 +355,14 @@ impl SessionView {
             .filter(|(key, _)| key.as_str() != "gentle:yolo")
             .map(|(key, lines)| {
                 let lines = lines.clone();
-                let title = key.clone();
                 chip_popover(
-                    SharedString::from(format!("widget-{key}")),
-                    IconName::LayoutDashboard,
-                    ui::muted(),
-                    gentle_core::text::first_line(key, 18),
-                    title,
-                    String::new(),
+                    ChipPopoverOptions::new(
+                        SharedString::from(format!("widget-{key}")),
+                        IconName::LayoutDashboard,
+                        ui::muted(),
+                        gentle_core::text::first_line(key, 18),
+                    )
+                    .title(key),
                     move || {
                         lines
                             .iter()
@@ -449,12 +447,14 @@ impl SessionView {
         };
         let weak = cx.entity().downgrade();
         chip_popover(
-            "helpers",
-            IconName::Users,
-            color,
-            format!("{active}/{total}"),
-            "Helpers",
-            format!("{active} active"),
+            ChipPopoverOptions::new(
+                "helpers",
+                IconName::Users,
+                color,
+                format!("{active}/{total}"),
+            )
+            .title("Helpers")
+            .count(format!("{active} active")),
             move || {
                 let mut items: Vec<AnyElement> = rows
                     .iter()
@@ -539,12 +539,13 @@ impl SessionView {
             ("Cache read", format_tokens(usage.cache_read)),
         ];
         Some(chip_popover(
-            "last-usage",
-            IconName::ChartPie,
-            ui::faint(),
-            format!("out {}", format_tokens(usage.output)),
-            "Last response",
-            String::new(),
+            ChipPopoverOptions::new(
+                "last-usage",
+                IconName::ChartPie,
+                ui::faint(),
+                format!("out {}", format_tokens(usage.output)),
+            )
+            .title("Last response"),
             move || {
                 rows.iter()
                     .map(|(name, value)| {
@@ -565,20 +566,79 @@ impl SessionView {
     }
 }
 
-/// A status chip over the composer that opens a card above it: icon, title,
-/// optional count, and the rows `body` builds when the card opens. Every
-/// chip (todos, jobs, widgets, usage) shares this look.
-pub(super) fn chip_popover(
-    id: impl Into<SharedString>,
+/// An extra control at a chip card header's right side (where the count
+/// otherwise sits): it is rebuilt with the card, so it can carry a listener
+/// on the popover's own state — `cx.listener` + `state.dismiss` — to act and
+/// close in one click.
+pub(super) type ChipHeaderAction =
+    Box<dyn Fn(&mut Window, &mut Context<PopoverState>) -> AnyElement>;
+
+/// The slots of a chip card's header, shared by every chip popover: the
+/// trigger's id, icon and color, its label, the card's title, and either a
+/// count in `ui::mono()` or a header action where the count would sit.
+pub(super) struct ChipPopoverOptions {
+    id: SharedString,
     icon: IconName,
     color: Hsla,
-    label: impl Into<SharedString>,
-    title: impl Into<SharedString>,
-    count: String,
+    label: SharedString,
+    title: SharedString,
+    count: SharedString,
+    action: Option<ChipHeaderAction>,
+}
+
+impl ChipPopoverOptions {
+    pub(super) fn new(
+        id: impl Into<SharedString>,
+        icon: IconName,
+        color: Hsla,
+        label: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            icon,
+            color,
+            label: label.into(),
+            title: "".into(),
+            count: "".into(),
+            action: None,
+        }
+    }
+
+    /// The card's title, next to the icon.
+    pub(super) fn title(mut self, title: impl Into<SharedString>) -> Self {
+        self.title = title.into();
+        self
+    }
+
+    /// A right-side count in `ui::mono()` ("2/3", "3.4k of 200k").
+    pub(super) fn count(mut self, count: impl Into<SharedString>) -> Self {
+        self.count = count.into();
+        self
+    }
+
+    /// A right-side control instead of the count (see [`ChipHeaderAction`]).
+    pub(super) fn action(mut self, action: ChipHeaderAction) -> Self {
+        self.action = Some(action);
+        self
+    }
+}
+
+/// A status chip over the composer that opens a card above it: icon, title,
+/// optional count or header action, and the rows `body` builds when the card
+/// opens. Every chip (todos, jobs, widgets, usage) shares this look.
+pub(super) fn chip_popover(
+    options: ChipPopoverOptions,
     body: impl Fn() -> Vec<AnyElement> + 'static,
 ) -> Popover {
-    let id: SharedString = id.into();
-    let title: SharedString = title.into();
+    let ChipPopoverOptions {
+        id,
+        icon,
+        color,
+        label,
+        title,
+        count,
+        action,
+    } = options;
     let trigger = Button::new(SharedString::from(format!("{id}-chip")))
         .ghost()
         .xsmall()
@@ -590,7 +650,7 @@ pub(super) fn chip_popover(
         .trigger(trigger)
         .w(rems(360. / 16.))
         .appearance(false)
-        .content(move |_, _, cx| {
+        .content(move |_, window, cx| {
             ui::island(cx)
                 .w_full()
                 .child(ui::popover_in(
@@ -618,7 +678,8 @@ pub(super) fn chip_popover(
                                             .text_color(ui::muted())
                                             .child(count.clone()),
                                     )
-                                }),
+                                })
+                                .when_some(action.as_ref(), |d, build| d.child(build(window, cx))),
                         )
                         .child(
                             v_flex()

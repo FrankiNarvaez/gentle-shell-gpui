@@ -1482,8 +1482,8 @@ impl Render for FileTreeView {
             .child(
                 Self::header_button(
                     "file-tree-collapse",
-                    IconName::PanelLeftClose,
-                    "Hide sidebar",
+                    IconName::PanelRightClose,
+                    "Hide Files sidebar",
                 )
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(FileTreeEvent::Collapse))),
             );
@@ -1501,7 +1501,7 @@ impl Render for FileTreeView {
             .child(self.tab_button(Tab::Files, IconName::Files, "Files", 0, cx))
             .child(self.tab_button(Tab::Changes, IconName::Diff, "Changes", change_count, cx))
             .child(self.tab_button(Tab::Branches, IconName::GitBranch, "Branches", 0, cx));
-        // The workspace's sidebar slot paints the rounded glass; a fill here
+        // The workspace's right sidebar slot paints the rounded glass; a fill here
         // would show square corners past it (GPUI clips to rectangles).
         v_flex()
             .size_full()

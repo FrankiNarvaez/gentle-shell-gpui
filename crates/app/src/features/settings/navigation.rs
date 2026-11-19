@@ -102,7 +102,7 @@ impl SettingsPage {
                 "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report"
             }
             Self::Appearance => {
-                "theme color dark light import share transparency window opacity interface zoom size font fonts family typeface nerd monospace code terminal scene motion background animated library terminal banner rose text"
+                "theme color dark light import share transparency window opacity interface zoom size font fonts family typeface nerd monospace code scene motion background animated library terminal banner rose text tabs vertical horizontal placement sidebar"
             }
             Self::Agents => {
                 "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked"
@@ -391,6 +391,9 @@ mod tests {
 
     #[test]
     fn search_finds_options_by_category_and_setting_name() {
+        for term in ["tabs", "vertical", "horizontal", "placement"] {
+            assert!(SettingsPage::Appearance.matches_query(term));
+        }
         assert!(SettingsPage::Appearance.matches_query("window transparency"));
         assert!(SettingsPage::Appearance.matches_query("THEME"));
         assert!(SettingsPage::Models.matches_query("claude bridge"));

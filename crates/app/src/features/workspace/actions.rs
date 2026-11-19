@@ -192,12 +192,16 @@ impl Workspace {
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_visible = !self.sidebar_visible;
-        cx.emit(WorkspaceEvent::SidebarToggled(self.sidebar_visible));
+        cx.emit(WorkspaceEvent::FilesVisibilityChanged(
+            self.files_sidebar_visible(),
+        ));
         self.schedule_save(cx);
         cx.notify();
     }
 
-    pub fn sidebar_visible(&self) -> bool {
+    /// The right Files sidebar polls only while it is visible, regardless
+    /// of whether tabs are arranged horizontally or vertically.
+    pub fn files_sidebar_visible(&self) -> bool {
         self.sidebar_visible
     }
 

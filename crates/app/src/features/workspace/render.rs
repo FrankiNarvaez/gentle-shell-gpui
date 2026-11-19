@@ -20,8 +20,9 @@ impl Render for Workspace {
         {
             tab.focused = inside;
         }
-        let sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
-        let has_sidebar = self.sidebar.is_some();
+        let files_sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
+        let has_files_sidebar = self.sidebar.is_some();
+        let vertical_tabs = self.tab_layout == TabLayout::Vertical;
         // Native web views would cover a screen or a dialog opened over
         // them, and swallow the pointer while a pane is dragged over them;
         // device cards stop capturing while covered.
@@ -116,7 +117,7 @@ impl Render for Workspace {
                                             .h(rems(14. / 16.))
                                             .bg(ui::border()),
                                     )
-                                    .child(self.render_tabs(cx)),
+                                    .when(!vertical_tabs, |row| row.child(self.render_tabs(cx))),
                             )
                             .child(
                                 h_flex()
@@ -178,6 +179,24 @@ impl Render for Workspace {
                                             ))
                                     })
                                     .child(
+                                        Button::new("toggle-tab-layout")
+                                            .ghost()
+                                            .xsmall()
+                                            .icon(Icon::new(if vertical_tabs {
+                                                IconName::PanelLeft
+                                            } else {
+                                                IconName::List
+                                            }))
+                                            .tooltip(if vertical_tabs {
+                                                "Use horizontal tabs"
+                                            } else {
+                                                "Show tabs in the sidebar"
+                                            })
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.toggle_tab_layout(cx)
+                                            })),
+                                    )
+                                    .child(
                                         Button::new("open-palette")
                                             .ghost()
                                             .xsmall()
@@ -190,18 +209,23 @@ impl Render for Workspace {
                                     // The screens behind one menu; it's lit while
                                     // one of them is open.
                                     .child(self.render_screens_menu(cx))
-                                    .when(has_sidebar, |d| {
+                                    .when(has_files_sidebar, |d| {
                                         d.child(
                                             Button::new("toggle-sidebar")
                                                 .ghost()
                                                 .xsmall()
                                                 .icon(Icon::new(if self.sidebar_visible {
-                                                    IconName::PanelLeftClose
+                                                    IconName::PanelRightClose
                                                 } else {
-                                                    IconName::PanelLeftOpen
+                                                    IconName::PanelRightOpen
                                                 }))
                                                 .tooltip(format!(
-                                                    "Toggle sidebar ({})",
+                                                    "{} Files sidebar ({})",
+                                                    if self.sidebar_visible {
+                                                        "Hide"
+                                                    } else {
+                                                        "Show"
+                                                    },
                                                     ui::shortcut("B")
                                                 ))
                                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -219,9 +243,10 @@ impl Render for Workspace {
                     .px_1p5()
                     .pb_1p5()
                     .gap_1p5()
-                    .children(sidebar.map(|view| {
-                        ui::appear(
-                            "sidebar-in",
+                    // The vertical tab navigator remains independent of the Files panel.
+                    .when(vertical_tabs, |row| {
+                        row.child(ui::appear(
+                            "tabs-sidebar-in",
                             div()
                                 .w(rems(SIDEBAR_WIDTH / 16.))
                                 .flex_none()
@@ -231,9 +256,9 @@ impl Render for Workspace {
                                 .border_1()
                                 .border_color(gpui_kit::transparent_black())
                                 .overflow_hidden()
-                                .child(view.cached(StyleRefinement::default().size_full())),
-                        )
-                    }))
+                                .child(self.render_vertical_sidebar(cx)),
+                        ))
+                    })
                     .child(
                         div()
                             .relative()
@@ -243,7 +268,26 @@ impl Render for Workspace {
                             .h_full()
                             .child(self.render_body(window, cx)),
                     )
-                    .when(devices_docked, |row| row.child(self.devices.clone())),
+                    .when(devices_docked, |row| row.child(self.devices.clone()))
+                    // Ctrl/Cmd+B toggles only the right Files/Changes/Branches sidebar.
+                    .when_some(files_sidebar, |row, view| {
+                        row.child(ui::appear(
+                            "files-sidebar-in",
+                            div()
+                                .w(rems(SIDEBAR_WIDTH / 16.))
+                                .flex_none()
+                                .h_full()
+                                .rounded_xl()
+                                .bg(ui::panel())
+                                .border_1()
+                                .border_color(gpui_kit::transparent_black())
+                                .overflow_hidden()
+                                .child(
+                                    view.cached(StyleRefinement::default().size_full())
+                                        .into_any_element(),
+                                ),
+                        ))
+                    }),
             )
             .children(self.stages.iter().filter_map(Stage::element))
             .when(devices_floating, |root| root.child(self.devices.clone()))

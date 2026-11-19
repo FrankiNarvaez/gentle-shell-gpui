@@ -12,6 +12,8 @@ use gpui_kit::*;
 use gentle_core::commands::Screen;
 use gentle_core::fuzzy::{FileEntry, Needle};
 
+use crate::features::workspaces::TabLayout;
+
 mod commands;
 mod keyboard;
 mod rows;
@@ -53,6 +55,7 @@ pub enum PaletteAction {
     ClosePane,
     ReopenClosed,
     ToggleSidebar,
+    SetTabLayout(TabLayout),
     /// Send `/name` as a prompt in the active agent pane.
     Command(String),
     /// A Gentle Shell command whose UI is terminal-only, opened natively.
@@ -134,6 +137,8 @@ pub struct PaletteInput {
     /// The current workspace's root, for files and branches.
     pub root: PathBuf,
     pub category: Category,
+    /// Current window tab placement; determines the available view command.
+    pub tab_layout: TabLayout,
 }
 
 #[derive(Clone)]
@@ -192,7 +197,7 @@ impl PaletteView {
                 cx.notify();
             }
         });
-        let mut commands = screen_rows();
+        let mut commands = screen_rows(input.tab_layout);
         commands.extend(input.commands.into_iter().filter_map(command_row));
 
         let root = input.root.clone();

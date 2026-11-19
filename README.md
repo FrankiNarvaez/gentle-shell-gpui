@@ -107,6 +107,21 @@ Tabs split into panes: agent, terminal or file. Panes tile like Hyprland's dwind
 
 ---
 
+### Optional vertical tabs — Projects and agents at a glance
+
+Tabs remain horizontal by default. To move them to the left, choose **Configuration → Appearance → Tab placement**, use the title-bar layout button, right-click a tab, or search **View: Show tabs vertically** in the command palette. The selection is saved across launches. **Files / Changes / Branches** always occupies a separate right sidebar; ⌘B (Ctrl+B on Windows/Linux) toggles Files without affecting tab placement.
+
+<details>
+<summary><kbd>More</kbd> <strong>Project navigator, pinning and tab actions</strong></summary>
+
+<br>
+
+The vertical navigator is built like the Files sidebar: a header with **+** (the title bar's new-tab menu: Agent, Terminal, Canvas, Tower) and the button that moves tabs back to the title bar, a search field, and the projects as a tree. Each project shows its letter badge, its tab count and its agents' activity (a dot: accent while working, amber when one needs you); the current one unfolds to its tabs, and search filters them. **Agent** and **Terminal** at the bottom of the sidebar open a tab in the current project. A tab's icon takes the same colors. Hover a tab for its grip (drag to reorder) and its ⋯ menu (pin/unpin, rename, move up/down, close). Pinned tabs stay at the top with a pin. Moving tabs back to the title bar leaves the Files sidebar and the pane tiling as they are.
+
+</details>
+
+---
+
 ### Terminal panes — Your login shell, in a real PTY
 
 Your login shell in a real PTY (alacritty_terminal) with the Gentleman colors; ⌘⇧T opens a terminal tab.
@@ -225,7 +240,7 @@ Enter sends; while the agent runs, Enter steers it and Esc, ⌘. (Ctrl+. elsewhe
 
 <br>
 
-Click the context percentage to compact now or turn auto-compaction on or off. For reasoning models, the effort chip (the level's icon, the level and a pixel meter) opens a slider in Gentle Shell's rose gradient with one stop per level the model accepts (`get_available_thinking_levels`: off … high, and xhigh / max where supported): click, drag or pick a label; the card says what the level costs, and the icon follows the level (moon, feather, leaf, brain, circuit brain, bolt, flame). Every level plays its own surge over the window, and each one builds on the level below until max: minimal and low send a pixel comet along a quarter and half of the window's edge; medium runs the whole lap and the edge flares; high adds energy spiralling into a glowing core while the window trembles; xhigh trembles harder and hatches the core with a flash, a shockwave and a shower of sparks; max (about 4 seconds) goes all the way: one last jolt and Gentle Shell's pixel rose bursts out with a rebound. Off plays nothing. Shows model, effort, context %, cost, the ODD phase (`✿ exploring…`), extension statuses, queued messages and running jobs.
+Click the context percentage to compact now or turn auto-compaction on or off. For reasoning models, the effort chip (the level's icon, the level and a pixel meter) opens a slider in Gentle Shell's rose gradient with one stop per level the model accepts (`get_available_thinking_levels`: off … high, and xhigh / max where supported): click, drag or pick a label; the card says what the level costs, and the icon follows the level (moon, feather, leaf, brain, circuit brain, bolt, flame). Every level plays its own surge over the window, and each one builds on the level below until max: minimal and low send a pixel comet along a quarter and half of the window's edge; medium runs the whole lap and the edge flares; high adds energy spiralling into a glowing core while the window trembles; xhigh trembles harder and hatches the core with a flash, a shockwave and a shower of sparks; max (about 4 seconds) goes all the way: one last jolt and Gentle Shell's pixel rose bursts out with a rebound. Off plays nothing. Shows model, effort, plan usage (a chip after the effort picker), context %, cost, the ODD phase (`✿ exploring…`), extension statuses, queued messages and running jobs.
 
 </details>
 
@@ -477,7 +492,7 @@ A running backend only reads credentials when it starts, so signing in or out re
 
 ### Usage & stats — Subscription windows and local cost
 
-Subscription windows and local token/cost stats, in place of `/gentle:usage` and `/gentle:stats`. With Gentle Shell 4.8+ the windows come from Shell itself (`get/refresh_subscription_usage` and `rate_limit` events), Claude's 5h/7d included; an older Shell keeps the app's own ChatGPT/Codex and NaN requests.
+Subscription windows and local token/cost stats, in place of `/gentle:usage` and `/gentle:stats`. With Gentle Shell 4.8+ the windows come from Shell itself (`get/refresh_subscription_usage` and `rate_limit` events), Claude's 5h/7d included; an older Shell keeps the app's own ChatGPT/Codex and NaN requests. In the composer, right after the effort picker, a plan-limits chip shows the current model provider's windows in a popover — the plan in the header with a text "See all →" opening this screen, one row per window ordered shortest first (5-hour reads "5-hour limit", a week "Weekly · all models"), with the local reset clock ("resets at 5:30 p.m." today, "resets Sun 6:00 a.m." later), the percent and a thin bar — asked for once the session has a model and hidden while the session reports no limits (on an older Shell the legacy limit chips keep the numbers, and the popover would say "Plan limits need a Gentle Shell newer than 4.8.0" instead).
 
 <details>
 <summary><kbd>More</kbd> <strong>Where the numbers come from</strong></summary>

@@ -34,6 +34,9 @@ pub struct SavedPane {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedTab {
     pub layout: PaneTree<SavedPane>,
+    /// Pinned tabs stay ahead of ordinary tabs.
+    #[serde(default)]
+    pub pinned: bool,
     /// Index of the focused pane among the layout's leaves.
     #[serde(default)]
     pub focused: usize,
@@ -52,6 +55,15 @@ pub struct SavedWorkspace {
     pub last_active: u64,
 }
 
+/// Which presentation the workspace uses for its tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabLayout {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SavedState {
     #[serde(default)]
@@ -64,6 +76,9 @@ pub struct SavedState {
     /// The files sidebar (⌘B) was showing.
     #[serde(default = "shown")]
     pub sidebar: bool,
+    /// Older workspaces.json files keep the familiar horizontal layout.
+    #[serde(default)]
+    pub tab_layout: TabLayout,
 }
 
 fn shown() -> bool {
@@ -78,6 +93,7 @@ impl Default for SavedState {
             current: 0,
             workspaces: Vec::new(),
             sidebar: true,
+            tab_layout: TabLayout::Horizontal,
         }
     }
 }

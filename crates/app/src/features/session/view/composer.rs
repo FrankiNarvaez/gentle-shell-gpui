@@ -17,7 +17,7 @@ use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::activity::chip_popover;
+use super::activity::{ChipPopoverOptions, chip_popover};
 use super::dialogs::checkbox_box;
 use super::{NARROW, TINY, image_tile, number_badge};
 use crate::features::session::SessionView;
@@ -81,12 +81,9 @@ impl SessionView {
         let color = if high { ui::warning() } else { ui::faint() };
         let weak = cx.entity().downgrade();
         chip_popover(
-            "context",
-            IconName::Gauge,
-            color,
-            label,
-            "Context",
-            count,
+            ChipPopoverOptions::new("context", IconName::Gauge, color, label)
+                .title("Context")
+                .count(count),
             move || {
                 let compact = weak.clone();
                 let toggle = weak.clone();
@@ -422,6 +419,12 @@ impl SessionView {
 
         let width = self.pane_width.get();
         let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
+        // The activity line folds every extension status (and the legacy
+        // limit chips) into one chip below `TINY`.
+        let collapse = width < f32::from(rems(TINY / 16.).to_pixels(rem_size));
+        // When the legacy limit chips are on the activity line, the plan
+        // chip has nothing to add: one number, never the same percent twice.
+        let legacy_chips_shown = !collapse && !self.extension.rate_limits.is_empty();
         let bottom = h_flex()
             .w_full()
             .min_w_0()
@@ -447,6 +450,12 @@ impl SessionView {
             .when(
                 self.models.current.as_ref().is_some_and(|m| m.reasoning),
                 |this| this.child(self.render_effort_picker(narrow, cx)),
+            )
+            // The plan-limits chip keeps its width; the model picker before
+            // it is the one that shrinks in a narrow pane.
+            .when_some(
+                self.render_plan_limits_chip(legacy_chips_shown, cx),
+                |this, chip| this.child(div().flex_shrink_0().child(chip)),
             )
             .child(div().flex_1().min_w_0())
             .child(div().flex_shrink_0().child(action_button));

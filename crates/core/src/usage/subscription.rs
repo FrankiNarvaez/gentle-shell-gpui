@@ -5,7 +5,7 @@
 use serde_json::{Map, Value};
 
 use super::finite;
-use super::time::{DAY, HOUR, MINUTE, WEEK, parse_iso_ms};
+use super::time::{DAY, HOUR, MINUTE, WEEK, local_day, parse_iso_ms};
 
 pub const CODEX_PROVIDER: &str = "openai-codex";
 pub const OPENAI_PROVIDER: &str = "openai";
@@ -76,6 +76,135 @@ pub fn format_reset(reset_at: Option<i64>, now: i64) -> String {
         )
     } else {
         format!("resets in {}d {}h", seconds / DAY, (seconds % DAY) / HOUR)
+    }
+}
+
+/// How alarming one used percent is: calm below 80, warning from 80,
+/// danger from 95. The plan-limits chip, the legacy limit chips and the
+/// usage meters share these thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitTone {
+    Calm,
+    Warning,
+    Danger,
+}
+
+pub fn limit_tone(percent: f64) -> LimitTone {
+    if percent >= 95.0 {
+        LimitTone::Danger
+    } else if percent >= 80.0 {
+        LimitTone::Warning
+    } else {
+        LimitTone::Calm
+    }
+}
+
+/// The canonical provider id behind a model's provider name: Codex reports
+/// as `codex` or `openai-codex` and Claude as `claude`, `anthropic` or
+/// `claude-bridge` (Claude Code's subscription through the bridge, whose
+/// 5h/7d windows Gentle Shell files under the provider that served the
+/// response), so either side of a model-provider → subscription-provider
+/// match uses this; anything else has no subscription windows to match.
+pub fn provider_alias(provider: &str) -> Option<&'static str> {
+    match provider {
+        "codex" | "openai-codex" => Some("codex"),
+        "claude" | "anthropic" | "claude-bridge" => Some("claude"),
+        "openai" => Some("openai"),
+        "nan" => Some("nan"),
+        _ => None,
+    }
+}
+
+/// A provider's windows flattened across its limits, most used first (the
+/// payload order stands on ties), so a compact view leads with the window
+/// that is about to bite.
+pub fn windows_most_used(limits: &[UsageLimit]) -> Vec<UsageWindow> {
+    let mut windows: Vec<UsageWindow> = limits
+        .iter()
+        .flat_map(|limit| limit.windows.iter().cloned())
+        .collect();
+    windows.sort_by(|a, b| b.used_percent.total_cmp(&a.used_percent));
+    windows
+}
+
+/// A provider's windows flattened across its limits, shortest first (the
+/// payload order stands on ties), so the plan card reads its 5-hour window
+/// above its weekly one while the trigger still shows the most-used window.
+/// Windows without a declared length (NaN's billing-period allowance has no
+/// label, and its `window_seconds` count down to the reset) go last.
+pub fn windows_by_length(limits: &[UsageLimit]) -> Vec<UsageWindow> {
+    let length = |window: &UsageWindow| {
+        if window.window_seconds > 0.0 && !window.label.is_empty() {
+            Some(window.window_seconds)
+        } else {
+            None
+        }
+    };
+    let mut windows: Vec<UsageWindow> = limits
+        .iter()
+        .flat_map(|limit| limit.windows.iter().cloned())
+        .collect();
+    // `sort_by` is stable, so ties and the unknown tail keep the payload's
+    // order.
+    windows.sort_by(|a, b| match (length(a), length(b)) {
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(a), Some(b)) => a.total_cmp(&b),
+        (None, None) => std::cmp::Ordering::Equal,
+    });
+    windows
+}
+
+/// A window's row label: friendly for the two windows a plan cares about —
+/// a 5-hour window reads "5-hour limit" and a week reads "Weekly · all
+/// models" — the payload's own label otherwise, and "period" for NaN's
+/// billing-period allowance (whose `window_seconds` counts down to the
+/// reset instead of naming a window length).
+pub fn window_display_label(window: &UsageWindow) -> String {
+    if window.label.is_empty() {
+        return "period".into();
+    }
+    let week =
+        window.label == "week" || window.label == "7d" || window.window_seconds >= WEEK as f64;
+    let five_hours = window.label == "5h"
+        || (window.window_seconds > 0.0 && window.window_seconds == 5.0 * HOUR as f64);
+    if week {
+        "Weekly · all models".into()
+    } else if five_hours {
+        "5-hour limit".into()
+    } else {
+        window.label.clone()
+    }
+}
+
+/// When this window resets, in the reader's local clock (`offset_secs` from
+/// UTC): a reset later the same local day reads "resets at 5:30 p.m.", a
+/// later day reads "resets Sun 6:00 a.m.", and a past or unknown reset says
+/// nothing.
+pub fn reset_clock_label(reset_at: Option<i64>, now: i64, offset_secs: i64) -> String {
+    let Some(reset_at) = reset_at.filter(|at| *at > now) else {
+        return String::new();
+    };
+    let local_secs = |ms: i64| ms.div_euclid(1000) + offset_secs;
+    let clock = |ms: i64| {
+        let time_of_day = local_secs(ms).rem_euclid(DAY);
+        let (mut hour, minute) = (time_of_day / HOUR, (time_of_day % HOUR) / MINUTE);
+        let meridiem = if hour >= 12 { "p.m." } else { "a.m." };
+        if hour >= 12 {
+            hour -= 12;
+        }
+        if hour == 0 {
+            hour = 12;
+        }
+        format!("{hour}:{minute:02} {meridiem}")
+    };
+    if local_day(reset_at, offset_secs) == local_day(now, offset_secs) {
+        format!("resets at {}", clock(reset_at))
+    } else {
+        const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        // 1970-01-01 (day 0) was a Thursday, four days into the table.
+        let weekday = (local_day(reset_at, offset_secs) + 4).rem_euclid(7) as usize;
+        format!("resets {} {}", WEEKDAYS[weekday], clock(reset_at))
     }
 }
 
@@ -343,12 +472,203 @@ pub fn account_id_from_token(token: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{group_usage_limits, parse_codex_usage, parse_nan_quota};
-    use crate::usage::time::parse_iso_ms;
+    use super::{
+        LimitTone, UsageLimit, UsageWindow, group_usage_limits, limit_tone, parse_codex_usage,
+        parse_nan_quota, provider_alias, reset_clock_label, window_display_label,
+        windows_by_length, windows_most_used,
+    };
+    use crate::usage::time::{DAY, HOUR, MINUTE, WEEK, days_from_civil, parse_iso_ms};
     use serde_json::Value;
     use serde_json::json;
 
     const NOW: i64 = 1_762_400_000_000;
+
+    fn window(label: &str, percent: f64) -> UsageWindow {
+        UsageWindow {
+            label: label.into(),
+            used_percent: percent,
+            window_seconds: 0.0,
+            reset_at: None,
+            used: None,
+            budget: None,
+        }
+    }
+
+    fn window_len(label: &str, percent: f64, seconds: f64) -> UsageWindow {
+        UsageWindow {
+            window_seconds: seconds,
+            ..window(label, percent)
+        }
+    }
+
+    #[test]
+    fn tone_thresholds_are_80_and_95() {
+        assert_eq!(limit_tone(0.0), LimitTone::Calm);
+        assert_eq!(limit_tone(79.0), LimitTone::Calm);
+        assert_eq!(limit_tone(79.9), LimitTone::Calm);
+        assert_eq!(limit_tone(80.0), LimitTone::Warning);
+        assert_eq!(limit_tone(94.0), LimitTone::Warning);
+        assert_eq!(limit_tone(94.9), LimitTone::Warning);
+        assert_eq!(limit_tone(95.0), LimitTone::Danger);
+        assert_eq!(limit_tone(100.0), LimitTone::Danger);
+    }
+
+    #[test]
+    fn provider_aliases_match_the_same_account() {
+        assert_eq!(provider_alias("codex"), Some("codex"));
+        assert_eq!(provider_alias("openai-codex"), Some("codex"));
+        assert_eq!(provider_alias("claude"), Some("claude"));
+        assert_eq!(provider_alias("anthropic"), Some("claude"));
+        assert_eq!(provider_alias("claude-bridge"), Some("claude"));
+        assert_eq!(provider_alias("openai"), Some("openai"));
+        assert_eq!(provider_alias("nan"), Some("nan"));
+        assert_eq!(provider_alias("deepseek"), None);
+        assert_eq!(provider_alias(""), None);
+    }
+
+    #[test]
+    fn reset_clock_speaks_the_local_day() {
+        // 2025-11-06 is a Thursday; 2025-11-07 a Friday.
+        let day = days_from_civil(2025, 11, 6);
+        let now = day * DAY * 1000 + (10 * HOUR + 30 * MINUTE) * 1000;
+        // Same local day: a plain clock time.
+        assert_eq!(
+            reset_clock_label(Some(now + 7 * HOUR * 1000), now, 0),
+            "resets at 5:30 p.m."
+        );
+        // A later day: short weekday first.
+        assert_eq!(
+            reset_clock_label(
+                Some(now + DAY * 1000 - (4 * HOUR + 30 * MINUTE) * 1000),
+                now,
+                0
+            ),
+            "resets Fri 6:00 a.m."
+        );
+        // Midnight reads as 12 a.m., noon as 12 p.m.
+        assert_eq!(
+            reset_clock_label(
+                Some(now + DAY * 1000 + 13 * HOUR * 1000 + 30 * MINUTE * 1000),
+                now,
+                0
+            ),
+            "resets Sat 12:00 a.m."
+        );
+        assert_eq!(
+            reset_clock_label(Some(now + 2 * HOUR * 1000), now, 0),
+            "resets at 12:30 p.m."
+        );
+        // A past or unknown reset says nothing.
+        assert_eq!(reset_clock_label(Some(now - 1), now, 0), "");
+        assert_eq!(reset_clock_label(Some(now), now, 0), "");
+        assert_eq!(reset_clock_label(None, now, 0), "");
+        // The offset moves the local day: 10:30 UTC with a -5h offset is
+        // 5:30 a.m. local, and a 17:30 UTC reset lands on the same local day.
+        let offset = -5 * HOUR;
+        assert_eq!(
+            reset_clock_label(Some(now + 7 * HOUR * 1000), now, offset),
+            "resets at 12:30 p.m."
+        );
+        // Just before local midnight: the reset lands on the next day.
+        let utc_now = day * DAY * 1000 + 3 * HOUR * 1000; // local 22:00 the day before
+        assert_eq!(
+            reset_clock_label(Some(day * DAY * 1000 + 9 * HOUR * 1000), utc_now, offset),
+            "resets Thu 4:00 a.m."
+        );
+    }
+
+    #[test]
+    fn windows_order_most_used_first() {
+        let limits = vec![
+            UsageLimit {
+                name: "prompts".into(),
+                windows: vec![window("5h", 42.0), window("week", 10.0)],
+                limit_reached: false,
+            },
+            UsageLimit {
+                name: "codex".into(),
+                windows: vec![window("1d", 77.5), window("5h", 42.0)],
+                limit_reached: false,
+            },
+        ];
+        let ordered: Vec<f64> = windows_most_used(&limits)
+            .iter()
+            .map(|w| w.used_percent)
+            .collect();
+        assert_eq!(ordered, vec![77.5, 42.0, 42.0, 10.0]);
+        assert!(windows_most_used(&[]).is_empty());
+    }
+
+    #[test]
+    fn windows_order_shortest_first_with_unknown_last() {
+        let limits = vec![
+            UsageLimit {
+                name: "prompts".into(),
+                windows: vec![
+                    window_len("week", 10.0, WEEK as f64),
+                    window_len("5h", 42.0, 5.0 * HOUR as f64),
+                ],
+                limit_reached: false,
+            },
+            UsageLimit {
+                name: "codex".into(),
+                windows: vec![
+                    window_len("1d", 77.5, DAY as f64),
+                    window_len("4h", 3.0, 4.0 * HOUR as f64),
+                ],
+                limit_reached: false,
+            },
+        ];
+        let ordered: Vec<String> = windows_by_length(&limits)
+            .iter()
+            .map(|w| w.label.clone())
+            .collect();
+        assert_eq!(ordered, ["4h", "5h", "1d", "week"], "shortest first");
+        // Windows without a length (NaN's billing-period allowance) go last,
+        // in the payload's order.
+        let with_unknown = vec![UsageLimit {
+            name: "glm".into(),
+            windows: vec![
+                window_len("4h", 3.0, 4.0 * HOUR as f64),
+                window("", 25.0),
+                window_len("1d", 77.5, DAY as f64),
+            ],
+            limit_reached: false,
+        }];
+        let ordered: Vec<String> = windows_by_length(&with_unknown)
+            .iter()
+            .map(|w| w.label.clone())
+            .collect();
+        assert_eq!(ordered, ["4h", "1d", ""], "unknown lengths last");
+        assert!(windows_by_length(&[]).is_empty());
+    }
+
+    #[test]
+    fn window_labels_speak_like_the_plan_card() {
+        // The two windows Claude reports read like the plan, everything else
+        // keeps the payload's label ("period" for NaN's billing-period
+        // allowance, whose `window_seconds` counts down instead).
+        assert_eq!(window_display_label(&window("5h", 0.0)), "5-hour limit");
+        assert_eq!(
+            window_display_label(&window("week", 0.0)),
+            "Weekly · all models"
+        );
+        assert_eq!(
+            window_display_label(&window("7d", 0.0)),
+            "Weekly · all models"
+        );
+        assert_eq!(window_display_label(&window("1d", 0.0)), "1d");
+        assert_eq!(window_display_label(&window("4h", 0.0)), "4h");
+        assert_eq!(window_display_label(&window("", 0.0)), "period");
+        // NaN's billing-period allowance keeps "period" even when its
+        // remaining time coincides with a window length: only a payload that
+        // names the window gets the friendly name.
+        let five_hours_left = UsageWindow {
+            window_seconds: 5.0 * HOUR as f64,
+            ..window("", 0.0)
+        };
+        assert_eq!(window_display_label(&five_hours_left), "period");
+    }
 
     #[test]
     fn codex_usage_parses_main_and_additional_limits() {

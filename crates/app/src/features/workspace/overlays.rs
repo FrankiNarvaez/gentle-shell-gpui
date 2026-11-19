@@ -34,6 +34,7 @@ impl Workspace {
             workspaces,
             root: self.space().root.clone(),
             category,
+            tab_layout: self.tab_layout,
         };
         let view = cx.new(|cx| PaletteView::new(input, window, cx));
         let subscription = cx.subscribe_in(
@@ -103,6 +104,7 @@ impl Workspace {
             PaletteAction::ClosePane => self.on_close_pane(&ClosePane, window, cx),
             PaletteAction::ReopenClosed => self.reopen_closed(window, cx),
             PaletteAction::ToggleSidebar => self.toggle_sidebar(cx),
+            PaletteAction::SetTabLayout(layout) => self.set_tab_layout(layout, cx),
             PaletteAction::Agents => {
                 if let Some(tab) = tab {
                     tab.update(cx, |s, cx| s.open_agents_panel(AgentsTab::Agents, cx));
@@ -342,12 +344,14 @@ impl Workspace {
         self.start_active_session(window, cx);
         let cwd = self.active_cwd(cx);
         let session = self.active_session();
-        let view = cx.new(|cx| SettingsView::new(cwd, session, window, cx));
+        let tab_layout = self.tab_layout;
+        let view = cx.new(|cx| SettingsView::new(cwd, tab_layout, session, window, cx));
         let subscription = cx.subscribe_in(
             &view,
             window,
             |this, view, event: &SettingsEvent, window, cx| match event {
                 SettingsEvent::Close => this.close_overlay(window, cx),
+                SettingsEvent::TabLayoutChanged(layout) => this.set_tab_layout(*layout, cx),
                 SettingsEvent::OpenProfiles => this.open_profiles(window, cx),
                 SettingsEvent::Changed => {
                     for tab in this.sessions() {

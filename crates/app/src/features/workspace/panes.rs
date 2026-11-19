@@ -70,6 +70,7 @@ impl Workspace {
             id,
             tree: PaneTree::Leaf(pane),
             focused: pane,
+            pinned: false,
         });
         let index = space.tabs.len() - 1;
         self.activate(index, window, cx);
@@ -79,12 +80,19 @@ impl Workspace {
     pub(super) fn pane_sizes(&self, window: &Window) -> Vec<(PaneId, f32, f32)> {
         let viewport = window.viewport_size();
         let rem = |n: f32| f32::from(rems(n / 16.).to_pixels(window.rem_size()));
-        let sidebar = if self.sidebar.is_some() && self.sidebar_visible {
+        // Vertical tabs and Files are separate columns. Keep pane hit-testing
+        // and split-size calculations aligned with the actual rendered width.
+        let left = if self.tab_layout == TabLayout::Vertical {
             rem(SIDEBAR_WIDTH) + 6.
         } else {
             0.
         };
-        let w = f32::from(viewport.width) - 12. - sidebar;
+        let right = if self.sidebar_visible && self.sidebar.is_some() {
+            rem(SIDEBAR_WIDTH) + 6.
+        } else {
+            0.
+        };
+        let w = (f32::from(viewport.width) - 12. - left - right).max(0.);
         let h = f32::from(viewport.height) - rem(super::render::TITLE_BAR_HEIGHT) - 6.;
         let mut out = Vec::new();
         if let Some(tab) = self.tab() {
@@ -290,6 +298,25 @@ impl Workspace {
             ),
             _ => (target, None),
         };
+        // A terminal whose shell exits (`exit`, Ctrl-D) closes its pane.
+        let subscriptions = item
+            .view
+            .clone()
+            .downcast::<crate::features::terminal::TerminalView>()
+            .ok()
+            .map(|terminal| {
+                cx.subscribe_in(
+                    &terminal,
+                    window,
+                    move |this, _, event: &crate::features::terminal::TerminalEvent, window, cx| {
+                        if *event == crate::features::terminal::TerminalEvent::Exited {
+                            this.close_pane_now(id, window, cx);
+                        }
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
         let mut pane = Pane {
             item,
             session: None,
@@ -299,7 +326,7 @@ impl Workspace {
             title: SharedString::default(),
             running: false,
             needs_you: false,
-            _subscriptions: Vec::new(),
+            _subscriptions: subscriptions,
         };
         pane.sync_chrome(cx);
         if kind == PaneKind::Canvas
