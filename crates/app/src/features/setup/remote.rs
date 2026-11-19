@@ -8,8 +8,44 @@ use serde_json::Value;
 
 use super::gentle::{self, BRIDGE, Marker};
 use super::probe::{parse_version, show_version};
-use super::{Check, CheckId, Fix, MIN_NODE, Status, extras, meta};
+use super::{Check, CheckId, Fix, Log, MIN_NODE, Status, extras, fetch, meta};
 use crate::features::backend;
+
+/// The backend agents run in, when they don't run on this computer.
+pub(super) fn backend() -> Option<Backend> {
+    Some(backend::saved()).filter(|choice| *choice != Backend::Local)
+}
+
+/// What `engram version` prints in `choice`.
+pub(super) fn engram_version_text(choice: &Backend) -> Option<String> {
+    run(choice, "engram", &["version"])
+}
+
+/// Where Engram goes in a backend: over the one there when it can be
+/// written, else a folder of the user's own on the PATH, else
+/// `/usr/local/bin` when it can be written (root in a container), else
+/// `~/.local/bin` (which Ubuntu's login profile adds once it exists).
+const ENGRAM_TARGET: &str = r#"e="$(command -v engram 2>/dev/null)"; if [ -n "$e" ] && [ -w "$e" ]; then echo "$e"; exit 0; fi; for d in "$HOME/.local/bin" "$HOME/bin" "$HOME/go/bin"; do case ":$PATH:" in *":$d:"*) echo "$d/engram"; exit 0;; esac; done; if [ -w /usr/local/bin ]; then echo /usr/local/bin/engram; exit 0; fi; echo "$HOME/.local/bin/engram""#;
+
+/// The latest Engram release for `choice`'s machine, downloaded and
+/// verified here and copied there. The version it runs afterwards.
+pub(super) fn install_engram(choice: &Backend, log: &Log) -> Result<String, String> {
+    let label = choice.label();
+    let arch = backend::arch(choice).ok_or_else(|| format!("Couldn't tell {label}'s machine."))?;
+    let (_staging, found, version) = fetch::download_engram("linux", arch, log)?;
+    let there = run(choice, "sh", &["-c", ENGRAM_TARGET])
+        .map(|out| out.trim().to_string())
+        .filter(|path| path.starts_with('/'))
+        .ok_or_else(|| format!("Couldn't find a folder for Engram in {label}."))?;
+    log(format!("Copying Engram {version} to {there} in {label}…"));
+    backend::put_file(choice, &found, &there, true)?;
+    backend::forget_paths();
+    let text = engram_version_text(choice).ok_or_else(|| {
+        format!("Engram is in {there}, but it doesn't run there: is that folder on the PATH?")
+    })?;
+    extras::engram_version_of(&text)
+        .ok_or_else(|| format!("Engram is in {there}, but `engram version` says: {text}"))
+}
 
 /// Node.js 22 through nvm, which needs only curl and no admin rights.
 const INSTALL_NODE: &str = r#"curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash && . "$HOME/.nvm/nvm.sh" && nvm install 22"#;
@@ -128,15 +164,11 @@ pub(super) fn run_checks(choice: &Backend) -> Vec<Check> {
                         terminal(INSTALL_CLAUDE),
                     ),
                 },
-                CheckId::Engram => match run(choice, "engram", &["version"]) {
-                    // Engram installs itself on this computer only.
-                    Some(text) => match extras::engram_status(&text) {
-                        (status, Fix::Auto) => (status, Fix::None),
-                        found => found,
-                    },
+                CheckId::Engram => match engram_version_text(choice) {
+                    Some(text) => extras::engram_status(&text),
                     None => (
                         Status::Missing(format!("Not installed in {label}")),
-                        Fix::None,
+                        Fix::Auto,
                     ),
                 },
                 // Go builds Gentle AI on Windows itself; a backend's setup brings its own.

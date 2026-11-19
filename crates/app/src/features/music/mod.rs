@@ -341,13 +341,20 @@ impl Music {
 
     /// Recompose to `mood` (starting the player when nothing plays).
     pub fn set_mood(&mut self, mood: String, cx: &mut Context<Self>) {
-        let Ok(spec) = pi_rpc::resolve_backend(&std::env::temp_dir()) else {
-            self.note = Some((
-                "Install Gentle Shell first: it reads the mood.".into(),
-                false,
-            ));
-            cx.notify();
-            return;
+        // In a backend the player runs there, with its login PATH: its
+        // `gentle-shell` reads the mood.
+        let shell = if crate::features::backend::saved() != gentle_core::backend::Backend::Local {
+            PathBuf::from("gentle-shell")
+        } else {
+            let Ok(spec) = pi_rpc::resolve_backend(&std::env::temp_dir()) else {
+                self.note = Some((
+                    "Install Gentle Shell first: it reads the mood.".into(),
+                    false,
+                ));
+                cx.notify();
+                return;
+            };
+            spec.launcher
         };
         let mut requests = Vec::new();
         // A mood applied to nothing starts the player first: `ctl mood` only
@@ -359,7 +366,7 @@ impl Music {
         requests.push(Request {
             action: "mood",
             value: Some(mood.clone()),
-            shell: Some(spec.launcher),
+            shell: Some(shell),
             timeout: SLOW_TIMEOUT,
         });
         self.run_job(Job::Composing(mood), requests, true, cx);

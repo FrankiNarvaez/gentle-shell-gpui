@@ -102,7 +102,7 @@ impl SettingsView {
                  ♪ button in the title bar. It installs into this app's own folder.",
             ),
         );
-        if !music::SUPPORTED {
+        if !music::supported() {
             return section.child(
                 div()
                     .text_xs()

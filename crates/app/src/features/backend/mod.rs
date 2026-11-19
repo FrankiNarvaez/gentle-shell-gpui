@@ -123,30 +123,126 @@ fn stage(choice: &Backend, file: &Path) -> Option<String> {
     if STAGED.lock().ok()?.contains(&key) {
         return Some(there);
     }
-    let mut argv = choice.launch("/")?;
-    // Written beside and moved in, so a tab starting meanwhile never reads half.
-    argv.extend(
-        [
-            "sh",
-            "-c",
-            r#"mkdir -p "${1%/*}" && cat > "$1.$$" && mv -f "$1.$$" "$1""#,
-            "sh",
-            &there,
-        ]
-        .map(str::to_string),
-    );
-    let (program, args) = argv.split_first()?;
-    let mut command = pi_rpc::command(program);
-    command
-        .args(args)
-        .stdin(std::fs::File::open(file).ok()?)
-        .stderr(std::process::Stdio::null());
-    let (ok, _) = pi_rpc::output_within(&mut command, PROBE_TIMEOUT)?;
-    if !ok {
-        return None;
-    }
+    put_file(choice, file, &there, false).ok()?;
     STAGED.lock().ok()?.insert(key);
     Some(there)
+}
+
+/// Copy `file` from this computer to `there` (absolute) in `choice`,
+/// executable when `executable`. Written beside and moved in, so whatever
+/// reads it meanwhile never sees half. Blocking.
+pub fn put_file(
+    choice: &Backend,
+    file: &Path,
+    there: &str,
+    executable: bool,
+) -> Result<(), String> {
+    let mode = if executable { "chmod 755" } else { "true" };
+    let script =
+        format!(r#"mkdir -p "${{1%/*}}" && cat > "$1.$$" && {mode} "$1.$$" && mv -f "$1.$$" "$1""#);
+    let mut command = in_root(choice, &["sh", "-c", &script, "sh", there])
+        .ok_or("Agents run on this computer.")?;
+    command
+        .stdin(std::fs::File::open(file).map_err(|e| format!("{}: {e}", file.display()))?)
+        .stderr(std::process::Stdio::piped());
+    let out = command
+        .output()
+        .map_err(|e| format!("Couldn't reach {}: {e}", choice.label()))?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Couldn't write {there} on {}: {}",
+            choice.label(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
+/// Copy the folder `dir` from this computer to `there` (absolute) in
+/// `choice`, replacing what was there in one step, as a tar stream: only
+/// `tar` is needed there. Unix file modes travel; Windows has none, so the
+/// caller marks what must run. Blocking.
+pub fn put_dir(choice: &Backend, dir: &Path, there: &str) -> Result<(), String> {
+    let script = r#"rm -rf "$1.part" && mkdir -p "$1.part" && tar -xf - --no-same-owner -C "$1.part" && rm -rf "$1" && mv "$1.part" "$1""#;
+    let mut command = in_root(choice, &["sh", "-c", script, "sh", there])
+        .ok_or("Agents run on this computer.")?;
+    let mut child = command
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Couldn't reach {}: {e}", choice.label()))?;
+    let stdin = child.stdin.take().ok_or("no input")?;
+    let dir = dir.to_path_buf();
+    let writer = std::thread::spawn(move || -> std::io::Result<()> {
+        let mut tar = tar::Builder::new(stdin);
+        tar.follow_symlinks(false);
+        tar.append_dir_all(".", &dir)?;
+        tar.into_inner().map(drop)
+    });
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("Couldn't reach {}: {e}", choice.label()))?;
+    let written = writer.join().map_err(|_| "The copy stopped.".to_string())?;
+    match (out.status.success(), written) {
+        (true, Ok(())) => Ok(()),
+        (_, Err(e)) => Err(format!("Couldn't copy into {}: {e}", choice.label())),
+        (false, _) => Err(format!(
+            "Couldn't unpack into {there} on {}: {}",
+            choice.label(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+    }
+}
+
+/// `argv` in `choice` from its root folder with its login PATH, for the
+/// caller to run (and log); `None` on this computer.
+pub fn in_root(choice: &Backend, argv: &[&str]) -> Option<Command> {
+    let mut launch = choice.launch("/")?;
+    launch.push("env".to_string());
+    launch.extend(login_path(choice).map(|path| format!("PATH={path}")));
+    launch.extend(argv.iter().map(|arg| arg.to_string()));
+    let (program, args) = launch.split_first()?;
+    let mut command = pi_rpc::command(program);
+    // This computer's PATH finds the launcher (wsl.exe, orb, docker); the
+    // backend's travels as an argument.
+    command.args(args).env("PATH", pi_rpc::child_path());
+    Some(command)
+}
+
+/// `argv` in the folder `cwd` where its agents run, with that backend's
+/// login PATH; `None` when they run on this computer.
+pub fn in_folder(cwd: &Path, argv: &[&str]) -> Option<Command> {
+    let choice = for_tab(cwd);
+    let mut launch = choice.launch(&reach(&choice, cwd).ok()?)?;
+    launch.push("env".to_string());
+    launch.extend(login_path(&choice).map(|path| format!("PATH={path}")));
+    launch.extend(argv.iter().map(|arg| arg.to_string()));
+    let (program, args) = launch.split_first()?;
+    let mut command = pi_rpc::command(program);
+    command.args(args);
+    Some(command)
+}
+
+/// Where the app keeps what it installs in `choice` (Java, Maestro):
+/// `~/.local/share/gentle-shell-gpui` there.
+pub fn toolchain(choice: &Backend) -> Option<String> {
+    Some(format!(
+        "{}/.local/share/gentle-shell-gpui",
+        remote_home(choice)?
+    ))
+}
+
+/// `choice`'s machine as `std::env::consts::ARCH` names it (`x86_64`,
+/// `aarch64`), for downloads built for it.
+pub fn arch(choice: &Backend) -> Option<&'static str> {
+    let (_, out) = run_in(choice, &["uname".to_string(), "-m".to_string()])?;
+    match out.trim() {
+        "x86_64" | "amd64" => Some("x86_64"),
+        "aarch64" | "arm64" => Some("aarch64"),
+        _ => None,
+    }
 }
 
 /// The backend user's home folder, asked once per backend.

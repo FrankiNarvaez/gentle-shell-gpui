@@ -10,8 +10,11 @@ use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
+use gentle_core::backend::Backend;
+
 use super::probe::{output_of, parse_version, run_logged};
 use super::{Log, fetch, refresh_paths, toolchain_dir, user_home};
+use crate::features::backend;
 
 /// Maestro runs on Java 17 or newer.
 const MIN_JAVA: u64 = 17;
@@ -134,8 +137,16 @@ pub struct MaestroStatus {
     pub connected: bool,
 }
 
-/// Blocking: looks for the CLI, Java and the registration.
+/// Blocking: looks for the CLI, Java and the registration, where agents run.
 pub fn status() -> MaestroStatus {
+    if let Some(choice) = super::remote::backend() {
+        return remote_status(&choice).unwrap_or(MaestroStatus {
+            cli: None,
+            app_owned: false,
+            java: None,
+            connected: false,
+        });
+    }
     let cli = maestro();
     MaestroStatus {
         app_owned: cli.is_some() && cli == app_cli(),
@@ -153,8 +164,9 @@ pub fn server_line(list: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// `gentle-shell` where agents run.
 fn launcher() -> Result<pi_rpc::LaunchSpec, String> {
-    pi_rpc::resolve_backend(&user_home()).map_err(|_| "Install Gentle Shell first.".to_string())
+    backend::home_shell_spec().map_err(|_| "Install Gentle Shell first.".to_string())
 }
 
 /// Blocking: starts the server the way the agent would and reports what Pi
@@ -187,6 +199,9 @@ pub fn disconnect(log: &Log) -> Result<(), String> {
 /// Disconnect, then delete the CLI and the Java runtime the app installed.
 /// A Maestro or Java you installed yourself is left alone.
 pub fn remove(log: &Log) -> Result<(), String> {
+    if let Some(choice) = super::remote::backend() {
+        return remote_remove(&choice, log);
+    }
     if is_registered(&pi_rpc::resolve_homes().agent) {
         disconnect(log)?;
     }
@@ -207,6 +222,9 @@ pub fn remove(log: &Log) -> Result<(), String> {
 
 /// Java (when missing), the CLI (when missing), then the MCP server.
 pub fn install(log: &Log) -> Result<(), String> {
+    if let Some(choice) = super::remote::backend() {
+        return remote_install(&choice, log);
+    }
     let spec = launcher()?;
     let java = match java_home() {
         Some(home) => {
@@ -252,6 +270,162 @@ pub fn install(log: &Log) -> Result<(), String> {
         Ok(())
     } else {
         Err("gentle-shell added Maestro, but it isn't in this home's mcp.json.".into())
+    }
+}
+
+// ── In a backend ───────────────────────────────────────────────────────────
+//
+// Where agents run in a WSL distro, a VM or a container, Maestro runs there
+// too: the app downloads and verifies the Linux Java runtime and CLI here,
+// copies them to `~/.local/share/gentle-shell-gpui` there, and registers the
+// server with that backend's Gentle Shell. It reaches the devices that
+// environment sees (Chromium pages; an emulator its `adb` reaches).
+
+/// Finds the CLI (the app's, the PATH's, `~/.maestro`) and a Java 17+ home
+/// (the app's, `JAVA_HOME`, the PATH's) in the backend.
+const REMOTE_LOOK: &str = r#"t="$1"; for c in "$t/maestro/bin/maestro" "$(command -v maestro 2>/dev/null)" "$HOME/.maestro/bin/maestro"; do if [ -n "$c" ] && [ -x "$c" ]; then echo "cli=$c"; break; fi; done; j="$(command -v java 2>/dev/null)"; [ -n "$j" ] && j="$(dirname "$(dirname "$(readlink -f "$j")")")"; for h in "$t/java" "$JAVA_HOME" "$j"; do if [ -n "$h" ] && [ -f "$h/release" ]; then echo "java=$h"; grep '^JAVA_VERSION=' "$h/release"; break; fi; done"#;
+
+fn remote_status(choice: &Backend) -> Option<MaestroStatus> {
+    let toolchain = backend::toolchain(choice)?;
+    let (_, out) = backend::run(choice, "sh", &["-c", REMOTE_LOOK, "sh", &toolchain])?;
+    let field = |key: &str| {
+        out.lines()
+            .find_map(|line| line.strip_prefix(key))
+            .map(str::to_string)
+    };
+    let cli = field("cli=").map(PathBuf::from);
+    let java = field("java=")
+        .zip(java_release_major(&out))
+        .map(|(home, major)| (PathBuf::from(home), major));
+    let connected = super::launcher_home()
+        .and_then(|home| backend::read(choice, &format!("{home}/mcp.json")))
+        .is_some_and(|text| registered(&text));
+    Some(MaestroStatus {
+        app_owned: cli.as_deref() == Some(Path::new(&format!("{toolchain}/maestro/bin/maestro"))),
+        cli,
+        java: java.filter(|(_, major)| *major >= MIN_JAVA),
+        connected,
+    })
+}
+
+/// Download `what` for the backend into a folder here with `fill`, copy it
+/// to `there`, and mark `executables` (globs) runnable: Windows keeps no
+/// Unix modes.
+fn copy_in(
+    choice: &Backend,
+    what: &str,
+    there: &str,
+    executables: &str,
+    fill: impl FnOnce(&Path) -> Result<(), String>,
+    log: &Log,
+) -> Result<(), String> {
+    let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
+    let here = toolchain.join(format!(".backend-{what}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&here);
+    let done = fill(&here).and_then(|()| {
+        log(format!(
+            "Copying the {what} to {there} in {}…",
+            choice.label()
+        ));
+        backend::put_dir(choice, &here, there)
+    });
+    let _ = std::fs::remove_dir_all(&here);
+    done?;
+    let script = format!(r#"cd "$1" && chmod +x {executables} 2>/dev/null; true"#);
+    backend::run(choice, "sh", &["-c", &script, "sh", there]);
+    Ok(())
+}
+
+fn remote_install(choice: &Backend, log: &Log) -> Result<(), String> {
+    let label = choice.label();
+    let spec = launcher()?;
+    let toolchain = backend::toolchain(choice).ok_or_else(|| format!("Couldn't reach {label}."))?;
+    let found = remote_status(choice).ok_or_else(|| format!("Couldn't reach {label}."))?;
+    let java = match found.java {
+        Some((home, _)) => {
+            log(format!("Using the Java in {} in {label}.", home.display()));
+            home.to_string_lossy().into_owned()
+        }
+        None => {
+            let arch =
+                backend::arch(choice).ok_or_else(|| format!("Couldn't tell {label}'s machine."))?;
+            let there = format!("{toolchain}/java");
+            copy_in(
+                choice,
+                "java",
+                &there,
+                "bin/* lib/jspawnhelper",
+                |here| fetch::install_java_runtime_into(here, "linux", arch, log),
+                log,
+            )?;
+            there
+        }
+    };
+    let maestro = match found.cli {
+        Some(cli) => {
+            log(format!(
+                "Using the Maestro CLI in {} in {label}.",
+                cli.display()
+            ));
+            cli.to_string_lossy().into_owned()
+        }
+        None => {
+            let there = format!("{toolchain}/maestro");
+            copy_in(
+                choice,
+                "maestro",
+                &there,
+                "bin/*",
+                |here| fetch::install_maestro_into(here, log),
+                log,
+            )?;
+            format!("{there}/bin/maestro")
+        }
+    };
+    let java_env = format!("JAVA_HOME={java}");
+    let args = [
+        "mcp",
+        "add",
+        SERVER,
+        "--env",
+        &java_env,
+        "--description",
+        DESCRIPTION,
+        "--",
+        &maestro,
+        "mcp",
+    ];
+    log(format!(
+        "Connecting Maestro to the agent in {label} (gentle-shell mcp add maestro)…"
+    ));
+    run_logged(spec.launcher_command(args), "gentle-shell mcp add", log)?;
+    if remote_status(choice).is_some_and(|status| status.connected) {
+        log("Done. New sessions (or /reload in an open one) have the maestro tools.".into());
+        Ok(())
+    } else {
+        Err(format!(
+            "gentle-shell added Maestro, but it isn't in {label}'s mcp.json."
+        ))
+    }
+}
+
+fn remote_remove(choice: &Backend, log: &Log) -> Result<(), String> {
+    if remote_status(choice).is_some_and(|status| status.connected) {
+        disconnect(log)?;
+    }
+    let toolchain =
+        backend::toolchain(choice).ok_or_else(|| format!("Couldn't reach {}.", choice.label()))?;
+    log(format!(
+        "Deleting the Maestro and Java runtime the app installed in {}…",
+        choice.label()
+    ));
+    match backend::run(
+        choice,
+        "sh",
+        &["-c", r#"rm -rf "$1/maestro" "$1/java""#, "sh", &toolchain],
+    ) {
+        Some((true, _)) => Ok(()),
+        _ => Err(format!("Couldn't delete them in {}.", choice.label())),
     }
 }
 
