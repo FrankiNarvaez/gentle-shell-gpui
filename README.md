@@ -208,7 +208,7 @@ Streaming Markdown, collapsible thinking, and tool cards (`Edit path +12 −3`, 
 
 <br>
 
-A slash command's text output appears as one result card. Hover an answer, or a message you sent, for Copy. When the conversation is longer than the pane, a rail on the right edge marks every message you sent, placed by the heights it has seen (rows not shown yet count as the average), and shows a scroll thumb while you scroll or point at it (the one you are reading highlighted, its first line on hover); click a mark to glide to it, and a ↓ button glides back to the latest output. Both hide when everything fits.
+A slash command's text output appears as one result card. Hover an answer, or a message you sent, for Copy; the text of both can also be selected with the mouse and copied with ⌘C (Ctrl+C elsewhere). When the conversation is longer than the pane, a rail on the right edge marks every message you sent, placed by the heights it has seen (rows not shown yet count as the average), and shows a scroll thumb while you scroll or point at it (the one you are reading highlighted, its first line on hover); click a mark to glide to it, and a ↓ button glides back to the latest output. Both hide when everything fits.
 
 </details>
 
@@ -217,6 +217,8 @@ A slash command's text output appears as one result card. Hover an answer, or a 
 ### Composer — Steer, stop and run commands
 
 Enter sends; while the agent runs, Enter steers it and Esc, ⌘. (Ctrl+. elsewhere) or the Stop button stops it, as in Gentle Shell's terminal ("stopping…" shows until the turn ends; the conversation and your draft stay). Esc closes what is open first (the `/` menu, the model picker, the Agents panel, a dialog, an expanded surface), and an Esc right after one that closed something doesn't stop. `!cmd` / `!!cmd` run shell commands; the Stop button, Esc and ⌘. stop a running one too (`abort_bash`). `/` lists commands (↑/↓ move through them, Tab or Enter fills one in, Esc closes the list), including Pi's built-ins: `/compact [what to keep]`, `/name <title>`, `/copy`, `/export [path]` (HTML) and `/reload` (restarts the backend and resumes the conversation).
+
+↑ on the composer's first line brings back the prompts you sent before, newest first, as in Gentle Shell's terminal (a resumed conversation's prompts included); ↓ on its last line walks back to the newest and then to what you were writing. A recalled prompt is only put in the composer, never sent. Inside a multi-line prompt the arrows move the cursor as usual, and while attachments or long pastes are in the composer they stay out of it.
 
 <details>
 <summary><kbd>More</kbd> <strong>Slash commands, context and effort</strong></summary>

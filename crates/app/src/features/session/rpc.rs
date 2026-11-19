@@ -774,6 +774,11 @@ impl SessionView {
                 let messages = data["messages"].as_array().cloned().unwrap_or_default();
                 if !messages.is_empty() {
                     this.transcript.load_messages(&messages);
+                    this.prompt_history
+                        .seed(this.transcript.items.iter().filter_map(|item| match item {
+                            gentle_core::transcript::Item::User { text, .. } => Some(text.as_str()),
+                            _ => None,
+                        }));
                     this.markdown.clear();
                     this.sync_todo_from_history();
                 }

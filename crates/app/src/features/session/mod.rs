@@ -154,6 +154,8 @@ pub struct SessionView {
     models: state::Models,
     usage: state::Usage,
     commands: Vec<(String, String)>,
+    /// The prompts sent from this tab, for ↑/↓ in the composer.
+    prompt_history: gentle_core::prompt_history::PromptHistory,
     /// Each skill's folder, by name (without `skill:`).
     skill_dirs: Vec<(String, PathBuf)>,
     session_name: Option<String>,
@@ -267,6 +269,7 @@ impl SessionView {
                 let consumed = weak
                     .update(cx, |this, cx| {
                         this.model_picker_key(&event.keystroke, window, cx)
+                            || this.history_key(&event.keystroke, window, cx)
                             || this.slash_menu_key(&event.keystroke, window, cx)
                     })
                     .unwrap_or(false);
@@ -313,6 +316,7 @@ impl SessionView {
             usage: state::Usage::default(),
             pane_width: std::rc::Rc::new(std::cell::Cell::new(10_000.)),
             commands: Vec::new(),
+            prompt_history: Default::default(),
             skill_dirs: Vec::new(),
             session_name: None,
             session_file: None,
