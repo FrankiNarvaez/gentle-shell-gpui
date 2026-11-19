@@ -298,6 +298,25 @@ impl Workspace {
             ),
             _ => (target, None),
         };
+        // A terminal whose shell exits (`exit`, Ctrl-D) closes its pane.
+        let subscriptions = item
+            .view
+            .clone()
+            .downcast::<crate::features::terminal::TerminalView>()
+            .ok()
+            .map(|terminal| {
+                cx.subscribe_in(
+                    &terminal,
+                    window,
+                    move |this, _, event: &crate::features::terminal::TerminalEvent, window, cx| {
+                        if *event == crate::features::terminal::TerminalEvent::Exited {
+                            this.close_pane_now(id, window, cx);
+                        }
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
         let mut pane = Pane {
             item,
             session: None,
@@ -307,7 +326,7 @@ impl Workspace {
             title: SharedString::default(),
             running: false,
             needs_you: false,
-            _subscriptions: Vec::new(),
+            _subscriptions: subscriptions,
         };
         pane.sync_chrome(cx);
         if kind == PaneKind::Canvas
