@@ -27,37 +27,12 @@ use crate::shared::ui;
 use gentle_core::transcript::format_tokens;
 
 impl SessionView {
-    /// `NN%` (a chip: compact now, auto-compaction) — thin pink bar — window size.
-    fn render_context_line(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let window_tokens = self
-            .models
-            .current
-            .as_ref()
-            .map(|m| m.context_window)
-            .unwrap_or(0);
+    /// The thin context gauge under the status row: only when the window is
+    /// more than 0% used, so at rest the row alone is the status line.
+    fn render_context_bar(&self) -> Option<Div> {
         let percent = self.usage.context_percent.unwrap_or(0.0).clamp(0.0, 100.0) as f32;
-        let high = self
-            .usage
-            .context_percent
-            .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
-        v_flex()
-            .w_full()
-            .px_3()
-            .gap(px(2.))
-            .child(
-                h_flex()
-                    .justify_between()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10. / 16.))
-                    .text_color(ui::faint())
-                    .child(self.render_context_chip(high, cx))
-                    .child(if window_tokens > 0 {
-                        format_tokens(window_tokens)
-                    } else {
-                        String::new()
-                    }),
-            )
-            .child(
+        (percent > 0.0).then(move || {
+            div().w_full().px_1().pt(px(2.)).child(
                 div()
                     .w_full()
                     .h(px(2.))
@@ -71,10 +46,15 @@ impl SessionView {
                             .bg(ui::petal()),
                     ),
             )
+        })
     }
 
     /// The context percentage as a chip: compact now, toggle auto-compaction.
-    fn render_context_chip(&self, high: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    pub(super) fn render_context_chip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let high = self
+            .usage
+            .context_percent
+            .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
         let compacting = self.usage.compacting;
         let auto = self.usage.auto_compaction;
         let ready = self.backend.is_ready();
@@ -361,7 +341,7 @@ impl SessionView {
             .border_color(if self.composer_focused {
                 ui::petal().opacity(0.45)
             } else {
-                ui::border_strong()
+                ui::border()
             })
             .bg(ui::surface())
             .shadow_lg()
@@ -401,10 +381,13 @@ impl SessionView {
         };
 
         let repository = self.git.repository.clone();
+        // In the row below the box the branch shrinks and truncates —
+        // only its leaf text gives way — before anything else there would.
         let git = self.git.snapshot.as_ref().map(|git| {
             h_flex()
                 .id("git-chip")
-                .flex_shrink_0()
+                .min_w_0()
+                .flex_shrink(1.)
                 .gap_1()
                 .text_size(rems(12. / 16.))
                 .child(
@@ -414,6 +397,10 @@ impl SessionView {
                 )
                 .child(
                     div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
                         .font_family(ui::MONO)
                         .text_color(ui::champagne())
                         .child(git.branch.clone().unwrap_or_else(|| "detached".into())),
@@ -421,6 +408,7 @@ impl SessionView {
                 .when(!git.files.is_empty(), |this| {
                     this.child(
                         div()
+                            .flex_shrink_0()
                             .font_family(ui::MONO)
                             .text_color(ui::muted())
                             .child(format!("±{}", git.files.len())),
@@ -460,55 +448,90 @@ impl SessionView {
                 self.models.current.as_ref().is_some_and(|m| m.reasoning),
                 |this| this.child(self.render_effort_picker(narrow, cx)),
             )
+            .child(div().flex_1().min_w_0())
+            .child(div().flex_shrink_0().child(action_button));
+
+        // Below the box: the folder, branch and cost in a quiet row of
+        // their own. The group shrinks and truncates before anything else;
+        // the folder's path truncates from the start (`text_ellipsis_start`)
+        // so the leaf name stays readable, and the branch keeps its
+        // ellipsis.
+        let below = h_flex()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .items_center()
             .when(!narrow, |this| {
+                // The group gives way and truncates (its texts with it)
+                // before anything else in the row would.
                 this.child(
                     h_flex()
-                        .id("cwd")
                         .min_w_0()
                         .flex_shrink(1.)
-                        .gap_1()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(ui::surface_hover()))
-                        .text_size(rems(12. / 16.))
                         .overflow_hidden()
-                        .whitespace_nowrap()
-                        .tooltip(|window, cx| Tooltip::new("Open another folder").build(window, cx))
-                        .on_click(cx.listener(|this, _, window, cx| this.choose_folder(window, cx)))
-                        .child(Icon::new(IconName::Folder).xsmall().text_color(ui::faint()))
+                        .gap_2()
+                        .items_center()
                         .child(
-                            div()
+                            h_flex()
+                                .id("cwd")
                                 .min_w_0()
+                                .flex_shrink(1.)
+                                .gap_1()
+                                .px_1p5()
+                                .py_0p5()
+                                .rounded_md()
+                                .cursor_pointer()
+                                .hover(|s| s.bg(ui::surface_hover()))
+                                .text_size(rems(12. / 16.))
                                 .overflow_hidden()
-                                .text_ellipsis_start()
-                                .font_family(ui::MONO)
-                                .text_color(ui::faint())
-                                .child(prefix),
+                                .whitespace_nowrap()
+                                .tooltip(|window, cx| {
+                                    Tooltip::new("Open another folder").build(window, cx)
+                                })
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.choose_folder(window, cx)
+                                    }),
+                                )
+                                .child(Icon::new(IconName::Folder).xsmall().text_color(ui::faint()))
+                                // The prefix gives way first; then the leaf
+                                // truncates from its start too, so its end (the
+                                // part that tells folders apart) stays readable.
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_shrink(100.)
+                                        .overflow_hidden()
+                                        .text_ellipsis_start()
+                                        .font_family(ui::MONO)
+                                        .text_color(ui::faint())
+                                        .child(prefix),
+                                )
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .text_ellipsis_start()
+                                        .font_family(ui::MONO)
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(ui::fg())
+                                        .child(leaf),
+                                ),
                         )
-                        .child(
-                            div()
-                                .flex_shrink_0()
-                                .font_family(ui::MONO)
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(ui::fg())
-                                .child(leaf),
-                        ),
+                        .children(git)
+                        .when(self.usage.cost > 0.0, |this| {
+                            this.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .font_family(ui::MONO)
+                                    .text_size(rems(11. / 16.))
+                                    .text_color(ui::faint())
+                                    .child(format!("${:.2}", self.usage.cost)),
+                            )
+                        }),
                 )
             })
-            .when(!narrow, |this| this.children(git))
-            .child(div().flex_1().min_w_0())
-            .when(self.usage.cost > 0.0 && !narrow, |this| {
-                this.child(
-                    div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(11. / 16.))
-                        .text_color(ui::faint())
-                        .child(format!("${:.2}", self.usage.cost)),
-                )
-            })
-            .child(div().flex_shrink_0().child(action_button));
+            .child(div().flex_1().min_w_0());
 
         let content = v_flex()
             .relative()
@@ -517,8 +540,8 @@ impl SessionView {
             .overflow_hidden()
             .gap_2()
             .map(|d| if narrow { d.px_3() } else { d.px_4() })
-            .pt_3()
-            .pb_2()
+            .pt_4()
+            .pb_2p5()
             .children(self.render_attachments(cx))
             .child(self.render_text_field(ready, cx))
             .child(bottom);
@@ -538,8 +561,9 @@ impl SessionView {
             .children(self.render_dialog(cx))
             .children(self.render_review_confirm(cx))
             .child(self.render_activity(rem_size, cx))
-            .child(self.render_context_line(cx))
+            .children(self.render_context_bar())
             .child(composer_box)
+            .child(below)
             .children(self.render_kisses())
             .when(width >= f32::from(rems(TINY / 16.).to_pixels(rem_size)), |this| {
                 this.child(
