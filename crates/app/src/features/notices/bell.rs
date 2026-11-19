@@ -26,6 +26,9 @@ pub fn bell(store: &Entity<Notices>, on_select: OnSelect, cx: &App) -> impl Into
         })
         .w(rems(380. / 16.))
         .p_0()
+        .on_open_change(|open, window, cx| {
+            crate::features::browser::popover_open("notices", *open, window, cx)
+        })
         .content(move |_, _, cx| {
             ui::popover_in(
                 ElementId::Name("notices-in".into()),

@@ -1,6 +1,7 @@
 //! Title bar chrome, tabs, pane tree and pane rendering.
 
 use super::*;
+use gpui_kit::component::Selectable as _;
 
 impl Workspace {
     // ── Rendering ───────────────────────────────────────────────────────────
@@ -150,6 +151,14 @@ impl Workspace {
                     .unwrap_or(PaneKind::Agent);
                 let count = tab.tree.len();
                 let icon_color = if active { ui::petal() } else { ui::faint() };
+                let drag = TabDrag {
+                    tab: tab.id,
+                    title: self
+                        .panes
+                        .get(&tab.focused)
+                        .map(|p| p.title.clone())
+                        .unwrap_or_default(),
+                };
                 let item = h_flex()
                     .min_w_0()
                     .overflow_hidden()
@@ -184,6 +193,14 @@ impl Workspace {
                         } else {
                             this.activate(i, window, cx);
                         }
+                    }))
+                    // Drag a tab onto another to put it there.
+                    .on_drag(drag, |drag, _, _, cx| {
+                        cx.new(|_| DragChip(drag.title.clone()))
+                    })
+                    .drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
+                    .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                        this.move_tab(drag.tab, i, cx)
                     }))
                     .child(
                         div()
@@ -292,54 +309,262 @@ impl Workspace {
                     .ml(px(2.))
                     .occlude()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(title_button("new-tab", IconName::Plus).dropdown_menu(
-                        move |menu, window, _| {
-                            let item = |icon: IconName,
-                                        label: &'static str,
-                                        detail: &'static str,
-                                        keys: &'static str| {
-                                PopupMenuItem::element(move |_, _| {
-                                    menu_row(icon, label, detail, keys)
+                    .child(
+                        title_button("new-tab", IconName::Plus)
+                            .dropdown_menu(move |menu, window, _| {
+                                let item =
+                                    |icon: IconName,
+                                     label: &'static str,
+                                     detail: &'static str,
+                                     keys: &'static str| {
+                                        PopupMenuItem::element(move |_, _| {
+                                            menu_row(icon, label, detail, keys)
+                                        })
+                                    };
+                                let (agent, terminal, canvas, tower) =
+                                    (weak.clone(), weak.clone(), weak.clone(), weak.clone());
+                                menu.min_w(rems(260. / 16.).to_pixels(window.rem_size()))
+                                    .item(
+                                        item(
+                                            IconName::Bot,
+                                            "Agent tab",
+                                            "Gentle Shell in this folder",
+                                            ui::platform_shortcut("⌘T", "Ctrl+T"),
+                                        )
+                                        .on_click(
+                                            move |_, window, cx| {
+                                                let _ = agent.update(cx, |this, cx| {
+                                                    this.on_new_tab(&NewTab, window, cx)
+                                                });
+                                            },
+                                        ),
+                                    )
+                                    .item(
+                                        item(
+                                            IconName::SquareTerminal,
+                                            "Terminal tab",
+                                            "A shell in this folder",
+                                            ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T"),
+                                        )
+                                        .on_click(
+                                            move |_, window, cx| {
+                                                let _ = terminal.update(cx, |this, cx| {
+                                                    this.on_new_terminal_tab(
+                                                        &NewTerminalTab,
+                                                        window,
+                                                        cx,
+                                                    )
+                                                });
+                                            },
+                                        ),
+                                    )
+                                    .item(
+                                        item(
+                                            IconName::PenTool,
+                                            "Canvas tab",
+                                            "A whiteboard: ink, shapes, notes",
+                                            ui::platform_shortcut("⌘⇧E", "Ctrl+Alt+Shift+E"),
+                                        )
+                                        .on_click(
+                                            move |_, window, cx| {
+                                                let _ = canvas.update(cx, |this, cx| {
+                                                    this.on_new_canvas_tab(
+                                                        &NewCanvasTab,
+                                                        window,
+                                                        cx,
+                                                    )
+                                                });
+                                            },
+                                        ),
+                                    )
+                                    .item(
+                                        item(
+                                            IconName::Building2,
+                                            "Tower tab",
+                                            "Gentle Tower: every session as a floor",
+                                            "",
+                                        )
+                                        .on_click(
+                                            move |_, window, cx| {
+                                                let _ = tower.update(cx, |this, cx| {
+                                                    this.open_tower(window, cx)
+                                                });
+                                            },
+                                        ),
+                                    )
+                            })
+                            .on_open_change(|open, window, cx| {
+                                crate::features::browser::popover_open("new-tab", *open, window, cx)
+                            }),
+                    ),
+            )
+    }
+
+    /// One title-bar button for the focused pane's layout: tile, split and
+    /// close, each named with its shortcut (the menu takes arrow keys too).
+    pub(super) fn render_layout_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = cx.entity().downgrade();
+        let target = self
+            .focused_pane()
+            .map(|id| self.pane_title(id))
+            .unwrap_or_default()
+            .trim_end_matches(" •")
+            .to_string();
+        div()
+            // Clicks here are not title-bar drags.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                title_button("title-layout", IconName::LayoutDashboard)
+                    .tooltip("Panes: tile, split or close the focused one")
+                    .dropdown_menu(move |menu, window, _| {
+                        type Act = fn(&mut Workspace, &mut Window, &mut Context<Workspace>);
+                        let entry = |icon: IconName,
+                                     label: &'static str,
+                                     detail: &'static str,
+                                     keys: &'static str,
+                                     act: Act| {
+                            let weak = weak.clone();
+                            PopupMenuItem::element(move |_, _| menu_row(icon, label, detail, keys))
+                                .on_click(move |_, window, cx| {
+                                    let _ = weak.update(cx, |this, cx| act(this, window, cx));
                                 })
-                            };
-                            let (agent, terminal) = (weak.clone(), weak.clone());
-                            menu.min_w(rems(260. / 16.).to_pixels(window.rem_size()))
-                                .item(
-                                    item(
-                                        IconName::Bot,
-                                        "Agent tab",
-                                        "Gentle Shell in this folder",
-                                        ui::platform_shortcut("⌘T", "Ctrl+T"),
+                        };
+                        let close = {
+                            let weak = weak.clone();
+                            let target = target.clone();
+                            PopupMenuItem::element(move |_, _| {
+                                h_flex()
+                                    .gap_2p5()
+                                    .py_0p5()
+                                    .w_full()
+                                    .child(Icon::new(IconName::X).small().text_color(ui::danger()))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_sm()
+                                            .child(format!("Close \u{201c}{target}\u{201d}")),
                                     )
-                                    .on_click(
-                                        move |_, window, cx| {
-                                            let _ = agent.update(cx, |this, cx| {
-                                                this.on_new_tab(&NewTab, window, cx)
-                                            });
-                                        },
-                                    ),
-                                )
-                                .item(
-                                    item(
-                                        IconName::SquareTerminal,
-                                        "Terminal tab",
-                                        "A shell in this folder",
-                                        ui::platform_shortcut("⌘⇧T", "Ctrl+Shift+T"),
-                                    )
-                                    .on_click(
-                                        move |_, window, cx| {
-                                            let _ = terminal.update(cx, |this, cx| {
-                                                this.on_new_terminal_tab(
-                                                    &NewTerminalTab,
-                                                    window,
-                                                    cx,
-                                                )
-                                            });
-                                        },
-                                    ),
-                                )
-                        },
-                    )),
+                                    .child(ui::kbd(ui::platform_shortcut("⌘W", "Ctrl+W")))
+                            })
+                            .on_click(move |_, window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.on_close_pane(&ClosePane, window, cx)
+                                });
+                            })
+                        };
+                        menu.min_w(rems(280. / 16.).to_pixels(window.rem_size()))
+                            .item(entry(
+                                IconName::LayoutDashboard,
+                                "New pane, tiled",
+                                "Same kind, beside the focused one",
+                                ui::platform_shortcut("⌘D", "Ctrl+Shift+D"),
+                                |this, window, cx| this.on_tile_pane(&TilePane, window, cx),
+                            ))
+                            .item(entry(
+                                IconName::Columns2,
+                                "Split right",
+                                "Same kind, to the right",
+                                "",
+                                |this, window, cx| {
+                                    this.split(SplitAxis::Horizontal, None, window, cx)
+                                },
+                            ))
+                            .item(entry(
+                                IconName::Rows2,
+                                "Split down",
+                                "Same kind, below",
+                                ui::platform_shortcut("⌘⇧D", "Ctrl+Shift+E"),
+                                |this, window, cx| this.on_split_down(&SplitDown, window, cx),
+                            ))
+                            .separator()
+                            .item(close)
+                    })
+                    .on_open_change(|open, window, cx| {
+                        crate::features::browser::popover_open("title-layout", *open, window, cx)
+                    }),
+            )
+    }
+
+    /// One title-bar button for the screens (Configuration, Profiles, Memory,
+    /// Sessions, Providers): lit while one is open, each entry with what it
+    /// is and its shortcut when it has one.
+    pub(super) fn render_screens_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let weak = cx.entity().downgrade();
+        let open_screen = matches!(
+            self.overlay,
+            Some((
+                Overlay::Settings(_)
+                    | Overlay::Profiles(_)
+                    | Overlay::Memory(_)
+                    | Overlay::Sessions(_)
+                    | Overlay::Providers(_),
+                _
+            ))
+        );
+        div()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                title_button("title-screens", IconName::Settings)
+                    .selected(open_screen)
+                    .tooltip(format!(
+                        "Configuration, profiles, memory, sessions, providers ({})",
+                        ui::platform_shortcut("⌘,", "Ctrl+,")
+                    ))
+                    .dropdown_menu(move |menu, window, _| {
+                        type Open = fn(&mut Workspace, &mut Window, &mut Context<Workspace>);
+                        let entry = |icon: IconName,
+                                     label: &'static str,
+                                     detail: &'static str,
+                                     keys: &'static str,
+                                     open: Open| {
+                            let weak = weak.clone();
+                            PopupMenuItem::element(move |_, _| menu_row(icon, label, detail, keys))
+                                .on_click(move |_, window, cx| {
+                                    let _ = weak.update(cx, |this, cx| open(this, window, cx));
+                                })
+                        };
+                        menu.min_w(rems(280. / 16.).to_pixels(window.rem_size()))
+                            .item(entry(
+                                IconName::Settings,
+                                "Configuration",
+                                "Theme, models, integrations, updates",
+                                ui::platform_shortcut("⌘,", "Ctrl+,"),
+                                |this, window, cx| this.open_settings(window, cx),
+                            ))
+                            .item(entry(
+                                IconName::Route,
+                                "Profiles",
+                                "Model and effort per agent",
+                                "",
+                                |this, window, cx| this.open_profiles(window, cx),
+                            ))
+                            .item(entry(
+                                IconName::Brain,
+                                "Memory",
+                                "Engram observations",
+                                "",
+                                |this, window, cx| this.open_memory(window, cx),
+                            ))
+                            .item(entry(
+                                IconName::RotateCcwClock,
+                                "Sessions",
+                                "Resume a past session",
+                                ui::platform_shortcut("⌘⇧O", "Ctrl+Shift+O"),
+                                |this, window, cx| this.open_sessions(window, cx),
+                            ))
+                            .item(entry(
+                                IconName::KeyRound,
+                                "Providers",
+                                "Sign-in and API keys",
+                                "",
+                                |this, window, cx| this.open_providers(window, cx),
+                            ))
+                    })
+                    .on_open_change(|open, window, cx| {
+                        crate::features::browser::popover_open("title-screens", *open, window, cx)
+                    }),
             )
     }
 
@@ -473,9 +698,6 @@ impl Workspace {
         };
         let tiled = tab.tree.len() > 1;
         let focused = tiled && tab.focused == id;
-        // The title bar's close button is hovered and this pane is what it
-        // closes.
-        let closing = self.close_hover && tab.focused == id;
         let title = pane.title.clone();
         let body = div()
             .id(("pane", id))
@@ -490,9 +712,7 @@ impl Workspace {
             // Panes read as glass on their own; only a split's focused pane gets
             // an edge. The width stays so focus changes don't shift content.
             .border_1()
-            .border_color(if closing {
-                ui::danger()
-            } else if focused {
+            .border_color(if focused {
                 ui::petal().opacity(0.45)
             } else {
                 gpui_kit::transparent_black()
@@ -557,10 +777,7 @@ impl Workspace {
                 self.drop_hint
                     .filter(|(pane, _)| *pane == id && cx.has_active_drag())
                     .map(|(_, zone)| drop_overlay(zone)),
-            )
-            .when(closing, |d| {
-                d.child(div().absolute().inset_0().bg(ui::danger().opacity(0.08)))
-            });
+            );
         // The grip: a pill straddling the pane's top edge (outside the
         // clipped body); drag it onto another pane's edge to move the pane
         // there, or onto its middle to swap the two.

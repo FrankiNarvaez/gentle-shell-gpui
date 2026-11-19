@@ -19,7 +19,7 @@ pub fn install() -> Option<PathBuf> {
 
 /// Write `text` to `path` unless it already holds it, so an unchanged file
 /// isn't rewritten on every start.
-fn write_if_changed(path: &Path, text: &str) -> Option<()> {
+pub(crate) fn write_if_changed(path: &Path, text: &str) -> Option<()> {
     if std::fs::read_to_string(path).ok().as_deref() != Some(text) {
         std::fs::create_dir_all(path.parent()?).ok()?;
         std::fs::write(path, text).ok()?;

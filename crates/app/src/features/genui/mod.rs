@@ -54,6 +54,7 @@ mod view;
 
 pub use diagram::{DiagramEvent, DiagramView};
 pub use extension::install;
+pub(crate) use extension::write_if_changed;
 pub use html::HtmlView;
 use live::SharedEnv;
 pub use live::todo_records;

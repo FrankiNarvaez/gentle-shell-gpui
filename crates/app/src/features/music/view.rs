@@ -311,8 +311,9 @@ pub fn title_button(music: &Entity<Music>, cx: &App) -> Option<AnyElement> {
                 Popover::new("music")
                     .anchor(Anchor::TopRight)
                     .trigger(trigger)
-                    .on_open_change(move |open, _, cx| {
+                    .on_open_change(move |open, window, cx| {
                         let open = *open;
+                        crate::features::browser::popover_open("music", open, window, cx);
                         watch.update(cx, |music, cx| music.set_watching(open, cx));
                     })
                     .w(rems(340. / 16.))

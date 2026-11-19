@@ -61,8 +61,14 @@ fn main() {
     pi_rpc::set_system_prompt(features::devices::agent_instructions(
         setup::devices::prefs(),
     ));
-    // The generative UI extension (`gentle_ui` tool) every agent loads.
-    pi_rpc::set_extensions(features::genui::install().into_iter().collect());
+    // The generative UI extension (`gentle_ui` tool) every agent loads, and
+    // the canvas tools (active only in an agent opened beside a canvas).
+    pi_rpc::set_extensions(
+        features::genui::install()
+            .into_iter()
+            .chain(features::canvas::install_extension())
+            .collect(),
+    );
     // Toolchains onboarding installed into the app's own folders.
     setup::apply_toolchain_path();
     // Gentle Shell 4.7's own install moved its config folder without copying

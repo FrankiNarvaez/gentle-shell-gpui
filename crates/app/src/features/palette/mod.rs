@@ -42,6 +42,7 @@ pub enum PaletteAction {
     /// A new tab with an agent pane.
     NewTab,
     NewTerminalTab,
+    NewCanvasTab,
     /// A new pane of the focused kind, tiled Hyprland-style.
     TilePane,
     SplitRight,
