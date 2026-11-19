@@ -118,6 +118,15 @@ gentle-ai is what updates and repairs this install, so for it (`managed_by_gentl
 
 On Windows it adds `CREATE_NO_WINDOW` (`0x0800_0000`): without it, every console child (git, node, shells, the backend) would open its own window in a release build, and in debug it would attach to the terminal that launched the app. On other platforms it is `Command::new`.
 
+### Where agents run (`gentle_core::backend`, `features/backend/`, `pi_rpc::remote_backend`)
+
+An agent tab's `gentle-shell --mode rpc` can run on this computer (the default), in a WSL2 distro, or in any environment a command reaches (a Linux VM through OrbStack or Lima, a container). The choice is the app's `settings.json` key `backend`: absent or `null` for this computer, `{"kind": "wsl", "distro": "Ubuntu"}`, or `{"kind": "command", "prefix": ["orb", "-m", "dev", "--"]}`. Configuration → General → Where agents run sets it. On Windows it lists `wsl.exe --list --verbose` (`WSL_UTF8=1`; UTF-16 is decoded too) and suggests the default distro that has `gentle-shell`. A folder under `\\wsl.localhost\<distro>\` (or `\\wsl$\<distro>\`) runs in that distro whatever is saved (`Backend::for_folder`), as VS Code does. A tab keeps the backend it first started on, so a restart resumes its conversation there.
+
+- **Launch.** `Backend::launch(folder)` is the argv that runs a program in the project folder: `wsl.exe -d <distro> --cd <folder> --exec` (`--exec` passes the arguments without a shell re-reading them), or `<prefix> sh -c 'cd "$1" && shift && exec "$@"' sh <folder>`. `pi_rpc::remote_backend` appends `env GENTLE_SHELL_INTERACTIVE_HOST=1 PATH=<login PATH> <tab variables> gentle-shell --mode rpc` and the app's `--append-system-prompt` and `--extension` files. Variables travel as `env` arguments because `wsl.exe` doesn't forward the host's environment. The host's launcher, `GENTLE_SHELL_ARGS` and PATH stay out.
+- **Login PATH.** `wsl.exe --exec` and most commands start programs without a login shell, so `gentle-shell` and its Node wouldn't be found. Once per backend the app runs the user's login shell there, interactive (`gentle_core::backend::path_probe`, the same markers as the local combined PATH), and keeps the result.
+- **Paths.** `Backend::path` maps what the app sees to what the backend sees. In WSL, `C:\…` is `/mnt/c/…` and `\\wsl.localhost\<distro>\…` is `/…`; through a command, paths are the same, as OrbStack and Lima mount the home folder. A project or app file the backend can't reach is an error on the tab, not a silent fallback.
+- **Not yet through the backend:** terminals, git and the Files / Changes / Branches views, Setup and the files the app reads itself (issue #141, later phases). An SSH command isn't supported: `ssh` joins its arguments into one remote command line.
+
 ## Homes: `crates/pi-rpc/src/home.rs`
 
 `resolve_homes() -> Homes { agent, config }` replicates gentle-pi's `resolveHome` (`lib/gentle-shell-launcher.ts`). It is cached until the `Stamp` of the launcher config (`launcher_config_path()`: `GENTLE_SHELL_CONFIG` or `~/.gentle-shell/config.json`) changes.

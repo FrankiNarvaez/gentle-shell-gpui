@@ -99,7 +99,7 @@ impl SettingsPage {
     fn keywords(self) -> &'static str {
         match self {
             Self::General => {
-                "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report"
+                "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report backend wsl linux distro remote vm orbstack lima docker container where agents run"
             }
             Self::Appearance => {
                 "theme color dark light import share transparency window opacity interface zoom size fonts scene motion background animated library terminal banner rose text tabs vertical horizontal placement sidebar"

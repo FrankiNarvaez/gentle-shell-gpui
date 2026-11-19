@@ -27,6 +27,7 @@ mod navigation;
 mod notifications;
 mod packages;
 mod pages;
+mod runs_on;
 mod services;
 mod snapshot;
 mod theme;
@@ -87,6 +88,8 @@ pub struct SettingsView {
     _session_sub: Option<Subscription>,
     /// RPC status and its in-flight ticket; separate from upgrade UI state.
     shell_updates: upgrade::ShellUpdates,
+    /// Where agents run: this computer, a WSL distro or a command.
+    runs_on: runs_on::RunsOn,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -170,12 +173,14 @@ impl SettingsView {
                 .map(|session| cx.observe(session, |this, _, cx| this.update_status_changed(cx))),
             session,
             shell_updates: upgrade::ShellUpdates::default(),
+            runs_on: runs_on::RunsOn::new(window, cx),
         };
         this.reload(cx);
         this.refresh_maestro(cx);
         this.refresh_music(cx);
         this.refresh_tower(cx);
         this.refresh_devices(cx);
+        this.refresh_runs_on(cx);
         this
     }
 

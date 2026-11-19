@@ -146,6 +146,64 @@ pub fn resolve_backend(cwd: &Path) -> Result<LaunchSpec> {
     ))
 }
 
+/// The RPC launch of `gentle-shell` in another environment (a WSL distro, a
+/// Linux VM, a container). `launch` runs a program there in the project's
+/// folder (`gentle_core::backend::Backend::launch`), `path` is that
+/// environment's login PATH when known (its launcher's `#!/usr/bin/env node`
+/// needs the user's Node), `env` is what the tab adds (already as the
+/// backend reads it), and `map` gives each host file Pi reads (the app's
+/// instructions, its extensions) as the backend sees it. The host's
+/// launcher, `GENTLE_SHELL_ARGS` and PATH belong to this computer and stay
+/// out; the environment travels as `env` arguments, which `wsl.exe` and
+/// other commands pass on where they don't forward their own environment.
+pub fn remote_backend(
+    launch: &[String],
+    path: Option<&str>,
+    env: &[(String, String)],
+    map: impl Fn(&Path) -> Option<String>,
+) -> Result<LaunchSpec> {
+    let (program, prefix) = launch
+        .split_first()
+        .ok_or_else(|| anyhow!("the backend has no command to run"))?;
+    let mut args = prefix.to_vec();
+    args.extend([
+        "env".to_string(),
+        "GENTLE_SHELL_INTERACTIVE_HOST=1".to_string(),
+    ]);
+    args.extend(path.map(|path| format!("PATH={path}")));
+    args.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
+    args.extend(["gentle-shell", "--mode", "rpc"].map(str::to_string));
+    let host_file = |file: &Path| {
+        map(file).ok_or_else(|| {
+            anyhow!(
+                "The backend can't read {}, a file the app gives every agent.",
+                file.display()
+            )
+        })
+    };
+    let prompt = SYSTEM_PROMPT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(file) = prompt {
+        args.push("--append-system-prompt".to_string());
+        args.push(host_file(&file)?);
+    }
+    let extensions = EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for file in extensions {
+        args.push("--extension".to_string());
+        args.push(host_file(&file)?);
+    }
+    Ok(LaunchSpec {
+        program: PathBuf::from(program),
+        args,
+        cwd: crate::home::home_dir(),
+        env: Vec::new(),
+        launcher: PathBuf::from("gentle-shell"),
+        bundled: None,
+    })
+}
+
 /// The RPC launch through `launcher`, with `path` as the child's PATH,
 /// `prompt` as the host's instructions file and `extensions` as the host's
 /// Pi extensions.
@@ -569,7 +627,7 @@ pub(crate) fn extra_args() -> Vec<String> {
 /// `"…"` or `'…'` keeps spaces inside one argument (`--home "C:\Users\Ana
 /// Li\gs"`) and the quotes go. A backslash stays literal: on Windows it is
 /// the path separator, not an escape.
-fn split_args(text: &str) -> Vec<String> {
+pub fn split_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     // An argument started, even if empty (`""`).

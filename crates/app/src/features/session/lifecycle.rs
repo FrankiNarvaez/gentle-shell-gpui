@@ -311,32 +311,42 @@ impl SessionView {
         // while it starts is sent once it is ready).
         let genui_mode = crate::features::genui::mode::mode(cx);
         let canvas = self.canvas.clone();
+        // The backend chosen when the tab first started: a restart resumes
+        // its conversation there, wherever new tabs go now.
+        let runs_on = self.runs_on.clone();
         self._io = cx.spawn_in(window, async move |this, cx| {
             let spawned = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut spec = pi_rpc::resolve_backend(&cwd)?;
+                    let runs_on =
+                        runs_on.unwrap_or_else(|| crate::features::backend::for_tab(&cwd));
+                    // The canvas this agent works on: its extension's tools.
+                    let files: Vec<(String, &std::path::Path)> = canvas
+                        .as_deref()
+                        .map(|file| (crate::features::canvas::AGENT_ENV.to_string(), file))
+                        .into_iter()
+                        .collect();
+                    let mut spec = crate::features::backend::launch_spec(
+                        &runs_on,
+                        &cwd,
+                        &[crate::features::genui::mode::launch_env(genui_mode)],
+                        &files,
+                    )?;
                     if let Some(path) = &resume {
                         spec.args.push("--session".into());
                         spec.args.push(path.display().to_string());
                     }
-                    spec.env
-                        .push(crate::features::genui::mode::launch_env(genui_mode));
-                    // The canvas this agent works on: its extension's tools.
-                    if let Some(canvas) = canvas {
-                        spec.env
-                            .push((crate::features::canvas::AGENT_ENV.into(), canvas.into()));
-                    }
                     let version = pi_rpc::backend_version(&spec);
                     let (process, rx) = PiProcess::spawn(&spec)?;
-                    anyhow::Ok((process, rx, version))
+                    anyhow::Ok((process, rx, version, runs_on))
                 })
                 .await;
             let rx = match spawned {
-                Ok((process, rx, version)) => {
+                Ok((process, rx, version, runs_on)) => {
                     let ok = this.update(cx, |this, cx| {
                         this.backend.status = BackendStatus::Ready(process);
                         this.backend.version = version;
+                        this.runs_on = Some(runs_on);
                         this.genui_mode = genui_mode;
                         this.sync_genui_mode(cx);
                         if let Some(path) = launched {
