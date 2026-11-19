@@ -6,12 +6,10 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use gentle_core::fonts;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
-use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
 use super::SettingsView;
@@ -330,40 +328,29 @@ impl SettingsView {
                     let family = entry.clone();
                     let weak = weak.clone();
                     list = list.child(
-                        h_flex()
-                            .id(("font-menu-row", index))
-                            .w_full()
-                            .gap_2()
-                            .px_3()
-                            .py_1p5()
-                            .rounded(rems(ui::ISLAND_ROW / 16.))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(ui::surface_hover()))
-                            .when(index == cursor, |d| d.bg(ui::surface_hover()))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(rems(13. / 16.))
-                                    .text_color(match (chosen, entry) {
-                                        (true, _) => ui::accent(),
-                                        (_, Some(_)) => ui::fg(),
-                                        _ => ui::muted(),
-                                    })
-                                    .child(title),
-                            )
-                            .when(chosen, |d| {
-                                d.child(
-                                    Icon::new(IconName::Check).xsmall().text_color(ui::accent()),
-                                )
-                            })
-                            .on_click(move |_, window, cx| {
-                                let family = family.clone();
-                                let _ = weak.update(cx, |this, cx| {
-                                    this.choose_font(slot, family.as_deref(), window, cx)
-                                });
-                            }),
+                        ui::picker_row(
+                            ("font-menu-row", index),
+                            index == cursor,
+                            chosen,
+                            None,
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(rems(13. / 16.))
+                                .text_color(match (chosen, entry) {
+                                    (true, _) => ui::accent(),
+                                    (_, Some(_)) => ui::fg(),
+                                    _ => ui::muted(),
+                                })
+                                .child(title),
+                        )
+                        .on_click(move |_, window, cx| {
+                            let family = family.clone();
+                            let _ = weak.update(cx, |this, cx| {
+                                this.choose_font(slot, family.as_deref(), window, cx)
+                            });
+                        }),
                     );
                 }
                 if entries.is_empty() || entries.as_ref() == [None] {
@@ -380,19 +367,7 @@ impl SettingsView {
                     .w_full()
                     .font_family(cx.theme().font_family.clone())
                     .text_color(ui::fg())
-                    .child(
-                        div().p(rems(6. / 16.)).child(
-                            h_flex()
-                                .items_center()
-                                .gap_2()
-                                .h(rems(36. / 16.))
-                                .px_3()
-                                .rounded(rems(ui::ISLAND_ROW / 16.))
-                                .bg(ui::well())
-                                .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
-                                .child(div().flex_1().child(Input::new(&search).appearance(false))),
-                        ),
-                    )
+                    .child(ui::search_well(&search))
                     .child(list);
                 ui::island(cx)
                     .w_full()

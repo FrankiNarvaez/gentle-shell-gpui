@@ -8,8 +8,9 @@
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::Sizable as _;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationElement, AnimationExt as _, App, BoxShadow, Div, ElementId, EntityId,
@@ -600,6 +601,48 @@ pub fn island(cx: &App) -> Div {
 /// padding, so the row's corners follow the card's:
 /// `.rounded(rems(ISLAND_ROW / 16.))`.
 pub const ISLAND_ROW: f32 = 12.;
+
+/// The inset search field for an island picker. The caller owns input state and focus.
+pub fn search_well(search: &gpui_kit::Entity<InputState>) -> Div {
+    div().p(rems(6. / 16.)).child(
+        h_flex()
+            .items_center()
+            .gap_2()
+            .h(rems(36. / 16.))
+            .px_3()
+            .rounded(rems(ISLAND_ROW / 16.))
+            .bg(well())
+            .child(Icon::new(IconName::Search).xsmall().text_color(faint()))
+            .child(div().flex_1().child(Input::new(search).appearance(false))),
+    )
+}
+
+/// An island picker row. Highlight follows the cursor, while the check marks
+/// the applied choice. The caller supplies the row content and click handler.
+pub fn picker_row(
+    id: impl Into<ElementId>,
+    highlighted: bool,
+    chosen: bool,
+    icon: Option<IconName>,
+    content: impl IntoElement,
+) -> Stateful<Div> {
+    use gpui_kit::InteractiveElement as _;
+    h_flex()
+        .id(id)
+        .w_full()
+        .gap_2()
+        .px_3()
+        .py_1p5()
+        .rounded(rems(ISLAND_ROW / 16.))
+        .cursor_pointer()
+        .hover(|s| s.bg(surface_hover()))
+        .when(highlighted, |d| d.bg(surface_hover()))
+        .children(icon.map(|icon| Icon::new(icon).xsmall().text_color(muted())))
+        .child(content)
+        .when(chosen, |d| {
+            d.child(Icon::new(IconName::Check).xsmall().text_color(accent()))
+        })
+}
 
 /// Segmented toggle (tabs inside a well): one shared look for every
 /// "This project / All", "Agents / Activity", "Pro / Max" switch.
