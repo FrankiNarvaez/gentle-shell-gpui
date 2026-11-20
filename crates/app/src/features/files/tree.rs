@@ -130,7 +130,7 @@ pub enum FileTreeEvent {
     InsertPath(String),
     /// Open an agent tab in this folder (a worktree).
     OpenAgent(PathBuf),
-    /// Show the Commit History of this repository.
+    /// Show the Git pane of this repository.
     OpenHistory(PathBuf),
     /// The header's collapse button: the owner should hide the sidebar.
     Collapse,

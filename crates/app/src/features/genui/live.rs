@@ -196,7 +196,7 @@ fn read(source: Source, live: &Live, workspace: &Path) -> Result<Value, String> 
         }
         Source::GitLog => {
             let top = git::toplevel(workspace).ok_or("not a git repository")?;
-            let history = git::history(&top, None, 50).ok_or("git log failed")?;
+            let history = git::history(&top, &git::Scope::Head, 50).ok_or("git log failed")?;
             Ok(Value::Array(
                 history
                     .commits

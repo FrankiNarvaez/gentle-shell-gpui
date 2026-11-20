@@ -39,7 +39,8 @@ use crate::features::workspaces::{
     self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
 };
 use crate::shared::pane::{
-    CloseViewer, PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
+    AskAgent, CloseViewer, OpenCommitDiff, OpenTerminalAt, PaneFactories, PaneId, PaneItem,
+    PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
 use crate::shared::ui;
 use gentle_core::commands::Screen;
@@ -562,8 +563,8 @@ impl Workspace {
         self.place_preview(id, window, cx);
     }
 
-    /// The Commit History of the repository `cwd` is in, as a pane placed
-    /// like a preview: it takes the place of the tab's history pane, if any.
+    /// The Git pane of the repository `cwd` is in, placed like a preview: it
+    /// takes the place of the tab's preview pane, if any.
     pub fn open_history(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.new_factory_pane(PaneKind::History, cwd, window, cx) {
             self.place_preview(id, window, cx);

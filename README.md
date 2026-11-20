@@ -145,16 +145,18 @@ Right-click a row for Open, Open to the Side (⌘↵), Open in New Tab (⌥⌘�
 
 ---
 
-### Commit history — The branch as a graph
+### Git — The repository as a graph, and what you do with it
 
-A pane beside your work (like a file preview: it splits the largest pane or takes the place of the tab's history pane, and is restored with the workspace) with the branch's commits as a graph: each merged branch in its own colored lane, forking out of the merge and joining where it started, labeled with its name (from the merge's subject or a branch ref); tags as chips; HEAD as a ring and uncommitted changes as a dashed one above it.
+A pane beside your work (like a file preview: it splits the largest pane or takes the place of the tab's preview pane, and is restored with the workspace; ⌘K → Git, or the graph button in the sidebar's Branches tab) with the commits as a graph: each merged branch in its own colored lane, forking out of the merge and joining where it started, labeled with its name; branches, remote branches and tags as chips (✓ on HEAD's branch, a globe when the remote has it there too); HEAD as a ring and uncommitted changes as a dashed one above it. The toolbar fetches, pulls (fast-forward if possible, fast-forward only or rebase), pushes, makes a branch at HEAD, stashes, jumps to HEAD and filters the loaded commits.
 
 <details>
-<summary><kbd>More</kbd> <strong>Lanes, cards and actions</strong></summary>
+<summary><kbd>More</kbd> <strong>Lanes, commits and actions</strong></summary>
 
 <br>
 
-Rows show the subject (merged-in commits dimmed), the author's initials and name (a dot marks a co-author such as Claude) and how long ago. Hover a row for its card: author and co-authors, full subject, hash, files changed with +/−, when and on which branch. The branch picker shows any local branch without checking it out; the first 200 commits load, and "Earlier history" loads 200 more. Click a commit to select it and copy its hash.
+Rows show the refs, the subject (merged-in commits dimmed), the author's initials and name (a dot marks a co-author such as Claude), how long ago and the short SHA. Hover a row for its card: author and co-authors, full subject, hash, files changed with +/−, when and on which branch. The branch picker shows HEAD, every branch at once (All branches) or any local branch without checking it out; the first 200 commits load, and "Earlier history" loads 200 more. The filter keeps commits whose subject, author or refs contain the text, or whose hash starts with it. Pull and Push show how far HEAD is behind and ahead of its upstream; a branch without one is published on push.
+
+Click a commit for its details under the list: the whole message and the files it changed with +/−; click a file to open what that commit did to it, in a diff pane. Right-click a commit to copy its SHA or message, switch to a branch on it, check it out, start a branch or a tag there, cherry-pick it, revert it, reset the current branch to it (keeping the changes, or discarding them after a confirmation), edit HEAD's message, push or delete its tags, or open an agent tab that explains it. Names and messages are asked for in a bar under the toolbar (↵ confirms, Esc cancels). When a merge, rebase, cherry-pick or revert stops on a conflict, a banner says so with Continue and Abort. ⋯ also adds a remote, runs Git LFS checkout, pull, push and prune (when Git LFS is installed), opens a terminal in the repository or the repository in a code editor. Every action runs git where the folder's agents run, and the footer says what it's doing, then how it went (git's own message when it fails).
 
 </details>
 

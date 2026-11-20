@@ -25,6 +25,32 @@ pub struct CloseViewer {
     pub pane: EntityId,
 }
 
+/// The Git pane asks to show what `commit` changed in `path` (relative to
+/// the repository's top level `root`), against `parent`.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = gentle, no_json)]
+pub struct OpenCommitDiff {
+    pub root: PathBuf,
+    pub path: PathBuf,
+    pub commit: String,
+    pub parent: Option<String>,
+}
+
+/// Open an agent tab in `cwd` and send it `prompt`.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = gentle, no_json)]
+pub struct AskAgent {
+    pub cwd: PathBuf,
+    pub prompt: String,
+}
+
+/// Open a terminal pane in `cwd`, beside the focused pane.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = gentle, no_json)]
+pub struct OpenTerminalAt {
+    pub cwd: PathBuf,
+}
+
 /// What a pane shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,7 +59,8 @@ pub enum PaneKind {
     Agent,
     Terminal,
     File,
-    /// A repository's Commit History ([`crate::features::history::HistoryView`]).
+    /// A repository's Git pane ([`crate::features::history::HistoryView`]).
+    /// Saved as `history`, its name before it took actions.
     History,
     /// A whiteboard ([`crate::features::canvas::CanvasView`]); the pane's
     /// path is its file.
@@ -70,8 +97,11 @@ pub struct PaneItem {
 /// Reads a pane's "has unsaved edits" state.
 pub type UnsavedProbe = Rc<dyn Fn(&App) -> bool>;
 
-/// Builds a pane for a folder (terminal, history) or a file (file viewer, canvas).
+/// Builds a pane for a folder (terminal, Git) or a file (file viewer, canvas).
 pub type PaneFactory = Rc<dyn Fn(PathBuf, &mut Window, &mut App) -> PaneItem>;
+
+/// Builds the pane showing one file's changes in one commit.
+pub type CommitDiffFactory = Rc<dyn Fn(&OpenCommitDiff, &mut Window, &mut App) -> PaneItem>;
 
 /// Pane kinds other modules provide; a `None` factory makes the actions that
 /// need it show a notice instead.
@@ -81,7 +111,9 @@ pub struct PaneFactories {
     pub file: Option<PaneFactory>,
     /// A file's changes against HEAD (saved and restored as a file pane).
     pub diff: Option<PaneFactory>,
-    /// Commit History of the repository a folder is in.
+    /// What a commit changed in a file (saved and restored as a file pane).
+    pub commit_diff: Option<CommitDiffFactory>,
+    /// The Git pane of the repository a folder is in.
     pub history: Option<PaneFactory>,
     /// A canvas saved in a file.
     pub canvas: Option<PaneFactory>,

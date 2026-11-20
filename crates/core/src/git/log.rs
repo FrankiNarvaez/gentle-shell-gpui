@@ -1,5 +1,5 @@
-//! Commit history for the History screen: the `git log` records it reads and
-//! the lanes of the graph drawn beside them.
+//! Commit history for the Git pane: the `git log` records it reads and the
+//! lanes of the graph drawn beside them.
 
 /// `git log` arguments whose output [`parse_log`] reads: each commit starts
 /// with `\x1e`, its fields are split by NUL, and `--shortstat`'s line follows.
@@ -53,6 +53,19 @@ impl Commit {
 
     pub fn is_merge(&self) -> bool {
         self.parents.len() > 1
+    }
+
+    /// The Git pane's filter keeps it: `query` (lowercase) in its subject,
+    /// author or a ref name, or the start of its hash.
+    pub fn matches(&self, query: &str) -> bool {
+        self.hash.starts_with(query)
+            || self.subject.to_lowercase().contains(query)
+            || self.author.to_lowercase().contains(query)
+            || self.refs.iter().any(|r| match r {
+                RefLabel::Branch(n) | RefLabel::Remote(n) | RefLabel::Tag(n) => {
+                    n.to_lowercase().contains(query)
+                }
+            })
     }
 }
 
@@ -462,6 +475,19 @@ mod tests {
         assert!(parse_log("\x1e\n").is_empty());
         // Fewer fields than the format prints: skipped, not a panic.
         assert!(parse_log("\x1eabc\0def").is_empty());
+    }
+
+    #[test]
+    fn the_filter_matches_subject_author_refs_and_hash_prefix() {
+        let mut c = commit("abc1234def", &[], "Fix the Login redirect");
+        c.author = "Maya Chen".into();
+        c.refs = vec![RefLabel::Tag("v2.4".into())];
+        for hit in ["login", "maya", "v2.4", "abc12"] {
+            assert!(c.matches(hit), "{hit}");
+        }
+        // Inside the hash isn't a prefix.
+        assert!(!c.matches("1234"));
+        assert!(!c.matches("logout"));
     }
 
     #[test]

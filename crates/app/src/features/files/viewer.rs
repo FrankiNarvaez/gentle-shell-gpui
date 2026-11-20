@@ -77,6 +77,8 @@ pub struct FileView {
     /// Breadcrumb: muted prefix, bold leaf.
     crumbs: (String, String),
     diff: bool,
+    /// A commit's diff shows its short hash here; `None` is the work tree's.
+    commit: Option<String>,
     body: Body,
     meta: Meta,
     /// File mode with an editable buffer; `None` for diffs and notices.
@@ -265,6 +267,7 @@ impl FileView {
             path,
             crumbs,
             diff: false,
+            commit: None,
             body,
             meta,
             edit,
@@ -290,6 +293,29 @@ impl FileView {
     /// (`path` may be absolute or relative to `root`). Untracked files show
     /// whole as added.
     pub fn diff(root: PathBuf, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::patch_view(root, path, None, window, cx)
+    }
+
+    /// Show what `commit` changed in a file, against `parent` (its first
+    /// parent; `None` for a root commit).
+    pub fn commit_diff(
+        root: PathBuf,
+        path: PathBuf,
+        commit: String,
+        parent: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::patch_view(root, path, Some((commit, parent)), window, cx)
+    }
+
+    fn patch_view(
+        root: PathBuf,
+        path: PathBuf,
+        commit: Option<(String, Option<String>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let abs = if path.is_absolute() {
             path
         } else {
@@ -301,12 +327,22 @@ impl FileView {
             Some((dir, leaf)) => (format!("{dir}/"), leaf.to_string()),
             None => (String::new(), rel_text.clone()),
         };
+        let short = commit
+            .as_ref()
+            .map(|(hash, _)| hash.get(..7).unwrap_or(hash).to_string());
         let job_root = root.clone();
         let job_abs = abs.clone();
         cx.spawn_in(window, async move |this, cx| {
             let patch = cx
                 .background_executor()
-                .spawn(async move { load_patch(&job_root, &job_abs, &rel_text) })
+                .spawn(async move {
+                    match commit {
+                        Some((hash, parent)) => {
+                            load_commit_patch(&job_root, &job_abs, &hash, parent.as_deref())
+                        }
+                        None => load_patch(&job_root, &job_abs, &rel_text),
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| this.install_patch(patch, cx));
         })
@@ -320,6 +356,7 @@ impl FileView {
             path: abs,
             crumbs,
             diff: true,
+            commit: short,
             body: Body::Loading,
             edit: None,
             markdown: None,
@@ -335,7 +372,9 @@ impl FileView {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.path.display().to_string());
-        if self.diff {
+        if let Some(short) = &self.commit {
+            format!("{name} · {short}").into()
+        } else if self.diff {
             format!("{name} · diff").into()
         } else if self.edit.as_ref().is_some_and(|e| e.dirty) {
             format!("{name} •").into()
@@ -1533,6 +1572,37 @@ fn atomic_write(
         let _ = fs::remove_file(&temp);
     }
     result
+}
+
+/// What `commit` changed in one file, against `parent` (the empty tree for a
+/// root commit).
+fn load_commit_patch(
+    root: &Path,
+    abs: &Path,
+    commit: &str,
+    parent: Option<&str>,
+) -> Result<String, Notice> {
+    let target = crate::features::backend::there(root, abs);
+    let mut args = match parent {
+        Some(parent) => vec!["diff", "--no-color", "--no-ext-diff", parent, commit],
+        None => vec!["show", "--format=", "--no-color", "--no-ext-diff", commit],
+    };
+    args.extend(["--", target.as_ref()]);
+    let Some(patch) = git(root, &args) else {
+        return Err(Notice::new(
+            IconName::GitBranch,
+            "Commit not found",
+            commit.get(..7).unwrap_or(commit).to_string(),
+        ));
+    };
+    if patch.len() > MAX_PATCH {
+        return Err(Notice::new(
+            IconName::TriangleAlert,
+            "Diff too large",
+            human_size(patch.len() as u64),
+        ));
+    }
+    Ok(patch)
 }
 
 /// The unified diff for one file: staged and unstaged changes against HEAD,
