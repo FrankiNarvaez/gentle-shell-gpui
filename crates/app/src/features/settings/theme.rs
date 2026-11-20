@@ -275,7 +275,12 @@ impl SettingsView {
                                         .ghost()
                                         .xsmall()
                                         .icon(Icon::new(IconName::Info).text_color(ui::faint()))
-                                        .tooltip("Scenes only move while this window is in front, at most Calm on battery, and hold still while saving power."),
+                                        // Three short lines: the tooltip has no width of its own.
+                                        .tooltip(
+                                            "Scenes only move while this window is in front.\n\
+                                             On battery, they move at Calm at most.\n\
+                                             While saving power, they hold still.",
+                                        ),
                                 ),
                         ),
                 )
