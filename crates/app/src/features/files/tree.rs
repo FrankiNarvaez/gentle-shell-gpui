@@ -26,12 +26,19 @@ use super::refs::{RefsEvent, RefsView};
 use super::{file_icon, status_color};
 use crate::features::git::GitSnapshot;
 use crate::platform::ides;
-use crate::shared::ui;
+use crate::shared::{themes, ui};
 
 const CONTEXT: &str = "FileTree";
 const ROW_HEIGHT: f32 = 26.;
 const INDENT: f32 = 14.;
 const POLL: Duration = Duration::from_secs(3);
+
+struct ShowIgnored {
+    value: bool,
+    path: Option<PathBuf>,
+}
+
+impl Global for ShowIgnored {}
 
 const REVEAL: &str = if cfg!(target_os = "macos") {
     "Reveal in Finder"
@@ -69,6 +76,10 @@ actions!(
 
 /// The tree's shortcuts, live while it has focus (the context menu shows them).
 pub fn init(cx: &mut App) {
+    let path = themes::store_path();
+    let value = path.as_deref().is_some_and(read_show_ignored);
+    cx.set_global(ShowIgnored { value, path });
+
     // Cmd on macOS, Ctrl elsewhere, as main.rs binds the app shortcuts
     // (this gpui has no `secondary-` modifier: it panics at startup).
     macro_rules! key {
@@ -220,6 +231,10 @@ impl FileTreeView {
         let changes = cx.new(|cx| ChangesView::new(root.clone(), window, cx));
         let refs = cx.new(|cx| RefsView::new(root.clone(), window, cx));
         let subscriptions = vec![
+            cx.observe_global::<ShowIgnored>(|this, cx| {
+                let value = cx.global::<ShowIgnored>().value;
+                this.apply_show_ignored(value, cx);
+            }),
             cx.subscribe(&changes, |_, _, event: &ChangesEvent, cx| match event {
                 ChangesEvent::OpenDiff(path) => cx.emit(FileTreeEvent::OpenDiff(path.clone())),
                 ChangesEvent::OpenFile(path) => cx.emit(FileTreeEvent::Open(path.clone())),
@@ -239,7 +254,7 @@ impl FileTreeView {
             expanded: HashSet::new(),
             selected: None,
             rows: Rc::default(),
-            show_ignored: false,
+            show_ignored: cx.global::<ShowIgnored>().value,
             clipboard: None,
             editing: None,
             git: None,
@@ -567,7 +582,28 @@ impl FileTreeView {
     }
 
     fn toggle_ignored(&mut self, cx: &mut Context<Self>) {
-        self.show_ignored = !self.show_ignored;
+        let value = !cx.global::<ShowIgnored>().value;
+        let path = cx.global::<ShowIgnored>().path.clone();
+        cx.set_global(ShowIgnored {
+            value,
+            path: path.clone(),
+        });
+        if let Some(path) = path
+            && let Err(err) = write_show_ignored(&path, value)
+        {
+            eprintln!("gentle-shell-gpui: could not save Show Ignored Files: {err}");
+        }
+        self.apply_show_ignored(value, cx);
+    }
+
+    fn apply_show_ignored(&mut self, value: bool, cx: &mut Context<Self>) {
+        if self.show_ignored == value {
+            return;
+        }
+        self.show_ignored = value;
+        // Closed folders must not reuse listings from the previous setting.
+        self.children
+            .retain(|dir, _| dir == &self.root || self.expanded.contains(dir));
         self.reload_listings(cx);
         cx.notify();
     }
@@ -1623,6 +1659,112 @@ fn click_outcome(is_dir: bool, clicks: usize) -> ClickOutcome {
         ClickOutcome::Open
     } else {
         ClickOutcome::Nothing
+    }
+}
+
+fn read_show_ignored(path: &Path) -> bool {
+    themes::read_key(path, "showIgnoredFiles")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn write_show_ignored(path: &Path, show: bool) -> std::io::Result<()> {
+    themes::write_key(path, "showIgnoredFiles", show.into())
+}
+
+#[cfg(test)]
+mod show_ignored_tests {
+    use super::{read_show_ignored, write_show_ignored};
+    use std::path::PathBuf;
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "gentle-show-ignored-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn open_trees_follow_ignored_choice(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+
+        let dir = Scratch::new();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(super::ShowIgnored {
+                value: false,
+                path: Some(dir.0.join("settings.json")),
+            });
+        });
+        let root = dir.0.clone();
+        let (first, cx) =
+            cx.add_window_view(|window, cx| super::FileTreeView::new(root.clone(), window, cx));
+        let second =
+            cx.update(|window, cx| cx.new(|cx| super::FileTreeView::new(root.clone(), window, cx)));
+        cx.update(|_, cx| first.update(cx, |tree, cx| tree.toggle_ignored(cx)));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert!(first.read(cx).show_ignored);
+            assert!(second.read(cx).show_ignored, "other open tree follows");
+        });
+        let settings = dir.0.join("settings.json");
+        assert!(read_show_ignored(&settings));
+        let late =
+            cx.update(|window, cx| cx.new(|cx| super::FileTreeView::new(root.clone(), window, cx)));
+        cx.update(|_, cx| assert!(late.read(cx).show_ignored));
+        cx.update(|_, cx| second.update(cx, |tree, cx| tree.toggle_ignored(cx)));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert!(!first.read(cx).show_ignored);
+            assert!(!second.read(cx).show_ignored);
+            assert!(!late.read(cx).show_ignored);
+        });
+        assert!(!read_show_ignored(&settings));
+    }
+
+    #[test]
+    fn show_ignored_defaults_to_false_for_missing_or_invalid_settings() {
+        let dir = Scratch::new();
+        let path = dir.0.join("settings.json");
+        assert!(!read_show_ignored(&path));
+        std::fs::write(&path, r#"{"showIgnoredFiles":"true"}"#).unwrap();
+        assert!(!read_show_ignored(&path));
+    }
+
+    #[test]
+    fn show_ignored_persists_both_values_and_preserves_other_settings() {
+        let dir = Scratch::new();
+        let path = dir.0.join("settings.json");
+        std::fs::write(&path, r#"{"theme":"Studio","other":{"value":3}}"#).unwrap();
+        write_show_ignored(&path, true).unwrap();
+        assert!(read_show_ignored(&path));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["theme"], "Studio");
+        assert_eq!(settings["other"]["value"], 3);
+        write_show_ignored(&path, false).unwrap();
+        assert!(!read_show_ignored(&path));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["showIgnoredFiles"], false);
+        assert_eq!(settings["theme"], "Studio");
+        assert_eq!(settings["other"]["value"], 3);
     }
 }
 
