@@ -1446,8 +1446,10 @@ impl SessionView {
                     diff_row(line)
                 } else {
                     div()
+                        .w_full()
+                        .min_w_0()
                         .px_3()
-                        .whitespace_nowrap()
+                        .whitespace_normal()
                         .text_color(ui::fg())
                         .child(line.text.clone())
                 }
@@ -1542,11 +1544,13 @@ impl SessionView {
                                 .child(format!("… {hidden} earlier lines not shown")),
                         )
                     })
-                    .children(
-                        shown
-                            .iter()
-                            .map(|line| div().whitespace_nowrap().child(line.text.clone())),
-                    ),
+                    .children(shown.iter().map(|line| {
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .child(line.text.clone())
+                    })),
             )
     }
 
@@ -2198,7 +2202,7 @@ fn diff_row(line: &CodeLine) -> Div {
         .w_full()
         .px_3()
         .gap_2()
-        .whitespace_nowrap()
+        .items_start()
         .when_some(bg, |this, bg| this.bg(bg))
         .child(
             div()
@@ -2217,6 +2221,9 @@ fn diff_row(line: &CodeLine) -> Div {
         )
         .child(
             div()
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal()
                 .text_color(if sign == ' ' { ui::muted() } else { ui::fg() })
                 .child(line.text.clone()),
         )
@@ -2466,6 +2473,86 @@ mod tests {
         language_for_path, line_count, parse_diff_line, tail_slice,
     };
     use gentle_core::transcript::{Block, Item, ToolStatus};
+    use gpui_kit::AppContext as _;
+
+    struct CardWrapFixture(gpui_kit::Entity<super::SessionView>);
+
+    impl gpui_kit::Render for CardWrapFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            let long = "unbroken".repeat(20);
+            self.0.update(cx, |view, cx| {
+                let well =
+                    |name: &'static str,
+                     body: &str,
+                     diff: bool,
+                     cx: &mut gpui_kit::Context<super::SessionView>| {
+                        gpui_kit::div()
+                            .w(gpui_kit::px(200.))
+                            .debug_selector(move || name.into())
+                            .child(view.code_well(
+                                0,
+                                body,
+                                1,
+                                diff,
+                                &super::BodyLines::default(),
+                                cx,
+                            ))
+                    };
+                let output =
+                    |name: &'static str,
+                     body: &str,
+                     cx: &mut gpui_kit::Context<super::SessionView>| {
+                        gpui_kit::div()
+                            .w(gpui_kit::px(200.))
+                            .debug_selector(move || name.into())
+                            .child(view.output_block(0, body, 1, &super::BodyLines::default(), cx))
+                    };
+                gpui_kit::component::v_flex()
+                    .child(well("short-input", "short", false, cx))
+                    .child(well("long-input", &long, false, cx))
+                    .child(output("short-output", "short", cx))
+                    .child(output("long-output", &long, cx))
+                    .child(well("short-diff", "+1 short", true, cx))
+                    .child(well("long-diff", &format!("+1 {long}"), true, cx))
+            })
+        }
+    }
+
+    #[gpui::test]
+    fn tool_card_wrap_unbroken_input_output_and_diff(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view =
+                    super::SessionView::new(std::env::temp_dir(), None, window, cx, false);
+                view.backend.started = true;
+                view
+            });
+            CardWrapFixture(view)
+        });
+        cx.run_until_parked();
+        for (short, long) in [
+            ("short-input", "long-input"),
+            ("short-output", "long-output"),
+            ("short-diff", "long-diff"),
+        ] {
+            let short_height = cx.debug_bounds(short).expect(short).size.height;
+            let long_height = cx.debug_bounds(long).expect(long).size.height;
+            assert!(
+                long_height > short_height,
+                "{long} must wrap: {long_height:?} vs {short_height:?}"
+            );
+        }
+    }
 
     fn step(name: &str, status: ToolStatus) -> Item {
         Item::Tool {
