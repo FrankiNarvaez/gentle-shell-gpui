@@ -1529,7 +1529,7 @@ impl SessionView {
                                             .text_ellipsis()
                                             .whitespace_nowrap()
                                             .font_family(ui::mono())
-                                            .text_size(ui::code_rems(16.))
+                                            .text_size(ui::code_rems(12.))
                                             .text_color(ui::muted())
                                             .child(ThreadItem::tool_subject(args)),
                                     )

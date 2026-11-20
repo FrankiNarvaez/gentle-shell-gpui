@@ -112,7 +112,7 @@ impl SessionView {
                     this.child(
                         div()
                             .font_family(ui::mono())
-                            .text_size(ui::code_rems(16.))
+                            .text_size(ui::code_rems(11.))
                             .text_color(ui::muted())
                             .child(clock(since.elapsed())),
                     )
