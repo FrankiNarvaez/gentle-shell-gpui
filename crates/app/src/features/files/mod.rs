@@ -11,8 +11,10 @@ mod tree;
 mod viewer;
 
 pub use mermaid::{
-    Renderer as DiagramRenderer, RendererState as DiagramRendererState,
-    install as install_diagram_renderer, renderer as diagram_renderer,
+    Diagrams as MermaidDiagrams, Job as MermaidJob, Renderer as DiagramRenderer,
+    RendererState as DiagramRendererState, banner as mermaid_banner, dark as mermaid_dark,
+    draw as draw_mermaid, install as install_diagram_renderer, ready_cli as diagram_renderer_cli,
+    renderer as diagram_renderer,
 };
 pub use tree::{FileTreeEvent, FileTreeView};
 pub use viewer::FileView;

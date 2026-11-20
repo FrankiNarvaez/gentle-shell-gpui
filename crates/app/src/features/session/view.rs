@@ -71,42 +71,87 @@ const USER_SLACK: usize = 2;
 const NARROW: f32 = 520.;
 const TINY: f32 = 420.;
 
-/// Bring the Markdown rendered for `key` up to `text`, appending when it
-/// only grew (streaming). Blocks not drawn yet have no state: it is made
-/// when they first show ([`ensure_markdown_block`]).
+/// Bring the Markdown rendered for `key` up to `shown` (the text as the
+/// conversation shows it, with `drawn` Mermaid diagrams as images),
+/// appending when it only grew (streaming). Blocks not drawn yet have no
+/// state: it is made when they first show ([`ensure_markdown_block`]).
 fn sync_markdown_block(
-    markdown: &mut HashMap<(usize, usize), (Entity<TextViewState>, usize)>,
+    markdown: &mut HashMap<(usize, usize), (Entity<TextViewState>, usize, usize)>,
     key: (usize, usize),
-    text: &str,
+    (shown, drawn): (&str, usize),
     cx: &mut Context<SessionView>,
 ) {
-    let Some((state, pushed)) = markdown.get_mut(&key) else {
+    let Some((state, pushed, was_drawn)) = markdown.get_mut(&key) else {
         return;
     };
-    if *pushed == text.len() {
+    if *pushed == shown.len() && *was_drawn == drawn {
         return;
     }
-    let appended = text.is_char_boundary(*pushed) && *pushed < text.len();
+    // A diagram drawn since replaced its source: the start changed too.
+    let appended = *was_drawn == drawn && shown.is_char_boundary(*pushed) && *pushed < shown.len();
     state.update(cx, |state, cx| {
         if appended {
-            state.push_str(&text[*pushed..], cx);
+            state.push_str(&shown[*pushed..], cx);
         } else {
-            state.set_text(text, cx);
+            state.set_text(shown, cx);
         }
     });
-    *pushed = text.len();
+    (*pushed, *was_drawn) = (shown.len(), drawn);
 }
 
-/// The Markdown for `key`, made from `text` the first time it shows.
+/// The Markdown for `key`, made from `shown` the first time it shows.
 fn ensure_markdown_block(
-    markdown: &mut HashMap<(usize, usize), (Entity<TextViewState>, usize)>,
+    markdown: &mut HashMap<(usize, usize), (Entity<TextViewState>, usize, usize)>,
     key: (usize, usize),
-    text: &str,
+    (shown, drawn): (&str, usize),
     cx: &mut Context<SessionView>,
 ) {
-    markdown
-        .entry(key)
-        .or_insert_with(|| (cx.new(|cx| TextViewState::markdown(text, cx)), text.len()));
+    markdown.entry(key).or_insert_with(|| {
+        (
+            cx.new(|cx| TextViewState::markdown(shown, cx)),
+            shown.len(),
+            drawn,
+        )
+    });
+}
+
+/// Whether `text` may hold a Mermaid block: most messages don't, and they
+/// skip [`shown_markdown`]'s copy.
+fn has_mermaid(text: &str) -> bool {
+    text.contains("```mermaid") || text.contains("~~~mermaid")
+}
+
+/// What the renderer needs to know from the app, read once per sync.
+struct DiagramEnv {
+    dark: bool,
+    cli: Option<std::path::PathBuf>,
+}
+
+impl DiagramEnv {
+    fn read(cx: &App) -> Self {
+        Self {
+            dark: crate::features::files::mermaid_dark(cx),
+            cli: crate::features::files::diagram_renderer_cli(cx),
+        }
+    }
+}
+
+/// `text` as the conversation shows it: Mermaid blocks drawn as images once
+/// the renderer has drawn them (the others as their source), how many are
+/// drawn, and the diagrams still to draw, added to `jobs`.
+fn shown_markdown<'a>(
+    diagrams: &crate::features::files::MermaidDiagrams,
+    env: &DiagramEnv,
+    text: &'a str,
+    jobs: &mut Vec<crate::features::files::MermaidJob>,
+) -> (std::borrow::Cow<'a, str>, usize) {
+    if !has_mermaid(text) {
+        return (text.into(), 0);
+    }
+    let prepared = diagrams.prepare(text, env.dark, env.cli.as_ref());
+    jobs.extend(prepared.jobs);
+    let drawn = prepared.text.matches("](mermaid:").count();
+    (prepared.text.into(), drawn)
 }
 
 impl SessionView {
@@ -189,40 +234,121 @@ impl SessionView {
         if self.markdown.is_empty() {
             return;
         }
+        let env = DiagramEnv::read(cx);
+        let mut jobs = Vec::new();
         let items = self.transcript.items.get(from..).unwrap_or_default();
         for (item_ix, item) in (from..).zip(items) {
-            match item {
-                Item::Assistant { blocks, .. } => {
-                    for (block_ix, block) in blocks.iter().enumerate() {
-                        if let Block::Text(text) = block {
-                            sync_markdown_block(&mut self.markdown, (item_ix, block_ix), text, cx);
-                        }
-                    }
-                }
+            let texts: Vec<(usize, &str)> = match item {
+                Item::Assistant { blocks, .. } => blocks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(ix, block)| match block {
+                        Block::Text(text) => Some((ix, text.as_str())),
+                        _ => None,
+                    })
+                    .collect(),
                 // Helpers answer in Markdown, like the assistant.
-                Item::Custom { kind, text, .. } if markdown_custom(kind) => {
-                    sync_markdown_block(&mut self.markdown, (item_ix, 0), text, cx);
+                Item::Custom { kind, text, .. } if markdown_custom(kind) => vec![(0, text)],
+                _ => continue,
+            };
+            for (block_ix, text) in texts {
+                if !self.markdown.contains_key(&(item_ix, block_ix)) {
+                    continue;
                 }
-                _ => {}
+                let (shown, drawn) = shown_markdown(&self.diagrams, &env, text, &mut jobs);
+                sync_markdown_block(&mut self.markdown, (item_ix, block_ix), (&shown, drawn), cx);
             }
         }
+        self.draw_diagrams(jobs, cx);
     }
 
     /// Make the Markdown of item `ix` the first time it shows.
     fn ensure_markdown(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let env = DiagramEnv::read(cx);
+        let mut jobs = Vec::new();
         match self.transcript.items.get(ix) {
             Some(Item::Assistant { blocks, .. }) => {
                 for (block_ix, block) in blocks.iter().enumerate() {
-                    if let Block::Text(text) = block {
-                        ensure_markdown_block(&mut self.markdown, (ix, block_ix), text, cx);
+                    if let Block::Text(text) = block
+                        && !self.markdown.contains_key(&(ix, block_ix))
+                    {
+                        let shown = shown_markdown(&self.diagrams, &env, text, &mut jobs);
+                        ensure_markdown_block(
+                            &mut self.markdown,
+                            (ix, block_ix),
+                            (&shown.0, shown.1),
+                            cx,
+                        );
                     }
                 }
             }
-            Some(Item::Custom { kind, text, .. }) if markdown_custom(kind) => {
-                ensure_markdown_block(&mut self.markdown, (ix, 0), text, cx);
+            Some(Item::Custom { kind, text, .. })
+                if markdown_custom(kind) && !self.markdown.contains_key(&(ix, 0)) =>
+            {
+                let shown = shown_markdown(&self.diagrams, &env, text, &mut jobs);
+                ensure_markdown_block(&mut self.markdown, (ix, 0), (&shown.0, shown.1), cx);
             }
             _ => {}
         }
+        self.draw_diagrams(jobs, cx);
+    }
+
+    /// Draw `jobs` off the UI thread, then show what they drew.
+    fn draw_diagrams(
+        &mut self,
+        jobs: Vec<crate::features::files::MermaidJob>,
+        cx: &mut Context<Self>,
+    ) {
+        if jobs.is_empty() {
+            return;
+        }
+        let diagrams = self.diagrams.clone();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .spawn(async move {
+                    for job in &jobs {
+                        diagrams.finish(job, crate::features::files::draw_mermaid(job));
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| this.redraw_diagrams(cx));
+        })
+        .detach();
+    }
+
+    /// Show diagrams drawn (or failed) since, and draw the ones a renderer
+    /// installed since can draw now.
+    pub(super) fn redraw_diagrams(&mut self, cx: &mut Context<Self>) {
+        self.sync_markdown(0, cx);
+        cx.notify();
+    }
+
+    /// A Markdown block of the conversation: its drawn Mermaid diagrams as
+    /// images, and under it the renderer's banner while they can't be drawn
+    /// (`id` names its button).
+    pub(super) fn markdown_view(
+        &self,
+        state: &Entity<TextViewState>,
+        text: &str,
+        id: impl Into<ElementId>,
+        cx: &App,
+    ) -> Div {
+        let diagrams = self.diagrams.clone();
+        let blocks = if has_mermaid(text) {
+            gentle_core::markdown::mermaid_blocks(text).len()
+        } else {
+            0
+        };
+        v_flex()
+            .gap_2()
+            .child(
+                TextView::new(state)
+                    .selectable(true)
+                    .image_source(move |uri| {
+                        diagrams.image(uri).unwrap_or_else(|| uri.clone().into())
+                    }),
+            )
+            .children(crate::features::files::mermaid_banner(blocks, id, cx))
     }
 
     /// Record start/end instants of live items `from..`.
@@ -626,13 +752,17 @@ impl SessionView {
                 let mut thinking_live = false;
                 for (block_ix, block) in blocks.iter().enumerate() {
                     match block {
-                        Block::Text(_) => {
-                            if let Some((state, _)) = self.markdown.get(&(ix, block_ix)) {
+                        Block::Text(text) => {
+                            if let Some((state, ..)) = self.markdown.get(&(ix, block_ix)) {
                                 column = column.child(
-                                    div()
-                                        .text_size(rems(14. / 16.))
-                                        .text_color(ui::fg())
-                                        .child(TextView::new(state).selectable(true)),
+                                    div().text_size(rems(14. / 16.)).text_color(ui::fg()).child(
+                                        self.markdown_view(
+                                            state,
+                                            text,
+                                            ("mermaid-install", ix * 64 + block_ix),
+                                            cx,
+                                        ),
+                                    ),
                                 );
                             }
                         }
