@@ -2310,17 +2310,51 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
 fn user_bubble_markdown(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut fence: Option<(u8, usize)> = None;
+    let mut list_indents = Vec::new();
     for line in text.split_inclusive('\n') {
         let content = line.strip_suffix('\n').unwrap_or(line);
         let content = content.strip_suffix('\r').unwrap_or(content);
-        let trimmed = content.trim_start_matches(' ');
-        let indent = content.len() - trimmed.len();
+        let mut container = content;
+        loop {
+            let candidate = container.trim_start_matches(' ');
+            if container.len() - candidate.len() > 3 || !candidate.starts_with('>') {
+                break;
+            }
+            container = &candidate[1..];
+            container = container.strip_prefix(' ').unwrap_or(container);
+        }
+        let trimmed = container.trim_start_matches(' ');
+        let indent = container.len() - trimmed.len();
+        if fence.is_none() && !trimmed.is_empty() {
+            while list_indents.last().is_some_and(|&level| indent < level) {
+                list_indents.pop();
+            }
+            let bytes = trimmed.as_bytes();
+            let marker_len = if matches!(bytes.first(), Some(b'-' | b'+' | b'*')) {
+                1
+            } else {
+                let digits = bytes.iter().take_while(|b| b.is_ascii_digit()).count();
+                if digits > 0 && digits <= 9 && matches!(bytes.get(digits), Some(b'.' | b')')) {
+                    digits + 1
+                } else {
+                    0
+                }
+            };
+            if marker_len > 0 && bytes.get(marker_len) == Some(&b' ') {
+                list_indents.push(indent + marker_len + 1);
+            }
+        }
+        let list_indent = list_indents.last().copied().unwrap_or(0);
+        let relative_indent = indent.saturating_sub(list_indent);
         let marker = trimmed.as_bytes().first().copied();
         let count = marker.map_or(0, |marker| {
             trimmed.bytes().take_while(|b| *b == marker).count()
         });
-        let fence_line = indent <= 3 && matches!(marker, Some(b'`' | b'~')) && count >= 3;
+        let fence_candidate =
+            relative_indent <= 3 && matches!(marker, Some(b'`' | b'~')) && count >= 3;
         let inside = fence.is_some();
+        let fence_line =
+            fence_candidate && (inside || marker != Some(b'`') || !trimmed[count..].contains('`'));
         if fence_line {
             match fence {
                 None => fence = Some((marker.unwrap(), count)),
@@ -2336,7 +2370,13 @@ fn user_bubble_markdown(text: &str) -> String {
         }
         result.push_str(content);
         if line.ends_with('\n') {
-            if !inside && !fence_line && !content.trim().is_empty() {
+            let backslashes = content.bytes().rev().take_while(|b| *b == b'\\').count();
+            if !inside
+                && !fence_line
+                && relative_indent < 4
+                && !content.trim().is_empty()
+                && backslashes % 2 == 0
+            {
                 result.push_str("  ");
             }
             if line.ends_with("\r\n") {
@@ -2516,6 +2556,32 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn user_bubble_preprocessing_preserves_existing_breaks() {
+        let source = "paragraph `code`\nnext\\\nlast\n- item\n  continuation\n";
+        let expected = "paragraph `code`  \nnext\\\nlast  \n- item  \n  continuation  \n";
+        assert_eq!(super::user_bubble_markdown(source), expected);
+    }
+
+    #[test]
+    fn user_bubble_preprocessing_blockquote_fence() {
+        let source = "> ~~~\n> one\n> two\n> ~~~\n";
+        assert_eq!(super::user_bubble_markdown(source), source);
+    }
+
+    #[test]
+    fn user_bubble_preprocessing_nested_list_fence() {
+        let source = "- outer\n  - inner\n\n    ```\n    one\n    two\n    ```\n";
+        let expected = "- outer  \n  - inner  \n\n    ```\n    one\n    two\n    ```\n";
+        assert_eq!(super::user_bubble_markdown(source), expected);
+    }
+
+    #[test]
+    fn user_bubble_preprocessing_indented_code() {
+        let source = "    one\n    two\n";
+        assert_eq!(super::user_bubble_markdown(source), source);
+    }
+
     use super::{
         BubbleText, USER_LINES, USER_SLACK, command_language, follows_step, head_slice,
         language_for_path, line_count, parse_diff_line, tail_slice,

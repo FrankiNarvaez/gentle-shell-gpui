@@ -534,6 +534,103 @@ fn user_bubble_list_and_fenced_code_preserved(cx: &mut TestAppContext) {
     }
 }
 
+fn assert_user_bubble_copy(
+    cx: &mut TestAppContext,
+    source: &str,
+    expected: &str,
+    start_inset: Option<f32>,
+    end_inset: f32,
+) {
+    use gpui_kit::{AppContext as _, MouseButton, base::TextSelection, point, px};
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            view.transcript
+                .items
+                .push(gentle_core::transcript::Item::User {
+                    text: source.into(),
+                    images: Vec::new(),
+                });
+            view.sync_view(cx);
+            view
+        });
+        Selectable(session)
+    });
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("user-text-0").expect("sent prompt");
+    let end = point(bounds.right() - px(end_inset), bounds.bottom() - px(10.));
+    let start_inset = start_inset.unwrap_or_else(|| {
+        // Find a hit inside the first glyph's leading half rather than assuming
+        // the list marker's indentation and glyph metrics in pixels.
+        (1..200)
+            .find(|x| {
+                let start = point(bounds.left() + px(*x as f32), bounds.top() + px(10.));
+                cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+                cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+                cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+                cx.update(|window, cx| {
+                    let _ = window.draw(cx);
+                    TextSelection::selected_text(window, cx).trim_end_matches('\n') == expected
+                })
+            })
+            .expect("selection reached the first glyph") as f32
+    });
+    let start = point(bounds.left() + px(start_inset), bounds.top() + px(10.));
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    let selected = cx.update(|window, cx| {
+        let _ = window.draw(cx);
+        TextSelection::selected_text(window, cx)
+    });
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    });
+    cx.run_until_parked();
+    let clipboard = cx.update(|_, cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    });
+    assert_eq!(selected.trim_end_matches('\n'), expected, "selection");
+    assert_eq!(clipboard, expected, "clipboard");
+}
+
+#[gpui::test]
+fn user_bubble_container_fenced_code_copy(cx: &mut TestAppContext) {
+    assert_user_bubble_copy(
+        cx,
+        "- item\n\n  ```\n  one\n  two\n  ```",
+        "item\none\ntwo",
+        None,
+        8.,
+    );
+}
+
+#[gpui::test]
+fn user_bubble_triple_backtick_inline_copy(cx: &mut TestAppContext) {
+    assert_user_bubble_copy(
+        cx,
+        "```code```\nnext\nlast",
+        "code\nnext\nlast",
+        Some(8.),
+        8.,
+    );
+}
+
+#[gpui::test]
+fn user_bubble_backslash_hard_break_copy(cx: &mut TestAppContext) {
+    assert_user_bubble_copy(cx, "one\\\ntwo", "one\ntwo", Some(1.), 1.);
+}
+
 /// The actual bubble must reserve space before an inline-code glyph.
 #[gpui::test]
 fn user_bubble_inline_code_reserves_horizontal_space(cx: &mut TestAppContext) {
