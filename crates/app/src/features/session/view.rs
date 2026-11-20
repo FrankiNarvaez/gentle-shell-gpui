@@ -1546,6 +1546,7 @@ impl SessionView {
                     })
                     .children(shown.iter().map(|line| {
                         div()
+                            .debug_selector(|| "output-wrap-padding-row".into())
                             .w_full()
                             .min_w_0()
                             .whitespace_normal()
@@ -2551,6 +2552,58 @@ mod tests {
                 long_height > short_height,
                 "{long} must wrap: {long_height:?} vs {short_height:?}"
             );
+        }
+    }
+
+    #[gpui::test]
+    fn output_wrap_padding(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view =
+                    super::SessionView::new(std::env::temp_dir(), None, window, cx, false);
+                view.backend.started = true;
+                view
+            });
+            OutputPaddingFixture(view)
+        });
+        cx.run_until_parked();
+        let outer = cx.debug_bounds("output-wrap-padding-outer").unwrap();
+        let row = cx.debug_bounds("output-wrap-padding-row").unwrap();
+        assert!(row.size.height > gpui_kit::px(20.), "output must wrap");
+        assert_eq!(row.origin.x - outer.origin.x, gpui_kit::px(12.));
+        assert_eq!(
+            outer.origin.x + outer.size.width - (row.origin.x + row.size.width),
+            gpui_kit::px(12.),
+            "output row must leave the right padding clear"
+        );
+    }
+
+    struct OutputPaddingFixture(gpui_kit::Entity<super::SessionView>);
+
+    impl gpui_kit::Render for OutputPaddingFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            self.0.update(cx, |view, cx| {
+                gpui_kit::div()
+                    .w(gpui_kit::px(200.))
+                    .debug_selector(|| "output-wrap-padding-outer".into())
+                    .child(view.output_block(
+                        0,
+                        &"0".repeat(160),
+                        1,
+                        &super::BodyLines::default(),
+                        cx,
+                    ))
+            })
         }
     }
 
