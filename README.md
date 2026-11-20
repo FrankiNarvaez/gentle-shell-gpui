@@ -835,7 +835,7 @@ Assets: `gentle-shell-gpui-<v>-macos-aarch64.dmg` / `.zip` and `…-macos-x86_64
 
 ## Community
 
-Built in public. Bring a real workflow, a bug report, or a small improvement that makes the next person's work clearer.
+Built in public. Bring a real workflow, a bug report, or a small improvement that makes the next person's work clearer. Before you take an issue or open a pull request, read [CONTRIBUTING.md](CONTRIBUTING.md): how to claim an issue, when a PR is ready for review, and what each state means.
 
 <p align="center">
   <a href="https://github.com/Gentleman-Programming/gentle-shell-gpui/issues"><img src="https://img.shields.io/badge/Issues-join%20the%20conversation-F095C8?style=for-the-badge&labelColor=1A1218" alt="GitHub issues"></a>
