@@ -161,6 +161,15 @@ impl Motion {
         }
     }
 
+    /// One line for Configuration, next to the choice: what it does.
+    pub fn summary(self) -> &'static str {
+        match self {
+            Motion::Smooth => "Full motion, up to 24 fps.",
+            Motion::Calm => "Half the rate. Easier on battery.",
+            Motion::Still => "No motion. Costs nothing.",
+        }
+    }
+
     fn floor(self) -> Duration {
         match self {
             Motion::Calm => Duration::from_millis(83),

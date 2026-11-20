@@ -234,10 +234,9 @@ impl SettingsView {
             .when(active.background.as_ref().is_some_and(backdrop::Backdrop::moves), |d| {
                 let motion = backdrop::motion(cx);
                 let labels = backdrop::Motion::ALL.map(backdrop::Motion::label);
-                let note = backdrop::power_note(cx).map_or_else(
-                    || "Calm moves at half the rate; Still costs nothing. Scenes only move while this window is in front, at most Calm on battery, and hold still while saving power.".to_string(),
-                    |why| format!("{why} Scenes only move while this window is in front."),
-                );
+                // One line, like the other rows: what the choice does, or why
+                // the power state overrides it; the rules sit in the tooltip.
+                let note = backdrop::power_note(cx).unwrap_or(motion.summary());
                 d.child(
                     h_flex()
                         .pb_2()
@@ -259,14 +258,25 @@ impl SettingsView {
                             }),
                         ))
                         .child(
-                            // min_w_0 lets the note wrap inside the card
-                            // instead of running past its edge.
-                            div()
+                            h_flex()
                                 .flex_1()
                                 .min_w_0()
-                                .text_xs()
-                                .text_color(ui::faint())
-                                .child(note),
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(ui::faint())
+                                        .child(note),
+                                )
+                                .child(
+                                    Button::new("backdrop-motion-info")
+                                        .ghost()
+                                        .xsmall()
+                                        .icon(Icon::new(IconName::Info).text_color(ui::faint()))
+                                        .tooltip("Scenes only move while this window is in front, at most Calm on battery, and hold still while saving power."),
+                                ),
                         ),
                 )
             })
