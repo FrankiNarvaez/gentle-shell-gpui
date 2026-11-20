@@ -125,6 +125,108 @@ impl Workspace {
         .detach();
     }
 
+    /// Point the shown workspace at another folder: the sidebar re-roots on
+    /// [`WorkspaceEvent::RootChanged`] and new tabs open there. Open tabs
+    /// keep their own folders.
+    pub(super) fn set_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.space().root == root || !root.is_dir() {
+            return;
+        }
+        self.space_mut().root = root.clone();
+        cx.emit(WorkspaceEvent::RootChanged(root));
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
+    /// The sidebar header: pick a folder, [`Self::set_root`] to it and move
+    /// the focused agent there too, so the files shown are the ones it works
+    /// on. An agent with a conversation asks first (it restarts fresh).
+    pub fn choose_root(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Open folder".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(mut paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.pop() else { return };
+            let _ = this.update_in(cx, |this, window, cx| this.move_root(path, window, cx));
+        })
+        .detach();
+    }
+
+    /// [`Self::choose_root`]'s pick: the sidebar and the focused agent follow
+    /// `root`, after a confirmation when the agent would lose a conversation.
+    fn move_root(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let focused = self.focused_pane();
+        // A canvas's agent floats in it instead of being the pane's.
+        let canvas = focused.and_then(|id| self.canvas_view(id).map(|view| (id, view)));
+        let agent = focused
+            .and_then(|id| self.panes.get(&id))
+            .and_then(|pane| pane.session.clone())
+            .or_else(|| {
+                canvas
+                    .as_ref()
+                    .and_then(|(_, view)| view.read(cx).agent_session())
+            })
+            .filter(|session| *session.read(cx).cwd() != root);
+        if !agent
+            .as_ref()
+            .is_some_and(|agent| agent.read(cx).has_conversation())
+        {
+            self.commit_root(root, agent, canvas, window, cx);
+            return;
+        }
+        let folder = ui::split_path(&root).1;
+        let title = format!("Move this agent to \u{201c}{folder}\u{201d}?");
+        let description = "Its conversation ends and a new session starts in that folder. \
+             The previous conversation stays on disk.";
+        let this = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |alert, _, _| {
+            let (this, agent, canvas, root) =
+                (this.clone(), agent.clone(), canvas.clone(), root.clone());
+            alert
+                .title(title.clone())
+                .description(description)
+                .ok_text("Move")
+                .show_cancel(true)
+                .on_ok(move |_, window, cx| {
+                    let (agent, canvas, root) = (agent.clone(), canvas.clone(), root.clone());
+                    let _ = this.update(cx, |this, cx| {
+                        this.commit_root(root, agent, canvas, window, cx)
+                    });
+                    true
+                })
+        });
+    }
+
+    /// Move the sidebar, the focused `canvas` pane (where its agent starts)
+    /// and `agent` to `root`.
+    fn commit_root(
+        &mut self,
+        root: PathBuf,
+        agent: Option<Entity<SessionView>>,
+        canvas: Option<(PaneId, Entity<CanvasView>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((id, view)) = canvas {
+            view.update(cx, |view, _| view.set_cwd(root.clone()));
+            if let Some(pane) = self.panes.get_mut(&id) {
+                pane.cwd = root.clone();
+            }
+            // Saved even when the sidebar already shows `root`.
+            self.schedule_save(cx);
+        }
+        if let Some(agent) = agent {
+            agent.update(cx, |agent, cx| agent.change_cwd(root.clone(), window, cx));
+        }
+        self.set_root(root, cx);
+    }
+
     pub(super) fn rename_workspace(&mut self, index: usize, name: String, cx: &mut Context<Self>) {
         let others = self
             .spaces

@@ -197,6 +197,12 @@ impl Workspace {
                     cx.notify();
                 }
             }
+            // The shown agent changed folder: the sidebar shows its files.
+            SessionEvent::CwdChanged(cwd) => {
+                if self.focused_pane() == Some(id) {
+                    self.set_root(cwd.clone(), cx);
+                }
+            }
             SessionEvent::OpenProviders => self.open_providers(window, cx),
             SessionEvent::OpenScreen(screen) => {
                 self.open_screen(*screen, Some(session.clone()), window, cx)

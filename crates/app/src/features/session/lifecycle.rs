@@ -88,6 +88,8 @@ impl SessionView {
     /// Restart the backend in another folder; the conversation starts fresh.
     pub fn change_cwd(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.cwd = cwd;
+        // A conversation still waiting to be resumed belongs to the old folder.
+        self.backend.pending_session = None;
         if self.backend.started {
             self.start(window, cx);
         } else {
@@ -108,7 +110,10 @@ impl SessionView {
                 return;
             };
             let Some(path) = paths.pop() else { return };
-            let _ = this.update_in(cx, |this, window, cx| this.change_cwd(path, window, cx));
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.change_cwd(path.clone(), window, cx);
+                cx.emit(super::SessionEvent::CwdChanged(path));
+            });
         })
         .detach();
     }
