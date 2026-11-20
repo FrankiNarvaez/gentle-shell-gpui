@@ -103,8 +103,12 @@ pub struct SessionView {
     /// [`state::desktop::permission`]); it borrows `desktop`'s session.
     permission: state::desktop::permission::Permission,
     transcript: Transcript,
-    /// Rendered Markdown per (item, block), with the byte length already pushed.
-    markdown: HashMap<(usize, usize), (Entity<TextViewState>, usize)>,
+    /// Rendered Markdown per (item, block): the state, the byte length of
+    /// the shown text already pushed and how many Mermaid diagrams it showed
+    /// drawn (a new drawing replaces source, so the text is set again).
+    markdown: HashMap<(usize, usize), (Entity<TextViewState>, usize, usize)>,
+    /// The conversation's Mermaid diagrams, drawn by the diagram renderer.
+    diagrams: std::sync::Arc<crate::features::files::MermaidDiagrams>,
     expanded: HashSet<usize>,
     /// Generative UI surfaces the agent showed (`gentle_ui`), rebuilt
     /// from the transcript.
@@ -289,6 +293,13 @@ impl SessionView {
             }),
             // Configuration › Agent UI changed: tell this tab's extension.
             crate::features::genui::mode::follow(cx, |this, _, cx| this.sync_genui_mode(cx)),
+            // The diagram renderer was installed (or failed), or the theme
+            // turned light or dark: draw Mermaid blocks already shown in its
+            // colors, or show why not.
+            cx.observe_global::<crate::features::files::DiagramRendererState>(|this, cx| {
+                this.redraw_diagrams(cx)
+            }),
+            cx.observe_global::<crate::shared::themes::Themes>(|this, cx| this.redraw_diagrams(cx)),
         ];
         let mut this = Self {
             cwd,
@@ -297,6 +308,7 @@ impl SessionView {
             permission: state::desktop::permission::Permission::default(),
             transcript: Transcript::default(),
             markdown: HashMap::new(),
+            diagrams: Default::default(),
             expanded: HashSet::new(),
             genui: Default::default(),
             genui_mode: crate::features::genui::mode::mode(cx),

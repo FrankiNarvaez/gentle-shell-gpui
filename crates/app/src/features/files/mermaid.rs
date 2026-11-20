@@ -1,8 +1,9 @@
-//! Mermaid diagrams in the Markdown preview. Each ` ```mermaid ` block is
-//! drawn as an SVG image by merman's CLI, the *diagram renderer*: not part of
-//! the app, it is downloaded the first time someone asks for it (see
-//! [`install`]). A block shows as its source until it is drawn (off the UI
-//! thread), and stays source with the error under it when it can't be.
+//! Mermaid diagrams in Markdown: the file preview and the conversation.
+//! Each ` ```mermaid ` block is drawn as an SVG image by merman's CLI, the
+//! *diagram renderer*: not part of the app, it is downloaded the first time
+//! someone asks for it (see [`install`]). A block shows as its source until
+//! it is drawn (off the UI thread), and stays source with the error under it
+//! when it can't be.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -12,9 +13,16 @@ use std::process::Stdio;
 use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use gentle_core::markdown::mermaid_blocks;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{Icon, Sizable as _, h_flex};
 use gpui_kit::{
-    App, BorrowAppContext as _, Global, Image, ImageFormat, ImageSource, SharedUri, Task,
+    App, BorrowAppContext as _, Div, ElementId, Global, Image, ImageFormat, ImageSource,
+    IntoElement as _, ParentElement as _, SharedUri, Styled as _, Task, div,
 };
+
+use crate::shared::ui;
 
 /// How a document's images name a drawn diagram: `mermaid:<key>`.
 const SCHEME: &str = "mermaid:";
@@ -46,9 +54,79 @@ pub(super) fn init(cx: &mut App) {
     });
 }
 
-/// The diagram renderer's state.
+/// The diagram renderer's state (`Missing` before [`init`], as in tests
+/// that don't set the app up).
 pub fn renderer(cx: &App) -> &Renderer {
-    &cx.global::<RendererState>().renderer
+    static MISSING: Renderer = Renderer::Missing;
+    cx.try_global::<RendererState>()
+        .map_or(&MISSING, |state| &state.renderer)
+}
+
+/// The diagram renderer, once installed.
+pub fn ready_cli(cx: &App) -> Option<PathBuf> {
+    match renderer(cx) {
+        Renderer::Ready(cli) => Some(cli.clone()),
+        _ => None,
+    }
+}
+
+/// The app's theme is dark: Mermaid draws in its dark theme.
+pub fn dark(cx: &App) -> bool {
+    cx.try_global::<crate::shared::themes::Themes>()
+        .is_none_or(|themes| !themes.active_theme().light)
+}
+
+/// Where `blocks` Mermaid blocks show and no renderer draws them: what they
+/// are and a way to draw them (a one-time download, not part of the app);
+/// `None` once the renderer is there. `id` names the button.
+pub fn banner(blocks: usize, id: impl Into<ElementId>, cx: &App) -> Option<Div> {
+    let (line, action) = match renderer(cx) {
+        _ if blocks == 0 => return None,
+        Renderer::Ready(_) => return None,
+        Renderer::Missing => (
+            format!(
+                "{blocks} Mermaid {} here. Draw {} with the diagram renderer, a one-time download of about 20 MB.",
+                if blocks == 1 { "diagram" } else { "diagrams" },
+                if blocks == 1 { "it" } else { "them" },
+            ),
+            Some("Install"),
+        ),
+        Renderer::Installing(progress) => (progress.clone(), None),
+        Renderer::Failed(error) => (
+            format!("The diagram renderer couldn't be installed: {error}"),
+            Some("Try again"),
+        ),
+    };
+    let installing = matches!(renderer(cx), Renderer::Installing(_));
+    Some(
+        h_flex()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .rounded_lg()
+            .bg(ui::surface())
+            .text_xs()
+            .text_color(ui::muted())
+            .child(if installing {
+                Spinner::new()
+                    .xsmall()
+                    .color(ui::accent())
+                    .into_any_element()
+            } else {
+                Icon::new(IconName::Workflow)
+                    .xsmall()
+                    .text_color(ui::info())
+                    .into_any_element()
+            })
+            .child(div().flex_1().min_w_0().child(line))
+            .children(action.map(|label| {
+                Button::new(id)
+                    .ghost()
+                    .xsmall()
+                    .label(label)
+                    .on_click(|_, _, cx| install(cx))
+            })),
+    )
 }
 
 /// Download and install the diagram renderer; observers of the global (the
@@ -95,10 +173,10 @@ enum Drawing {
 
 /// The diagrams of one preview, by source and theme.
 #[derive(Default)]
-pub(super) struct Diagrams(Mutex<HashMap<u64, Drawing>>);
+pub struct Diagrams(Mutex<HashMap<u64, Drawing>>);
 
 /// A diagram to draw: its key, its source, the theme and the renderer.
-pub(super) struct Job {
+pub struct Job {
     key: u64,
     source: String,
     dark: bool,
@@ -106,7 +184,7 @@ pub(super) struct Job {
 }
 
 /// What [`Diagrams::prepare`] gives the preview.
-pub(super) struct Prepared {
+pub struct Prepared {
     /// The document as shown.
     pub text: String,
     /// Mermaid blocks in it.
@@ -123,7 +201,7 @@ impl Diagrams {
     /// `text` as the preview shows it: drawn diagrams as images, the others
     /// as their source (with the error under a failed one). Without a
     /// renderer (`cli`) nothing is drawn.
-    pub(super) fn prepare(&self, text: &str, dark: bool, cli: Option<&PathBuf>) -> Prepared {
+    pub fn prepare(&self, text: &str, dark: bool, cli: Option<&PathBuf>) -> Prepared {
         let blocks = mermaid_blocks(text);
         let mut prepared = Prepared {
             text: String::with_capacity(text.len()),
@@ -174,7 +252,7 @@ impl Diagrams {
     }
 
     /// Store what drawing `job` gave.
-    pub(super) fn finish(&self, job: &Job, drawn: Result<Vec<u8>, String>) {
+    pub fn finish(&self, job: &Job, drawn: Result<Vec<u8>, String>) {
         let drawing = match drawn {
             Ok(svg) => Drawing::Ready(Arc::new(Image::from_bytes(ImageFormat::Svg, svg))),
             Err(error) => Drawing::Failed(error),
@@ -183,7 +261,7 @@ impl Diagrams {
     }
 
     /// The image for a `mermaid:<key>` URI, if it is one.
-    pub(super) fn image(&self, uri: &SharedUri) -> Option<ImageSource> {
+    pub fn image(&self, uri: &SharedUri) -> Option<ImageSource> {
         let key: u64 = uri.strip_prefix(SCHEME)?.parse().ok()?;
         match self.lock().get(&key)? {
             Drawing::Ready(image) => Some(ImageSource::Image(image.clone())),
@@ -234,7 +312,7 @@ static FONT: LazyLock<Option<(String, PathBuf)>> = LazyLock::new(|| {
 
 /// Draw `job` as SVG with the renderer. Tens of milliseconds: call it off
 /// the UI thread.
-pub(super) fn draw(job: &Job) -> Result<Vec<u8>, String> {
+pub fn draw(job: &Job) -> Result<Vec<u8>, String> {
     let mut init = vec![format!(
         "\"theme\": \"{}\"",
         if job.dark { "dark" } else { "default" }

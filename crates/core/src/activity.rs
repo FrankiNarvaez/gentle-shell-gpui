@@ -159,6 +159,23 @@ pub fn retain_finished(previous: Option<Activity>, next: Option<Activity>) -> Ac
     next
 }
 
+/// The task a `subagent_run` call for `agent` started: the one whose prompt
+/// is the call's `prompt`, else the latest for that agent (the activity
+/// feed carries no call id). Its id selects it in the Agents panel.
+pub fn task_for_run<'a>(
+    tasks: &'a [AgentTask],
+    agent: &str,
+    prompt: Option<&str>,
+) -> Option<&'a str> {
+    let mine = || tasks.iter().filter(|t| t.summary.agent == agent);
+    let same_prompt = prompt.and_then(|prompt| {
+        mine().find(|t| t.summary.prompt.as_deref().map(str::trim) == Some(prompt.trim()))
+    });
+    same_prompt
+        .or_else(|| mine().max_by_key(|t| t.summary.created_at.unwrap_or(0)))
+        .map(|t| t.summary.id.as_str())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +205,32 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert_eq!(task.thread.items[2], ThreadItem::Other);
+    }
+
+    #[test]
+    fn a_run_call_finds_its_task_by_prompt_else_the_latest() {
+        let task = |id: &str, agent: &str, prompt: &str, at: u64| AgentTask {
+            summary: TaskSummary {
+                id: id.into(),
+                agent: agent.into(),
+                prompt: Some(prompt.into()),
+                created_at: Some(at),
+                ..TaskSummary::default()
+            },
+            thread: Thread::default(),
+        };
+        let tasks = [
+            task("a", "explore", "Map auth", 1),
+            task("b", "explore", "Review words.py", 2),
+            task("c", "review", "Review words.py", 3),
+        ];
+        assert_eq!(
+            task_for_run(&tasks, "explore", Some(" Map auth ")),
+            Some("a")
+        );
+        assert_eq!(task_for_run(&tasks, "explore", Some("other")), Some("b"));
+        assert_eq!(task_for_run(&tasks, "explore", None), Some("b"));
+        assert_eq!(task_for_run(&tasks, "missing", Some("Map auth")), None);
     }
 
     #[test]

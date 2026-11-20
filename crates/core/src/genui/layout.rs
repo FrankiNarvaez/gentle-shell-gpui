@@ -4,18 +4,20 @@
 //! ranks (ungrouped first, then groups chained by how much they link), add
 //! dummy vertices where an edge skips ranks, and order every (band, rank) cell
 //! with barycenter sweeps plus adjacent transpositions, keeping the ordering
-//! with the fewest crossings between adjacent ranks. Long edges then run as
-//! smooth chains of cubics through their dummies, around the boxes in between.
+//! with the fewest crossings between adjacent ranks. Edges then run
+//! orthogonally with rounded corners: straight through their dummies, across
+//! in a channel of each rank gap, every edge turning in a gap getting its own.
 
 use std::collections::HashMap;
 
-use super::diagram::{Diagram, Direction};
+use super::diagram::{Diagram, Direction, EdgeStyle};
 
 /// A diagram node's box: room for the title, a two-line description and the
 /// kind · tech line.
 pub const NODE_W: f32 = 208.;
 pub const NODE_H: f32 = 88.;
-/// Wide enough between ranks for a short verb-phrase edge label.
+/// Wide enough between ranks for a short verb-phrase edge label; gaps widen
+/// for longer ones.
 pub const RANK_GAP: f32 = 120.;
 pub const NODE_GAP: f32 = 32.;
 pub const GROUP_PAD: f32 = 20.;
@@ -37,10 +39,10 @@ pub const DIAGRAM: Sizing = Sizing {
     rank_gap: RANK_GAP,
 };
 
-/// State machines: compact cards that hold a name and one line.
+/// State machines: compact cards that hold an icon badge, a name and one line.
 pub const STATES: Sizing = Sizing {
-    node_w: 168.,
-    node_h: 60.,
+    node_w: 200.,
+    node_h: 64.,
     rank_gap: 96.,
 };
 
@@ -48,6 +50,40 @@ const ORDER_SWEEPS: usize = 4;
 const TRANSPOSE_PASSES: usize = 4;
 /// Cross-axis room a dummy takes in its cell, besides the usual gap.
 const DUMMY_SIZE: f32 = 8.;
+/// Corner radius of orthogonal edges, shrunk where a run is too short for it.
+pub const CORNER: f32 = 10.;
+/// Control-point distance, as a share of the radius, of the cubic closest to
+/// a quarter circle.
+const KAPPA: f32 = 0.5523;
+/// Ends nearer than this across the main axis count as aligned: the edge runs
+/// straight instead of jogging by a sliver.
+pub(crate) const ALIGNED: f32 = 1.;
+/// Room a channel keeps from the group boxes reaching into a rank gap.
+const CHANNEL_INSET: f32 = 8.;
+/// Where channels may start in a rank gap, from the side edges leave.
+const CHANNEL_LEAD: f32 = GROUP_PAD + CHANNEL_INSET;
+/// How far a self-loop reaches out of its box, and how wide it is.
+const LOOP_REACH: f32 = 24.;
+const LOOP_SPAN: f32 = 36.;
+/// Spacing of the ports edges leave or enter one side through: a label's
+/// height, so labels on neighboring runs can sit side by side.
+const PORT_GAP: f32 = 24.;
+/// Ports stay this far from a side's ends, clear of the card's corner.
+const PORT_INSET: f32 = 14.;
+/// Edge label pills, estimated in diagram units: 10.5 px text runs about 6.2
+/// per character, plus the pill's padding; past the widest a label wraps
+/// onto a second line.
+const LABEL_CHAR: f32 = 6.2;
+const LABEL_PADDING: f32 = 28.;
+pub const LABEL_MAX_W: f32 = 240.;
+const LABEL_H: f32 = 22.;
+const LABEL_LINE: f32 = 14.;
+/// A caption line under a label (a diagram edge's style).
+const LABEL_CAPTION: f32 = 12.;
+/// Clearance a label keeps from the ends of its run.
+const LABEL_PAD: f32 = 6.;
+/// How far a label slides along its run per try when it collides.
+const LABEL_STEP: f32 = 8.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Point {
@@ -136,6 +172,16 @@ impl Cubic {
             to: self.from,
         }
     }
+
+    /// A straight run: both control points on the line from `from` to `to`.
+    fn is_straight(&self) -> bool {
+        let (dx, dy) = (self.to.x - self.from.x, self.to.y - self.from.y);
+        let len = dx.hypot(dy);
+        len > 1e-3
+            && [self.c1, self.c2]
+                .iter()
+                .all(|c| ((c.x - self.from.x) * dy - (c.y - self.from.y) * dx).abs() / len < 1e-2)
+    }
 }
 
 /// Tangent-continuous chain of cubics from the source box's border to the
@@ -162,8 +208,31 @@ impl EdgePath {
         self.segments[i].point_at(s - i as f32)
     }
 
+    /// The middle of the longest straight run, so a label never sits on a
+    /// corner; on a tie, a run along the first one (the main axis) wins.
+    /// Paths without straight runs fall back to their middle.
     pub fn label_at(&self) -> Point {
-        self.point_at(0.5)
+        const TIE: f32 = 0.5;
+        let horizontal = |s: &Cubic| (s.to.x - s.from.x).abs() >= (s.to.y - s.from.y).abs();
+        let main = horizontal(&self.segments[0]);
+        let mut best: Option<(f32, bool, &Cubic)> = None;
+        for s in self.segments.iter().filter(|s| s.is_straight()) {
+            let len = (s.to.x - s.from.x).hypot(s.to.y - s.from.y);
+            let along = horizontal(s) == main;
+            let wins = best.is_none_or(|(most, most_along, _)| {
+                len > most + TIE || (len > most - TIE && along && !most_along)
+            });
+            if wins {
+                best = Some((len, along, s));
+            }
+        }
+        match best {
+            Some((_, _, s)) => Point {
+                x: (s.from.x + s.to.x) / 2.,
+                y: (s.from.y + s.to.y) / 2.,
+            },
+            None => self.point_at(0.5),
+        }
     }
 
     /// Sampled over 24 pieces per segment: plenty for hit-testing.
@@ -231,13 +300,15 @@ impl EdgePath {
 }
 
 /// `nodes`/`ranks` are index-aligned with `diagram.nodes`, `groups` with
-/// `diagram.groups` (None: no members), `edges` with `diagram.edges`.
+/// `diagram.groups` (None: no members), `edges` and `labels` with
+/// `diagram.edges` (a label's center, None for an edge without one).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     pub nodes: Vec<Rect>,
     pub ranks: Vec<usize>,
     pub groups: Vec<Option<Rect>>,
     pub edges: Vec<EdgePath>,
+    pub labels: Vec<Option<Point>>,
     pub bounds: Rect,
 }
 
@@ -300,7 +371,26 @@ pub fn layout_with(d: &Diagram, sizing: Sizing) -> Layout {
         .collect();
 
     let lr = d.direction == Direction::LeftRight;
-    let (mut nodes, waypoints) = place(d, &ranks, &links, sizing);
+    let sizes: Vec<Option<(f32, f32)>> = d
+        .edges
+        .iter()
+        .map(|e| {
+            let text = e.label.as_deref().filter(|l| !l.is_empty())?;
+            Some(label_size(text, e.style != EdgeStyle::Sync))
+        })
+        .collect();
+    let rank_count = ranks.iter().max().map_or(0, |r| r + 1);
+    let gaps = rank_gaps(rank_count, &ranks, &links, &sizes, lr, sizing);
+    let main_size = if lr { sizing.node_w } else { sizing.node_h };
+    let starts: Vec<f32> = gaps
+        .iter()
+        .scan(0., |cursor: &mut f32, gap| {
+            let start = *cursor;
+            *cursor += main_size + gap;
+            Some(start)
+        })
+        .collect();
+    let (mut nodes, waypoints) = place(d, &ranks, &links, sizing, &starts);
     let pinned: Vec<bool> = d
         .nodes
         .iter()
@@ -331,21 +421,25 @@ pub fn layout_with(d: &Diagram, sizing: Sizing) -> Layout {
         })
         .collect();
 
+    // Links between auto-placed nodes route through their dummies; edges
+    // touching a pinned node connect directly.
+    let routed: Vec<Option<(usize, usize)>> = links
+        .iter()
+        .map(|link| link.filter(|(lo, hi)| !pinned[*lo] && !pinned[*hi]))
+        .collect();
+    let paths = routes(lr, &nodes, &ranks, &routed, &waypoints, sizing, &starts);
     let edges: Vec<EdgePath> = ends
         .iter()
-        .zip(&links)
-        .zip(&waypoints)
-        .map(|((e, link), crosses)| match (e, link) {
-            (Some((a, b)), _) if a == b => self_loop(&nodes[*a]),
-            (Some((a, b)), Some((lo, hi))) if !pinned[*lo] && !pinned[*hi] => {
-                let path = route(lr, &nodes[*lo], &nodes[*hi], ranks[*lo], crosses, sizing);
-                if lo == a && hi == b {
-                    path
-                } else {
-                    path.reversed()
-                }
-            }
-            (Some((a, b)), _) => connect(&nodes[*a], &nodes[*b]),
+        .zip(&routed)
+        .zip(paths)
+        .map(|((e, link), path)| match (e, path) {
+            (Some((a, b)), _) if a == b => self_loop(&nodes[*a], lr),
+            // Back edges were routed from their lower-rank end.
+            (Some((a, _)), Some(path)) => match link {
+                Some((lo, _)) if lo == a => path,
+                _ => path.reversed(),
+            },
+            (Some((a, b)), None) => connect(&nodes[*a], &nodes[*b]),
             // Only reachable for hand-built diagrams; parse rejects dangling edges.
             (None, _) => {
                 let p = Point::default();
@@ -361,11 +455,17 @@ pub fn layout_with(d: &Diagram, sizing: Sizing) -> Layout {
         })
         .collect();
 
+    let labels = place_labels(&edges, &sizes, &nodes, lr);
+
     let bounds = nodes
         .iter()
         .copied()
         .chain(groups.iter().flatten().copied())
         .chain(edges.iter().map(EdgePath::bounds))
+        .chain(labels.iter().zip(&sizes).filter_map(|(p, size)| {
+            let (p, (w, h)) = ((*p)?, (*size)?);
+            Some(label_box(p, w, h))
+        }))
         .reduce(|a, b| a.union(&b))
         .unwrap_or_default();
 
@@ -374,6 +474,7 @@ pub fn layout_with(d: &Diagram, sizing: Sizing) -> Layout {
         ranks,
         groups,
         edges,
+        labels,
         bounds,
     }
 }
@@ -450,13 +551,14 @@ fn longest_path_ranks(n: usize, forward: &[(usize, usize)]) -> Vec<usize> {
 
 /// Auto positions for every node, plus the cross-axis centers of each link's
 /// dummies in rank order (empty for links spanning one rank). Ranks run along
-/// the main axis; across it each group gets a band, and the order inside each
-/// (band, rank) cell is chosen to reduce crossings.
+/// the main axis from `starts`; across it each group gets a band, and the
+/// order inside each (band, rank) cell is chosen to reduce crossings.
 fn place(
     d: &Diagram,
     ranks: &[usize],
     links: &[Option<(usize, usize)>],
     sizing: Sizing,
+    starts: &[f32],
 ) -> (Vec<Rect>, Vec<Vec<f32>>) {
     let n = d.nodes.len();
     if n == 0 {
@@ -545,10 +647,9 @@ fn place(
     };
     layers.order();
 
-    let main_size = if lr { sizing.node_w } else { sizing.node_h };
     let nodes = (0..n)
         .map(|v| {
-            let main = ranks[v] as f32 * (main_size + sizing.rank_gap);
+            let main = starts[ranks[v]];
             let cross = layers.cross[v] - node_cross / 2.;
             if lr {
                 Rect {
@@ -825,18 +926,22 @@ fn inversions(v: &mut [f32], scratch: &mut Vec<f32>) -> usize {
     count
 }
 
-/// A link through its dummies: straight across each skipped rank at the
-/// dummy's cross position, S-curves in the gaps between ranks, all tangents
-/// along the main axis so the joins are smooth. `crosses` are the dummies'
-/// centers for the ranks after `first_rank`.
-fn route(
+/// Orthogonal paths for the links between auto-placed nodes (None for the
+/// others): out of a port on the source's far side, straight along the main
+/// axis through each dummy, and across in a channel of every rank gap where
+/// the cross position changes, into a port on the target's near side. Each
+/// link turning in a gap gets its own channel there, so cross runs never
+/// overlap. `crosses` are each link's dummies' centers, in rank order;
+/// `starts` where each rank begins along the main axis.
+fn routes(
     lr: bool,
-    from: &Rect,
-    to: &Rect,
-    first_rank: usize,
-    crosses: &[f32],
+    nodes: &[Rect],
+    ranks: &[usize],
+    links: &[Option<(usize, usize)>],
+    crosses: &[Vec<f32>],
     sizing: Sizing,
-) -> EdgePath {
+    starts: &[f32],
+) -> Vec<Option<EdgePath>> {
     let at = |main: f32, cross: f32| {
         if lr {
             Point { x: main, y: cross }
@@ -844,121 +949,513 @@ fn route(
             Point { x: cross, y: main }
         }
     };
-    let (main_size, start, end) = if lr {
+    let cross_of = |r: &Rect| {
+        let c = r.center();
+        if lr { c.y } else { c.x }
+    };
+    // Ports: the links leaving (or entering) one side spread along it in the
+    // order of the cross position they head to (or come from), so they
+    // neither share a run nor cross on the way out; a lone link keeps the
+    // middle.
+    let mut outs: Vec<Vec<(f32, usize)>> = vec![Vec::new(); nodes.len()];
+    let mut ins: Vec<Vec<(f32, usize)>> = vec![Vec::new(); nodes.len()];
+    for (i, (link, dummies)) in links.iter().zip(crosses).enumerate() {
+        let Some((lo, hi)) = *link else { continue };
+        let next = dummies
+            .first()
+            .copied()
+            .unwrap_or_else(|| cross_of(&nodes[hi]));
+        let prev = dummies
+            .last()
+            .copied()
+            .unwrap_or_else(|| cross_of(&nodes[lo]));
+        outs[lo].push((next, i));
+        ins[hi].push((prev, i));
+    }
+    let mut out_port = vec![0.; links.len()];
+    let mut in_port = vec![0.; links.len()];
+    for (v, rect) in nodes.iter().enumerate() {
+        let side = if lr { rect.h } else { rect.w };
+        spread_ports(&mut outs[v], side, &mut out_port);
+        spread_ports(&mut ins[v], side, &mut in_port);
+    }
+    // The cross position at every rank a link spans, a step smaller than
+    // ALIGNED keeping the previous one so near-aligned ends run straight.
+    let steps: Vec<Vec<f32>> = links
+        .iter()
+        .zip(crosses)
+        .enumerate()
+        .map(|(i, (link, dummies))| {
+            let Some((lo, hi)) = *link else {
+                return Vec::new();
+            };
+            let mut out: Vec<f32> = Vec::with_capacity(dummies.len() + 2);
+            let ends = [
+                cross_of(&nodes[lo]) + out_port[i],
+                cross_of(&nodes[hi]) + in_port[i],
+            ];
+            for c in ends[..1].iter().chain(dummies).chain(&ends[1..]) {
+                let c = match out.last() {
+                    Some(&prev) if (c - prev).abs() < ALIGNED => prev,
+                    _ => *c,
+                };
+                out.push(c);
+            }
+            out
+        })
+        .collect();
+
+    // The jogs in the gap after each rank: ((link, step), cross in, cross out).
+    type Jog = ((usize, usize), f32, f32);
+    let rank_count = ranks.iter().max().map_or(0, |r| r + 1);
+    let mut gaps: Vec<Vec<Jog>> = vec![Vec::new(); rank_count];
+    for (i, (link, cross)) in links.iter().zip(&steps).enumerate() {
+        let Some((lo, _)) = *link else { continue };
+        for (step, pair) in cross.windows(2).enumerate() {
+            if pair[0] != pair[1] {
+                gaps[ranks[lo] + step].push(((i, step), pair[0], pair[1]));
+            }
+        }
+    }
+    let main_size = if lr { sizing.node_w } else { sizing.node_h };
+    let mut channel: Vec<Vec<f32>> = steps
+        .iter()
+        .map(|cross| vec![0.; cross.len().saturating_sub(1)])
+        .collect();
+    for (g, jogs) in gaps.into_iter().enumerate() {
+        // The channels keep to the base gap's zone at the leaving side, so a
+        // gap widened for labels leaves the room on the arriving runs.
+        let start = starts[g] + main_size;
+        let lo = start + CHANNEL_LEAD;
+        let hi = (start + sizing.rank_gap - channel_trail(lr)).max(lo);
+        for ((i, step), main) in channels(jogs, lo, hi) {
+            channel[i][step] = main;
+        }
+    }
+
+    links
+        .iter()
+        .zip(&steps)
+        .zip(&channel)
+        .map(|((link, cross), channel)| {
+            let (lo, hi) = (*link)?;
+            let (from, to) = (&nodes[lo], &nodes[hi]);
+            let (start, end) = if lr {
+                (from.right(), to.x)
+            } else {
+                (from.bottom(), to.y)
+            };
+            let mut points = Vec::with_capacity(2 * cross.len());
+            points.push(at(start, cross[0]));
+            for (pair, &main) in cross.windows(2).zip(channel) {
+                if pair[0] != pair[1] {
+                    points.push(at(main, pair[0]));
+                    points.push(at(main, pair[1]));
+                }
+            }
+            points.push(at(end, cross[cross.len() - 1]));
+            Some(orthogonal(&points))
+        })
+        .collect()
+}
+
+/// Writes the cross offsets of the ports along one side `len` long into
+/// `offsets` (by link). `side` holds (cross the link heads to, link) and is
+/// sorted here; ports sit PORT_GAP apart around the middle, closer on a
+/// side too short for that.
+fn spread_ports(side: &mut [(f32, usize)], len: f32, offsets: &mut [f32]) {
+    if side.len() < 2 {
+        return;
+    }
+    side.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let last = (side.len() - 1) as f32;
+    let gap = PORT_GAP.min((len - 2. * PORT_INSET).max(0.) / last);
+    for (k, &(_, i)) in side.iter().enumerate() {
+        offsets[i] = (k as f32 - last / 2.) * gap;
+    }
+}
+
+/// How far channels stay from the side edges arrive at. Group boxes reach
+/// GROUP_PAD into every gap, and in TB a group's header too: channels keep
+/// clear of both so cross runs don't hug group borders or strike through
+/// their titles.
+fn channel_trail(lr: bool) -> f32 {
+    CHANNEL_LEAD + if lr { 0. } else { GROUP_HEADER }
+}
+
+/// The gap after every rank (the last one unused): the sizing's, widened
+/// where the label of a link spanning just that gap would not fit on its
+/// arriving run, past the channels and a corner. A label's width counts in
+/// LR, its height in TB. Longer links have room on their runs through the
+/// ranks they skip.
+fn rank_gaps(
+    rank_count: usize,
+    ranks: &[usize],
+    links: &[Option<(usize, usize)>],
+    sizes: &[Option<(f32, f32)>],
+    lr: bool,
+    sizing: Sizing,
+) -> Vec<f32> {
+    let mut gaps = vec![sizing.rank_gap; rank_count];
+    let channels_end = sizing.rank_gap - channel_trail(lr);
+    for (link, size) in links.iter().zip(sizes) {
+        let (Some((lo, hi)), Some((w, h))) = (*link, *size) else {
+            continue;
+        };
+        if ranks[hi] != ranks[lo] + 1 {
+            continue;
+        }
+        let along = if lr { w } else { h };
+        let gap = &mut gaps[ranks[lo]];
+        *gap = gap.max(channels_end + CORNER + along + 2. * LABEL_PAD);
+    }
+    gaps
+}
+
+/// A label pill's estimated (width, height) in diagram units, `caption`
+/// adding a line under the text.
+pub fn label_size(text: &str, caption: bool) -> (f32, f32) {
+    let w = text.chars().count() as f32 * LABEL_CHAR + LABEL_PADDING;
+    let mut h = LABEL_H;
+    if w > LABEL_MAX_W {
+        h += LABEL_LINE;
+    }
+    if caption {
+        h += LABEL_CAPTION;
+    }
+    (w.min(LABEL_MAX_W), h)
+}
+
+/// The box of a `w` × `h` label centered on `p`.
+pub fn label_box(p: Point, w: f32, h: f32) -> Rect {
+    Rect {
+        x: p.x - w / 2.,
+        y: p.y - h / 2.,
+        w,
+        h,
+    }
+}
+
+/// Each labelled edge's label center (`sizes` from [`label_size`]).
+/// Candidates lie on the edge's straight runs: main-axis runs long enough
+/// for the label first, then other runs it fits, then the rest, longest
+/// first within each, every run tried at its middle and then slid along it
+/// a step at a time either way. Edges go in order, each taking the first
+/// candidate clear of every node and of the labels placed before it with no
+/// other edge's run passing under it; failing that, the one clashing least.
+/// Paths without straight runs fall back to [`EdgePath::label_at`].
+fn place_labels(
+    edges: &[EdgePath],
+    sizes: &[Option<(f32, f32)>],
+    nodes: &[Rect],
+    lr: bool,
+) -> Vec<Option<Point>> {
+    let runs: Vec<Vec<(Point, Point)>> = edges
+        .iter()
+        .map(|path| {
+            path.segments
+                .iter()
+                .filter(|s| s.is_straight())
+                .map(|s| (s.from, s.to))
+                .collect()
+        })
+        .collect();
+    // Whether an axis-aligned run passes through `r`'s inside.
+    let under = |(a, b): (Point, Point), r: &Rect| {
+        if (a.y - b.y).abs() < 1e-3 {
+            a.y > r.y && a.y < r.bottom() && a.x.min(b.x) < r.right() && a.x.max(b.x) > r.x
+        } else if (a.x - b.x).abs() < 1e-3 {
+            a.x > r.x && a.x < r.right() && a.y.min(b.y) < r.bottom() && a.y.max(b.y) > r.y
+        } else {
+            false
+        }
+    };
+    let mut placed: Vec<Rect> = Vec::new();
+    edges
+        .iter()
+        .zip(sizes)
+        .enumerate()
+        .map(|(i, (path, size))| {
+            let (w, h) = (*size)?;
+            // (preference, length, run): preference 0 for main-axis runs
+            // the label fits on, 1 for other runs it fits on, 2 for the rest.
+            let mut order: Vec<(u8, f32, (Point, Point))> = runs[i]
+                .iter()
+                .map(|&(a, b)| {
+                    let len = (b.x - a.x).hypot(b.y - a.y);
+                    let horizontal = (b.x - a.x).abs() >= (b.y - a.y).abs();
+                    let along = if horizontal { w } else { h };
+                    let preference = match (len >= along + 2. * LABEL_PAD, horizontal == lr) {
+                        (true, true) => 0,
+                        (true, false) => 1,
+                        (false, _) => 2,
+                    };
+                    (preference, len, (a, b))
+                })
+                .collect();
+            order.sort_by(|p, q| p.0.cmp(&q.0).then(q.1.total_cmp(&p.1)));
+            let mut best: Option<((usize, usize), Point)> = None;
+            'runs: for &(_, len, (a, b)) in &order {
+                let horizontal = (b.x - a.x).abs() >= (b.y - a.y).abs();
+                let along_run = if horizontal { w } else { h };
+                let dir = Point {
+                    x: (b.x - a.x) / len,
+                    y: (b.y - a.y) / len,
+                };
+                let mid = Point {
+                    x: (a.x + b.x) / 2.,
+                    y: (a.y + b.y) / 2.,
+                };
+                let room = ((len - along_run) / 2. - LABEL_PAD).max(0.);
+                let tries = (room / LABEL_STEP) as usize;
+                for k in 0..=2 * tries {
+                    // 0, +1, -1, +2, -2… steps from the middle.
+                    let step = k.div_ceil(2) as f32 * LABEL_STEP;
+                    let p = along(mid, dir, if k % 2 == 1 { step } else { -step });
+                    let r = label_box(p, w, h);
+                    let hard = placed.iter().filter(|o| o.intersects(&r)).count()
+                        + nodes.iter().filter(|n| n.intersects(&r)).count();
+                    let soft = if hard > 0 {
+                        0
+                    } else {
+                        runs.iter()
+                            .enumerate()
+                            .filter(|(j, _)| *j != i)
+                            .flat_map(|(_, rs)| rs)
+                            .filter(|run| under(**run, &r))
+                            .count()
+                    };
+                    let score = (hard, soft);
+                    if best.is_none_or(|(most, _)| score < most) {
+                        best = Some((score, p));
+                    }
+                    if score == (0, 0) {
+                        break 'runs;
+                    }
+                }
+            }
+            let p = best.map_or_else(|| path.label_at(), |(_, p)| p);
+            placed.push(label_box(p, w, h));
+            Some(p)
+        })
+        .collect()
+}
+
+/// Main-axis positions, evenly spaced from `lo` to `hi`, for the cross runs
+/// of `jogs` sharing one gap: `(key, cross where it enters, cross where it
+/// leaves)`, entering on the `lo` side. Two jogs cross where the one nearer
+/// `lo` spans the other's entering cross, or the other spans the first's
+/// leaving cross, so only their order matters: among jogs heading toward
+/// higher crosses, the one entering (then leaving) furthest along goes
+/// first, never crossing more than the other way round; jogs heading back
+/// mirror that, and a pair heading opposite ways crosses as often either way.
+pub(crate) fn channels<K: Copy + Ord>(
+    mut jogs: Vec<(K, f32, f32)>,
+    lo: f32,
+    hi: f32,
+) -> Vec<(K, f32)> {
+    let ahead = |j: &(K, f32, f32)| j.2 > j.1;
+    jogs.sort_by(|p, q| {
+        ahead(q)
+            .cmp(&ahead(p))
+            .then_with(|| {
+                let order = p.1.total_cmp(&q.1).then(p.2.total_cmp(&q.2));
+                if ahead(p) { order.reverse() } else { order }
+            })
+            .then(p.0.cmp(&q.0))
+    });
+    let slots = jogs.len() as f32 + 1.;
+    jogs.into_iter()
+        .enumerate()
+        .map(|(k, (key, ..))| (key, lo + (hi - lo) * (k as f32 + 1.) / slots))
+        .collect()
+}
+
+/// A path along an orthogonal polyline: a straight run per leg (control
+/// points at thirds) and, at every bend, a quarter circle of up to
+/// [`CORNER`], shrunk to half its shorter leg. Repeated points and points
+/// partway along a straight leg are dropped first, so `k` bends always give
+/// `2k + 1` segments, alternating runs and corners: a leg its two corners
+/// use up stays as a zero-length run, keeping the count motion tweens match on.
+pub fn orthogonal(points: &[Point]) -> EdgePath {
+    const EPS: f32 = 1e-3;
+    let mut legs: Vec<Point> = Vec::with_capacity(points.len());
+    for &p in points {
+        if legs
+            .last()
+            .is_some_and(|q| (q.x - p.x).abs() < EPS && (q.y - p.y).abs() < EPS)
+        {
+            continue;
+        }
+        if let [.., a, b] = legs[..] {
+            // `b` strictly between `a` and `p` on one axis line.
+            let level = |a: f32, b: f32, p: f32| (a - b).abs() < EPS && (b - p).abs() < EPS;
+            let inside = |a: f32, b: f32, p: f32| (b - a) * (p - b) > 0.;
+            if (level(a.x, b.x, p.x) && inside(a.y, b.y, p.y))
+                || (level(a.y, b.y, p.y) && inside(a.x, b.x, p.x))
+            {
+                legs.pop();
+            }
+        }
+        legs.push(p);
+    }
+    let first = legs.first().copied().unwrap_or_default();
+    let Some(&last) = legs.last().filter(|_| legs.len() > 1) else {
+        return EdgePath {
+            segments: vec![run(first, first)],
+        };
+    };
+    let unit = |a: Point, b: Point| {
+        let len = (b.x - a.x).hypot(b.y - a.y);
         (
-            sizing.node_w,
-            (from.right(), from.center().y),
-            (to.x, to.center().y),
-        )
-    } else {
-        (
-            sizing.node_h,
-            (from.bottom(), from.center().x),
-            (to.y, to.center().x),
+            Point {
+                x: (b.x - a.x) / len,
+                y: (b.y - a.y) / len,
+            },
+            len,
         )
     };
-    // (main, cross) waypoints: leaving the source, entering and leaving each
-    // skipped rank, entering the target.
-    let mut points = Vec::with_capacity(2 * crosses.len() + 2);
-    points.push(start);
-    for (k, &cross) in crosses.iter().enumerate() {
-        let main = (first_rank + 1 + k) as f32 * (main_size + sizing.rank_gap);
-        points.push((main, cross));
-        points.push((main + main_size, cross));
-    }
-    points.push(end);
-
-    let mut segments = Vec::with_capacity(points.len() - 1);
-    let mut i = 0;
-    while i + 1 < points.len() {
-        let (m0, c0) = points[i];
-        // A run at one cross position becomes a single straight segment.
-        let mut j = i;
-        while j + 1 < points.len() && points[j + 1].1 == c0 {
-            j += 1;
-        }
-        let (m1, c1, push) = if j > i {
-            (points[j].0, c0, (points[j].0 - m0) / 3.)
-        } else {
-            j = i + 1;
-            (points[j].0, points[j].1, (points[j].0 - m0) / 2.)
-        };
+    let mut segments = Vec::with_capacity(2 * legs.len() - 3);
+    let mut from = first;
+    for bend in legs.windows(3) {
+        let (into, before) = unit(bend[0], bend[1]);
+        let (out, after) = unit(bend[1], bend[2]);
+        let r = CORNER.min(before / 2.).min(after / 2.);
+        // A leg both corners use up must be exactly zero long, not a
+        // rounding-error sliver pointing either way.
+        let enter = Some(along(bend[1], into, -r))
+            .filter(|p| (p.x - from.x).abs() >= EPS || (p.y - from.y).abs() >= EPS)
+            .unwrap_or(from);
+        let leave = along(bend[1], out, r);
+        segments.push(run(from, enter));
         segments.push(Cubic {
-            from: at(m0, c0),
-            c1: at(m0 + push, c0),
-            c2: at(m1 - push, c1),
-            to: at(m1, c1),
+            from: enter,
+            c1: along(enter, into, KAPPA * r),
+            c2: along(leave, out, -KAPPA * r),
+            to: leave,
         });
-        i = j;
+        from = leave;
     }
+    segments.push(run(from, last));
     EdgePath { segments }
 }
 
-/// Leaves and enters through the sides facing each other, with control points
-/// pushed along the side normals so the curve meets the boxes square.
-fn connect(a: &Rect, b: &Rect) -> EdgePath {
-    let (ca, cb) = (a.center(), b.center());
-    let (dx, dy) = (cb.x - ca.x, cb.y - ca.y);
-    let (from, to, normal) = if dx.abs() >= dy.abs() {
-        let sign = if dx >= 0. { 1. } else { -1. };
-        let from_x = if sign > 0. { a.right() } else { a.x };
-        let to_x = if sign > 0. { b.x } else { b.right() };
-        (
-            Point { x: from_x, y: ca.y },
-            Point { x: to_x, y: cb.y },
-            Point { x: sign, y: 0. },
-        )
-    } else {
-        let sign = if dy >= 0. { 1. } else { -1. };
-        let from_y = if sign > 0. { a.bottom() } else { a.y };
-        let to_y = if sign > 0. { b.y } else { b.bottom() };
-        (
-            Point { x: ca.x, y: from_y },
-            Point { x: cb.x, y: to_y },
-            Point { x: 0., y: sign },
-        )
-    };
-    let push = ((to.x - from.x).hypot(to.y - from.y) * 0.4).max(30.);
-    EdgePath {
-        segments: vec![Cubic {
-            from,
-            c1: Point {
-                x: from.x + normal.x * push,
-                y: from.y + normal.y * push,
-            },
-            c2: Point {
-                x: to.x - normal.x * push,
-                y: to.y - normal.y * push,
-            },
-            to,
-        }],
+fn along(p: Point, dir: Point, by: f32) -> Point {
+    Point {
+        x: p.x + dir.x * by,
+        y: p.y + dir.y * by,
     }
 }
 
-fn self_loop(r: &Rect) -> EdgePath {
-    let c = r.center();
-    let from = Point {
-        x: r.right(),
-        y: c.y - r.h / 4.,
+/// A straight cubic from `a` to `b`, moving at constant speed.
+fn run(a: Point, b: Point) -> Cubic {
+    let third = |k: f32| Point {
+        x: a.x + (b.x - a.x) * k / 3.,
+        y: a.y + (b.y - a.y) * k / 3.,
     };
-    let to = Point {
-        x: r.right(),
-        y: c.y + r.h / 4.,
-    };
-    EdgePath {
-        segments: vec![Cubic {
-            from,
-            c1: Point {
-                x: from.x + 48.,
-                y: from.y - 20.,
-            },
-            c2: Point {
-                x: to.x + 48.,
-                y: to.y + 20.,
-            },
-            to,
-        }],
+    Cubic {
+        from: a,
+        c1: third(1.),
+        c2: third(2.),
+        to: b,
     }
+}
+
+/// Pinned ends: out of the sides facing each other across the axis the
+/// centers lie further apart along (the other one if only it has a gap
+/// between the boxes), with the elbow halfway.
+fn connect(a: &Rect, b: &Rect) -> EdgePath {
+    let (ca, cb) = (a.center(), b.center());
+    let (dx, dy) = (cb.x - ca.x, cb.y - ca.y);
+    let gap_x = (b.x - a.right()).max(a.x - b.right());
+    let gap_y = (b.y - a.bottom()).max(a.y - b.bottom());
+    let across_x = if dx.abs() >= dy.abs() {
+        gap_x > 0. || gap_y <= 0.
+    } else {
+        gap_x > 0. && gap_y <= 0.
+    };
+    let points = if across_x {
+        let (from_x, to_x) = if dx >= 0. {
+            (a.right(), b.x)
+        } else {
+            (a.x, b.right())
+        };
+        let mid = (from_x + to_x) / 2.;
+        [
+            Point { x: from_x, y: ca.y },
+            Point { x: mid, y: ca.y },
+            Point { x: mid, y: cb.y },
+            Point { x: to_x, y: cb.y },
+        ]
+    } else {
+        let (from_y, to_y) = if dy >= 0. {
+            (a.bottom(), b.y)
+        } else {
+            (a.y, b.bottom())
+        };
+        let mid = (from_y + to_y) / 2.;
+        [
+            Point { x: ca.x, y: from_y },
+            Point { x: ca.x, y: mid },
+            Point { x: cb.x, y: mid },
+            Point { x: cb.x, y: to_y },
+        ]
+    };
+    let jog = (points[1].x - points[2].x).abs() + (points[1].y - points[2].y).abs();
+    if jog < ALIGNED {
+        orthogonal(&[points[0], points[3]])
+    } else {
+        orthogonal(&points)
+    }
+}
+
+/// A rounded rectangle out of the middle of the side no routed edge uses
+/// (the top in LR, the right in TB) and back, short of the next box over.
+fn self_loop(r: &Rect, lr: bool) -> EdgePath {
+    let c = r.center();
+    let half = LOOP_SPAN / 2.;
+    let points = if lr {
+        let top = r.y - LOOP_REACH;
+        [
+            Point {
+                x: c.x + half,
+                y: r.y,
+            },
+            Point {
+                x: c.x + half,
+                y: top,
+            },
+            Point {
+                x: c.x - half,
+                y: top,
+            },
+            Point {
+                x: c.x - half,
+                y: r.y,
+            },
+        ]
+    } else {
+        let out = r.right() + LOOP_REACH;
+        [
+            Point {
+                x: r.right(),
+                y: c.y - half,
+            },
+            Point {
+                x: out,
+                y: c.y - half,
+            },
+            Point {
+                x: out,
+                y: c.y + half,
+            },
+            Point {
+                x: r.right(),
+                y: c.y + half,
+            },
+        ]
+    };
+    orthogonal(&points)
 }
 
 fn segment_distance(p: Point, a: Point, b: Point) -> f32 {
@@ -1253,6 +1750,92 @@ mod tests {
                 assert!(on_border(a, path.start()) && on_border(b, path.end()));
                 assert!(l.bounds.contains(path.label_at()));
             }
+            assert!(l.labels.iter().all(Option::is_none));
+        }
+    }
+
+    /// A state machine's shape: one state feeding three, two of them
+    /// answering back, all labelled, plus a link skipping a rank.
+    fn labelled(direction: &str) -> Diagram {
+        diagram(json!({
+            "direction": direction,
+            "nodes": [{"id": "work"}, {"id": "blocked"}, {"id": "review"}, {"id": "done"}],
+            "edges": [
+                {"from": "work", "to": "blocked", "label": "asks"},
+                {"from": "blocked", "to": "work", "label": "you answer"},
+                {"from": "work", "to": "review", "label": "edits ready [review on]"},
+                {"from": "review", "to": "work", "label": "changes requested"},
+                {"from": "review", "to": "done", "label": "approved"},
+                {"from": "work", "to": "done", "label": "finishes", "style": "async"},
+                {"from": "done", "to": "review"},
+            ],
+        }))
+    }
+
+    #[test]
+    fn labels_sit_on_their_edges_clear_of_each_other_and_the_nodes() {
+        for (direction, lr) in [("LR", true), ("TB", false)] {
+            let d = labelled(direction);
+            let l = layout(&d);
+            let mut boxes = Vec::new();
+            for ((edge, path), spot) in d.edges.iter().zip(&l.edges).zip(&l.labels) {
+                let Some(text) = &edge.label else {
+                    assert_eq!(*spot, None);
+                    continue;
+                };
+                let p = spot.expect("a labelled edge gets a spot");
+                assert!(path.distance_to(p) < 0.01, "{direction} {text}");
+                let (w, h) = label_size(text, edge.style != EdgeStyle::Sync);
+                let r = label_box(p, w, h);
+                assert!(l.bounds.contains(Point { x: r.x, y: r.y }));
+                assert!(l.bounds.contains(Point {
+                    x: r.right(),
+                    y: r.bottom()
+                }));
+                for node in &l.nodes {
+                    assert!(!node.intersects(&r), "{direction} {text} on a node");
+                }
+                boxes.push((text.clone(), r));
+            }
+            for (i, (a, ra)) in boxes.iter().enumerate() {
+                for (b, rb) in &boxes[i + 1..] {
+                    assert!(!ra.intersects(rb), "{direction}: {a} overlaps {b}");
+                }
+            }
+            // The first gap widened for its widest label, in LR only.
+            let (work, blocked) = (l.nodes[0], l.nodes[1]);
+            let gap = if lr {
+                blocked.x - work.right()
+            } else {
+                blocked.y - work.bottom()
+            };
+            let widest = label_size("edits ready [review on]", false).0;
+            if lr {
+                assert!(gap > widest, "{gap}");
+            } else {
+                assert_eq!(gap, RANK_GAP);
+            }
+        }
+    }
+
+    #[test]
+    fn edges_leaving_one_side_take_their_own_ports() {
+        let d = labelled("LR");
+        let l = layout(&d);
+        let work = l.nodes[0];
+        let starts: Vec<f32> = d
+            .edges
+            .iter()
+            .zip(&l.edges)
+            .filter(|(e, _)| e.from == "work")
+            .map(|(_, p)| p.start().y)
+            .collect();
+        assert_eq!(starts.len(), 3);
+        for (i, a) in starts.iter().enumerate() {
+            assert!(*a > work.y && *a < work.bottom());
+            for b in &starts[i + 1..] {
+                assert!((a - b).abs() > 1., "{starts:?}");
+            }
         }
     }
 
@@ -1287,9 +1870,11 @@ mod tests {
             let l = layout(&d);
             for (e, path) in ends(&d).iter().zip(&l.edges) {
                 let (a, b) = e.unwrap();
+                let mut points = vec![path.start()];
+                path.polyline(16, |_, p| points.push(p));
                 for (i, rect) in l.nodes.iter().enumerate() {
                     if i != a && i != b {
-                        assert!((0..=64).all(|k| !rect.contains(path.point_at(k as f32 / 64.))));
+                        assert!(points.iter().all(|p| !rect.contains(*p)));
                     }
                 }
             }
@@ -1307,11 +1892,95 @@ mod tests {
             for path in layout(&d).edges {
                 for pair in path.segments.windows(2) {
                     assert_eq!(pair[0].to, pair[1].from);
+                }
+                // Zero-length runs (legs their corners use up) carry no
+                // direction: the corners on either side meet tangent.
+                let moving: Vec<&Cubic> = path.segments.iter().filter(|s| s.from != s.to).collect();
+                for pair in moving.windows(2) {
                     let (ix, iy) = unit(pair[0].c2, pair[0].to);
                     let (ox, oy) = unit(pair[1].from, pair[1].c1);
                     assert!((ix - ox).abs() < 1e-3 && (iy - oy).abs() < 1e-3);
                 }
             }
         }
+    }
+
+    #[test]
+    fn routes_are_orthogonal_with_labels_on_straight_runs() {
+        const EPS: f32 = 1e-2;
+        let level = |a: Point, b: Point| (a.x - b.x).abs() < EPS || (a.y - b.y).abs() < EPS;
+        for d in shapes() {
+            for path in layout(&d).edges {
+                for s in path.segments.iter().filter(|s| s.from != s.to) {
+                    if level(s.from, s.to) {
+                        // A straight run along one axis.
+                        assert!(s.is_straight(), "{s:?}");
+                        assert!(level(s.from, s.c1) && level(s.c2, s.to), "{s:?}");
+                    } else {
+                        // A quarter circle turning from one axis to the other.
+                        let (dx, dy) = ((s.to.x - s.from.x).abs(), (s.to.y - s.from.y).abs());
+                        assert!((dx - dy).abs() < EPS, "{s:?}");
+                        assert!(level(s.from, s.c1) && level(s.c2, s.to), "{s:?}");
+                        let into = (s.c1.x - s.from.x, s.c1.y - s.from.y);
+                        let out = (s.to.x - s.c2.x, s.to.y - s.c2.y);
+                        assert!((into.0 * out.0 + into.1 * out.1).abs() < EPS, "{s:?}");
+                    }
+                }
+                let label = path.label_at();
+                assert!(
+                    path.segments.iter().any(|s| {
+                        s.is_straight() && segment_distance(label, s.from, s.to) < EPS
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn edges_turning_in_one_gap_get_their_own_channels() {
+        for (direction, lr) in [("LR", true), ("TB", false)] {
+            let d = diagram(json!({
+                "direction": direction,
+                "nodes": [{"id": "a"}, {"id": "b"}, {"id": "c"}, {"id": "d"}],
+                "edges": [{"from": "a", "to": "b"}, {"from": "a", "to": "c"}, {"from": "a", "to": "d"}],
+            }));
+            let l = layout(&d);
+            // The target lined up with the source gets one straight run.
+            assert_eq!(l.edges.iter().filter(|p| p.segments.len() == 1).count(), 1);
+            let main = |p: Point| if lr { p.x } else { p.y };
+            let channels: Vec<f32> = l
+                .edges
+                .iter()
+                .filter(|p| p.segments.len() > 1)
+                .map(|p| {
+                    let across = p
+                        .segments
+                        .iter()
+                        .find(|s| s.is_straight() && (main(s.from) - main(s.to)).abs() < 1e-3)
+                        .expect("a run across the main axis");
+                    main(across.from)
+                })
+                .collect();
+            assert_eq!(channels.len(), 2);
+            assert!((channels[0] - channels[1]).abs() > 10., "{channels:?}");
+            let gap = main(Point {
+                x: l.nodes[0].right(),
+                y: l.nodes[0].bottom(),
+            });
+            for c in channels {
+                assert!(c > gap + GROUP_PAD && c < gap + RANK_GAP - GROUP_PAD);
+            }
+        }
+    }
+
+    #[test]
+    fn channels_order_jogs_to_avoid_crossings() {
+        // Two jogs heading the same way, staggered: the one entering further
+        // along turns first, so neither crosses the other.
+        let order = channels(vec![(0, 0., 100.), (1, 50., 150.)], 0., 30.);
+        assert_eq!(order, vec![(1, 10.), (0, 20.)]);
+        // Heading back mirrors it.
+        let order = channels(vec![(0, 150., 50.), (1, 100., 0.)], 0., 30.);
+        assert_eq!(order, vec![(1, 10.), (0, 20.)]);
     }
 }

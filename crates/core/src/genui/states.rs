@@ -11,6 +11,7 @@ use super::diagram::{
 };
 use super::edits::{Editable, fresh_id, plural};
 use super::layout::{self, Layout, Point};
+use super::style::{self, Tint};
 
 pub const MAX_STATES: usize = 150;
 pub const MAX_TRANSITIONS: usize = 300;
@@ -59,12 +60,16 @@ pub struct State {
     pub description: Option<String>,
     pub x: Option<f32>,
     pub y: Option<f32>,
+    /// Overrides the state's look (`color`, `icon`).
+    pub color: Option<Tint>,
+    pub icon: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Composite {
     pub id: String,
     pub label: String,
+    pub color: Option<Tint>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +101,8 @@ impl State {
             description: None,
             x: None,
             y: None,
+            color: None,
+            icon: None,
         }
     }
 
@@ -113,6 +120,12 @@ impl State {
         if let (Some(x), Some(y)) = (self.x, self.y) {
             map.insert("x".into(), json!(x.round() as i64));
             map.insert("y".into(), json!(y.round() as i64));
+        }
+        if let Some(color) = self.color {
+            map.insert("color".into(), json!(color.name()));
+        }
+        if let Some(icon) = self.icon {
+            map.insert("icon".into(), json!(icon));
         }
         Value::Object(map)
     }
@@ -194,6 +207,7 @@ impl Machine {
             }
             m.groups.push(Composite {
                 label: text(raw.get("label"), MAX_LABEL).unwrap_or_else(|| id.clone()),
+                color: Tint::field(raw),
                 id,
             });
         }
@@ -246,6 +260,8 @@ impl Machine {
                 description: text(raw.get("description"), MAX_TEXT),
                 x,
                 y,
+                color: Tint::field(raw),
+                icon: style::icon_field(raw),
                 id,
             });
         }
@@ -371,8 +387,10 @@ impl Machine {
                     id: t.id.clone(),
                     from: t.from.clone(),
                     to: t.to.clone(),
-                    label: None,
+                    // Labelled so the layout sizes gaps and places labels for it.
+                    label: Some(t.label()).filter(|l| !l.is_empty()),
                     style: EdgeStyle::Sync,
+                    color: None,
                 })
                 .collect(),
             groups: self
@@ -382,6 +400,7 @@ impl Machine {
                     id: g.id.clone(),
                     label: g.label.clone(),
                     description: None,
+                    color: g.color,
                 })
                 .collect(),
             direction: self.direction,
@@ -844,7 +863,10 @@ impl Editable for Machine {
             "groups".into(),
             self.groups
                 .iter()
-                .map(|g| json!({"id": g.id, "label": g.label}))
+                .map(|g| match g.color {
+                    Some(color) => json!({"id": g.id, "label": g.label, "color": color.name()}),
+                    None => json!({"id": g.id, "label": g.label}),
+                })
                 .collect(),
         );
         map.insert(
@@ -868,11 +890,35 @@ impl Editable for Machine {
 pub fn layout(m: &Machine) -> Layout {
     let mut l = layout::layout_with(&m.proxy(), layout::STATES);
     let index = |id: &str| m.state_index(id);
-    let shift = |p: Point, center: Point, kind: StateKind| -> Point {
-        let (dx, dy) = (p.x - center.x, p.y - center.y);
+    // Where the end run through `p`, heading along `dir` (a unit vector,
+    // toward the shape), meets the shape's border: slid along the run so it
+    // stays straight, or aimed at the center when the run misses the shape.
+    let shift = |p: Point, dir: Point, center: Point, kind: StateKind| -> Point {
         let r = kind.radius();
-        let scale = match kind {
+        // Offset across the run, and the half-chord at that offset.
+        let off = (p.x - center.x) * -dir.y + (p.y - center.y) * dir.x;
+        let chord = match kind {
             // A diamond's border: |x| + |y| = r.
+            StateKind::Choice => r - off.abs(),
+            _ => {
+                let sq = r * r - off * off;
+                if sq > 0. { sq.sqrt() } else { 0. }
+            }
+        };
+        if chord > 0. {
+            // The near side: the end lies before the center along `dir`.
+            let side = if (p.x - center.x) * dir.x + (p.y - center.y) * dir.y < 0. {
+                -1.
+            } else {
+                1.
+            };
+            return Point {
+                x: center.x - dir.y * off + dir.x * side * chord,
+                y: center.y + dir.x * off + dir.y * side * chord,
+            };
+        }
+        let (dx, dy) = (p.x - center.x, p.y - center.y);
+        let scale = match kind {
             StateKind::Choice => r / (dx.abs() + dy.abs()).max(1e-3),
             _ => r / dx.hypot(dy).max(1e-3),
         };
@@ -898,12 +944,23 @@ pub fn layout(m: &Machine) -> Layout {
                 path.segments.last_mut()
             };
             let Some(seg) = segment else { continue };
+            // The end run's direction, heading into the shape.
+            let (inner, outer) = if at_start {
+                (seg.from, seg.to)
+            } else {
+                (seg.to, seg.from)
+            };
+            let len = (inner.x - outer.x).hypot(inner.y - outer.y).max(1e-3);
+            let dir = Point {
+                x: (inner.x - outer.x) / len,
+                y: (inner.y - outer.y) / len,
+            };
             let (point, control) = if at_start {
                 (&mut seg.from, &mut seg.c1)
             } else {
                 (&mut seg.to, &mut seg.c2)
             };
-            let moved = shift(*point, center, kind);
+            let moved = shift(*point, dir, center, kind);
             control.x += moved.x - point.x;
             control.y += moved.y - point.y;
             *point = moved;

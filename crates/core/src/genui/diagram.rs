@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use serde_json::{Map, Value, json};
 
 use super::refs::CodeRef;
+use super::style::{self, Tint};
 
 pub const MAX_NODES: usize = 200;
 pub const MAX_EDGES: usize = 400;
@@ -114,6 +115,9 @@ pub struct Node {
     pub y: Option<f32>,
     /// The code this node is (`ref`).
     pub code_ref: Option<CodeRef>,
+    /// Overrides the kind's color and icon (`color`, `icon`).
+    pub color: Option<Tint>,
+    pub icon: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -123,6 +127,7 @@ pub struct Edge {
     pub to: String,
     pub label: Option<String>,
     pub style: EdgeStyle,
+    pub color: Option<Tint>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -130,6 +135,7 @@ pub struct Group {
     pub id: String,
     pub label: String,
     pub description: Option<String>,
+    pub color: Option<Tint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -153,6 +159,8 @@ impl Node {
             x: None,
             y: None,
             code_ref: None,
+            color: None,
+            icon: None,
         }
     }
 
@@ -172,6 +180,8 @@ impl Node {
         if let Some(code_ref) = &self.code_ref {
             map.insert("ref".into(), code_ref.to_value());
         }
+        insert_some(&mut map, "color", self.color.map(Tint::name));
+        insert_some(&mut map, "icon", self.icon);
         Value::Object(map)
     }
 }
@@ -184,6 +194,7 @@ impl Edge {
         map.insert("to".into(), json!(self.to));
         insert_some(&mut map, "label", self.label.as_deref());
         map.insert("style".into(), json!(self.style.name()));
+        insert_some(&mut map, "color", self.color.map(Tint::name));
         Value::Object(map)
     }
 }
@@ -194,6 +205,7 @@ impl Group {
         map.insert("id".into(), json!(self.id));
         map.insert("label".into(), json!(self.label));
         insert_some(&mut map, "description", self.description.as_deref());
+        insert_some(&mut map, "color", self.color.map(Tint::name));
         Value::Object(map)
     }
 }
@@ -245,6 +257,7 @@ impl Diagram {
             groups.push(Group {
                 label: text(raw.get("label"), MAX_LABEL).unwrap_or_else(|| id.clone()),
                 description: text(raw.get("description"), MAX_TEXT),
+                color: Tint::field(raw),
                 id,
             });
         }
@@ -291,6 +304,8 @@ impl Diagram {
                 x,
                 y,
                 code_ref,
+                color: Tint::field(raw),
+                icon: style::icon_field(raw),
                 id,
             });
         }
@@ -337,6 +352,7 @@ impl Diagram {
                     .and_then(Value::as_str)
                     .and_then(EdgeStyle::parse)
                     .unwrap_or_default(),
+                color: Tint::field(raw),
                 id,
                 from,
                 to,
@@ -623,6 +639,7 @@ mod tests {
             id: "group".into(),
             label: "Group".into(),
             description: None,
+            color: None,
         });
         assert_eq!(grouped.fresh_group_id("Back end"), "back-end");
         assert_eq!(grouped.fresh_group_id(""), "group-2");

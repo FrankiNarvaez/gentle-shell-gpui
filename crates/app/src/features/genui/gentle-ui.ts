@@ -29,18 +29,60 @@ const parseMode = (value: unknown): Mode | undefined => {
 const NODE_KINDS = ["service", "database", "queue", "cache", "client", "external", "storage", "function", "note"];
 const STATUSES = ["planned", "existing", "deprecated", "risk"];
 const EDGE_STYLES = ["sync", "async", "data", "dependency"];
+// Mirrors `gentle_core::genui::style`: the colors an element may take and
+// the bundled Lucide icons it may name (unknown values are dropped).
+const COLORS = ["blue", "green", "yellow", "red", "purple", "teal", "pink", "gold", "gray"];
+const COLOR_SYNONYMS: Record<string, string> = {
+	orange: "yellow", amber: "yellow", violet: "purple", indigo: "purple", cyan: "teal", aqua: "teal",
+	magenta: "pink", rose: "pink", grey: "gray", slate: "gray", neutral: "gray",
+};
+const ICONS = [
+	"activity", "archive", "book-open", "bot", "box", "boxes", "brain", "bug", "building", "cable", "calendar",
+	"chart-column", "circle-check", "circle-x", "clock", "cloud", "cloud-cog", "cloud-download", "cloud-upload",
+	"code", "container", "cookie", "cpu", "credit-card", "database", "database-zap", "download", "eye", "file",
+	"file-text", "fingerprint-pattern", "flag", "folder", "gauge", "git-branch", "git-merge", "git-pull-request",
+	"globe", "graduation-cap", "hammer", "hard-drive", "heart", "hourglass", "image", "inbox", "key-round", "laptop",
+	"layers", "lightbulb", "list-todo", "lock", "log-in", "log-out", "mail", "map-pin", "memory-stick", "merge",
+	"message-square", "monitor", "network", "package", "pause", "play", "plug", "puzzle", "radio", "receipt",
+	"refresh-cw", "repeat", "rocket", "router", "satellite", "scale", "scan-face", "search", "send", "server",
+	"server-cog", "settings", "shield", "shield-check", "shopping-cart", "smartphone", "sparkles", "split",
+	"square-function", "star", "store", "table", "terminal", "timer", "trash", "triangle-alert", "truck", "unplug",
+	"upload", "user", "users", "wallet", "warehouse", "webhook", "wifi", "workflow", "wrench", "zap",
+];
+const ICON_ALIASES: Record<string, string> = {
+	lambda: "square-function", function: "square-function", fn: "square-function", queue: "layers", stream: "layers",
+	kafka: "layers", api: "server", service: "server", cache: "zap", redis: "zap", db: "database", postgres: "database",
+	sql: "database", "user-group": "users", team: "users", people: "users", person: "user", actor: "user",
+	fingerprint: "fingerprint-pattern", auth: "fingerprint-pattern", phone: "smartphone", mobile: "smartphone",
+	web: "globe", browser: "globe", internet: "globe", storage: "archive", bucket: "archive", s3: "archive",
+	email: "mail", chat: "message-square", message: "message-square", payment: "credit-card",
+	payments: "credit-card", card: "credit-card", cart: "shopping-cart", k8s: "container", kubernetes: "container",
+	docker: "container", ai: "sparkles", llm: "sparkles", model: "sparkles", worker: "timer", job: "timer",
+	cron: "timer", alert: "triangle-alert", warning: "triangle-alert", ok: "circle-check", done: "circle-check",
+	check: "circle-check", error: "circle-x", fail: "circle-x", failed: "circle-x",
+};
+const styleColor = (value: unknown): string | undefined => {
+	const name = typeof value === "string" ? value.trim().toLowerCase() : "";
+	const color = COLOR_SYNONYMS[name] ?? name;
+	return COLORS.includes(color) ? color : undefined;
+};
+const styleIcon = (value: unknown): string | undefined => {
+	const name = typeof value === "string" ? value.trim().toLowerCase().replace(/[ _]/g, "-") : "";
+	const icon = ICON_ALIASES[name] ?? name;
+	return ICONS.includes(icon) ? icon : undefined;
+};
 const MAX = { nodes: 200, edges: 400, groups: 50, id: 64, label: 80, text: 1000, errors: 10, listed: 60 };
 const SLUG = /^[a-z0-9][a-z0-9-_]{0,63}$/;
 // The session's cwd: absolute code refs inside it are stored relative to it.
 let workspaceRoot = "";
 
 type Json = Record<string, unknown>;
-interface Group { id: string; label: string; description?: string }
+interface Group { id: string; label: string; description?: string; color?: string }
 interface Node {
 	id: string; label: string; kind: string; group?: string; description?: string;
-	tech?: string; status?: string; x?: number; y?: number; ref?: Json;
+	tech?: string; status?: string; x?: number; y?: number; ref?: Json; color?: string; icon?: string;
 }
-interface Edge { id: string; from: string; to: string; label?: string; style: string }
+interface Edge { id: string; from: string; to: string; label?: string; style: string; color?: string }
 interface Spec { direction: "LR" | "TB"; groups: Group[]; nodes: Node[]; edges: Edge[] }
 interface Surface { id: string; version: number; kind: string; title: string; spec: Json }
 type Details = Surface | { id: string; version: number; kind: string; title: string; spec: null; closed: true };
@@ -142,7 +184,7 @@ function normalize(raw: unknown): Spec {
 		if (id === undefined || !isObject(item)) return;
 		if (groupIds.has(id)) return fail(`duplicate group id "${id}"`);
 		groupIds.add(id);
-		groups.push({ id, label: optionalText(item.label, MAX.label) ?? id, description: optionalText(item.description, MAX.text) });
+		groups.push({ id, label: optionalText(item.label, MAX.label) ?? id, description: optionalText(item.description, MAX.text), color: styleColor(item.color) });
 	});
 
 	const nodes: Node[] = [];
@@ -168,6 +210,8 @@ function normalize(raw: unknown): Spec {
 			x: placed ? Math.round(item.x as number) : undefined,
 			y: placed ? Math.round(item.y as number) : undefined,
 			ref: normalizeRef(item.ref, `node "${id}"`, fail),
+			color: styleColor(item.color),
+			icon: styleIcon(item.icon),
 		});
 	});
 
@@ -190,7 +234,7 @@ function normalize(raw: unknown): Spec {
 		if (seenEdges.has(id)) return fail(`duplicate edge id "${id}"`);
 		seenEdges.add(id);
 		const style = typeof item.style === "string" ? item.style.toLowerCase() : "";
-		edges.push({ id, from, to, label: optionalText(item.label, MAX.label), style: EDGE_STYLES.includes(style) ? style : "sync" });
+		edges.push({ id, from, to, label: optionalText(item.label, MAX.label), style: EDGE_STYLES.includes(style) ? style : "sync", color: styleColor(item.color) });
 	});
 
 	if (errors.length > 0) throw new Error(`invalid diagram spec:\n- ${errors.join("\n- ")}`);
@@ -1564,7 +1608,7 @@ function normalizeSequence(raw: unknown): Json {
 		if (participants.some((o) => o.id === id)) return fail(`duplicate participant id "${id}"`);
 		const kind = lower(isObject(p) ? p.kind : undefined);
 		const known = PARTICIPANT_KINDS.includes(kind) ? kind : kind === "database" || kind === "store" ? "db" : kind === "user" || kind === "person" ? "actor" : "service";
-		participants.push({ id, label: label ?? id, kind: known });
+		participants.push({ id, label: label ?? id, kind: known, color: isObject(p) ? styleColor(p.color) : undefined, icon: isObject(p) ? styleIcon(p.icon) : undefined });
 	});
 	const implicit = participants.length === 0;
 	const explicit = new Set(raw.messages.flatMap((m) => (isObject(m) && idText(m.id) !== undefined ? [idText(m.id) as string] : [])));
@@ -1716,7 +1760,7 @@ function normalizeErd(raw: unknown): Json {
 		const x = finite(t.x);
 		const y = finite(t.y);
 		const pinned = x !== undefined && y !== undefined;
-		tables.push({ id, name: name ?? id, columns, note: txt(t.note, MAX.text), ref, x: pinned ? Math.round(x) : undefined, y: pinned ? Math.round(y) : undefined });
+		tables.push({ id, name: name ?? id, columns, note: txt(t.note, MAX.text), ref, x: pinned ? Math.round(x) : undefined, y: pinned ? Math.round(y) : undefined, color: styleColor(t.color), icon: styleIcon(t.icon) });
 	});
 	const tableOf = (id: string) => tables.find((t) => t.id === id);
 	const columnOf = (end: Json) => (tableOf(end.table as string)?.columns as Json[] | undefined)?.find((c) => c.name === end.column);
@@ -1849,7 +1893,7 @@ function normalizeState(raw: unknown): Json {
 		const id = isObject(g) ? idText(g.id) : undefined;
 		if (!isObject(g) || id === undefined) return fail(`group #${i + 1} has no id`);
 		if (groups.some((o) => o.id === id)) return fail(`duplicate group id "${id}"`);
-		groups.push({ id, label: txt(g.label, MAX.label) ?? id });
+		groups.push({ id, label: txt(g.label, MAX.label) ?? id, color: styleColor(g.color) });
 	});
 	const states: Json[] = [];
 	raw.states.slice(0, CANVAS.states).forEach((s, i) => {
@@ -1866,6 +1910,7 @@ function normalizeState(raw: unknown): Json {
 		states.push({
 			id, label: label ?? id, kind: STATE_KINDS.includes(kind) ? kind : "normal", group,
 			description: isObject(s) ? txt(s.description, MAX.text) : undefined, x: pinned ? Math.round(x) : undefined, y: pinned ? Math.round(y) : undefined,
+			color: isObject(s) ? styleColor(s.color) : undefined, icon: isObject(s) ? styleIcon(s.icon) : undefined,
 		});
 	});
 	const explicit = new Set(transitionsRaw.flatMap((t) => (isObject(t) && idText(t.id) !== undefined ? [idText(t.id) as string] : [])));
@@ -1967,7 +2012,7 @@ function normalizeTimeline(raw: unknown): Json {
 		tasks.push({
 			id, label, start: dateOf(start), end: dateOf(end),
 			progress: progress === undefined ? undefined : Math.round(Math.min(100, Math.max(0, progress <= 1 ? progress * 100 : progress))),
-			group: txt(t.group, MAX.label), dependsOn: [] as string[], milestone: milestone || undefined,
+			group: txt(t.group, MAX.label), dependsOn: [] as string[], milestone: milestone || undefined, color: styleColor(t.color),
 		});
 	});
 	tasks.forEach((task, i) => {
@@ -2066,10 +2111,10 @@ const EXAMPLE = JSON.stringify({
 	id: "checkout",
 	title: "Checkout architecture",
 	spec: {
-		groups: [{ id: "backend", label: "Backend" }],
+		groups: [{ id: "backend", label: "Backend", color: "blue" }],
 		nodes: [
-			{ id: "web", label: "Web app", kind: "client", description: "Customers browse and pay" },
-			{ id: "api", label: "API", group: "backend", tech: "Rust", description: "Validates carts and takes payments" },
+			{ id: "web", label: "Web app", kind: "client", icon: "globe", description: "Customers browse and pay" },
+			{ id: "api", label: "API", group: "backend", tech: "Rust", icon: "credit-card", description: "Validates carts and takes payments" },
 			{ id: "db", label: "Orders DB", kind: "database", group: "backend", tech: "Postgres", description: "Orders and their line items" },
 		],
 		edges: [
@@ -2177,8 +2222,10 @@ const Params = Type.Object({
 	spec: Type.Optional(Type.Object({}, {
 		additionalProperties: true,
 		description:
-			"Full spec for the kind. diagram: { direction?: LR|TB, groups?: [{id,label,description?}], nodes: [{id,label,kind?,group?,description?,tech?,status?,ref?}], edges?: [{id?,from,to,label?,style?}] }; " +
+			"Full spec for the kind. diagram: { direction?: LR|TB, groups?: [{id,label,description?,color?}], nodes: [{id,label,kind?,group?,description?,tech?,status?,ref?,color?,icon?}], edges?: [{id?,from,to,label?,style?,color?}] }; " +
 			`node kind: ${NODE_KINDS.join("|")}, status: ${STATUSES.join("|")}, edge style: ${EDGE_STYLES.join("|")}. ` +
+			`color (diagram nodes, groups, edges; state states and groups; sequence participants; erd tables; timeline tasks), drawn in the user's theme: ${COLORS.join("|")}; default: the kind's. ` +
+			`icon (diagram nodes, states, participants, tables; default: the kind's), a Lucide name: ${ICONS.join("|")}. Use color to group meaning (one color per layer or team) and icon to say what a thing is. ` +
 			`table: { columns: [{key,label?,type?: ${COLUMN_TYPES.join("|")},align?}], rows: [{id,cells:{key:value},ref?}], sort?: {column,direction:asc|desc}, editable?, selectable?, selection?: [row ids], live? }. ` +
 			`form: { fields: [{id,type: ${FIELD_TYPES.join("|")},label,help?,placeholder?,required?,options?: [value|{value,label}],min?,max?,step?,default?}], description?, submitLabel?, values? }. ` +
 			"checklist: { items: [{id,label,done?,status?: pending|running|done|failed|skipped,note?,ref?,items?: [sub-items, one level]}], run?: true (a plan the user runs), live? }. " +
@@ -2187,10 +2234,10 @@ const Params = Type.Object({
 			`chart: { type: ${CHART_TYPES.join("|")}, labels: [...], series: [{name,values:[numbers, one per label]}] (scatter: points: [[x,y]]), xTitle?, yTitle?, unit?, stacked?, live? }. ` +
 			`live (table, chart, checklist; the app fills the data): { source: ${LIVE_SOURCES.filter((s) => s !== "command").join("|")}, map? } or { command: {cmd, cwd?, parse: json|lines|csv}, interval?: seconds ≥ ${LIVE.minInterval}, map? }; ` +
 			"map: { items?: path to the records, id?, columns?: {key: path} (table), label?, status?, note? (checklist), label?, series?: {name: path} (chart) } with JSONPath-lite paths ($.a.b, $.list[0], $.list[*], relative to each record). " +
-			`sequence: { participants?: [{id,label,kind?: ${PARTICIPANT_KINDS.join("|")}}] (default: from the messages), messages: [{id?,from,to,label?,kind?: ${MESSAGE_KINDS.join("|")},note?}] (in time order), fragments?: [{id?,kind: ${FRAGMENT_KINDS.join("|")},label?,from,to (message ids or 1-based numbers),else?: [{at,label?}]}], activations?: [{participant,from,to}] (default: each sync call until its return) }. ` +
-			"erd: { tables: [{id,name?,columns: [{name,type?,pk?,fk?: \"table.column\"|{table,column},nullable?,unique?,note?}],note?,ref?}], relations?: [{id?,from: \"table.column\",to: \"table.column\",cardinality?: 1-1|1-n|n-1|n-n,label?}] } (every fk is drawn as a relation). " +
-			`state: { direction?: LR|TB, groups?: [{id,label}] (composite states), states: [{id,label?,kind?: ${STATE_KINDS.join("|")},group?,description?}], transitions: [{id?,from,to,event?,guard?,action?}], current?: state id }. ` +
-			"timeline: { tasks: [{id,label,start: YYYY-MM-DD,end?: YYYY-MM-DD (inclusive) | duration?: days,progress?: 0-1 or percent,group?,dependsOn?: [task ids],milestone?}] }. " +
+			`sequence: { participants?: [{id,label,kind?: ${PARTICIPANT_KINDS.join("|")},color?,icon?}] (default: from the messages), messages: [{id?,from,to,label?,kind?: ${MESSAGE_KINDS.join("|")},note?}] (in time order), fragments?: [{id?,kind: ${FRAGMENT_KINDS.join("|")},label?,from,to (message ids or 1-based numbers),else?: [{at,label?}]}], activations?: [{participant,from,to}] (default: each sync call until its return) }. ` +
+			"erd: { tables: [{id,name?,columns: [{name,type?,pk?,fk?: \"table.column\"|{table,column},nullable?,unique?,note?}],note?,ref?,color?,icon?}], relations?: [{id?,from: \"table.column\",to: \"table.column\",cardinality?: 1-1|1-n|n-1|n-n,label?}] } (every fk is drawn as a relation). " +
+			`state: { direction?: LR|TB, groups?: [{id,label,color?}] (composite states), states: [{id,label?,kind?: ${STATE_KINDS.join("|")},group?,description?,color?,icon?}], transitions: [{id?,from,to,event?,guard?,action?}], current?: state id }. ` +
+			"timeline: { tasks: [{id,label,start: YYYY-MM-DD,end?: YYYY-MM-DD (inclusive) | duration?: days,progress?: 0-1 or percent,group?,dependsOn?: [task ids],milestone?,color?}] }. " +
 			"html: { html: self-contained page ≤512 KiB, height?: px, data?: object (the page's tool input/result), csp?: { connectDomains?, resourceDomains?, frameDomains?, baseUriDomains? } (origins; default no network) }. " +
 			"review: { summary?, files: [{path, status?: added|modified|deleted|renamed, oldPath?, language?, hunks: [{id, header?, oldStart, newStart, lines: [\"+added\"|\"-removed\"|\" context\" or {kind: context|add|del, text}], note?}]}] } or per file {path, before?, after?} (whole texts; hunks are computed; no before = added, no after = deleted).",
 	})),
