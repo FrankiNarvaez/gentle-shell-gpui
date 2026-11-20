@@ -1,10 +1,10 @@
 ## What and why
 
-<!-- What changes for the user, and why. Link the issue if there is one. -->
+<!-- What changes for the user, and why. `Closes #123` if there is an issue. Open as a Draft until the checklist is done (CONTRIBUTING.md). -->
 
 ## How it was tested
 
-<!-- Commands, platforms, a temporary-HOME smoke test (docs/development.md). -->
+<!-- Commands, systems you tried it on (macOS, Windows, Linux), an isolated-copy smoke test (docs/development.md), screenshots for visual changes. -->
 
 ## Security
 
