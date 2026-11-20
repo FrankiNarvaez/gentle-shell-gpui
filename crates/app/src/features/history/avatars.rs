@@ -9,6 +9,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use gentle_core::git::avatar::{
@@ -27,7 +28,7 @@ const MAX_BYTES: u64 = 2 * 1024 * 1024;
 
 enum Known {
     Pending,
-    Ready(PathBuf),
+    Ready(Arc<Path>),
     Missing,
 }
 
@@ -46,13 +47,18 @@ pub(super) struct Avatars {
 
 impl Global for Avatars {}
 
-/// The picture of `email`, once it is on disk.
-pub(super) fn picture(email: &str, cx: &App) -> Option<PathBuf> {
-    match cx
-        .try_global::<Avatars>()?
-        .known
-        .get(&normalize_email(email))?
-    {
+/// The picture of `email`, once it is on disk. Called for every row drawn:
+/// an address that is already normalized (the usual case) is looked up
+/// without allocating, and the path is shared, not copied.
+pub(super) fn picture(email: &str, cx: &App) -> Option<Arc<Path>> {
+    let known = &cx.try_global::<Avatars>()?.known;
+    let normalized = email.trim() == email && !email.bytes().any(|b| b.is_ascii_uppercase());
+    let entry = if normalized {
+        known.get(email)
+    } else {
+        known.get(&normalize_email(email))
+    };
+    match entry? {
         Known::Ready(path) => Some(path.clone()),
         Known::Pending | Known::Missing => None,
     }
@@ -121,7 +127,7 @@ fn pump(cx: &mut App) {
                     avatars.running -= 1;
                     avatars.no_github_api |= lookup.github_refused;
                     let known = match lookup.found {
-                        Found::Picture(path) => Known::Ready(path),
+                        Found::Picture(path) => Known::Ready(path.into()),
                         Found::Nothing => Known::Missing,
                         Found::Offline => {
                             avatars.offline = true;

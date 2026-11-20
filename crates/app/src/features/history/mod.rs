@@ -60,6 +60,8 @@ pub struct HistoryView {
     commits: Rc<Vec<Commit>>,
     graph: Rc<Graph>,
     lines: Rc<Vec<Line>>,
+    /// Commit rows in `lines`, counted when they are laid out.
+    matched: usize,
     selected: Option<String>,
     detail: Option<Detail>,
     loading: bool,
@@ -115,6 +117,7 @@ impl HistoryView {
             commits: Rc::new(Vec::new()),
             graph: Rc::new(Graph::default()),
             lines: Rc::new(Vec::new()),
+            matched: 0,
             selected: None,
             detail: None,
             loading: false,
@@ -249,6 +252,10 @@ impl HistoryView {
         if earlier > 0 && !filtering {
             lines.push(Line::Earlier(earlier));
         }
+        self.matched = lines
+            .iter()
+            .filter(|l| matches!(l, Line::Commit(_)))
+            .count();
         self.lines = Rc::new(lines);
     }
 

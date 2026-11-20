@@ -36,7 +36,7 @@ pub struct History {
     /// HEAD's branch; `None` on a detached HEAD.
     pub current: Option<String>,
     /// Local branches, most recently committed first.
-    pub branches: Vec<String>,
+    pub branches: std::sync::Arc<[String]>,
     /// The work tree has changes not yet committed. Read when HEAD is shown.
     pub dirty: bool,
     /// HEAD's upstream (`origin/main`) and how far HEAD is `(ahead, behind)` it.
@@ -145,7 +145,7 @@ pub fn history(toplevel: &Path, scope: &Scope, limit: usize) -> Option<History> 
         total,
         scope,
         current,
-        branches,
+        branches: branches.into(),
         dirty,
         upstream,
         remotes,

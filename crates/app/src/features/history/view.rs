@@ -3,8 +3,9 @@
 //! in, the graph list with its context menus, the selected commit's details,
 //! the hover card of a commit, and the footer.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use gentle_core::git::log::{Commit, RefLabel, initials};
 use gentle_core::git::ops::{CommitFile, PullMode, ResetMode};
@@ -75,7 +76,7 @@ fn short_time(now_ms: i64, secs: i64) -> String {
 
 /// The author's picture in a circle, else their initials; a petal dot marks
 /// a commit written with a co-author.
-fn avatar(name: &str, picture: Option<PathBuf>, coauthored: bool, size: f32) -> Div {
+fn avatar(name: &str, picture: Option<Arc<Path>>, coauthored: bool, size: f32) -> Div {
     let circle = div()
         .size(rems(size / 16.))
         .flex_none()
@@ -859,7 +860,7 @@ impl HistoryView {
             now_ms: self.now_ms,
         };
         let hash = commit.hash.clone();
-        let menu = self.commit_menu(commit, cx);
+        let menu = self.commit_menu(i, cx);
         row.cursor_pointer()
             .when(selected, |d| d.bg(ui::raised()))
             .when(!selected, |d| d.hover(|s| s.bg(ui::surface_hover())))
@@ -949,10 +950,12 @@ impl HistoryView {
             .into_any_element()
     }
 
-    /// The right-click menu of a commit row.
+    /// The right-click menu of a commit row. Rendering a row only captures
+    /// the shared commit list and its index; the menu reads the rest when it
+    /// opens.
     fn commit_menu(
         &self,
-        commit: &Commit,
+        index: usize,
         cx: &mut Context<Self>,
     ) -> impl Fn(
         gpui_kit::component::menu::PopupMenu,
@@ -965,29 +968,31 @@ impl HistoryView {
         let history = self.read();
         let current = history.and_then(|h| h.current.clone());
         let has_remote = history.is_some_and(|h| !h.remotes.is_empty());
-        let hash = commit.hash.clone();
-        let short = commit.short().to_string();
-        let subject = commit.subject.clone();
-        let head = commit.head;
-        let merge = commit.is_merge();
-        let branches: Vec<String> = commit
-            .refs
-            .iter()
-            .filter_map(|r| match r {
-                RefLabel::Branch(name) if Some(name) != current.as_ref() => Some(name.clone()),
-                _ => None,
-            })
-            .collect();
-        let tags: Vec<String> = commit
-            .refs
-            .iter()
-            .filter_map(|r| match r {
-                RefLabel::Tag(tag) => Some(tag.clone()),
-                _ => None,
-            })
-            .collect();
-        let target = current.clone().unwrap_or_else(|| "HEAD".into());
+        let commits = self.commits.clone();
         move |menu, _, _| {
+            let commit = &commits[index];
+            let hash = commit.hash.clone();
+            let short = commit.short().to_string();
+            let subject = commit.subject.clone();
+            let head = commit.head;
+            let merge = commit.is_merge();
+            let branches: Vec<String> = commit
+                .refs
+                .iter()
+                .filter_map(|r| match r {
+                    RefLabel::Branch(name) if Some(name) != current.as_ref() => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
+            let tags: Vec<String> = commit
+                .refs
+                .iter()
+                .filter_map(|r| match r {
+                    RefLabel::Tag(tag) => Some(tag.clone()),
+                    _ => None,
+                })
+                .collect();
+            let target = current.clone().unwrap_or_else(|| "HEAD".into());
             // One menu row that runs `run` on the view.
             let row = |label: String, icon: IconName, enabled: bool, run: MenuAction| {
                 let weak = weak.clone();
@@ -1452,11 +1457,7 @@ impl HistoryView {
                 ui::danger(),
             ),
             (None, None, Some(history)) if !self.commits.is_empty() => {
-                let shown = self
-                    .lines
-                    .iter()
-                    .filter(|l| matches!(l, Line::Commit(_)))
-                    .count();
+                let shown = self.matched;
                 let text = if self.filtering() {
                     format!("{shown} of {} loaded commits match", self.commits.len())
                 } else {
