@@ -2306,6 +2306,48 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         })
 }
 
+/// Preserve authored line breaks in Markdown paragraphs without changing fenced code.
+fn user_bubble_markdown(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut fence: Option<(u8, usize)> = None;
+    for line in text.split_inclusive('\n') {
+        let content = line.strip_suffix('\n').unwrap_or(line);
+        let content = content.strip_suffix('\r').unwrap_or(content);
+        let trimmed = content.trim_start_matches(' ');
+        let indent = content.len() - trimmed.len();
+        let marker = trimmed.as_bytes().first().copied();
+        let count = marker.map_or(0, |marker| {
+            trimmed.bytes().take_while(|b| *b == marker).count()
+        });
+        let fence_line = indent <= 3 && matches!(marker, Some(b'`' | b'~')) && count >= 3;
+        let inside = fence.is_some();
+        if fence_line {
+            match fence {
+                None => fence = Some((marker.unwrap(), count)),
+                Some((open, length))
+                    if marker == Some(open)
+                        && count >= length
+                        && trimmed[count..].trim().is_empty() =>
+                {
+                    fence = None
+                }
+                _ => {}
+            }
+        }
+        result.push_str(content);
+        if line.ends_with('\n') {
+            if !inside && !fence_line && !content.trim().is_empty() {
+                result.push_str("  ");
+            }
+            if line.ends_with("\r\n") {
+                result.push('\r');
+            }
+            result.push('\n');
+        }
+    }
+    result
+}
+
 /// A user message: its images (numbered like their `[Image #N]` tokens)
 /// over the text, tokens shown as `🖼 #N`, a long text folded unless
 /// `open`, with its `toggle`. `None` is an image that could not be decoded.
@@ -2344,7 +2386,20 @@ fn user_bubble(
                 this.child(
                     div()
                         .debug_selector(move || format!("user-text-{ix}"))
-                        .child(gpui_kit::base::SelectableText::new(("user-text", ix), text)),
+                        .child(
+                            gpui_kit::base::TextView::markdown(
+                                ("user-text", ix),
+                                user_bubble_markdown(&text),
+                            )
+                            .selectable(true)
+                            .inline_code_style(
+                                StyleRefinement::default()
+                                    .px(px(4.))
+                                    .bg(ui::accent().opacity(0.12))
+                                    .border_1()
+                                    .border_color(ui::border_strong()),
+                            ),
+                        ),
                 )
             })
             // The toggle's own padding, undone so its label lines up with the text.
@@ -2466,6 +2521,283 @@ mod tests {
         language_for_path, line_count, parse_diff_line, tail_slice,
     };
     use gentle_core::transcript::{Block, Item, ToolStatus};
+
+    #[gpui::test]
+    fn user_bubble_selection_changes_and_text_updates(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{
+            AppContext as _, InteractiveElement as _, IntoElement as _, Modifiers, MouseButton,
+            ParentElement as _, Render, Styled as _, base::TextSelection, point, px,
+        };
+
+        struct Bubble {
+            text: &'static str,
+            focus: gpui_kit::FocusHandle,
+            baseline: bool,
+        }
+        impl Render for Bubble {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                let content = if self.baseline {
+                    gpui_kit::div()
+                        .debug_selector(|| "user-text-0".to_string())
+                        .child(gpui_kit::base::SelectableText::new("baseline", self.text))
+                        .into_any_element()
+                } else {
+                    super::user_bubble(
+                        0,
+                        &super::BubbleText::new(self.text),
+                        Vec::new(),
+                        true,
+                        None,
+                    )
+                    .into_any_element()
+                };
+                gpui_kit::div()
+                    .id("focus")
+                    .track_focus(&self.focus)
+                    .size_full()
+                    .child(content)
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let focus = cx.focus_handle();
+            window.focus(&focus, cx);
+            let view = cx.new(|_| Bubble {
+                text: "hello `café` world",
+                focus,
+                baseline: false,
+            });
+            gpui_kit::base::Root::new(view, window, cx)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<Bubble>().unwrap()
+        });
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("user-text-0").unwrap();
+        let start = point(bounds.left() + px(1.), bounds.center().y);
+        let end = point(bounds.right() - px(1.), bounds.center().y);
+        let drag = |cx: &mut gpui_kit::VisualTestContext, end| {
+            cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+            cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        };
+        let copy = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| {
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()))
+            });
+            cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+                "cmd-c"
+            } else {
+                "ctrl-c"
+            });
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .unwrap_or_default()
+            })
+        };
+        drag(cx, end);
+        // TextView's selection API includes a block separator; the copy action
+        // omits that separator from the clipboard.
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                "hello café world\n"
+            );
+        });
+        assert_eq!(copy(cx), "hello café world");
+        drag(cx, point(bounds.left() + px(35.), bounds.center().y));
+        let partial = cx.update(TextSelection::selected_text);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let after = cx.update(TextSelection::selected_text);
+        assert_eq!(partial, after);
+        assert_eq!(after, "hell\n");
+        assert_eq!(copy(cx), "hell");
+        view.update(cx, |view, cx| {
+            view.text = "replacement `é` text";
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "");
+        });
+        cx.update(TextSelection::clear);
+        cx.update(|window, cx| assert_eq!(TextSelection::selected_text(window, cx), ""));
+        assert_eq!(copy(cx), "sentinel");
+        cx.run_until_parked();
+        let replacement = cx.debug_bounds("user-text-0").unwrap();
+        let replacement_start = point(replacement.left() + px(1.), replacement.center().y);
+        let replacement_end = point(replacement.right() - px(1.), replacement.center().y);
+        cx.simulate_mouse_down(replacement_start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(replacement_end, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(replacement_end, MouseButton::Left, Modifiers::none());
+        assert_eq!(copy(cx), "replacement é text");
+        view.update(cx, |view, cx| {
+            view.text = "hello `café` world";
+            view.baseline = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("user-text-0").unwrap();
+        let start = point(bounds.left() + px(1.), bounds.center().y);
+        let end = point(bounds.right() - px(1.), bounds.center().y);
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                "hello `café` world"
+            );
+        });
+        assert_eq!(
+            copy(cx),
+            "hello `café` world",
+            "existing SelectableText baseline"
+        );
+    }
+
+    #[test]
+    fn user_bubble_attachment_substitution_and_folding() {
+        let text = format!(
+            "see [Image #1] and `café`\n{}",
+            (1..12)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let bubble = super::BubbleText::new(&text);
+        let open = bubble.visible(true);
+        let folded = bubble.visible(false);
+        assert!(open.starts_with("see 🖼 #1 and `café`\n"));
+        assert_eq!(folded.lines().count(), super::USER_LINES);
+        assert!(folded.starts_with("see 🖼 #1 and `café`\n"));
+        assert!(!folded.contains("line 11"));
+        assert!(open.contains("line 11"));
+    }
+
+    #[gpui::test]
+    fn user_bubble_wrapped_selection_copies_visible_text(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{
+            Modifiers, MouseButton, ParentElement as _, Render, Styled as _, base::TextSelection,
+            point, px,
+        };
+        const TEXT: &str =
+            "first `café code followed by enough words to wrap onto several lines` end";
+        struct Bubble;
+        impl Render for Bubble {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div()
+                    .size_full()
+                    .child(gpui_kit::base::TextSelectionLayer)
+                    .child(gpui_kit::div().w(px(180.)).child(super::user_bubble(
+                        0,
+                        &super::BubbleText::new(TEXT),
+                        Vec::new(),
+                        true,
+                        None,
+                    )))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Bubble);
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("user-text-0").unwrap();
+        assert!(bounds.size.height > px(30.), "fixture must wrap");
+        let start = point(bounds.left() + px(1.), bounds.top() + px(5.));
+        let end = point(bounds.right() - px(1.), bounds.bottom() - px(5.));
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                "first café code followed by enough words to wrap onto several lines end\n"
+            );
+        });
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-c"
+        } else {
+            "ctrl-c"
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()),
+            "first café code followed by enough words to wrap onto several lines end"
+        );
+    }
+
+    #[gpui::test]
+    fn user_bubble_backticks_paint_code_background(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{ParentElement as _, Render, Styled as _};
+
+        struct Bubble;
+        impl Render for Bubble {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div()
+                    .size_full()
+                    .child(gpui_kit::base::TextSelectionLayer)
+                    .child(super::user_bubble(
+                        0,
+                        &super::BubbleText::new("hello `café` world"),
+                        Vec::new(),
+                        true,
+                        None,
+                    ))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Bubble);
+        cx.run_until_parked();
+        let color: gpui_kit::Background = crate::shared::ui::accent().opacity(0.12).into();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            let radius = gpui_kit::px(3.).scale(window.scale_factor());
+            let quad = window
+                .painted_quads()
+                .into_iter()
+                .find(|quad| quad.background == color)
+                .expect("inline code background must be painted");
+            let border = gpui_kit::px(1.).scale(window.scale_factor());
+            let outline = window
+                .painted_quads()
+                .into_iter()
+                .find(|candidate| {
+                    candidate.border_color == crate::shared::ui::border_strong()
+                        && candidate.bounds == quad.bounds
+                })
+                .expect("inline code outline must be painted on its background");
+            assert_eq!(outline.border_widths.top, border);
+            assert_eq!(outline.border_widths.right, border);
+            assert_eq!(outline.border_widths.bottom, border);
+            assert_eq!(outline.border_widths.left, border);
+            assert_eq!(quad.corner_radii.top_left, radius);
+            assert_eq!(quad.corner_radii.top_right, radius);
+            assert_eq!(quad.corner_radii.bottom_left, radius);
+            assert_eq!(quad.corner_radii.bottom_right, radius);
+        });
+    }
 
     fn step(name: &str, status: ToolStatus) -> Item {
         Item::Tool {
