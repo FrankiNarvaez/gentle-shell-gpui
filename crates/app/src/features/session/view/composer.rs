@@ -214,12 +214,12 @@ impl SessionView {
 
     /// The text grew (you typed): blow a small kiss from the caret. At most
     /// one every `KISS_GAP` and `KISSES_MAX` alive, so it stays a sprinkle.
-    /// None with reduced motion.
+    /// None when Configuration turned them off, or with reduced motion.
     pub(in crate::features::session) fn blow_kiss(&mut self, cx: &mut Context<Self>) {
         let len = self.composer.read(cx).value().len();
         let typed = len > self.composer_len;
         self.composer_len = len;
-        if !typed || cx.reduce_motion() {
+        if !typed || !crate::shared::kisses::typing(cx).plays(cx.reduce_motion()) {
             return;
         }
         self.kisses.retain(|(at, _, _)| at.elapsed() < KISS_LIFE);

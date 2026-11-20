@@ -1,8 +1,38 @@
 //! Pixel kisses: Gentle Shell's lips and heart sprites, painted dot by dot.
 //! The welcome finale blows a handful from the rose; the composer blows
-//! small ones from the caret while you type.
+//! small ones from the caret while you type, unless Configuration turned
+//! them off (`gentle_core::typing_kisses`).
 
+use gentle_core::typing_kisses::{self, TypingKisses};
 use gpui_kit::*;
+
+use crate::shared::themes;
+
+struct TypingChoice(TypingKisses);
+
+impl Global for TypingChoice {}
+
+/// Read the saved choice for the composer's kisses.
+pub fn init(cx: &mut App) {
+    let saved = themes::store_path().and_then(|path| themes::read_key(&path, typing_kisses::KEY));
+    cx.set_global(TypingChoice(TypingKisses::from_json(saved.as_ref())));
+}
+
+/// The composer's kisses as chosen in Configuration.
+pub fn typing(cx: &App) -> TypingKisses {
+    cx.try_global::<TypingChoice>()
+        .map_or_else(TypingKisses::default, |c| c.0)
+}
+
+/// Choose and save whether the composer blows kisses.
+pub fn set_typing(choice: TypingKisses, cx: &mut App) {
+    cx.set_global(TypingChoice(choice));
+    if let Some(path) = themes::store_path()
+        && let Err(err) = themes::write_key(&path, typing_kisses::KEY, choice.to_json())
+    {
+        eprintln!("gentle-shell-gpui: could not save the typing kisses: {err}");
+    }
+}
 
 /// Pixel lips: `#` the lips, `o` the line between them.
 pub const LIPS: [&str; 6] = [

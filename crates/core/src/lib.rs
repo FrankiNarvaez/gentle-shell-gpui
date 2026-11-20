@@ -30,6 +30,7 @@ pub mod setup;
 pub mod text;
 pub mod tools;
 pub mod transcript;
+pub mod typing_kisses;
 pub mod usage;
 pub mod version;
 pub mod web;
