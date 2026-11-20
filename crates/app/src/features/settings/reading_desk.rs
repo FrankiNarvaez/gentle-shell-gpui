@@ -135,7 +135,12 @@ fn tile(spec: &Spec, glyphs: &'static str, accessory: Option<Div>, preview: Div,
             div()
                 .text_color(ui::faint())
                 .font_family(ui::mono())
-                .child(format!("{} px", trim(spec.points))),
+                // The interface text follows Interface size, not a size of its own.
+                .child(if spec.slot.has_size() {
+                    format!("{} px", trim(spec.points))
+                } else {
+                    format!("{:.0} %", spec.zoom * 100.)
+                }),
         );
     v_flex()
         .flex_1()

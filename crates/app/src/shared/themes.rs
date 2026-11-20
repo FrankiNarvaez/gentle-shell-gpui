@@ -722,6 +722,11 @@ pub enum FontSlot {
 
 impl FontSlot {
     pub const ALL: [FontSlot; 3] = [FontSlot::Interface, FontSlot::Code, FontSlot::Terminal];
+    /// Whether the slot has a size of its own. The interface has none: its
+    /// text follows Interface size (the zoom), which also sets the rem.
+    pub fn has_size(self) -> bool {
+        self != FontSlot::Interface
+    }
 
     /// The key in the app's settings file.
     pub fn key(self) -> &'static str {
@@ -732,7 +737,8 @@ impl FontSlot {
         }
     }
 
-    /// The key of the slot's size in the app's settings file.
+    /// The key of the slot's size in the app's settings file. The
+    /// interface's is legacy: never read, and removed on the next write.
     pub fn size_key(self) -> &'static str {
         match self {
             FontSlot::Interface => "interfaceFontSize",
@@ -741,7 +747,8 @@ impl FontSlot {
         }
     }
 
-    /// The size, in px at 100 % zoom, the app used before sizes were chosen.
+    /// The size, in px at 100 % zoom, the app used before sizes were chosen;
+    /// the interface's is the rem at 100 %, and never changes.
     pub fn default_size(self) -> f32 {
         match self {
             FontSlot::Interface => fonts::DEFAULT_INTERFACE_SIZE,
@@ -766,17 +773,21 @@ pub fn read_fonts(path: &Path) -> Fonts {
     let mut fonts = Fonts::default();
     for slot in FontSlot::ALL {
         fonts.set(slot, read_font(path, slot).map(SharedString::from));
+        if !slot.has_size() {
+            continue;
+        }
         let size = read_key(path, slot.size_key())
             .and_then(|v| v.as_f64())
             .and_then(fonts::normalize_size)
-            .filter(|s| *s != slot.default_size());
-        *fonts.size_mut(slot) = size;
+            .unwrap_or_else(|| slot.default_size());
+        fonts.set_size(slot, size);
     }
     fonts
 }
 
 /// Write every font family and size in one read-modify-write, keeping every
-/// other key. Defaults remove their keys.
+/// other key. Defaults remove their keys, and so does the interface's
+/// legacy size (it has no size of its own).
 pub fn write_fonts(path: &Path, fonts: &Fonts) -> std::io::Result<()> {
     let mut value = read_settings(path)
         .filter(Value::is_object)
@@ -904,8 +915,8 @@ pub struct Fonts {
     pub interface: Option<SharedString>,
     pub code: Option<SharedString>,
     pub terminal: Option<SharedString>,
-    /// Sizes in px at 100 % zoom; `None` is the slot's default.
-    pub interface_size: Option<f32>,
+    /// Sizes in px at 100 % zoom; `None` is the slot's default. The
+    /// interface has no size of its own (see [`FontSlot::has_size`]).
     pub code_size: Option<f32>,
     pub terminal_size: Option<f32>,
 }
@@ -935,25 +946,28 @@ impl Fonts {
     }
 
     /// Choose the size of `slot`. Out-of-range sizes clamp to the limits;
-    /// NaN and the slot's default size both mean the default.
+    /// NaN and the slot's default size both mean the default. The interface
+    /// has no size of its own, so it ignores this.
     pub fn set_size(&mut self, slot: FontSlot, size: f32) {
         let size = fonts::clamp_size(f64::from(size)).filter(|s| *s != slot.default_size());
-        *self.size_mut(slot) = size;
+        if let Some(stored) = self.size_mut(slot) {
+            *stored = size;
+        }
     }
 
     fn size_ref(&self, slot: FontSlot) -> Option<f32> {
         match slot {
-            FontSlot::Interface => self.interface_size,
+            FontSlot::Interface => None,
             FontSlot::Code => self.code_size,
             FontSlot::Terminal => self.terminal_size,
         }
     }
 
-    fn size_mut(&mut self, slot: FontSlot) -> &mut Option<f32> {
+    fn size_mut(&mut self, slot: FontSlot) -> Option<&mut Option<f32>> {
         match slot {
-            FontSlot::Interface => &mut self.interface_size,
-            FontSlot::Code => &mut self.code_size,
-            FontSlot::Terminal => &mut self.terminal_size,
+            FontSlot::Interface => None,
+            FontSlot::Code => Some(&mut self.code_size),
+            FontSlot::Terminal => Some(&mut self.terminal_size),
         }
     }
 
@@ -1623,6 +1637,22 @@ mod tests {
         write_fonts(&path, &Fonts::default()).unwrap();
         let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value, serde_json::json!({"theme": "cute"}));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn the_interface_has_no_size_of_its_own_and_the_legacy_key_goes_away() {
+        let dir = scratch("fonts-interface-size");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"keep": 1, "interfaceFontSize": 20}"#).unwrap();
+        let mut fonts = read_fonts(&path);
+        assert_eq!(fonts.size(FontSlot::Interface), 16.);
+        fonts.set_size(FontSlot::Interface, 20.);
+        assert_eq!(fonts.size(FontSlot::Interface), 16.);
+        assert_eq!(fonts, Fonts::default());
+        write_fonts(&path, &fonts).unwrap();
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(value, serde_json::json!({"keep": 1}));
         let _ = std::fs::remove_dir_all(dir);
     }
 

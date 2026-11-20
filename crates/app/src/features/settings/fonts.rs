@@ -565,13 +565,21 @@ impl SettingsView {
             .collect()
     }
 
-    fn size_field(&self, slot: FontSlot) -> impl IntoElement {
-        let input = &self.fonts.sizes[slot_index(slot)];
-        let invalid = parse_size(&self.fonts.texts[slot_index(slot)]) == SizeInput::Invalid;
-        h_flex()
+    /// The size column: a number field for code and terminal. The interface
+    /// has no size of its own (Interface size, the zoom, sets it), so its row
+    /// keeps the column empty to line the pickers up.
+    fn size_field(&self, slot: FontSlot) -> Div {
+        let column = h_flex()
+            .w(rems(72. / 16.))
             .flex_shrink_0()
             .gap_1()
-            .items_center()
+            .items_center();
+        if !slot.has_size() {
+            return column;
+        }
+        let input = &self.fonts.sizes[slot_index(slot)];
+        let invalid = parse_size(&self.fonts.texts[slot_index(slot)]) == SizeInput::Invalid;
+        column
             .child(
                 div()
                     .w(rems(48. / 16.))

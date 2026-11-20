@@ -293,30 +293,30 @@ static KIT_FAMILIES: OnceLock<(SharedString, SharedString)> = OnceLock::new();
 static CODE_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
 static TERMINAL_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
 
-/// The code and terminal sizes in px at 100 % zoom, and the interface size
-/// (f32 bits), set by `apply_theme`. Render code reads them without a `cx`.
+/// The code and terminal sizes in px at 100 % zoom (f32 bits), set by
+/// `apply_theme`. Render code reads them without a `cx`.
 static CODE_SIZE: AtomicU32 = AtomicU32::new(gentle_core::fonts::DEFAULT_CODE_SIZE.to_bits());
 static TERMINAL_SIZE: AtomicU32 =
     AtomicU32::new(gentle_core::fonts::DEFAULT_TERMINAL_SIZE.to_bits());
-static INTERFACE_SIZE: AtomicU32 =
-    AtomicU32::new(gentle_core::fonts::DEFAULT_INTERFACE_SIZE.to_bits());
 
 /// Code text of `px_at_100` px (at the default code size and 100 % zoom) as
-/// rems: follows the code size and the zoom, never the interface font size
-/// (which sets the rem).
+/// rems: it follows the chosen code size and the zoom (the rem), and at the
+/// default code size it is exactly `rems(px_at_100 / 16.)`. Every
+/// `ui::mono()` text is sized through it.
 pub fn code_rems(px_at_100: f32) -> Rems {
     let code = f32::from_bits(CODE_SIZE.load(Ordering::Relaxed));
-    let interface = f32::from_bits(INTERFACE_SIZE.load(Ordering::Relaxed));
-    rems(px_at_100 * (code / gentle_core::fonts::DEFAULT_CODE_SIZE) / interface)
+    rems(px_at_100 * (code / gentle_core::fonts::DEFAULT_CODE_SIZE) / REM_AT_100)
 }
 
+/// The rem at 100 % zoom: the interface text size, which only Interface size
+/// (the zoom) changes.
+const REM_AT_100: f32 = gentle_core::fonts::DEFAULT_INTERFACE_SIZE;
+
 /// The terminal font size in px for a window whose rem size is `rem`: the
-/// chosen terminal size times the interface zoom, independent of the
-/// interface font size.
+/// chosen terminal size times the interface zoom.
 pub fn terminal_px(px_at_100: f32, rem: Pixels) -> Pixels {
     let terminal = f32::from_bits(TERMINAL_SIZE.load(Ordering::Relaxed));
-    let interface = f32::from_bits(INTERFACE_SIZE.load(Ordering::Relaxed));
-    let zoom = f32::from(rem) / interface;
+    let zoom = f32::from(rem) / REM_AT_100;
     px(px_at_100 * (terminal / gentle_core::fonts::DEFAULT_TERMINAL_SIZE) * zoom)
 }
 
@@ -368,8 +368,7 @@ pub fn apply_theme(cx: &mut App) {
     store_font(&CODE_FONT, fonts.code.clone());
     store_font(&TERMINAL_FONT, fonts.terminal_family().cloned());
     use themes::FontSlot;
-    let (interface_size, code_size) = (fonts.size(FontSlot::Interface), fonts.size(FontSlot::Code));
-    INTERFACE_SIZE.store(interface_size.to_bits(), Ordering::Relaxed);
+    let code_size = fonts.size(FontSlot::Code);
     CODE_SIZE.store(code_size.to_bits(), Ordering::Relaxed);
     TERMINAL_SIZE.store(fonts.size(FontSlot::Terminal).to_bits(), Ordering::Relaxed);
     let mode = if p.light {
@@ -464,7 +463,7 @@ pub fn apply_theme(cx: &mut App) {
         c.sidebar_primary = p.accent;
         c.sidebar_primary_foreground = p.on_accent;
         // 16 px at 100 %: the rem every `rems(px_at_100 / 16.)` is written for.
-        theme.font_size = px(interface_size * scale);
+        theme.font_size = px(REM_AT_100 * scale);
         theme.mono_font_size = px(code_size * scale);
         theme.radius = px(8. * scale);
         theme.radius_lg = px(12. * scale);
