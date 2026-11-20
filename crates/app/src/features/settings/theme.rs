@@ -259,8 +259,11 @@ impl SettingsView {
                             }),
                         ))
                         .child(
+                            // min_w_0 lets the note wrap inside the card
+                            // instead of running past its edge.
                             div()
                                 .flex_1()
+                                .min_w_0()
                                 .text_xs()
                                 .text_color(ui::faint())
                                 .child(note),
