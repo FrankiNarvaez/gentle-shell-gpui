@@ -8,3 +8,10 @@ rules:
       # merged to main. Building every dependency from scratch on each tag is
       # the alternative.
       - release.yml
+  dangerous-triggers:
+    ignore:
+      # `/take` and `/drop` need a token that can assign issues, which only
+      # `issue_comment` gives. The job never checks out or runs code, the
+      # comment reaches the script only through environment variables, and
+      # its token can write issues and nothing else.
+      - issue-claims.yml
