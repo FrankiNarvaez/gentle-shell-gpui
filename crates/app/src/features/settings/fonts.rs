@@ -1,6 +1,8 @@
 //! Configuration › Appearance › Fonts: a searchable picker of the installed
 //! font families for the interface, the code and the terminal, with
 //! ↑/↓/Enter/Esc. Monospace families come first for code and terminal.
+//! Hovering a family or moving to it previews it in the Reading Desk only;
+//! a click or Enter applies it at once, with a toast that undoes it.
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -8,14 +10,15 @@ use std::rc::Rc;
 use gentle_core::fonts::{self, MAX_SIZE, MIN_SIZE};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, Sizable as _, WindowExt as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::SettingsView;
 use crate::platform::font_metadata;
-use crate::shared::themes::{self, FontSlot};
+use crate::shared::themes::{self, FontSlot, Fonts};
 use crate::shared::ui;
 
 /// `None` is the Default row, shown only with a blank search.
@@ -95,129 +98,109 @@ fn slot_index(slot: FontSlot) -> usize {
     }
 }
 
-/// The families and sizes being edited in the settings screen. Nothing here
-/// reaches the app until the parent applies `to_apply`; dropping the screen
-/// drops the draft.
-pub(super) struct Draft {
-    baseline: themes::Fonts,
-    fonts: themes::Fonts,
-    texts: [String; 3],
+/// One applied font change, holding what the slot had before so the toast
+/// can put it back.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Change {
+    Family(FontSlot, Option<SharedString>),
+    Size(FontSlot, f32),
 }
 
-impl Draft {
-    pub(super) fn new(baseline: themes::Fonts) -> Self {
-        let texts = FontSlot::ALL.map(|slot| format_size(baseline.size(slot)));
-        Self {
-            fonts: baseline.clone(),
-            baseline,
-            texts,
+impl Change {
+    /// `current` with this change's slot put back; every other slot keeps
+    /// what it has now, so undoing an older change never reverts newer ones.
+    pub(super) fn revert(&self, current: &Fonts) -> Fonts {
+        let mut fonts = current.clone();
+        match self {
+            Change::Family(slot, family) => fonts.set(*slot, family.clone()),
+            Change::Size(slot, size) => fonts.set_size(*slot, *size),
+        }
+        fonts
+    }
+
+    /// The toast after the change, naming what `applied` now uses.
+    pub(super) fn message(&self, applied: &Fonts) -> String {
+        match *self {
+            Change::Family(slot, _) => match (applied.get(slot), slot) {
+                (Some(family), _) => {
+                    format!("{} changed to {family}. Click to undo.", slot_label(slot))
+                }
+                (None, FontSlot::Terminal) => {
+                    "Terminal font now follows the code font. Click to undo.".to_string()
+                }
+                (None, _) => format!("{} reset to default. Click to undo.", slot_label(slot)),
+            },
+            Change::Size(slot, _) => format!(
+                "{} size changed to {} px. Click to undo.",
+                slot_label(slot),
+                format_size(applied.size(slot))
+            ),
         }
     }
+}
 
-    pub(super) fn family(&self, slot: FontSlot) -> Option<&SharedString> {
-        self.fonts.get(slot)
-    }
+/// Marks the font toast, so a newer change replaces it.
+struct FontToast;
 
-    /// The last valid size of `slot`: what the preview shows while the text
-    /// is being edited.
-    pub(super) fn size(&self, slot: FontSlot) -> f32 {
-        self.fonts.size(slot)
-    }
-
-    pub(super) fn text(&self, slot: FontSlot) -> &str {
-        &self.texts[slot_index(slot)]
-    }
-
-    pub(super) fn input(&self, slot: FontSlot) -> SizeInput {
-        parse_size(self.text(slot))
-    }
-
-    pub(super) fn set_family(&mut self, slot: FontSlot, family: Option<&str>) {
-        self.fonts.set(
+/// What the Reading Desk draws: the applied fonts, with the family under the
+/// open picker's cursor (`peek`) and any valid size being typed laid over
+/// them. Nothing here reaches the app.
+pub(super) fn preview_fonts(
+    applied: &Fonts,
+    peek: Option<(FontSlot, Option<&str>)>,
+    texts: &[String; 3],
+) -> Fonts {
+    let mut fonts = applied.clone();
+    if let Some((slot, family)) = peek {
+        fonts.set(
             slot,
             family.map(|name| SharedString::from(name.to_string())),
         );
     }
-
-    pub(super) fn set_text(&mut self, slot: FontSlot, text: &str) {
-        self.texts[slot_index(slot)] = text.to_string();
-        if let SizeInput::Valid(size) = parse_size(text) {
-            self.fonts.set_size(slot, size);
+    for slot in FontSlot::ALL {
+        if let SizeInput::Valid(size) = parse_size(&texts[slot_index(slot)]) {
+            fonts.set_size(slot, size);
         }
     }
+    fonts
+}
 
-    /// The family the preview draws `slot` with: its draft family, else its
-    /// default; the terminal's default is the draft code font.
-    pub(super) fn effective_family(
-        &self,
-        slot: FontSlot,
-        default_interface: &SharedString,
-    ) -> SharedString {
-        match (self.family(slot), slot) {
-            (Some(family), _) => family.clone(),
-            (None, FontSlot::Interface) => default_interface.clone(),
-            (None, FontSlot::Code) => ui::default_mono(),
-            (None, FontSlot::Terminal) => self
-                .fonts
-                .terminal_family()
-                .cloned()
-                .unwrap_or_else(ui::default_mono),
-        }
-    }
-
-    pub(super) fn dirty(&self) -> bool {
-        self.fonts != self.baseline
-            || FontSlot::ALL
-                .iter()
-                .any(|&slot| self.input(slot) != SizeInput::Valid(self.baseline.size(slot)))
-    }
-
-    /// The first size problem, `Invalid` before `Incomplete`.
-    pub(super) fn problem(&self) -> Option<SizeInput> {
-        let inputs = FontSlot::ALL.map(|slot| self.input(slot));
-        inputs
-            .iter()
-            .find(|input| **input == SizeInput::Invalid)
-            .or_else(|| inputs.iter().find(|input| **input == SizeInput::Incomplete))
-            .copied()
-    }
-
-    pub(super) fn can_apply(&self) -> bool {
-        self.dirty() && self.problem().is_none()
-    }
-
-    /// The fonts to apply, or `None` when clean or a size is not valid.
-    pub(super) fn to_apply(&self) -> Option<themes::Fonts> {
-        self.can_apply().then(|| self.fonts.clone())
-    }
-
-    /// Make `fonts` (what the app uses now) the clean state.
-    pub(super) fn rebase(&mut self, fonts: themes::Fonts) {
-        *self = Self::new(fonts);
-    }
-
-    pub(super) fn discard(&mut self) {
-        let baseline = self.baseline.clone();
-        self.rebase(baseline);
+/// The family `fonts` draws `slot` with: its own, else its default; the
+/// terminal's default is the code font.
+pub(super) fn effective_family(
+    fonts: &Fonts,
+    slot: FontSlot,
+    default_interface: &SharedString,
+) -> SharedString {
+    match (fonts.get(slot), slot) {
+        (Some(family), _) => family.clone(),
+        (None, FontSlot::Interface) => default_interface.clone(),
+        (None, FontSlot::Code) => ui::default_mono(),
+        (None, FontSlot::Terminal) => fonts
+            .terminal_family()
+            .cloned()
+            .unwrap_or_else(ui::default_mono),
     }
 }
 
 /// The picker's state: which slot's list is open, the search, the cursor.
 pub(super) struct FontsUi {
-    /// Edits not yet applied; recreated with the settings screen.
-    pub(super) draft: Draft,
+    /// The text of each size field, in `FontSlot::ALL` order; a valid one
+    /// previews until Enter or leaving the field applies it.
+    texts: [String; 3],
     /// One number field per slot, in `FontSlot::ALL` order.
     sizes: [Entity<InputState>; 3],
     /// Whether the Reading Desk is expanded.
     pub(super) desk_open: bool,
-    open: Option<FontSlot>,
+    pub(super) open: Option<FontSlot>,
     search: Entity<InputState>,
     /// Index into the entries: the Default entry (when shown), then families.
-    cursor: usize,
+    /// Hover and ↑/↓ both move it; its family is what the desk previews.
+    pub(super) cursor: usize,
     scroll: ScrollHandle,
     /// The installed families, read when the picker opens.
     names: Vec<String>,
-    entries: Rc<[Option<String>]>,
+    pub(super) entries: Rc<[Option<String>]>,
     query: String,
     waiting_for_metadata: bool,
     _subscriptions: Vec<Subscription>,
@@ -227,11 +210,11 @@ impl FontsUi {
     pub(super) fn new(window: &mut Window, cx: &mut Context<SettingsView>) -> Self {
         let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search fonts…"));
         let weak = cx.entity().downgrade();
-        let draft = Draft::new(cx.global::<themes::Themes>().fonts.clone());
-        let sizes = FontSlot::ALL.map(|slot| {
-            let text = draft.text(slot).to_string();
-            cx.new(|cx| InputState::new(window, cx).default_value(text))
-        });
+        let applied = cx.global::<themes::Themes>().fonts.clone();
+        let texts = FontSlot::ALL.map(|slot| format_size(applied.size(slot)));
+        let sizes = texts
+            .clone()
+            .map(|text| cx.new(|cx| InputState::new(window, cx).default_value(text)));
         let mut subscriptions = vec![
             cx.subscribe(&search, |this, _, event: &InputEvent, cx| {
                 if let InputEvent::Change = event
@@ -259,18 +242,29 @@ impl FontsUi {
             }),
         ];
         for (slot, input) in FontSlot::ALL.into_iter().zip(&sizes) {
-            subscriptions.push(
-                cx.subscribe(input, move |this, input, event: &InputEvent, cx| {
-                    if let InputEvent::Change = event {
-                        let text = input.read(cx).value().to_string();
-                        this.fonts.draft.set_text(slot, &text);
+            subscriptions.push(cx.subscribe_in(
+                input,
+                window,
+                move |this, input, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => {
+                        this.fonts.texts[slot_index(slot)] = input.read(cx).value().to_string();
                         cx.notify();
                     }
-                }),
-            );
+                    InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                        this.commit_size(slot, window, cx);
+                    }
+                    InputEvent::Focus => {}
+                },
+            ));
         }
+        // An undo from the toast (or any other font change) shows in the fields.
+        subscriptions.push(
+            cx.observe_global_in::<themes::Themes>(window, |this, window, cx| {
+                this.sync_size_inputs(window, cx);
+            }),
+        );
         Self {
-            draft,
+            texts,
             sizes,
             desk_open: true,
             open: None,
@@ -361,7 +355,11 @@ impl SettingsView {
                 state.focus(window, cx);
             });
             // Start on the slot's own family, so Enter keeps it.
-            let current = self.fonts.draft.family(slot).map(|f| f.to_string());
+            let current = cx
+                .global::<themes::Themes>()
+                .fonts
+                .get(slot)
+                .map(|f| f.to_string());
             if slot != FontSlot::Interface {
                 self.request_font_metadata(cx);
             }
@@ -418,6 +416,7 @@ impl SettingsView {
         true
     }
 
+    /// Apply `family` to `slot` at once, with a toast that undoes it.
     fn choose_font(
         &mut self,
         slot: FontSlot,
@@ -426,78 +425,98 @@ impl SettingsView {
         cx: &mut Context<Self>,
     ) {
         self.set_fonts_menu(None, window, cx);
-        self.fonts.draft.set_family(slot, family);
+        let applied = cx.global::<themes::Themes>().fonts.clone();
+        let mut next = applied.clone();
+        next.set(
+            slot,
+            family.map(|name| SharedString::from(name.to_string())),
+        );
+        if next != applied {
+            let before = applied.get(slot).cloned();
+            self.apply_font_change(next, Change::Family(slot, before), window, cx);
+        }
         cx.notify();
     }
 
-    fn sync_size_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for (slot, input) in FontSlot::ALL.into_iter().zip(&self.fonts.sizes) {
-            let text = self.fonts.draft.text(slot).to_string();
-            input.update(cx, |state, cx| {
-                if state.value().as_ref() != text {
-                    state.set_value(text, window, cx);
-                }
+    /// Enter or leaving a size field: apply a valid new size, else put the
+    /// applied one back in the field.
+    fn commit_size(&mut self, slot: FontSlot, window: &mut Window, cx: &mut Context<Self>) {
+        let applied = cx.global::<themes::Themes>().fonts.clone();
+        let before = applied.size(slot);
+        match parse_size(&self.fonts.texts[slot_index(slot)]) {
+            SizeInput::Valid(size) if size != before => {
+                let mut next = applied;
+                next.set_size(slot, size);
+                self.apply_font_change(next, Change::Size(slot, before), window, cx);
+            }
+            _ => {
+                self.fonts.texts[slot_index(slot)] = format_size(before);
+                self.set_size_input(slot, window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn apply_font_change(
+        &mut self,
+        next: Fonts,
+        change: Change,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        themes::apply_fonts(next, cx);
+        // What the app really uses now: an uninstalled family is dropped.
+        let applied = cx.global::<themes::Themes>().fonts.clone();
+        let note = Notification::info(change.message(&applied))
+            .id::<FontToast>()
+            .on_click(move |_, window, cx| {
+                // The click runs inside the notice's own update; removing it
+                // now would read it, so wait for that update to end.
+                let change = change.clone();
+                window.defer(cx, move |window, cx| {
+                    let current = cx.global::<themes::Themes>().fonts.clone();
+                    themes::apply_fonts(change.revert(&current), cx);
+                    window.remove_notification::<FontToast>(cx);
+                });
             });
+        window.push_notification(note, cx);
+    }
+
+    /// Show the applied sizes in every field the user is not typing in.
+    fn sync_size_inputs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let applied = cx.global::<themes::Themes>().fonts.clone();
+        for slot in FontSlot::ALL {
+            let input = &self.fonts.sizes[slot_index(slot)];
+            if input.read(cx).focus_handle(cx).is_focused(window) {
+                continue;
+            }
+            self.fonts.texts[slot_index(slot)] = format_size(applied.size(slot));
+            self.set_size_input(slot, window, cx);
         }
     }
 
-    /// Commit the draft once through the backend; no-op when clean or invalid.
-    fn apply_font_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(fonts) = self.fonts.draft.to_apply() else {
-            return;
-        };
-        themes::apply_fonts(fonts, cx);
-        // Rebase on what the app really uses: an uninstalled family is dropped.
-        let applied = cx.global::<themes::Themes>().fonts.clone();
-        self.fonts.draft.rebase(applied);
-        self.sync_size_inputs(window, cx);
-        cx.notify();
+    fn set_size_input(&mut self, slot: FontSlot, window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.fonts.texts[slot_index(slot)].clone();
+        self.fonts.sizes[slot_index(slot)].update(cx, |state, cx| {
+            if state.value().as_ref() != text {
+                state.set_value(text, window, cx);
+            }
+        });
     }
 
-    fn discard_font_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.fonts.draft.discard();
-        self.sync_size_inputs(window, cx);
-        cx.notify();
-    }
-
-    /// Apply and Discard for the draft, with what blocks applying.
-    pub(super) fn font_actions(&self, cx: &mut Context<Self>) -> Div {
-        let draft = &self.fonts.draft;
-        let dirty = draft.dirty();
-        let (note, color) = match draft.problem() {
-            Some(SizeInput::Invalid) => (
-                format!(
-                    "Sizes are numbers from {} to {} px.",
-                    MIN_SIZE as u32, MAX_SIZE as u32
-                ),
-                ui::danger(),
-            ),
-            Some(_) => ("Finish the size to apply.".to_string(), ui::muted()),
-            None if dirty => ("Not applied yet.".to_string(), ui::muted()),
-            None => (String::new(), ui::muted()),
-        };
-        h_flex()
-            .pb_2()
-            .gap_2()
-            .items_center()
-            .child(
-                Button::new("fonts-apply")
-                    .small()
-                    .primary()
-                    .label("Apply")
-                    .disabled(!draft.can_apply())
-                    .on_click(cx.listener(|this, _, window, cx| this.apply_font_draft(window, cx))),
-            )
-            .child(
-                Button::new("fonts-discard")
-                    .small()
-                    .label("Discard")
-                    .disabled(!dirty)
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.discard_font_draft(window, cx)),
-                    ),
-            )
-            .child(div().text_xs().text_color(color).child(note))
+    /// What the Reading Desk draws, and whether it differs from the app.
+    pub(super) fn desk_fonts(&self, cx: &App) -> (Fonts, bool) {
+        let applied = &cx.global::<themes::Themes>().fonts;
+        let fonts = &self.fonts;
+        let peek = fonts.open.and_then(|slot| {
+            fonts
+                .entries
+                .get(fonts.cursor)
+                .map(|entry| (slot, entry.as_deref()))
+        });
+        let preview = preview_fonts(applied, peek, &fonts.texts);
+        let previewing = preview != *applied;
+        (preview, previewing)
     }
 
     /// The Fonts rows: a button per slot showing its family, opening its picker.
@@ -523,7 +542,7 @@ impl SettingsView {
 
     fn size_field(&self, slot: FontSlot) -> impl IntoElement {
         let input = &self.fonts.sizes[slot_index(slot)];
-        let invalid = self.fonts.draft.input(slot) == SizeInput::Invalid;
+        let invalid = parse_size(&self.fonts.texts[slot_index(slot)]) == SizeInput::Invalid;
         h_flex()
             .flex_shrink_0()
             .gap_1()
@@ -541,7 +560,11 @@ impl SettingsView {
     fn font_picker(&self, slot: FontSlot, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.entity().downgrade();
         let open = self.fonts.open == Some(slot);
-        let current = self.fonts.draft.family(slot).map(|f| f.to_string());
+        let current = cx
+            .global::<themes::Themes>()
+            .fonts
+            .get(slot)
+            .map(|f| f.to_string());
         let label = current
             .clone()
             .unwrap_or_else(|| default_label(slot).to_string());
@@ -593,6 +616,7 @@ impl SettingsView {
                     };
                     let family = entry.clone();
                     let weak = weak.clone();
+                    let hover = weak.clone();
                     list = list.child(
                         ui::picker_row(
                             ("font-menu-row", index),
@@ -611,6 +635,16 @@ impl SettingsView {
                                 })
                                 .child(title),
                         )
+                        .on_hover(move |hovered, _, cx| {
+                            if *hovered {
+                                let _ = hover.update(cx, |this, cx| {
+                                    if this.fonts.open == Some(slot) && this.fonts.cursor != index {
+                                        this.fonts.cursor = index;
+                                        cx.notify();
+                                    }
+                                });
+                            }
+                        })
                         .on_click(move |_, window, cx| {
                             let family = family.clone();
                             let _ = weak.update(cx, |this, cx| {
@@ -648,12 +682,15 @@ impl SettingsView {
 
 #[cfg(test)]
 mod tests {
-    use super::{Draft, FontSlot, HashSet, SizeInput, entry_cursor, parse_size, picker_entries};
+    use super::{
+        Change, FontSlot, HashSet, SizeInput, effective_family, entry_cursor, format_size,
+        parse_size, picker_entries, preview_fonts,
+    };
     use crate::shared::themes::Fonts;
     use crate::shared::ui;
 
-    fn draft() -> Draft {
-        Draft::new(Fonts::default())
+    fn texts(fonts: &Fonts) -> [String; 3] {
+        FontSlot::ALL.map(|slot| format_size(fonts.size(slot)))
     }
 
     #[test]
@@ -673,102 +710,115 @@ mod tests {
     }
 
     #[test]
-    fn clean_draft_has_nothing_to_apply_or_discard() {
-        let draft = draft();
-        assert!(!draft.dirty());
-        assert!(!draft.can_apply());
-        assert_eq!(draft.to_apply(), None);
-        assert_eq!(draft.problem(), None);
+    fn nothing_hovered_or_typed_previews_the_applied_fonts() {
+        let applied = Fonts::default();
+        assert_eq!(preview_fonts(&applied, None, &texts(&applied)), applied);
     }
 
     #[test]
-    fn editing_the_draft_never_touches_the_baseline_until_rebased() {
-        let mut draft = draft();
-        draft.set_family(FontSlot::Code, Some("Candidate"));
-        draft.set_text(FontSlot::Terminal, "18");
-        assert!(draft.dirty());
-        let pending = draft.to_apply().expect("valid edits apply");
-        assert_eq!(
-            pending.get(FontSlot::Code).map(|f| f.as_ref()),
-            Some("Candidate")
+    fn a_hovered_family_previews_only_its_slot() {
+        let applied = Fonts::default();
+        let preview = preview_fonts(
+            &applied,
+            Some((FontSlot::Code, Some("IosevkaTerm"))),
+            &texts(&applied),
         );
-        assert_eq!(pending.size(FontSlot::Terminal), 18.);
         assert_eq!(
-            pending.size(FontSlot::Code),
-            Fonts::default().size(FontSlot::Code)
+            preview.get(FontSlot::Code).map(|f| f.as_ref()),
+            Some("IosevkaTerm")
         );
-        draft.rebase(pending);
-        assert!(!draft.dirty());
-        assert_eq!(draft.text(FontSlot::Terminal), "18");
+        assert_eq!(preview.get(FontSlot::Interface), None);
+        assert_eq!(preview.get(FontSlot::Terminal), None);
+        assert_eq!(preview.size(FontSlot::Code), applied.size(FontSlot::Code));
+        // Hovering the Default row of a chosen slot previews the default.
+        let mut chosen = Fonts::default();
+        chosen.set(FontSlot::Code, Some("Menlo".into()));
+        let preview = preview_fonts(&chosen, Some((FontSlot::Code, None)), &texts(&chosen));
+        assert_eq!(preview.get(FontSlot::Code), None);
     }
 
     #[test]
-    fn discard_restores_families_sizes_and_text() {
-        let mut draft = draft();
-        let text = draft.text(FontSlot::Interface).to_string();
-        draft.set_family(FontSlot::Interface, Some("Candidate"));
-        draft.set_text(FontSlot::Interface, "abc");
-        assert!(draft.dirty());
-        draft.discard();
-        assert!(!draft.dirty());
-        assert_eq!(draft.family(FontSlot::Interface), None);
-        assert_eq!(draft.text(FontSlot::Interface), text);
-        assert_eq!(draft.to_apply(), None);
+    fn only_a_valid_typed_size_previews() {
+        let applied = Fonts::default();
+        let mut typed = texts(&applied);
+        typed[2] = "18".into();
+        let preview = preview_fonts(&applied, None, &typed);
+        assert_eq!(preview.size(FontSlot::Terminal), 18.);
+        assert_eq!(preview.size(FontSlot::Code), applied.size(FontSlot::Code));
+        for unfinished in ["", "1", "99", "abc"] {
+            typed[2] = unfinished.into();
+            let preview = preview_fonts(&applied, None, &typed);
+            assert_eq!(
+                preview.size(FontSlot::Terminal),
+                applied.size(FontSlot::Terminal)
+            );
+        }
     }
 
     #[test]
-    fn invalid_or_unfinished_sizes_are_dirty_but_not_applicable() {
-        let mut draft = draft();
-        draft.set_family(FontSlot::Code, Some("Candidate"));
-        let size = draft.size(FontSlot::Interface);
-        draft.set_text(FontSlot::Interface, "99");
-        assert!(draft.dirty());
-        assert_eq!(draft.problem(), Some(SizeInput::Invalid));
-        assert!(!draft.can_apply());
-        assert_eq!(draft.to_apply(), None);
-        // The preview keeps the last valid size meanwhile.
-        assert_eq!(draft.size(FontSlot::Interface), size);
-        draft.set_text(FontSlot::Interface, "");
-        assert_eq!(draft.problem(), Some(SizeInput::Incomplete));
-        assert!(!draft.can_apply());
-        // Invalid text alone, with families unchanged, still offers Discard.
-        let mut only_text = self::draft();
-        only_text.set_text(FontSlot::Code, "x");
-        assert!(only_text.dirty() && !only_text.can_apply());
-        // Returning to the original value is clean again.
-        let mut back = self::draft();
-        let original = back.text(FontSlot::Code).to_string();
-        back.set_text(FontSlot::Code, "x");
-        back.set_text(FontSlot::Code, &original);
-        assert!(!back.dirty());
+    fn undo_puts_back_only_the_changed_slot() {
+        let mut fonts = Fonts::default();
+        fonts.set(FontSlot::Code, Some("IosevkaTerm".into()));
+        let code_change = Change::Family(FontSlot::Code, None);
+        // A later, unrelated change survives undoing the earlier one.
+        fonts.set_size(FontSlot::Terminal, 18.);
+        let undone = code_change.revert(&fonts);
+        assert_eq!(undone.get(FontSlot::Code), None);
+        assert_eq!(undone.size(FontSlot::Terminal), 18.);
+        let size_change = Change::Size(FontSlot::Terminal, 13.);
+        let undone = size_change.revert(&undone);
+        assert_eq!(undone, Fonts::default());
     }
 
     #[test]
-    fn terminal_preview_inherits_only_the_draft_code_family() {
+    fn the_toast_names_what_was_applied() {
+        let mut fonts = Fonts::default();
+        fonts.set(FontSlot::Code, Some("IosevkaTerm".into()));
+        fonts.set_size(FontSlot::Terminal, 15.5);
+        assert_eq!(
+            Change::Family(FontSlot::Code, None).message(&fonts),
+            "Code font changed to IosevkaTerm. Click to undo."
+        );
+        assert_eq!(
+            Change::Family(FontSlot::Interface, Some("Georgia".into())).message(&fonts),
+            "Interface font reset to default. Click to undo."
+        );
+        assert_eq!(
+            Change::Family(FontSlot::Terminal, Some("Menlo".into())).message(&fonts),
+            "Terminal font now follows the code font. Click to undo."
+        );
+        assert_eq!(
+            Change::Size(FontSlot::Terminal, 13.).message(&fonts),
+            "Terminal font size changed to 15.5 px. Click to undo."
+        );
+    }
+
+    #[test]
+    fn terminal_preview_inherits_only_the_code_family() {
         let interface = "Kit Interface".into();
-        let mut draft = draft();
+        let mut fonts = Fonts::default();
         assert_eq!(
-            draft.effective_family(FontSlot::Interface, &interface),
+            effective_family(&fonts, FontSlot::Interface, &interface),
             interface
         );
         assert_eq!(
-            draft.effective_family(FontSlot::Code, &interface),
+            effective_family(&fonts, FontSlot::Code, &interface),
             ui::default_mono()
         );
         assert_eq!(
-            draft.effective_family(FontSlot::Terminal, &interface),
+            effective_family(&fonts, FontSlot::Terminal, &interface),
             ui::default_mono()
         );
-        draft.set_family(FontSlot::Code, Some("Candidate"));
-        draft.set_text(FontSlot::Code, "20");
+        fonts.set(FontSlot::Code, Some("Candidate".into()));
+        fonts.set_size(FontSlot::Code, 20.);
         assert_eq!(
-            draft.effective_family(FontSlot::Terminal, &interface),
+            effective_family(&fonts, FontSlot::Terminal, &interface),
             "Candidate"
         );
-        assert_ne!(draft.size(FontSlot::Terminal), 20.);
-        draft.set_family(FontSlot::Terminal, Some("Own"));
+        assert_ne!(fonts.size(FontSlot::Terminal), 20.);
+        fonts.set(FontSlot::Terminal, Some("Own".into()));
         assert_eq!(
-            draft.effective_family(FontSlot::Terminal, &interface),
+            effective_family(&fonts, FontSlot::Terminal, &interface),
             "Own"
         );
     }

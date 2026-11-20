@@ -1,7 +1,7 @@
 //! Configuration › Appearance › Reading Desk: a collapsible specimen of the
-//! font draft. It draws fixed samples with the draft families and sizes only
-//! inside this panel, so nothing is applied, saved or re-rendered elsewhere
-//! until Apply. The tiles follow the theme library's cards: a framed preview
+//! fonts. It draws the applied fonts, or the family under the open picker's
+//! cursor and any size being typed, only inside this panel: trying a font
+//! here never applies, saves or re-renders anything else. The tiles follow the theme library's cards: a framed preview
 //! in the theme's own terminal colors over a caption row.
 
 use gpui_kit::assets::IconName;
@@ -9,7 +9,8 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
 use super::SettingsView;
-use crate::shared::themes::{self, FontSlot, Themes};
+use super::fonts::effective_family;
+use crate::shared::themes::{self, FontSlot, Fonts, Themes};
 use crate::shared::ui;
 
 /// Every tile has the same fixed bands, at 100 % zoom, so the three stay
@@ -50,7 +51,7 @@ struct Spec {
 impl SettingsView {
     pub(super) fn reading_desk(&self, cx: &mut Context<Self>) -> Div {
         let open = self.fonts.desk_open;
-        let dirty = self.fonts.draft.dirty();
+        let (preview, previewing) = self.desk_fonts(cx);
         let header = h_flex()
             .id("reading-desk-toggle")
             .gap_2()
@@ -69,9 +70,13 @@ impl SettingsView {
                 div()
                     .ml_auto()
                     .text_xs()
-                    .text_color(if dirty { ui::accent() } else { ui::faint() })
-                    .child(if dirty {
-                        "Previewing unapplied changes"
+                    .text_color(if previewing {
+                        ui::accent()
+                    } else {
+                        ui::faint()
+                    })
+                    .child(if previewing {
+                        "Previewing · click or Enter to apply"
                     } else {
                         "Live preview"
                     }),
@@ -84,26 +89,25 @@ impl SettingsView {
         if open {
             let interface = ui::default_interface(cx);
             let zoom = f32::from(cx.global::<Themes>().interface_size) / 100.;
-            desk = desk.child(self.desk_tiles(&interface, zoom));
+            desk = desk.child(desk_tiles(&preview, &interface, zoom));
         }
         desk
     }
+}
 
-    fn desk_tiles(&self, default_interface: &SharedString, zoom: f32) -> Div {
-        let draft = &self.fonts.draft;
-        let spec = |slot| Spec {
-            slot,
-            family: draft.effective_family(slot, default_interface),
-            size: px(draft.size(slot) * zoom),
-            points: draft.size(slot),
-            zoom,
-        };
-        h_flex()
-            .gap_3()
-            .child(interface_tile(spec(FontSlot::Interface)))
-            .child(code_tile(spec(FontSlot::Code)))
-            .child(terminal_tile(spec(FontSlot::Terminal)))
-    }
+fn desk_tiles(fonts: &Fonts, default_interface: &SharedString, zoom: f32) -> Div {
+    let spec = |slot| Spec {
+        slot,
+        family: effective_family(fonts, slot, default_interface),
+        size: px(fonts.size(slot) * zoom),
+        points: fonts.size(slot),
+        zoom,
+    };
+    h_flex()
+        .gap_3()
+        .child(interface_tile(spec(FontSlot::Interface)))
+        .child(code_tile(spec(FontSlot::Code)))
+        .child(terminal_tile(spec(FontSlot::Terminal)))
 }
 
 /// The theme card's frame: a preview well over a caption naming the slot,
