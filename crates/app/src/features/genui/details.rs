@@ -14,7 +14,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::diagram::{DiagramView, Selection};
-use super::view::{kind_color, kind_icon, status_color, style_name};
+use super::view::{node_icon, node_tone, status_color, style_name};
 use crate::shared::ui;
 
 impl DiagramView {
@@ -83,9 +83,9 @@ impl DiagramView {
             Selection::Node(id) => {
                 let node = self.working.node(id)?;
                 panel = panel.child(title(
-                    Icon::new(kind_icon(node.kind))
+                    Icon::new(node_icon(node))
                         .small()
-                        .text_color(kind_color(node.kind)),
+                        .text_color(node_tone(node)),
                     node.label.clone(),
                 ));
                 if editable {
@@ -235,7 +235,7 @@ impl DiagramView {
                             h_flex()
                                 .gap_1()
                                 .flex_wrap()
-                                .child(ui::chip(node.kind.name(), kind_color(node.kind)))
+                                .child(ui::chip(node.kind.name(), node_tone(node)))
                                 .when_some(node.status, |d, status| {
                                     d.child(ui::chip(status.name(), status_color(status)))
                                 })

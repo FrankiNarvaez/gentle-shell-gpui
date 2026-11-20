@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use gentle_core::genui::edits::{Editable as _, Edits, plural};
 use gentle_core::genui::layout::{Point as P, Rect};
+use gentle_core::genui::style::Tint;
 use gentle_core::genui::timeline::{
     self, BAR_H, Change, DAY, LABEL_W, ROW, Task, Timeline, TimelineLayout, day_parts, month_label,
     short_date,
@@ -21,6 +22,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::canvas::{self, Canvas, Drawn, Head, Shape, moved};
+use super::look;
 use super::panel::{Body, PanelView};
 use crate::shared::ui;
 
@@ -173,6 +175,21 @@ fn span(t: &Task) -> String {
     }
 }
 
+/// A group's tone: the next in a fixed cycle by its place among the
+/// groups, so groups read apart without the agent choosing.
+fn group_tone(index: usize) -> Hsla {
+    ui::tint(Tint::cycle(index))
+}
+
+/// A task's tone: its `color`, else its group's, else blue.
+fn task_tone(t: &Task, groups: &[(String, Rect)]) -> Hsla {
+    let group = t
+        .group
+        .as_deref()
+        .and_then(|name| groups.iter().position(|(g, _)| g == name));
+    look::tone(t.color, group.map_or(ui::tint(Tint::Blue), group_tone))
+}
+
 impl PanelView {
     fn timeline(&self) -> Option<&TimelineState> {
         match &self.body {
@@ -264,6 +281,7 @@ impl PanelView {
                     },
                     fill: ui::surface().opacity(0.3),
                     border: None,
+                    border_width: 0.,
                     radius: 0.,
                     dashed: false,
                 });
@@ -290,6 +308,7 @@ impl PanelView {
                 rect: *rect,
                 fill: ui::surface().opacity(0.6),
                 border: None,
+                border_width: 0.,
                 radius: 0.,
                 dashed: false,
             });
@@ -344,31 +363,41 @@ impl PanelView {
             } else if on_path {
                 ui::accent().opacity(0.8)
             } else {
-                ui::muted()
+                look::line()
             };
             shapes.push(Shape::Curve {
                 path: path.clone(),
                 color,
-                width: if picked { 2. } else { 1.4 },
+                width: if picked { 2. } else { look::EDGE_WIDTH },
                 dash: None,
-                head: Head::Filled,
+                head: Head::Arrow,
             });
         }
         for (t, bar) in shown.tasks.iter().zip(&l.bars) {
             if !t.milestone {
                 continue;
             }
+            // A diamond in the task's tone; on the critical path it sits in
+            // an `accent` outline.
             let c = bar.center();
             let r = bar.w / 2. + 2.;
-            let on_path = critical.contains(&t.id);
-            shapes.push(Shape::Polygon {
-                points: vec![
+            let diamond = |r: f32| {
+                vec![
                     P { x: c.x, y: c.y - r },
                     P { x: c.x + r, y: c.y },
                     P { x: c.x, y: c.y + r },
                     P { x: c.x - r, y: c.y },
-                ],
-                color: if on_path { ui::accent() } else { ui::warning() },
+                ]
+            };
+            if critical.contains(&t.id) {
+                shapes.push(Shape::Polygon {
+                    points: diamond(r + 2.),
+                    color: ui::accent(),
+                });
+            }
+            shapes.push(Shape::Polygon {
+                points: diamond(r),
+                color: task_tone(t, &l.groups),
             });
         }
         if let Some(TimelineDrag::Link { start, to, .. }) = &s.drag {
@@ -378,23 +407,35 @@ impl PanelView {
             });
         }
 
-        // Group headers and task names on the left.
-        for (name, rect) in &l.groups {
+        // Group headers (a dot in the group's tone, then the name) and task
+        // names on the left.
+        for (gi, (name, rect)) in l.groups.iter().enumerate() {
             let (x, y) = c.at(-LABEL_W + 10., rect.y, rem);
             children.push(
-                div()
+                h_flex()
                     .absolute()
                     .left(x)
                     .top(y)
                     .h(px(rect.h * scale))
                     .w(px((LABEL_W - 20.) * scale))
-                    .flex()
-                    .items_center()
-                    .truncate()
-                    .text_size(px(11.5 * scale))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(ui::muted())
-                    .child(name.clone())
+                    .gap(px(6. * scale))
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(8. * scale))
+                            .rounded_full()
+                            .bg(group_tone(gi)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.5 * scale))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(ui::muted())
+                            .child(name.clone()),
+                    )
                     .into_any_element(),
             );
         }
@@ -431,7 +472,7 @@ impl PanelView {
                         d.child(
                             Icon::new(IconName::Flag)
                                 .size(px(11. * scale))
-                                .text_color(ui::warning()),
+                                .text_color(task_tone(t, &l.groups)),
                         )
                     })
                     .child(
@@ -455,6 +496,7 @@ impl PanelView {
                 ix,
                 t,
                 *bar,
+                task_tone(t, &l.groups),
                 critical.contains(&t.id),
                 is_late,
                 scale,
@@ -504,17 +546,10 @@ impl PanelView {
             .tasks
             .iter()
             .zip(&l.bars)
-            .map(|(t, r)| {
-                let tone = if critical.contains(&t.id) {
-                    ui::accent()
-                } else {
-                    ui::info()
-                };
-                (*r, tone.opacity(0.7))
-            })
+            .map(|(t, r)| (*r, task_tone(t, &l.groups).opacity(0.7)))
             .collect();
-        let details =
-            selected.and_then(|key| self.timeline_details(shown, key, &critical, &late, cx));
+        let details = selected
+            .and_then(|key| self.timeline_details(shown, key, &critical, &late, &l.groups, cx));
         Drawn {
             shapes,
             children,
@@ -541,6 +576,7 @@ impl PanelView {
         ix: usize,
         t: &Task,
         bar: Rect,
+        tone: Hsla,
         on_path: bool,
         late: bool,
         scale: f32,
@@ -551,7 +587,6 @@ impl PanelView {
             return div().into_any_element();
         };
         let picked = s.selected.as_deref() == Some(&format!("t:{}", t.id));
-        let tone = if on_path { ui::accent() } else { ui::info() };
         let (x, y) = s.canvas.at(bar.x, bar.y, rem);
         let press = |grip: Grip| {
             let id = t.id.clone();
@@ -623,18 +658,27 @@ impl PanelView {
             return base.rounded_full().child(link).into_any_element();
         }
         let progress = t.progress.map(|p| f32::from(p) / 100.);
+        // The bar keeps its tone; the critical path shows as a heavier
+        // `accent` hairline (a late task's `danger` one wins).
         base.rounded(px(6. * scale))
-            .bg(tone.opacity(0.2))
-            .border_1()
+            .bg(tone.opacity(0.22))
+            .border(px(if picked {
+                2.
+            } else if on_path {
+                1.5
+            } else {
+                1.
+            }))
             .border_color(if picked {
                 ui::accent()
             } else if late {
                 ui::danger()
+            } else if on_path {
+                ui::accent()
             } else {
                 tone.opacity(0.7)
             })
-            .when(picked, |d| d.border_2())
-            .hover(|d| d.bg(tone.opacity(0.28)))
+            .hover(|d| d.bg(tone.opacity(0.3)))
             // The fill is clipped to the bar; the link handle sits outside it.
             .when_some(progress, |d, p| {
                 d.child(
@@ -647,7 +691,7 @@ impl PanelView {
                             div()
                                 .h_full()
                                 .w(px(bar.w * p * scale))
-                                .bg(tone.opacity(0.4)),
+                                .bg(tone.opacity(0.45)),
                         ),
                 )
             })
@@ -678,6 +722,7 @@ impl PanelView {
         key: &str,
         critical: &[String],
         late: &[(usize, usize)],
+        groups: &[(String, Rect)],
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let (what, rest) = key.split_once(':')?;
@@ -731,7 +776,7 @@ impl PanelView {
                 } else {
                     IconName::ChartGantt
                 },
-                ui::info(),
+                task_tone(t, groups),
                 t.label.clone(),
                 rows,
                 cx,

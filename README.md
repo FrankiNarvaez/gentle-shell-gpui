@@ -216,7 +216,7 @@ Gentle Shell's rose and pixel wordmark, written in like the terminal intro. It f
 
 ### Conversation — Streaming answers and live tool cards
 
-Streaming Markdown, collapsible thinking, and tool cards (`Edit path +12 −3`, `Bash …`) with live output. Helper answers (`gentle-agents.result`) appear as Markdown cards titled with the agent and its status; background job notices show their label, exit code and output tail; Gentle Shell's review preflight, exploration budget and verification reminders get named cards.
+Streaming Markdown, collapsible thinking, and tool cards (`Edit path +12 −3`, `Bash …`) with live output. ` ```mermaid ` blocks in an answer are drawn as diagrams (with the same on-demand diagram renderer as the file preview; until it is installed, the block shows as code with an Install button under it). A subagent run's line opens the Agents panel on that helper. Helper answers (`gentle-agents.result`) appear as Markdown cards titled with the agent and its status; background job notices show their label, exit code and output tail; Gentle Shell's review preflight, exploration budget and verification reminders get named cards.
 
 <details>
 <summary><kbd>More</kbd> <strong>Cards, copy and the message rail</strong></summary>
@@ -298,7 +298,7 @@ App tabs follow Gentle Shell's `notifications.json` (the file `/gentle:customize
 
 ### Diagrams — Plan a system on a live canvas
 
-Not only a chat: when you plan an architecture, a data flow or anything with many interacting parts, the agent can show an interactive diagram right in the conversation (its `gentle_ui` tool, from a Pi extension the app ships and loads into every agent tab).
+Not only a chat: when you plan an architecture, a data flow or anything with many interacting parts, the agent can show an interactive diagram right in the conversation (its `gentle_ui` tool, from a Pi extension the app ships and loads into every agent tab). It is drawn in the style of Eraser's diagrams: each part tinted in its own color with an icon badge, groups as colored containers with a label tag, and right-angled connections with rounded corners; the agent picks a color (blue, green, yellow, red, purple, teal, pink, gold, gray) and an icon per part, or each kind brings its own, all in your theme's tones.
 
 <details>
 <summary><kbd>More</kbd> <strong>Canvas, editing and layout</strong></summary>
@@ -835,7 +835,7 @@ Assets: `gentle-shell-gpui-<v>-macos-aarch64.dmg` / `.zip` and `…-macos-x86_64
 
 ## Community
 
-Built in public. Bring a real workflow, a bug report, or a small improvement that makes the next person's work clearer.
+Built in public. Bring a real workflow, a bug report, or a small improvement that makes the next person's work clearer. Before you take an issue or open a pull request, read [CONTRIBUTING.md](CONTRIBUTING.md): how to claim an issue, when a PR is ready for review, and what each state means.
 
 <p align="center">
   <a href="https://github.com/Gentleman-Programming/gentle-shell-gpui/issues"><img src="https://img.shields.io/badge/Issues-join%20the%20conversation-F095C8?style=for-the-badge&labelColor=1A1218" alt="GitHub issues"></a>

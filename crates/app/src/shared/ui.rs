@@ -51,6 +51,12 @@ pub struct Palette {
     pub danger_hover: Hsla,
     pub danger_active: Hsla,
     pub warning: Hsla,
+    /// The diagram palette's purple and teal, which the theme's roles don't
+    /// cover: its `info` turned to those hues, so they keep the theme's
+    /// lightness and saturation (pastel stays pastel) and never collide
+    /// with the accent the way a pink terminal magenta would.
+    pub purple: Hsla,
+    pub teal: Hsla,
     pub selection: Hsla,
     pub popover: Hsla,
     pub screen: Hsla,
@@ -61,6 +67,13 @@ pub struct Palette {
 fn color(hex: u32, alpha: f32) -> Hsla {
     let mut c: Hsla = rgb(hex).into();
     c.a = alpha;
+    c
+}
+
+/// `hex` turned to `degrees` of hue, its saturation and lightness kept.
+fn with_hue(hex: u32, degrees: f32) -> Hsla {
+    let mut c = color(hex, 1.);
+    c.h = degrees / 360.;
     c
 }
 
@@ -111,6 +124,8 @@ impl Palette {
             danger_hover: solid(mix(t.danger, 0xffffff, 0.2)),
             danger_active: solid(mix(t.danger, 0x000000, 0.1)),
             warning: solid(t.warning),
+            purple: with_hue(t.info, 275.),
+            teal: with_hue(t.info, 172.),
             selection: color(mix(t.selection, accent_deep, 0.5), 0.6),
             // Menus, the palette and screens float over content: solid, whatever
             // the transparency, so the conversation behind never bleeds through.
@@ -223,6 +238,29 @@ pub fn danger() -> Hsla {
 pub fn warning() -> Hsla {
     themes::palette(|p| p.warning)
 }
+pub fn purple() -> Hsla {
+    themes::palette(|p| p.purple)
+}
+pub fn teal() -> Hsla {
+    themes::palette(|p| p.teal)
+}
+
+/// A diagram element's named color in this theme's tones.
+pub fn tint(tint: gentle_core::genui::style::Tint) -> Hsla {
+    use gentle_core::genui::style::Tint;
+    match tint {
+        Tint::Blue => info(),
+        Tint::Green => success(),
+        Tint::Yellow => warning(),
+        Tint::Red => danger(),
+        Tint::Purple => purple(),
+        Tint::Teal => teal(),
+        Tint::Pink => accent(),
+        Tint::Gold => champagne(),
+        Tint::Gray => muted(),
+    }
+}
+
 /// Opaque-ish glass for full-window screens and palettes.
 pub fn screen_bg() -> Hsla {
     themes::palette(|p| p.screen)

@@ -124,6 +124,9 @@ pub enum FileTreeEvent {
     OpenHistory(PathBuf),
     /// The header's collapse button: the owner should hide the sidebar.
     Collapse,
+    /// The header's folder name: the owner should let the user pick another
+    /// root folder.
+    ChooseFolder,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1443,17 +1446,30 @@ impl Render for FileTreeView {
             .pr_1p5()
             .gap_0p5()
             .flex_none()
-            .child(Icon::new(IconName::Folder).small().text_color(ui::muted()))
             .child(
-                div()
+                h_flex()
+                    .id("file-tree-change-folder")
                     .flex_1()
                     .min_w_0()
-                    .ml_1()
-                    .truncate()
-                    .text_size(rems(13.5 / 16.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(ui::fg())
-                    .child(self.name.clone()),
+                    .h(rems(26. / 16.))
+                    .ml_neg_1()
+                    .px_1()
+                    .gap_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(ui::surface_hover().opacity(0.6)))
+                    .child(Icon::new(IconName::Folder).small().text_color(ui::muted()))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(rems(13.5 / 16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(ui::fg())
+                            .child(self.name.clone()),
+                    )
+                    .tooltip(|window, cx| Tooltip::new("Change folder").build(window, cx))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(FileTreeEvent::ChooseFolder))),
             )
             .when(files, |d| {
                 d.child(

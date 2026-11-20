@@ -1,7 +1,8 @@
-//! The sequence kind on the shared canvas: participant cards on top of
-//! dashed lifelines, messages as arrows down the page (sync filled, async
-//! open, returns dashed, self calls looping), fragments as labeled boxes
-//! and activation bars. Drag a header sideways or a message up and down to
+//! The sequence kind on the shared canvas: participant cards (in their
+//! tone, with an icon badge) on top of dashed lifelines, messages as
+//! chevron arrows down the page (sync solid, async dotted, returns dashed,
+//! self calls looping), fragments as tagged containers and activation
+//! bars. Drag a header sideways or a message up and down to
 //! reorder, drag from one lifeline to another to add a message,
 //! double-click to rename; the details island changes a message's kind.
 
@@ -13,12 +14,14 @@ use gentle_core::genui::sequence::{
     self as seq, Change, HEAD_H, Message, MessageKind, Participant, ParticipantKind, SELF_LOOP,
     Sequence, SequenceLayout,
 };
+use gentle_core::genui::style::Tint;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{Icon, h_flex, v_flex};
+use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::canvas::{self, Canvas, Drawn, Head, Shape, moved};
+use super::look;
 use super::panel::{Body, PanelView};
 use crate::shared::ui;
 
@@ -144,14 +147,26 @@ fn kind_icon(kind: ParticipantKind) -> IconName {
     }
 }
 
+/// A kind's tone when the participant sets no `color`.
 fn kind_color(kind: ParticipantKind) -> Hsla {
-    match kind {
-        ParticipantKind::Actor => ui::accent(),
-        ParticipantKind::Service => ui::info(),
-        ParticipantKind::Db => ui::success(),
-        ParticipantKind::Queue => ui::warning(),
-        ParticipantKind::External => ui::muted(),
-    }
+    ui::tint(match kind {
+        ParticipantKind::Actor => Tint::Pink,
+        ParticipantKind::Service => Tint::Blue,
+        ParticipantKind::Db => Tint::Green,
+        ParticipantKind::Queue => Tint::Yellow,
+        ParticipantKind::External => Tint::Gray,
+    })
+}
+
+/// A participant's tone (its `color`, else its kind's) and icon (its
+/// `icon`, else its kind's): its card, lifeline and activation bars wear
+/// them.
+fn participant_tone(p: &Participant) -> Hsla {
+    look::tone(p.color, kind_color(p.kind))
+}
+
+fn participant_icon(p: &Participant) -> IconName {
+    p.icon.and_then(look::icon).unwrap_or(kind_icon(p.kind))
 }
 
 fn fragment_name(kind: seq::FragmentKind) -> &'static str {
@@ -229,12 +244,16 @@ impl PanelView {
         let mut shapes = Vec::new();
         let mut children: Vec<AnyElement> = Vec::new();
 
+        // Fragments are containers like the diagram's groups, in the
+        // neutral tone; their tags sit on top as elements.
+        let frame = ui::muted();
         for f in &l.fragments {
             shapes.push(Shape::Box {
                 rect: f.rect,
-                fill: ui::surface().opacity(0.35),
-                border: Some(ui::border_strong()),
-                radius: 8.,
+                fill: look::group_fill(frame),
+                border: Some(look::group_border(frame)),
+                border_width: 1.5,
+                radius: look::GROUP_RADIUS,
                 dashed: false,
             });
             for (y, _) in &f.branches {
@@ -244,14 +263,16 @@ impl PanelView {
                         x: f.rect.right(),
                         y: *y,
                     },
-                    color: ui::border_strong(),
+                    color: look::group_border(frame),
                     width: 1.,
                     dash: Some([5., 4.]),
                 });
             }
         }
-        // Lifelines.
-        for head in &l.heads {
+        // Lifelines and activation bars in their participant's tone.
+        let tones: Vec<Hsla> = shown.participants.iter().map(participant_tone).collect();
+        let tone_of = |lane: usize| tones.get(lane).copied().unwrap_or(ui::muted());
+        for (lane, head) in l.heads.iter().enumerate() {
             let x = head.x + head.w / 2.;
             shapes.push(Shape::Line {
                 from: P { x, y: HEAD_H },
@@ -259,16 +280,18 @@ impl PanelView {
                     x,
                     y: l.lifeline_end,
                 },
-                color: ui::border_strong(),
+                color: tone_of(lane).opacity(0.4),
                 width: 1.25,
                 dash: Some([6., 5.]),
             });
         }
-        for (_, bar) in &l.bars {
+        for (lane, bar) in &l.bars {
+            let tone = tone_of(*lane);
             shapes.push(Shape::Box {
                 rect: *bar,
-                fill: ui::info().opacity(0.18),
-                border: Some(ui::info().opacity(0.6)),
+                fill: ui::well().blend(tone.opacity(0.18)),
+                border: Some(tone.opacity(0.6)),
+                border_width: 1.,
                 radius: 2.,
                 dashed: false,
             });
@@ -300,15 +323,18 @@ impl PanelView {
             } else {
                 canvas::straight(g.from, g.to)
             };
+            // Every message ends in the open chevron; the kind shows in the
+            // line: a return dashed and muted, an async call dotted.
             shapes.push(Shape::Curve {
                 path,
                 color,
-                width: if picked { 2. } else { 1.4 },
-                dash: (m.kind == MessageKind::Return).then_some([5., 4.]),
-                head: match m.kind {
-                    MessageKind::Sync | MessageKind::SelfCall => Head::Filled,
-                    MessageKind::Async | MessageKind::Return => Head::Open,
+                width: if picked { 2. } else { look::EDGE_WIDTH },
+                dash: match m.kind {
+                    MessageKind::Return => Some([5., 4.]),
+                    MessageKind::Async => Some([2., 3.]),
+                    MessageKind::Sync | MessageKind::SelfCall => None,
                 },
+                head: Head::Arrow,
             });
         }
         if let Some(SeqDrag::Connect {
@@ -349,26 +375,31 @@ impl PanelView {
             );
         }
 
-        // Fragment tabs: the kind, then the condition.
+        // Fragment tags, inside the top-left like a group's: the kind in
+        // `ui::mono()` `accent`, then the condition, on the container's tone.
         for (f, g) in shown.fragments.iter().zip(&l.fragments) {
             if !g.rect.intersects(&visible) {
                 continue;
             }
-            let (x, y) = c.at(g.rect.x, g.rect.y, rem);
+            let (x, y) = c.at(g.rect.x + 8., g.rect.y + 4., rem);
             children.push(
                 h_flex()
                     .absolute()
                     .left(x)
                     .top(y)
+                    .max_w(px((g.rect.w - 16.) * scale))
+                    .overflow_hidden()
                     .gap(px(6. * scale))
                     .px(px(6. * scale))
-                    .h(px(20. * scale))
-                    .rounded_tl(px(8. * scale))
-                    .rounded_br(px(6. * scale))
-                    .bg(ui::surface())
+                    .h(px(18. * scale))
+                    .rounded(px(5. * scale))
+                    // Opaque, so the lifelines it sits on break around it.
+                    .bg(ui::well().blend(frame.opacity(0.16)))
                     .border_1()
-                    .border_color(ui::border_strong())
-                    .text_size(px(11. * scale))
+                    .border_color(frame.opacity(0.4))
+                    .text_size(px(10. * scale))
+                    .line_height(px(12. * scale))
+                    .whitespace_nowrap()
                     .child(
                         div()
                             .font_family(ui::mono())
@@ -385,12 +416,16 @@ impl PanelView {
             );
             for (y, label) in &g.branches {
                 let Some(label) = label else { continue };
-                let (x, y) = c.at(g.rect.x + 8., *y + 2., rem);
+                let (x, y) = c.at(g.rect.x + 4., *y + 2., rem);
                 children.push(
                     div()
                         .absolute()
                         .left(x)
                         .top(y)
+                        .px(px(4. * scale))
+                        .rounded(px(4. * scale))
+                        // On the canvas color: lifelines break around it.
+                        .bg(ui::well())
                         .text_size(px(11. * scale))
                         .text_color(ui::muted())
                         .child(format!("[{label}]"))
@@ -455,14 +490,13 @@ impl PanelView {
                     .justify_center()
                     .when(g.self_loop, |d| d.justify_start())
                     .child(
-                        div()
-                            .px(px(6. * scale))
-                            .rounded_full()
-                            .bg(ui::well())
+                        look::label_pill(scale)
                             .max_w_full()
                             .truncate()
-                            .text_size(px(11. * scale))
-                            .text_color(if picked { ui::accent() } else { ui::fg() })
+                            .when(picked, |d| {
+                                d.border_color(ui::accent().opacity(0.6))
+                                    .text_color(ui::accent())
+                            })
                             .child(m.label.clone()),
                     )
                     .into_any_element(),
@@ -473,11 +507,13 @@ impl PanelView {
         for (p, head) in shown.participants.iter().zip(&l.heads) {
             let key = format!("p:{}", p.id);
             let picked = selected == Some(key.as_str());
-            let color = kind_color(p.kind);
+            let tone = participant_tone(p);
             let (x, y) = c.at(head.x, head.y, rem);
             let id = p.id.clone();
             children.push(
-                h_flex()
+                look::card(tone, scale)
+                    .flex()
+                    .items_center()
                     .id(SharedString::from(format!(
                         "genui-seq-participant-{}",
                         p.id
@@ -493,38 +529,16 @@ impl PanelView {
                     .h(px(head.h * scale))
                     .gap(px(8. * scale))
                     .px(px(10. * scale))
-                    .rounded(px(10. * scale))
-                    .bg(ui::surface())
-                    .border_1()
-                    .border_color(if picked {
-                        ui::accent()
-                    } else {
-                        ui::border_strong()
-                    })
-                    .shadow_sm()
+                    .when(picked, |d| d.border_color(ui::accent()))
                     .cursor(CursorStyle::OpenHand)
-                    .hover(|d| d.bg(ui::surface_hover()))
+                    .hover(|d| d.bg(look::hover_fill(tone)))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             this.press_participant(&id, event, window, cx)
                         }),
                     )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .size(px(24. * scale))
-                            .rounded(px(7. * scale))
-                            .bg(color.opacity(0.14))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                Icon::new(kind_icon(p.kind))
-                                    .size(px(14. * scale))
-                                    .text_color(color),
-                            ),
-                    )
+                    .child(look::badge(tone, participant_icon(p), look::BADGE, scale))
                     .child(
                         v_flex()
                             .flex_1()
@@ -540,8 +554,9 @@ impl PanelView {
                             .when(scale >= 0.5, |d| {
                                 d.child(
                                     div()
+                                        .font_family(ui::mono())
                                         .text_size(px(10.5 * scale))
-                                        .text_color(ui::muted())
+                                        .text_color(ui::faint())
                                         .child(p.kind.name()),
                                 )
                             }),
@@ -550,13 +565,17 @@ impl PanelView {
             );
         }
 
-        let mut minimap: Vec<(Rect, Hsla)> = shown
-            .participants
+        let mut minimap: Vec<(Rect, Hsla)> = l
+            .heads
             .iter()
-            .zip(&l.heads)
-            .map(|(p, r)| (*r, kind_color(p.kind).opacity(0.7)))
+            .zip(&tones)
+            .map(|(r, tone)| (*r, tone.opacity(0.7)))
             .collect();
-        minimap.extend(l.bars.iter().map(|(_, r)| (*r, ui::info().opacity(0.5))));
+        minimap.extend(
+            l.bars
+                .iter()
+                .map(|(lane, r)| (*r, tone_of(*lane).opacity(0.5))),
+        );
         let details = selected.and_then(|key| self.sequence_details(shown, key, cx));
         Drawn {
             shapes,
@@ -591,8 +610,8 @@ impl PanelView {
             let subject = format!("participant “{}”", p.label);
             let pid = id.clone();
             return Some(canvas::details(
-                kind_icon(p.kind),
-                kind_color(p.kind),
+                participant_icon(p),
+                participant_tone(p),
                 p.label.clone(),
                 vec![
                     canvas::pills(
@@ -946,6 +965,8 @@ impl PanelView {
             id: working.fresh_participant_id(&label),
             label,
             kind: ParticipantKind::Service,
+            color: None,
+            icon: None,
         };
         let key = format!("p:{}", participant.id);
         if self.sequence_edit(Change::AddParticipant { participant }, cx) {

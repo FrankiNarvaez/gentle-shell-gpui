@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use gentle_core::genui::diagram::{Diagram, EdgeStyle, Node};
 use gentle_core::genui::layout::{Cubic, EdgePath, Layout, Point as P, Rect};
+use gentle_core::genui::style::Tint;
 // Not a glob: GPUI exports a `test` attribute that would shadow `#[test]`.
 use gpui_kit::{App, Point, Styled, Window, ease_out_quint, point, rems};
 
@@ -121,9 +122,11 @@ impl ViewTween {
 pub(super) struct Arrival {
     start: Instant,
     nodes: HashMap<String, Rect>,
-    edges: HashMap<String, EdgePath>,
+    /// Each kept edge's old path and label center.
+    edges: HashMap<String, (EdgePath, Option<P>)>,
     pub leaving_nodes: Vec<(Node, Rect)>,
-    pub leaving_edges: Vec<(EdgePath, EdgeStyle)>,
+    /// Removed edges fading out, in their style and color.
+    pub leaving_edges: Vec<(EdgePath, EdgeStyle, Option<Tint>)>,
 }
 
 impl Arrival {
@@ -150,11 +153,12 @@ impl Arrival {
             .zip(&old_layout.nodes)
             .map(|(n, r)| (n.id.clone(), *r))
             .collect();
-        let edges: HashMap<String, EdgePath> = old
+        let edges: HashMap<String, (EdgePath, Option<P>)> = old
             .edges
             .iter()
             .zip(&old_layout.edges)
-            .map(|(e, p)| (e.id.clone(), p.clone()))
+            .zip(&old_layout.labels)
+            .map(|((e, p), label)| (e.id.clone(), (p.clone(), *label)))
             .collect();
         let leaving_nodes: Vec<(Node, Rect)> = old
             .nodes
@@ -163,12 +167,12 @@ impl Arrival {
             .filter(|(n, _)| new.node(&n.id).is_none())
             .map(|(n, r)| (n.clone(), *r))
             .collect();
-        let leaving_edges: Vec<(EdgePath, EdgeStyle)> = old
+        let leaving_edges: Vec<(EdgePath, EdgeStyle, Option<Tint>)> = old
             .edges
             .iter()
             .zip(&old_layout.edges)
             .filter(|(e, _)| new.edge(&e.id).is_none())
-            .map(|(e, p)| (p.clone(), e.style))
+            .map(|(e, p)| (p.clone(), e.style, e.color))
             .collect();
         let moves = new
             .nodes
@@ -219,7 +223,7 @@ impl Arrival {
     /// old path when both have as many segments, faded in when new.
     pub fn edge(&self, id: &str, target: &EdgePath, p: f32) -> (EdgePath, f32) {
         match self.edges.get(id) {
-            Some(from) if from.segments.len() == target.segments.len() => {
+            Some((from, _)) if from.segments.len() == target.segments.len() => {
                 let segments = from
                     .segments
                     .iter()
@@ -235,6 +239,15 @@ impl Arrival {
             }
             Some(_) => (target.clone(), 1.),
             None => (target.clone(), p),
+        }
+    }
+
+    /// Edge `id`'s label center at progress `p`: slid from its old place
+    /// when it had one, else already at `target` (it fades in with the edge).
+    pub fn label(&self, id: &str, target: Option<P>, p: f32) -> Option<P> {
+        match (self.edges.get(id).and_then(|(_, old)| *old), target) {
+            (Some(from), Some(to)) => Some(lerp(from, to, p)),
+            _ => target,
         }
     }
 }

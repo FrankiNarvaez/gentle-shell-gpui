@@ -1,24 +1,25 @@
 //! The state kind on the shared canvas, edited like the diagram: state
-//! cards (the current one ringed in `accent`), the initial dot, final
-//! rings and choice diamonds, composite states as group boxes and
-//! transitions as arrows labeled `event [guard] / action`. Drag states to
-//! move them, drag ● to another state for a transition, double-click to
-//! rename; the details island changes a state's kind.
+//! cards in their tone (the current one in `accent`), the initial dot,
+//! final rings and choice diamonds, composite states as tinted containers
+//! and transitions as chevron arrows labeled `event [guard] / action`.
+//! Drag states to move them, drag ● to another state for a transition,
+//! double-click to rename; the details island changes a state's kind.
 
 use std::rc::Rc;
 
 use gentle_core::genui::edits::{Editable as _, Edits};
 use gentle_core::genui::layout::{
-    GROUP_HEADER, GROUP_PAD, Layout, Point as P, Rect, STATES as SIZE,
+    GROUP_HEADER, GROUP_PAD, Layout, Point as P, Rect, STATES as SIZE, label_size,
 };
 use gentle_core::genui::states::{self, Change, Machine, State, StateKind, Transition};
 use gpui_kit::assets::IconName;
-use gpui_kit::component::h_flex;
+use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::canvas::{self, Canvas, Drawn, Head, Shape, moved};
 use super::diagram::snap;
+use super::look;
 use super::panel::{Body, PanelView};
 use crate::shared::ui;
 
@@ -129,6 +130,16 @@ fn kind_name(kind: StateKind) -> &'static str {
     kind.name()
 }
 
+/// A state's tone: `accent` while it's the current one, else its `color`,
+/// else neutral so a machine reads calm until an agent tints it.
+fn state_tone(st: &State, current: bool) -> Hsla {
+    if current {
+        ui::accent()
+    } else {
+        look::tone(st.color, ui::muted())
+    }
+}
+
 impl PanelView {
     fn machine(&self) -> Option<&MachineState> {
         match &self.body {
@@ -187,26 +198,26 @@ impl PanelView {
 
         for (g, rect) in shown.groups.iter().zip(&l.groups) {
             let Some(rect) = rect else { continue };
+            let tone = look::tone(g.color, ui::muted());
             shapes.push(Shape::Box {
                 rect: *rect,
-                fill: ui::surface().opacity(0.55),
-                border: Some(ui::border()),
-                radius: 14.,
+                fill: look::group_fill(tone),
+                border: Some(look::group_border(tone)),
+                border_width: 1.5,
+                radius: look::GROUP_RADIUS,
                 dashed: false,
             });
-            let (x, y) = c.at(rect.x + GROUP_PAD * 0.75, rect.y + 5., rem);
+            // The tag sits in the header band the layout keeps above the
+            // states.
+            let (x, y) = c.at(rect.x + 10., rect.y + (GROUP_HEADER - 18.) / 2. + 2., rem);
             children.push(
                 div()
                     .absolute()
                     .left(x)
                     .top(y)
                     .max_w(px((rect.w - GROUP_PAD) * scale))
-                    .truncate()
-                    .text_size(px(11. * scale))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(ui::muted())
-                    .h(px(GROUP_HEADER * scale))
-                    .child(g.label.clone())
+                    .overflow_hidden()
+                    .child(look::group_tag(tone, &g.label, None, scale))
                     .into_any_element(),
             );
         }
@@ -214,43 +225,70 @@ impl PanelView {
             let picked = selected == Some(&format!("t:{}", t.id));
             shapes.push(Shape::Curve {
                 path: path.clone(),
-                color: if picked { ui::accent() } else { ui::muted() },
-                width: if picked { 2.25 } else { 1.5 },
+                color: if picked { ui::accent() } else { look::line() },
+                width: if picked { 2.25 } else { look::EDGE_WIDTH },
                 dash: None,
-                head: Head::Filled,
+                head: Head::Arrow,
             });
         }
         // Pseudo-states are painted; a card-less hit box sits on each.
         for (st, rect) in shown.states.iter().zip(&l.nodes) {
             let picked = selected == Some(&format!("s:{}", st.id));
-            let tone = if picked { ui::accent() } else { ui::fg() };
             let center = rect.center();
             match st.kind {
-                StateKind::Initial => shapes.push(Shape::Box {
-                    rect: *rect,
-                    fill: tone,
-                    border: None,
-                    radius: rect.w / 2.,
-                    dashed: false,
-                }),
-                StateKind::Final => {
+                // A solid dot in a soft halo of its tone.
+                StateKind::Initial => {
+                    let tone = if picked {
+                        ui::accent()
+                    } else {
+                        look::tone(st.color, ui::fg())
+                    };
+                    let halo = rect.inflate(3.);
+                    shapes.push(Shape::Box {
+                        rect: halo,
+                        fill: tone.opacity(0.14),
+                        border: None,
+                        border_width: 0.,
+                        radius: halo.w / 2.,
+                        dashed: false,
+                    });
                     shapes.push(Shape::Box {
                         rect: *rect,
-                        fill: ui::well(),
-                        border: Some(tone),
+                        fill: tone,
+                        border: None,
+                        border_width: 0.,
                         radius: rect.w / 2.,
                         dashed: false,
                     });
-                    let inner = rect.inflate(-4.);
+                }
+                StateKind::Final => {
+                    let tone = if picked {
+                        ui::accent()
+                    } else {
+                        look::tone(st.color, ui::fg())
+                    };
+                    shapes.push(Shape::Box {
+                        rect: *rect,
+                        fill: look::fill(tone),
+                        border: Some(tone),
+                        border_width: 1.5,
+                        radius: rect.w / 2.,
+                        dashed: false,
+                    });
+                    let inner = rect.inflate(-4.5);
                     shapes.push(Shape::Box {
                         rect: inner,
                         fill: tone,
                         border: None,
+                        border_width: 0.,
                         radius: inner.w / 2.,
                         dashed: false,
                     });
                 }
+                // A tinted diamond: its tone's hairline around the card
+                // fill, like a state card.
                 StateKind::Choice => {
+                    let tone = look::tone(st.color, ui::muted());
                     let r = rect.w / 2.;
                     let points = vec![
                         P {
@@ -275,19 +313,19 @@ impl PanelView {
                         color: if picked {
                             ui::accent()
                         } else {
-                            ui::border_strong()
+                            look::edge_color(tone)
                         },
                     });
                     let inner: Vec<P> = points
                         .iter()
                         .map(|p| P {
-                            x: center.x + (p.x - center.x) * 0.86,
-                            y: center.y + (p.y - center.y) * 0.86,
+                            x: center.x + (p.x - center.x) * 0.9,
+                            y: center.y + (p.y - center.y) * 0.9,
                         })
                         .collect();
                     shapes.push(Shape::Polygon {
                         points: inner,
-                        color: ui::surface(),
+                        color: look::fill(tone),
                     });
                 }
                 StateKind::Normal => {}
@@ -300,49 +338,43 @@ impl PanelView {
             });
         }
 
-        // Transition labels.
+        // Transition labels, where the layout placed them clear of each other.
         if scale >= 0.35 {
-            for (ix, (t, path)) in shown.transitions.iter().zip(&l.edges).enumerate() {
+            for (ix, (t, spot)) in shown.transitions.iter().zip(&l.labels).enumerate() {
                 let label = t.label();
-                if label.is_empty() {
+                let Some(p) = spot.filter(|_| !label.is_empty()) else {
                     continue;
-                }
-                let p = path.label_at();
+                };
                 if !visible.contains(p) {
                     continue;
                 }
                 let picked = selected == Some(&format!("t:{}", t.id));
-                let (x, y) = c.at(p.x - 80., p.y - 10., rem);
+                let (width, height) = label_size(&label, false);
+                let (x, y) = c.at(p.x - width / 2., p.y - height / 2., rem);
                 let id = t.id.clone();
                 children.push(
                     h_flex()
                         .absolute()
                         .left(x)
                         .top(y)
-                        .w(px(160. * scale))
+                        .w(px(width * scale))
+                        .h(px(height * scale))
+                        .items_center()
                         .justify_center()
                         .child(
-                            div()
+                            look::label_pill(scale)
                                 .id(("genui-state-transition", ix))
                                 .debug_selector({
                                     let id = t.id.clone();
                                     move || format!("genui-state-transition-{id}")
                                 })
-                                .px(px(6. * scale))
-                                .py(px(1. * scale))
-                                .rounded_full()
-                                .bg(ui::surface())
-                                .border_1()
-                                .border_color(if picked {
-                                    ui::accent().opacity(0.6)
-                                } else {
-                                    ui::border()
+                                .when(picked, |d| {
+                                    d.border_color(ui::accent().opacity(0.6))
+                                        .text_color(ui::accent())
                                 })
                                 .max_w_full()
                                 .truncate()
                                 .cursor_pointer()
-                                .text_size(px(10.5 * scale))
-                                .text_color(if picked { ui::accent() } else { ui::muted() })
                                 .child(label)
                                 .on_mouse_down(
                                     MouseButton::Left,
@@ -376,10 +408,7 @@ impl PanelView {
             .zip(&l.nodes)
             .map(|(st, r)| {
                 let current = shown.current.as_deref() == Some(st.id.as_str());
-                (
-                    *r,
-                    if current { ui::accent() } else { ui::info() }.opacity(0.7),
-                )
+                (*r, state_tone(st, current).opacity(0.7))
             })
             .collect();
         let details = selected.and_then(|key| self.state_details(shown, key, cx));
@@ -440,7 +469,14 @@ impl PanelView {
                     this.press_state_handle(&handle_id, event, window, cx)
                 }),
             );
-        let base = div()
+        let tone = state_tone(st, current);
+        // Pseudo-states are painted under a bare hit box; a state is a card.
+        let frame = if st.kind.pseudo() {
+            div()
+        } else {
+            look::card(tone, scale)
+        };
+        let base = frame
             .id(("genui-state", ix))
             .debug_selector({
                 let id = st.id.clone();
@@ -480,73 +516,76 @@ impl PanelView {
                 })
                 .into_any_element();
         }
+        let badge = st
+            .icon
+            .and_then(look::icon)
+            .map(|icon| look::badge(tone, icon, look::BADGE, scale));
         base.flex()
-            .flex_col()
-            .justify_center()
+            .items_center()
+            .gap(px(8. * scale))
             .px(px(12. * scale))
-            .rounded(px(16. * scale))
-            .bg(ui::surface())
-            .border_1()
-            .border_color(if picked || current {
-                ui::accent()
-            } else {
-                ui::border_strong()
-            })
-            .when(current, |d| d.border_2().bg(ui::accent().opacity(0.08)))
-            .shadow_sm()
+            .when(picked, |d| d.border_color(ui::accent()))
+            .when(current, |d| d.border_2().border_color(ui::accent()))
             .when(dragging, |d| d.shadow_lg())
-            .hover(|d| d.bg(ui::surface_hover()))
+            .hover(|d| d.bg(look::hover_fill(tone)))
+            .children(badge)
             .child(
-                h_flex()
-                    .gap(px(6. * scale))
+                v_flex()
+                    .flex_1()
                     .min_w_0()
-                    .when(current, |d| {
+                    .justify_center()
+                    .child(
+                        h_flex()
+                            .gap(px(6. * scale))
+                            .min_w_0()
+                            .when(current, |d| {
+                                d.child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .size(px(7. * scale))
+                                        .rounded_full()
+                                        .bg(ui::accent()),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(px(13. * scale))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(ui::fg())
+                                    .child(st.label.clone()),
+                            ),
+                    )
+                    .when_some(
+                        st.description.clone().filter(|_| scale >= 0.5),
+                        |d, description| {
+                            d.child(
+                                div()
+                                    .truncate()
+                                    .text_size(px(11. * scale))
+                                    .text_color(ui::muted())
+                                    .child(description),
+                            )
+                        },
+                    )
+                    .when(current && scale >= 0.5 && st.description.is_none(), |d| {
                         d.child(
                             div()
-                                .flex_shrink_0()
-                                .size(px(7. * scale))
-                                .rounded_full()
-                                .bg(ui::accent()),
+                                .text_size(px(10.5 * scale))
+                                .text_color(ui::accent())
+                                .child("current"),
                         )
-                    })
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(13. * scale))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(ui::fg())
-                            .child(st.label.clone()),
-                    ),
+                    }),
             )
-            .when_some(
-                st.description.clone().filter(|_| scale >= 0.5),
-                |d, description| {
-                    d.child(
-                        div()
-                            .truncate()
-                            .text_size(px(11. * scale))
-                            .text_color(ui::muted())
-                            .child(description),
-                    )
-                },
-            )
-            .when(current && scale >= 0.5 && st.description.is_none(), |d| {
-                d.child(
-                    div()
-                        .text_size(px(10.5 * scale))
-                        .text_color(ui::accent())
-                        .child("current"),
-                )
-            })
             .when(picked, |d| {
                 d.child(ui::popover_in(
                     ("genui-state-ring", ix),
                     div()
                         .absolute()
                         .inset(px(-4. * scale))
-                        .rounded(px(20. * scale))
+                        .rounded(px((look::CARD_RADIUS + 4.) * scale))
                         .border_2()
                         .border_color(ui::accent().opacity(0.35)),
                 ))
@@ -614,8 +653,8 @@ impl PanelView {
                 ),
             ]));
             return Some(canvas::details(
-                IconName::CircleDot,
-                ui::info(),
+                st.icon.and_then(look::icon).unwrap_or(IconName::CircleDot),
+                state_tone(st, shown.current.as_deref() == Some(id)),
                 st.label.clone(),
                 rows,
                 cx,
@@ -864,7 +903,7 @@ impl PanelView {
                 .iter()
                 .position(|t| t.id == id)
                 .map(|ix| {
-                    let p = l.edges[ix].label_at();
+                    let p = l.labels[ix].unwrap_or_else(|| l.edges[ix].label_at());
                     (
                         working.transitions[ix].event.clone().unwrap_or_default(),
                         Rect {

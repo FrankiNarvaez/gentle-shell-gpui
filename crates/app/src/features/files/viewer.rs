@@ -198,7 +198,7 @@ impl FileView {
                 let diagrams = Arc::new(mermaid::Diagrams::default());
                 let preview = is_markdown(&path).then(|| {
                     let prepared =
-                        diagrams.prepare(&text, dark_theme(cx), renderer_cli(cx).as_ref());
+                        diagrams.prepare(&text, mermaid::dark(cx), mermaid::ready_cli(cx).as_ref());
                     (drawing, diagram_blocks) = (prepared.jobs, prepared.blocks);
                     cx.new(|cx| TextViewState::markdown(&prepared.text, cx))
                 });
@@ -596,9 +596,9 @@ impl FileView {
             return;
         };
         let text = editor.read(cx).text().to_string();
-        let prepared = md
-            .diagrams
-            .prepare(&text, dark_theme(cx), renderer_cli(cx).as_ref());
+        let prepared =
+            md.diagrams
+                .prepare(&text, mermaid::dark(cx), mermaid::ready_cli(cx).as_ref());
         md.diagram_blocks = prepared.blocks;
         let list = md.preview.read(cx).list_state().clone();
         md.restore
@@ -1326,71 +1326,8 @@ fn image_source(dir: &Path, embedded: &EmbeddedImages, uri: &SharedUri) -> Image
 /// Above a preview with Mermaid blocks and no renderer: what the blocks
 /// are and a way to draw them (a one-time download, not part of the app).
 fn diagram_banner(md: &Markdown, cx: &App) -> Option<Div> {
-    let blocks = md.diagram_blocks;
-    let (line, action) = match mermaid::renderer(cx) {
-        _ if blocks == 0 => return None,
-        mermaid::Renderer::Ready(_) => return None,
-        mermaid::Renderer::Missing => (
-            format!(
-                "{blocks} Mermaid {} here. Draw {} with the diagram renderer, a one-time download of about 20 MB.",
-                if blocks == 1 { "diagram" } else { "diagrams" },
-                if blocks == 1 { "it" } else { "them" },
-            ),
-            Some("Install"),
-        ),
-        mermaid::Renderer::Installing(progress) => (progress.clone(), None),
-        mermaid::Renderer::Failed(error) => (
-            format!("The diagram renderer couldn't be installed: {error}"),
-            Some("Try again"),
-        ),
-    };
-    let installing = matches!(mermaid::renderer(cx), mermaid::Renderer::Installing(_));
-    Some(
-        h_flex()
-            .mx_6()
-            .mt_3()
-            .px_3()
-            .py_2()
-            .gap_2()
-            .rounded_lg()
-            .bg(ui::surface())
-            .text_xs()
-            .text_color(ui::muted())
-            .child(if installing {
-                Spinner::new()
-                    .xsmall()
-                    .color(ui::accent())
-                    .into_any_element()
-            } else {
-                Icon::new(IconName::Workflow)
-                    .xsmall()
-                    .text_color(ui::info())
-                    .into_any_element()
-            })
-            .child(div().flex_1().min_w_0().child(line))
-            .children(action.map(|label| {
-                Button::new("install-diagram-renderer")
-                    .ghost()
-                    .xsmall()
-                    .label(label)
-                    .on_click(|_, _, cx| mermaid::install(cx))
-            })),
-    )
-}
-
-/// The diagram renderer, once installed.
-fn renderer_cli(cx: &App) -> Option<PathBuf> {
-    match mermaid::renderer(cx) {
-        mermaid::Renderer::Ready(cli) => Some(cli.clone()),
-        _ => None,
-    }
-}
-
-/// The app's theme is dark: Mermaid draws in its dark theme.
-fn dark_theme(cx: &App) -> bool {
-    !cx.global::<crate::shared::themes::Themes>()
-        .active_theme()
-        .light
+    mermaid::banner(md.diagram_blocks, "install-diagram-renderer", cx)
+        .map(|banner| banner.mx_6().mt_3())
 }
 
 /// The image a base64 `data:` URL carries, if GPUI can decode its type.

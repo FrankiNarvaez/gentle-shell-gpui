@@ -14,13 +14,15 @@ use gentle_core::genui::erd::{
 };
 use gentle_core::genui::layout::{Point as P, Rect};
 use gentle_core::genui::refs::CodeRef;
+use gentle_core::genui::style::Tint;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{Icon, h_flex, v_flex};
+use gpui_kit::component::{Icon, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::canvas::{self, Canvas, Drawn, Head, Shape, moved};
 use super::diagram::{DiagramEvent, snap};
+use super::look;
 use super::panel::{Body, PanelView};
 use super::share::RefState;
 use crate::shared::ui;
@@ -129,7 +131,7 @@ fn state(this: &mut PanelView) -> Option<&mut ErdState> {
 
 /// A crow's-foot end at `p`, `d` pointing out of the table: three prongs
 /// for "many" or a bar for "one", then a bar (required) or a ring
-/// (optional) further out.
+/// (optional) further out, all stroked like the relation's line.
 fn marker(p: P, d: P, many: bool, optional: bool, color: Hsla, shapes: &mut Vec<Shape>) {
     let along = |k: f32| P {
         x: p.x + d.x * k,
@@ -143,7 +145,7 @@ fn marker(p: P, d: P, many: bool, optional: bool, color: Hsla, shapes: &mut Vec<
         from,
         to,
         color,
-        width: 1.4,
+        width: look::EDGE_WIDTH,
         dash: None,
     };
     if many {
@@ -166,6 +168,7 @@ fn marker(p: P, d: P, many: bool, optional: bool, color: Hsla, shapes: &mut Vec<
             },
             fill: ui::well(),
             border: Some(color),
+            border_width: 1.,
             radius: 4.,
             dashed: false,
         });
@@ -173,6 +176,12 @@ fn marker(p: P, d: P, many: bool, optional: bool, color: Hsla, shapes: &mut Vec<
         let at = along(20.);
         shapes.push(line(side(at, 7.), side(at, -7.)));
     }
+}
+
+/// A table's tone: its `color`, else the next in a fixed cycle so tables
+/// read apart without the agent choosing.
+fn table_tone(t: &Table, ix: usize) -> Hsla {
+    look::tone(t.color, ui::tint(Tint::cycle(ix)))
 }
 
 fn short(c: Cardinality) -> String {
@@ -231,11 +240,11 @@ impl PanelView {
         };
         for (r, g) in shown.relations.iter().zip(&l.relations) {
             let picked = selected == Some(&format!("r:{}", r.id));
-            let color = if picked { ui::accent() } else { ui::muted() };
+            let color = if picked { ui::accent() } else { look::line() };
             shapes.push(Shape::Curve {
                 path: g.path.clone(),
                 color,
-                width: if picked { 2. } else { 1.4 },
+                width: if picked { 2. } else { look::EDGE_WIDTH },
                 dash: None,
                 head: Head::None,
             });
@@ -266,7 +275,7 @@ impl PanelView {
             });
         }
 
-        // Relation pills: the cardinality (and label) halfway.
+        // Relation pills: the cardinality (and label) halfway, on the cross run.
         for (ix, (r, g)) in shown.relations.iter().zip(&l.relations).enumerate() {
             if scale < 0.35 {
                 break;
@@ -288,27 +297,20 @@ impl PanelView {
                     .h(px(20. * scale))
                     .justify_center()
                     .child(
-                        div()
+                        look::label_pill(scale)
                             .id(("genui-erd-relation", ix))
                             .debug_selector({
                                 let id = r.id.clone();
                                 move || format!("genui-erd-relation-{id}")
                             })
-                            .px(px(6. * scale))
-                            .rounded_full()
-                            .bg(ui::surface())
-                            .border_1()
-                            .border_color(if picked {
-                                ui::accent().opacity(0.6)
-                            } else {
-                                ui::border()
+                            .when(picked, |d| {
+                                d.border_color(ui::accent().opacity(0.6))
+                                    .text_color(ui::accent())
                             })
                             .max_w_full()
                             .truncate()
                             .cursor_pointer()
                             .font_family(ui::mono())
-                            .text_size(px(10.5 * scale))
-                            .text_color(if picked { ui::accent() } else { ui::muted() })
                             .child(text)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -335,10 +337,12 @@ impl PanelView {
             children.push(self.table_card(ti, t, *rect, scale, rem, cx));
         }
 
-        let minimap = l
+        let minimap = shown
             .tables
             .iter()
-            .map(|r| (*r, ui::success().opacity(0.6)))
+            .zip(&l.tables)
+            .enumerate()
+            .map(|(ti, (t, r))| (*r, table_tone(t, ti).opacity(0.6)))
             .collect();
         let details = selected.and_then(|key| self.erd_details(shown, key, cx));
         Drawn {
@@ -373,6 +377,8 @@ impl PanelView {
         let dragging = picked && matches!(&s.drag, Some(ErdDrag::Table { moved: true, .. }));
         let (x, y) = s.canvas.at(rect.x, rect.y, rem);
         let id = t.id.clone();
+        let tone = table_tone(t, ti);
+        let icon = t.icon.and_then(look::icon).unwrap_or(IconName::Database);
         let header = h_flex()
             .id(("genui-erd-table", ti))
             .debug_selector({
@@ -384,8 +390,11 @@ impl PanelView {
             .gap(px(8. * scale))
             .px(px(10. * scale))
             .border_b_1()
-            .border_color(ui::border())
-            .bg(ui::success().opacity(0.06))
+            .border_color(look::edge_color(tone))
+            // The card keeps its corners: the handles hang outside it, so
+            // it can't clip the header.
+            .rounded_t(px((look::CARD_RADIUS - 1.) * scale))
+            .bg(tone.opacity(0.14))
             .cursor(CursorStyle::OpenHand)
             .on_mouse_down(
                 MouseButton::Left,
@@ -393,11 +402,7 @@ impl PanelView {
                     this.press_table(&id, event, window, cx)
                 }),
             )
-            .child(
-                Icon::new(IconName::Database)
-                    .size(px(14. * scale))
-                    .text_color(ui::success()),
-            )
+            .child(look::badge(tone, icon, 22., scale))
             .child(
                 div()
                     .flex_1()
@@ -528,21 +533,15 @@ impl PanelView {
                 .child(handle(true))
                 .child(handle(false))
         });
-        v_flex()
+        look::card(tone, scale)
+            .flex()
+            .flex_col()
             .absolute()
             .left(x)
             .top(y)
             .w(px(rect.w * scale))
             .h(px(rect.h * scale))
-            .rounded(px(10. * scale))
-            .bg(ui::surface())
-            .border_1()
-            .border_color(if picked {
-                ui::accent()
-            } else {
-                ui::border_strong()
-            })
-            .shadow_sm()
+            .when(picked, |d| d.border_color(ui::accent()))
             .when(dragging, |d| d.shadow_lg())
             .child(header)
             .children(rows)
@@ -618,6 +617,11 @@ impl PanelView {
                     cx.listener(move |this, _, window, cx| this.erd_rename(&target, window, cx)),
                 )
             };
+        // A table (and its columns) take the table's tone, as on its card.
+        let tone_of = |t: &Table| {
+            let ix = shown.tables.iter().position(|x| x.id == t.id);
+            table_tone(t, ix.unwrap_or(0))
+        };
         match what {
             "t" => {
                 let t = shown.table(rest)?;
@@ -660,8 +664,8 @@ impl PanelView {
                     ),
                 ]));
                 Some(canvas::details(
-                    IconName::Database,
-                    ui::success(),
+                    t.icon.and_then(look::icon).unwrap_or(IconName::Database),
+                    tone_of(t),
                     t.name.clone(),
                     rows,
                     cx,
@@ -740,7 +744,7 @@ impl PanelView {
                     } else {
                         IconName::Table
                     },
-                    ui::info(),
+                    tone_of(t),
                     format!("{}.{}", t.name, col.name),
                     rows,
                     cx,

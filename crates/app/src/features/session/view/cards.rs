@@ -1,7 +1,6 @@
 //! Cards for extension custom messages, styled from their type and details.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::text::TextView;
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -25,7 +24,7 @@ impl SessionView {
         let open = self.expanded.contains(&key);
         let more = lines.saturating_sub(INPUT_LINES);
         let body = match look.body {
-            CustomBody::Markdown => self.markdown.get(&(ix, 0)).map(|(state, _)| {
+            CustomBody::Markdown => self.markdown.get(&(ix, 0)).map(|(state, ..)| {
                 div()
                     .px_3()
                     .pb_2()
@@ -35,7 +34,7 @@ impl SessionView {
                         d.max_h(rems((INPUT_LINES as f32 * 21.) / 16.))
                             .overflow_hidden()
                     })
-                    .child(TextView::new(state).selectable(true))
+                    .child(self.markdown_view(state, text, ("mermaid-install-custom", ix), cx))
                     .into_any_element()
             }),
             CustomBody::Head | CustomBody::Tail => {

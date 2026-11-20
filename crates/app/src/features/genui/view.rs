@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use gentle_core::genui::diagram::{Direction, EdgeStyle, NodeKind, Status};
+use gentle_core::genui::diagram::{Direction, EdgeStyle, Node, NodeKind, Status};
 use gentle_core::genui::layout::{self, GROUP_PAD, Rect};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -17,6 +17,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::diagram::{DiagramEvent, DiagramView, Drag, READABLE_ZOOM, Selection, SendState};
+use super::look;
 use super::motion::{self, MARCH_SPEED};
 use super::paint::{self, EdgeDraw, EdgeLook, Frame, MiniMap};
 use super::pointer::ZOOM_STEP;
@@ -31,8 +32,11 @@ const DETAIL_ZOOM: f32 = 0.35;
 /// The minimap's size (px at 100 %).
 const MINIMAP_W: f32 = 168.;
 const MINIMAP_H: f32 = 108.;
+/// Where a group's tag sits inside its box, from the top-left corner
+/// (diagram units).
+const GROUP_TAG_INSET: f32 = 10.;
 
-pub(super) fn kind_icon(kind: NodeKind) -> IconName {
+fn kind_icon(kind: NodeKind) -> IconName {
     match kind {
         NodeKind::Service => IconName::Server,
         NodeKind::Database => IconName::Database,
@@ -46,16 +50,32 @@ pub(super) fn kind_icon(kind: NodeKind) -> IconName {
     }
 }
 
-pub(super) fn kind_color(kind: NodeKind) -> Hsla {
+/// A kind's default tone (Eraser's palette per kind); a node's `color`
+/// overrides it (`node_tone`).
+fn kind_color(kind: NodeKind) -> Hsla {
     match kind {
-        NodeKind::Service | NodeKind::Function => ui::info(),
-        NodeKind::Database | NodeKind::Storage => ui::success(),
+        NodeKind::Service => ui::info(),
+        NodeKind::Function => ui::purple(),
+        NodeKind::Database => ui::success(),
+        NodeKind::Storage => ui::teal(),
         NodeKind::Queue => ui::warning(),
-        NodeKind::Cache => ui::champagne(),
+        NodeKind::Cache => ui::danger(),
         NodeKind::Client => ui::accent(),
         NodeKind::External => ui::muted(),
-        NodeKind::Note => ui::faint(),
+        NodeKind::Note => ui::champagne(),
     }
+}
+
+/// The tone a node wears everywhere (card, badge, minimap, details).
+pub(super) fn node_tone(node: &Node) -> Hsla {
+    look::tone(node.color, kind_color(node.kind))
+}
+
+/// A node's badge icon: its `icon`, else its kind's.
+pub(super) fn node_icon(node: &Node) -> IconName {
+    node.icon
+        .and_then(look::icon)
+        .unwrap_or_else(|| kind_icon(node.kind))
 }
 
 pub(super) fn status_color(status: Status) -> Hsla {
@@ -81,6 +101,8 @@ pub(super) fn style_name(style: EdgeStyle) -> &'static str {
 struct Shown {
     nodes: Vec<(Rect, f32)>,
     edges: Vec<(layout::EdgePath, f32)>,
+    /// Each edge's label center (None: no label), moving with its edge.
+    labels: Vec<Option<layout::Point>>,
     /// Removed by the update, fading out: (index into the arrival's lists).
     leaving: f32,
 }
@@ -145,6 +167,7 @@ impl DiagramView {
             return Shown {
                 nodes: self.layout.nodes.iter().map(|r| (*r, 1.)).collect(),
                 edges: self.layout.edges.iter().map(|p| (p.clone(), 1.)).collect(),
+                labels: self.layout.labels.clone(),
                 leaving: 0.,
             };
         };
@@ -163,6 +186,13 @@ impl DiagramView {
                 .iter()
                 .zip(&self.layout.edges)
                 .map(|(e, path)| arrival.edge(&e.id, path, p))
+                .collect(),
+            labels: self
+                .working
+                .edges
+                .iter()
+                .zip(&self.layout.labels)
+                .map(|(e, label)| arrival.label(&e.id, *label, p))
                 .collect(),
             leaving: 1. - p,
         }
@@ -326,8 +356,8 @@ impl DiagramView {
             }),
             _ => None,
         };
-        // Group boxes follow their members while they ease in.
-        let groups: Vec<(Rect, bool)> = self
+        // Group boxes follow their members while they ease in, in their tone.
+        let groups: Vec<(Rect, Hsla, bool)> = self
             .working
             .groups
             .iter()
@@ -351,7 +381,8 @@ impl DiagramView {
                     }
                     _ => target,
                 };
-                Some((rect, selected_group == Some(gi)))
+                let tone = look::tone(g.color, ui::muted());
+                Some((rect, tone, selected_group == Some(gi)))
             })
             .collect();
         let group_rects: Vec<Option<Rect>> = {
@@ -359,16 +390,17 @@ impl DiagramView {
             self.layout
                 .groups
                 .iter()
-                .map(|g| g.and_then(|_| it.next().map(|(r, _)| *r)))
+                .map(|g| g.and_then(|_| it.next().map(|(r, _, _)| *r)))
                 .collect()
         };
         let mut edges: Vec<EdgeDraw> = self
             .arrival
             .iter()
             .flat_map(|a| a.leaving_edges.iter())
-            .map(|(path, style)| EdgeDraw {
+            .map(|(path, style, color)| EdgeDraw {
                 path: path.clone(),
                 style: *style,
+                tone: color.map(ui::tint),
                 alpha: shown.leaving,
                 look: EdgeLook::Normal,
             })
@@ -377,6 +409,7 @@ impl DiagramView {
             |(ix, (e, (path, alpha)))| EdgeDraw {
                 path: path.clone(),
                 style: e.style,
+                tone: e.color.map(ui::tint),
                 alpha: *alpha,
                 look: if selected_edge == Some(ix) {
                     EdgeLook::Selected
@@ -447,55 +480,60 @@ impl DiagramView {
             .on_pinch(cx.listener(Self::pinched))
             .child(painter);
 
-        // Group titles, in their boxes' top padding: press to select and
-        // drag the group, double-click to rename.
+        // Group titles: a tag in the group's tone inside the box's top-left
+        // padding (the layout reserves `GROUP_HEADER` for it). Press to
+        // select and drag the group, double-click to rename.
         for (gi, (group, rect)) in self.working.groups.iter().zip(&group_rects).enumerate() {
             let Some(rect) = rect.filter(|r| r.intersects(&visible)) else {
                 continue;
             };
-            let (x, y) = at(rect.x + GROUP_PAD * 0.75, rect.y + 5.);
+            let (x, y) = at(rect.x + GROUP_TAG_INSET, rect.y + GROUP_TAG_INSET);
             let id = group.id.clone();
-            let selected = selected_group == Some(gi);
+            let tone = if selected_group == Some(gi) {
+                ui::accent()
+            } else {
+                look::tone(group.color, ui::muted())
+            };
             body = body.child(
-                div()
+                look::group_tag(tone, &group.label, None, s)
                     .id(("genui-group", gi))
                     .absolute()
                     .left(x)
                     .top(y)
-                    .max_w(px((rect.w - GROUP_PAD) * s))
-                    .px(px(4. * s))
-                    .rounded(px(4. * s))
+                    .max_w(px((rect.w - 2. * GROUP_TAG_INSET) * s))
                     .truncate()
                     .cursor(CursorStyle::PointingHand)
-                    .text_size(px(11. * s))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(if selected { ui::accent() } else { ui::muted() })
-                    .hover(|d| d.text_color(ui::fg()))
+                    .hover(move |d| d.border_color(tone))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             this.press_group(&id, event, window, cx)
                         }),
-                    )
-                    .child(group.label.clone()),
+                    ),
             );
         }
 
-        // Edge labels: the phrase on the curve, up to two lines, on the
-        // canvas color so the line doesn't run through the text; the
-        // style (async, data flow, dependency) under it in `ui::mono()`.
+        // Edge labels: the phrase on its run, up to two lines, in a pill on
+        // the canvas color so the line doesn't run through the text; the
+        // style (async, data flow, dependency) under it in `ui::mono()`. The layout
+        // placed each in a box of its estimated size, clear of the others.
         if s >= DETAIL_ZOOM {
-            for (ix, (edge, (path, alpha))) in
-                self.working.edges.iter().zip(&shown.edges).enumerate()
+            for (ix, ((edge, (_, alpha)), spot)) in self
+                .working
+                .edges
+                .iter()
+                .zip(&shown.edges)
+                .zip(&shown.labels)
+                .enumerate()
             {
-                let Some(label) = edge.label.as_ref().filter(|l| !l.is_empty()) else {
+                let (Some(label), Some(p)) = (edge.label.as_ref().filter(|l| !l.is_empty()), *spot)
+                else {
                     continue;
                 };
-                let p = path.label_at();
                 if !visible.contains(p) {
                     continue;
                 }
-                let (width, height) = (layout::RANK_GAP + 24., 48.);
+                let (width, height) = layout::label_size(label, edge.style != EdgeStyle::Sync);
                 let (x, y) = at(p.x - width / 2., p.y - height / 2.);
                 let highlighted = selected_edge == Some(ix) || self.hover_edge == Some(ix);
                 let style =
@@ -511,24 +549,18 @@ impl DiagramView {
                         .justify_center()
                         .opacity(*alpha)
                         .child(
-                            v_flex()
+                            look::label_pill(s)
+                                .flex()
+                                .flex_col()
                                 .max_w_full()
                                 .items_center()
-                                .px(px(4. * s))
-                                .rounded(px(4. * s))
-                                .bg(ui::well())
+                                .when(highlighted, |d| d.text_color(ui::accent()))
                                 .child(
                                     div()
                                         .max_w_full()
                                         .overflow_hidden()
                                         .line_clamp(2)
                                         .text_center()
-                                        .text_size(px(10.5 * s))
-                                        .text_color(if highlighted {
-                                            ui::accent()
-                                        } else {
-                                            ui::muted()
-                                        })
                                         .child(label.clone()),
                                 )
                                 .when_some(style, |d, style| {
@@ -536,6 +568,7 @@ impl DiagramView {
                                         div()
                                             .font_family(ui::mono())
                                             .text_size(px(9. * s))
+                                            .line_height(px(12. * s))
                                             .text_color(ui::faint())
                                             .child(style),
                                     )
@@ -553,11 +586,10 @@ impl DiagramView {
                 }
                 let (x, y) = at(rect.x, rect.y);
                 body = body.child(
-                    node_card(node, *rect, s)
+                    node_card(node, *rect, s, shown.leaving)
                         .absolute()
                         .left(x)
-                        .top(y)
-                        .opacity(shown.leaving),
+                        .top(y),
                 );
             }
         }
@@ -582,7 +614,8 @@ impl DiagramView {
                         .iter()
                         .position(|e| &e.id == id)
                         .map(|ix| {
-                            let p = self.layout.edges[ix].label_at();
+                            let p = self.layout.labels[ix]
+                                .unwrap_or_else(|| self.layout.edges[ix].label_at());
                             Rect {
                                 x: p.x - layout::NODE_W / 2.,
                                 y: p.y - 14.,
@@ -729,13 +762,13 @@ impl DiagramView {
                     }),
                 )
         };
-        let card = node_card(node, rect, s)
+        let tone = node_tone(node);
+        let card = node_card(node, rect, s, alpha)
             .id(("genui-node", ix))
             .group("genui-node")
             .absolute()
             .left(x)
             .top(y)
-            .opacity(alpha)
             .when(selected, |d| d.border_color(ui::accent()))
             .when(dragging, |d| d.shadow_lg())
             .cursor(if self.locked {
@@ -743,7 +776,7 @@ impl DiagramView {
             } else {
                 CursorStyle::OpenHand
             })
-            .hover(|d| d.bg(ui::surface_hover()))
+            .hover(move |d| d.bg(look::hover_fill(tone)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -757,7 +790,7 @@ impl DiagramView {
                     div()
                         .absolute()
                         .inset(px(-4. * s))
-                        .rounded(px(12. * s))
+                        .rounded(px((look::CARD_RADIUS + 4.) * s))
                         .border_2()
                         .border_color(ui::accent().opacity(0.35)),
                 ))
@@ -886,7 +919,7 @@ impl DiagramView {
                 .nodes
                 .iter()
                 .zip(&shown.nodes)
-                .map(|(n, (r, _))| (*r, kind_color(n.kind).opacity(0.7)))
+                .map(|(n, (r, _))| (*r, node_tone(n).opacity(0.7)))
                 .collect(),
             content: self.layout.bounds.union(&view),
             view,
@@ -1038,24 +1071,18 @@ impl DiagramView {
     }
 }
 
-/// A node's card, read top to bottom: the kind tile and title, what the node
-/// does (its description, at most two lines) and `KIND · tech` in `ui::mono()`.
-/// The kind sets its weight: a client is an actor (its icon in a badge above
-/// the card, on `raised`), an external system sits sunken on `well` with a
-/// lighter border, a note has no tile. Status changes the border (risk),
-/// dashes it (planned) or dims the card (deprecated), and puts a dot by the
-/// title.
-fn node_card(node: &gentle_core::genui::diagram::Node, rect: Rect, s: f32) -> Div {
+/// A node's card, read top to bottom: its icon badge and title, what the
+/// node does (its description, at most two lines) and `KIND · tech` in
+/// `ui::mono()`. The card wears the node's tone (`node_tone`): tinted fill, a
+/// hairline and the solid badge. Notes and external systems sit flat (no
+/// shadow), a note's description in italics. Status changes the hairline
+/// (risk), dashes it (planned) or dims the card (deprecated), and puts a dot
+/// by the title. `alpha` is the card's fade (easing in or out).
+fn node_card(node: &Node, rect: Rect, s: f32, alpha: f32) -> Div {
     let kind = node.kind;
-    let actor = kind == NodeKind::Client;
-    let external = kind == NodeKind::External;
     let note = kind == NodeKind::Note;
-    let color = kind_color(kind);
-    let border = match node.status {
-        Some(Status::Risk) => ui::danger().opacity(0.7),
-        _ if external || note => ui::border(),
-        _ => ui::border_strong(),
-    };
+    let flat = note || kind == NodeKind::External;
+    let tone = node_tone(node);
     let meta = match node.tech.as_deref().filter(|t| !t.is_empty()) {
         Some(tech) => format!("{} · {tech}", kind.name().to_uppercase()),
         None => kind.name().to_uppercase(),
@@ -1064,30 +1091,22 @@ fn node_card(node: &gentle_core::genui::diagram::Node, rect: Rect, s: f32) -> Di
         .description
         .clone()
         .filter(|d| !d.trim().is_empty() && s >= DETAIL_ZOOM);
-    let tile = div()
-        .flex_shrink_0()
-        .size(px(20. * s))
-        .rounded(px(6. * s))
-        .bg(color.opacity(if external { 0.08 } else { 0.14 }))
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            Icon::new(kind_icon(kind))
-                .size(px(13. * s))
-                .text_color(color),
-        );
+    let dim = if node.status == Some(Status::Deprecated) {
+        0.55
+    } else {
+        1.
+    };
     let header = h_flex()
+        .flex_shrink_0()
         .w_full()
         .min_w_0()
         .gap(px(8. * s))
-        .when(!actor && !note, |d| d.child(tile))
+        .child(look::badge(tone, node_icon(node), look::BADGE, s))
         .child(
             div()
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .when(actor, |d| d.text_center())
                 .text_size(px(13. * s))
                 .line_height(px(16. * s))
                 .font_weight(FontWeight::SEMIBOLD)
@@ -1103,26 +1122,22 @@ fn node_card(node: &gentle_core::genui::diagram::Node, rect: Rect, s: f32) -> Di
                     .bg(status_color(status)),
             )
         });
-    v_flex()
+    // 88 units tall: 8 + badge 26 + 4 + two 13-unit lines + 4 + meta 12 + 8.
+    look::card(tone, s)
         .relative()
+        .flex()
+        .flex_col()
         .w(px(rect.w * s))
         .h(px(rect.h * s))
         .px(px(12. * s))
-        .py(px(9. * s))
+        .py(px(8. * s))
         .gap(px(4. * s))
-        .rounded(px(10. * s))
-        .bg(if actor {
-            ui::raised()
-        } else if external || note {
-            ui::well()
-        } else {
-            ui::surface()
+        .when(flat, |d| d.shadow(Vec::new()))
+        .when(node.status == Some(Status::Risk), |d| {
+            d.border_color(ui::danger().opacity(0.7))
         })
-        .border_1()
-        .border_color(border)
-        .when(!external && !note, |d| d.shadow_sm())
         .when(node.status == Some(Status::Planned), |d| d.border_dashed())
-        .when(node.status == Some(Status::Deprecated), |d| d.opacity(0.55))
+        .opacity(alpha * dim)
         .child(header)
         .when_some(description, |d, text| {
             d.child(
@@ -1132,50 +1147,25 @@ fn node_card(node: &gentle_core::genui::diagram::Node, rect: Rect, s: f32) -> Di
                     .min_w_0()
                     .overflow_hidden()
                     .line_clamp(2)
-                    .when(actor, |d| d.text_center())
                     .when(note, |d| d.italic())
                     .text_size(px(11. * s))
-                    .line_height(px(14. * s))
+                    .line_height(px(13. * s))
                     .text_color(ui::muted())
                     .child(text),
             )
         })
-        .child(div().flex_1())
         .when(s >= DETAIL_ZOOM, |d| {
             d.child(
                 div()
+                    .mt_auto()
                     .flex_shrink_0()
                     .w_full()
                     .truncate()
-                    .when(actor, |d| d.text_center())
                     .font_family(ui::mono())
                     .text_size(px(9.5 * s))
                     .line_height(px(12. * s))
                     .text_color(ui::faint())
                     .child(meta),
-            )
-        })
-        // An actor wears its kind icon in a round badge above the card.
-        .when(actor, |d| {
-            let size = 26. * s;
-            d.child(
-                div()
-                    .absolute()
-                    .top(px(-size / 2.))
-                    .left(px(rect.w * s / 2. - size / 2.))
-                    .size(px(size))
-                    .rounded_full()
-                    .bg(ui::surface())
-                    .border_1()
-                    .border_color(ui::border_strong())
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        Icon::new(kind_icon(kind))
-                            .size(px(13. * s))
-                            .text_color(color),
-                    ),
             )
         })
 }
