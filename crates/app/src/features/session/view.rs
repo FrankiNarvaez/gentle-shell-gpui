@@ -2309,12 +2309,14 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
 /// Preserve authored line breaks in Markdown paragraphs without changing fenced code.
 fn user_bubble_markdown(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
-    let mut fence: Option<(u8, usize)> = None;
+    let mut fence: Option<(u8, usize, usize)> = None;
+    let mut paragraph = false;
     let mut list_indents = Vec::new();
     for line in text.split_inclusive('\n') {
         let content = line.strip_suffix('\n').unwrap_or(line);
         let content = content.strip_suffix('\r').unwrap_or(content);
         let mut container = content;
+        let mut quote_depth = 0;
         loop {
             let candidate = container.trim_start_matches(' ');
             if container.len() - candidate.len() > 3 || !candidate.starts_with('>') {
@@ -2322,6 +2324,10 @@ fn user_bubble_markdown(text: &str) -> String {
             }
             container = &candidate[1..];
             container = container.strip_prefix(' ').unwrap_or(container);
+            quote_depth += 1;
+        }
+        if fence.is_some_and(|(_, _, depth)| quote_depth < depth) {
+            fence = None;
         }
         let trimmed = container.trim_start_matches(' ');
         let indent = container.len() - trimmed.len();
@@ -2357,8 +2363,8 @@ fn user_bubble_markdown(text: &str) -> String {
             fence_candidate && (inside || marker != Some(b'`') || !trimmed[count..].contains('`'));
         if fence_line {
             match fence {
-                None => fence = Some((marker.unwrap(), count)),
-                Some((open, length))
+                None => fence = Some((marker.unwrap(), count, quote_depth)),
+                Some((open, length, _))
                     if marker == Some(open)
                         && count >= length
                         && trimmed[count..].trim().is_empty() =>
@@ -2368,15 +2374,15 @@ fn user_bubble_markdown(text: &str) -> String {
                 _ => {}
             }
         }
+        let paragraph_line = !inside
+            && !fence_line
+            && !content.trim().is_empty()
+            && (relative_indent < 4 || paragraph);
+        paragraph = paragraph_line;
         result.push_str(content);
         if line.ends_with('\n') {
             let backslashes = content.bytes().rev().take_while(|b| *b == b'\\').count();
-            if !inside
-                && !fence_line
-                && relative_indent < 4
-                && !content.trim().is_empty()
-                && backslashes % 2 == 0
-            {
+            if paragraph_line && backslashes % 2 == 0 {
                 result.push_str("  ");
             }
             if line.ends_with("\r\n") {
@@ -2573,6 +2579,20 @@ mod tests {
     fn user_bubble_preprocessing_nested_list_fence() {
         let source = "- outer\n  - inner\n\n    ```\n    one\n    two\n    ```\n";
         let expected = "- outer  \n  - inner  \n\n    ```\n    one\n    two\n    ```\n";
+        assert_eq!(super::user_bubble_markdown(source), expected);
+    }
+
+    #[test]
+    fn user_bubble_preprocessing_indented_paragraph_continuation() {
+        let source = "one\n    two\nthree\n";
+        let expected = "one  \n    two  \nthree  \n";
+        assert_eq!(super::user_bubble_markdown(source), expected);
+    }
+
+    #[test]
+    fn user_bubble_preprocessing_unclosed_quoted_fence() {
+        let source = "> ```\n> code\none\ntwo\n";
+        let expected = "> ```\n> code\none  \ntwo  \n";
         assert_eq!(super::user_bubble_markdown(source), expected);
     }
 
