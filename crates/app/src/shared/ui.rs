@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -673,6 +674,22 @@ pub fn island(cx: &App) -> Div {
             offset: point(px(0.), px(10.)),
             blur_radius: px(30.),
             spread_radius: px(2.),
+            inset: false,
+        }])
+}
+
+/// A tooltip that stands off the UI behind it: the stock tooltip with the
+/// island's outline and a small soft shadow, so a glass popover surface does
+/// not blend into what it covers. Use it with `.tooltip(|window, cx|
+/// ui::tooltip(text).build(window, cx))`.
+pub fn tooltip(text: impl Into<SharedString>) -> Tooltip {
+    Tooltip::new(text.into())
+        .border_color(border_strong().opacity(0.8))
+        .shadow(vec![BoxShadow {
+            color: backdrop().opacity(0.3),
+            offset: point(px(0.), px(4.)),
+            blur_radius: px(14.),
+            spread_radius: px(0.),
             inset: false,
         }])
 }

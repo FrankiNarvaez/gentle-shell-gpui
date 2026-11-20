@@ -396,7 +396,7 @@ A `gentle_ui` html page (`features/genui/html.rs`) uses the diagram card's shell
 | --- | --- |
 | Secondary `ghost()` buttons on the left, a spacer (`div().flex_1()` or `ml_auto()`), the primary `primary()` last on the right. | Footer of Sessions, Usage, welcome, Profiles. |
 | Sizes: `small()` in footers, `xsmall()` in headers and bars, `large()` only in the welcome. | |
-| Icon-only buttons have a `tooltip`. | Refresh in headers. |
+| Icon-only buttons have a `tooltip`. Explanatory tooltips use `ui::tooltip` (the island outline and a small soft shadow) so they stand off the glass behind them. | Refresh in headers. |
 | Work in progress: `.loading(busy)` and the label says so ("Installing…"); `.disabled(..)` when the action is not possible. | `welcome-primary`, `usage-refresh`, `welcome-recheck`. |
 | Destructive: `danger()` in confirmations (Discard, Delete), `danger().outline()` to stop agents. | `features/profiles/view/confirm.rs`, `features/session/agents.rs`. |
 | Inline confirm: `outline()`; cancel: `ghost()` with "Cancel". | Rename profile, custom model. |

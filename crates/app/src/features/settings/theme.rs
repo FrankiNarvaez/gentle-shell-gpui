@@ -271,16 +271,24 @@ impl SettingsView {
                                         .child(note),
                                 )
                                 .child(
-                                    Button::new("backdrop-motion-info")
-                                        .ghost()
-                                        .xsmall()
-                                        .icon(Icon::new(IconName::Info).text_color(ui::faint()))
+                                    // Informational only: no click, just the tooltip.
+                                    div()
+                                        .id("backdrop-motion-info")
+                                        .flex_none()
+                                        .child(
+                                            Icon::new(IconName::Info)
+                                                .xsmall()
+                                                .text_color(ui::faint()),
+                                        )
                                         // Three short lines: the tooltip has no width of its own.
-                                        .tooltip(
-                                            "Scenes only move while this window is in front.\n\
-                                             On battery, they move at Calm at most.\n\
-                                             While saving power, they hold still.",
-                                        ),
+                                        .tooltip(|window, cx| {
+                                            ui::tooltip(
+                                                "Scenes only move while this window is in front.\n\
+                                                 On battery, they move at Calm at most.\n\
+                                                 While saving power, they hold still.",
+                                            )
+                                            .build(window, cx)
+                                        }),
                                 ),
                         ),
                 )
