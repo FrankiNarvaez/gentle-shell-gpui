@@ -1185,15 +1185,11 @@ fn generate_message(toplevel: &Path) -> Result<(String, String), String> {
     if diff.trim().is_empty() {
         return Err("Stage some changes first; the message is written from the staged diff".into());
     }
-    let spec = pi_rpc::resolve_backend(toplevel).map_err(|e| format!("{e:#}"))?;
-    // Launcher options (home selectors) come before Pi's own arguments.
-    let mut command = spec.launcher_command(["--print", "--no-session", "--no-tools"]);
-    command
-        .arg(commit_prompt(&diff))
-        .current_dir(toplevel)
-        .stdin(Stdio::null())
-        // Interactive-host dialogs make no sense for a one-shot print run.
-        .env_remove("GENTLE_SHELL_INTERACTIVE_HOST");
+    let spec = crate::features::backend::shell_spec(toplevel).map_err(|e| format!("{e:#}"))?;
+    // Launcher options (home selectors) come before Pi's own arguments;
+    // interactive-host dialogs make no sense for a one-shot print run.
+    let mut command = spec.print_command(["--print", "--no-session", "--no-tools"]);
+    command.arg(commit_prompt(&diff)).stdin(Stdio::null());
     let out = command
         .output()
         .map_err(|e| format!("Could not start gentle-shell: {e}"))?;

@@ -19,6 +19,7 @@ pub(super) fn render(
     v_flex()
         .gap_3()
         .child(gentle_shell_section(snapshot))
+        .child(view.runs_on_section(cx))
         .child(view.diagnostics_section(cx))
         .child(section(IconName::CircleCheck, "Setup & requirements").child(view.setup.clone()))
 }

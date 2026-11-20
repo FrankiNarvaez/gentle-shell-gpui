@@ -173,25 +173,40 @@ fn spawn_pty(
     listener: Listener,
     size: WindowSize,
 ) -> anyhow::Result<EventLoopSender> {
-    let working_directory = if cwd.is_dir() {
-        cwd.to_path_buf()
-    } else {
-        dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf())
+    // Where the project's agents run, the backend's login shell in the
+    // project folder; there the folder is the backend's, so the PTY starts
+    // from the user's home here.
+    let (shell, working_directory) = match crate::features::backend::terminal(cwd) {
+        Some(argv) => (
+            tty::Shell::new(argv[0].clone(), argv[1..].to_vec()),
+            dirs::home_dir().unwrap_or_else(std::env::temp_dir),
+        ),
+        None if cwd.is_dir() => (login_shell(), cwd.to_path_buf()),
+        None => (
+            login_shell(),
+            dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
+        ),
     };
     let env = HashMap::from([
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
         ("TERM_PROGRAM".to_string(), "GentleShell".to_string()),
     ]);
-    // Windows has extra fields (`escape_args`); the update keeps one literal for every OS.
+    // Windows has extra fields (`escape_args`): the update fills them.
     #[allow(clippy::needless_update)]
-    let options = tty::Options {
-        shell: Some(login_shell()),
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut options = tty::Options {
+        shell: Some(shell),
         working_directory: Some(working_directory),
         drain_on_exit: true,
         env,
         ..Default::default()
     };
+    // A backend's argv carries paths with spaces: quote each argument.
+    #[cfg(windows)]
+    {
+        options.escape_args = true;
+    }
     let pty = tty::new(&options, size, 0)?;
     let event_loop = EventLoop::new(term, listener, pty, true, false)?;
     let sender = event_loop.channel();

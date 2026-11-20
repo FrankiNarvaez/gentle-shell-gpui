@@ -2,6 +2,7 @@
 
 pub mod alerts;
 pub mod app_update;
+pub mod backend;
 pub mod browser;
 pub mod canvas;
 pub mod devices;

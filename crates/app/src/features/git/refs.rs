@@ -10,6 +10,7 @@ use gentle_core::git::refs::{
 use gentle_core::git::status::parse_status_v2;
 
 use super::{git, run};
+use crate::features::backend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StashAction {
@@ -98,7 +99,16 @@ pub fn refs_snapshot(toplevel: &Path) -> Option<RefsSnapshot> {
         .map(|raw| parse_stashes(&raw))
         .unwrap_or_default();
     let worktrees = git(toplevel, &["worktree", "list", "--porcelain"])
-        .map(|raw| parse_worktrees(&raw).into_iter().skip(1).collect())
+        .map(|raw| {
+            parse_worktrees(&raw)
+                .into_iter()
+                .skip(1)
+                .map(|mut tree| {
+                    tree.path = backend::host_path(toplevel, &tree.path.to_string_lossy());
+                    tree
+                })
+                .collect()
+        })
         .unwrap_or_default();
     let submodules = if toplevel.join(".gitmodules").exists() {
         git(toplevel, &["submodule", "status"])
@@ -131,9 +141,12 @@ pub fn add_worktree(toplevel: &Path, branch: &str, new: bool) -> Result<PathBuf,
     // (`git worktree list` names it first).
     let main = git(toplevel, &["worktree", "list", "--porcelain"])
         .and_then(|raw| parse_worktrees(&raw).into_iter().next())
-        .map_or_else(|| toplevel.to_path_buf(), |main| main.path);
+        .map_or_else(
+            || toplevel.to_path_buf(),
+            |main| backend::host_path(toplevel, &main.path.to_string_lossy()),
+        );
     let path = worktree_path(&main, branch, |p| p.exists());
-    let folder = path.to_string_lossy();
+    let folder = backend::there(toplevel, &path);
     let args: Vec<&str> = if new {
         vec!["worktree", "add", "-b", branch, "--", &folder]
     } else {
@@ -148,7 +161,7 @@ pub fn add_worktree(toplevel: &Path, branch: &str, new: bool) -> Result<PathBuf,
 pub fn remove_worktree(toplevel: &Path, path: &Path) -> Result<(), String> {
     run(
         toplevel,
-        &["worktree", "remove", "--", &path.to_string_lossy()],
+        &["worktree", "remove", "--", &backend::there(toplevel, path)],
     )
     .map(drop)
 }

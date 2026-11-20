@@ -16,6 +16,9 @@ pub enum ProvidersEvent {
     Close,
     /// Credentials changed; sessions should reload their models.
     Changed,
+    /// Agents run in a backend: sign in there, in a terminal in this folder
+    /// with this command typed (`gentle-shell`, then `/login`).
+    Terminal(PathBuf, String),
 }
 
 struct Flow {
@@ -35,6 +38,9 @@ pub struct ProvidersView {
     answer: Entity<InputState>,
     secret: Entity<InputState>,
     flow: Option<Flow>,
+    /// Where the folder's agents run, when not on this computer: they sign in
+    /// there (`/login` in a terminal), not with this computer's helper.
+    remote: Option<(PathBuf, String)>,
     _io: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
@@ -68,10 +74,14 @@ impl ProvidersView {
             answer,
             secret,
             flow: None,
+            remote: None,
             _io: Task::ready(()),
             _subscriptions: subscriptions,
         };
-        this.start(cwd, cx);
+        match crate::features::backend::for_tab(&cwd) {
+            gentle_core::backend::Backend::Local => this.start(cwd, cx),
+            choice => this.remote = Some((cwd, choice.label())),
+        }
         this
     }
 }

@@ -52,11 +52,41 @@ fn config_path_in(over: Option<std::ffi::OsString>, home: &Path) -> PathBuf {
 /// it depends on is this process's environment.
 static HOMES: Mutex<Option<(Option<Stamp>, Homes)>> = Mutex::new(None);
 
-/// Order: gentle-ai's managed install (its own homes, whatever the app
+/// The homes of the backend agents run on (a WSL distro's, as this computer
+/// reaches them), when the app runs them there: see [`use_backend_homes`].
+static BACKEND_HOMES: Mutex<Option<Homes>> = Mutex::new(None);
+
+/// Read and write the backend's homes instead of this computer's (`None`:
+/// this computer's again). The app sets it when agents run in a WSL distro
+/// whose home this computer reaches through `\\wsl.localhost`.
+pub fn use_backend_homes(homes: Option<Homes>) {
+    *BACKEND_HOMES.lock().unwrap_or_else(|e| e.into_inner()) = homes;
+}
+
+/// The homes for an agent dir in a backend: an isolated
+/// `.gentle-shell/agent` keeps its config beside it (`.gentle-shell/gentle-ai`),
+/// any other next to the agent dir (`~/.pi/agent` → `~/.pi/gentle-ai`).
+pub fn backend_homes(agent: PathBuf) -> Homes {
+    let config = agent.parent().map_or_else(
+        || agent.join("gentle-ai"),
+        |parent| parent.join("gentle-ai"),
+    );
+    Homes { agent, config }
+}
+
+/// Order: the backend's homes when agents run there ([`use_backend_homes`]),
+/// gentle-ai's managed install (its own homes, whatever the app
 /// inherited), then `--link`, `--isolated`, `--home <dir>` (from
 /// `GENTLE_SHELL_ARGS`), then `~/.gentle-shell/config.json`, then the
 /// isolated default. Cached until that config file changes.
 pub fn resolve_homes() -> Homes {
+    if let Some(homes) = BACKEND_HOMES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+    {
+        return homes;
+    }
     memo_by_stamp(&HOMES, &launcher_config_path(), resolve_homes_uncached)
 }
 

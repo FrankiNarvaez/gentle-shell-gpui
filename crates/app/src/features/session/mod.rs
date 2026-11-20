@@ -122,6 +122,9 @@ pub struct SessionView {
     /// The canvas this agent was opened beside to read and draw on (the
     /// canvas extension's tools act on it).
     canvas: Option<PathBuf>,
+    /// Where this tab's agent runs (`features::backend`), fixed when it
+    /// first starts so a restart resumes its conversation in the same place.
+    runs_on: Option<gentle_core::backend::Backend>,
     /// This conversation is on screen with nothing over the window (the
     /// workspace says so): its web views may show.
     web_shown: bool,
@@ -316,6 +319,7 @@ impl SessionView {
             genui: Default::default(),
             genui_mode: crate::features::genui::mode::mode(cx),
             canvas: None,
+            runs_on: None,
             web_shown: false,
             composer,
             composer_focused: false,

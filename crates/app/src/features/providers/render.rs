@@ -4,7 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::Input;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{Icon, Sizable as _, h_flex};
+use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -65,7 +65,35 @@ pub(super) fn notice(icon: IconName, color: Hsla, text: String) -> Div {
 impl Render for ProvidersView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let listing = self.flow.is_none() && !(self.error.is_some() && self.helper.is_none());
-        let body: AnyElement = if let Some(error) = &self.error
+        let body: AnyElement = if let Some((cwd, label)) = &self.remote {
+            let (cwd, label) = (cwd.clone(), label.clone());
+            v_flex()
+                .gap_3()
+                .child(notice(
+                    IconName::SquareTerminal,
+                    ui::accent(),
+                    format!(
+                        "Agents here run on {label}, so they sign in there: open Gentle Shell \
+                         in a terminal on {label} and run /login. Credentials go to its auth.json."
+                    ),
+                ))
+                .child(
+                    h_flex().child(
+                        Button::new("providers-remote-login")
+                            .primary()
+                            .small()
+                            .icon(Icon::new(IconName::SquareTerminal))
+                            .label(format!("Open a terminal on {label}"))
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.emit(ProvidersEvent::Terminal(
+                                    cwd.clone(),
+                                    "gentle-shell".to_string(),
+                                ))
+                            })),
+                    ),
+                )
+                .into_any_element()
+        } else if let Some(error) = &self.error
             && self.helper.is_none()
         {
             notice(IconName::CircleAlert, ui::danger(), error.clone()).into_any_element()

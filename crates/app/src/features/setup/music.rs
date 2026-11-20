@@ -8,8 +8,11 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use gentle_core::backend::Backend;
+
 use super::probe::run_logged;
 use super::{Log, fetch, refresh_paths, toolchain_dir, user_home};
+use crate::features::backend;
 
 /// The gentle-stream commit the app installs, as a GitHub archive (no git
 /// needed): the merge of `ctl --json` (gentle-stream#29), which the app needs
@@ -19,6 +22,25 @@ const PYTHON: &str = "3.13";
 
 /// gentle-stream needs POSIX (Unix sockets, `fcntl` locks).
 pub const SUPPORTED: bool = cfg!(unix);
+
+/// The player can run where agents run: this computer when it is Unix, or
+/// a backend (Linux), whose audio WSLg carries to Windows.
+pub fn supported() -> bool {
+    SUPPORTED || super::remote::backend().is_some()
+}
+
+/// `player` ready to take its arguments: in the backend agents run in,
+/// else here with the app's combined PATH.
+pub fn player_command(player: &Path) -> Command {
+    if let Some(choice) = super::remote::backend()
+        && let Some(command) = backend::in_root(&choice, &[&player.to_string_lossy()])
+    {
+        return command;
+    }
+    let mut command = pi_rpc::command(player);
+    command.env("PATH", pi_rpc::child_path());
+    command
+}
 
 fn spec(samples: bool) -> String {
     format!(
@@ -39,8 +61,12 @@ fn app_player() -> Option<PathBuf> {
 }
 
 /// The player: the app's own, the one on the PATH (`uv tool install`), or
-/// the one Gentle Shell's bundled install put in `~/.gentle-shell/music`.
+/// the one Gentle Shell's bundled install put in `~/.gentle-shell/music`;
+/// in the backend agents run in, when there is one.
 pub fn player() -> Option<PathBuf> {
+    if let Some(choice) = super::remote::backend() {
+        return remote_player(&choice);
+    }
     pick_player(
         app_player(),
         pi_rpc::find_program("gentle-stream"),
@@ -77,7 +103,7 @@ pub struct MusicStatus {
 impl MusicStatus {
     /// The player can be started and steered.
     pub fn usable(&self) -> bool {
-        SUPPORTED && self.player.is_some() && self.json_ctl
+        supported() && self.player.is_some() && self.json_ctl
     }
 }
 
@@ -93,9 +119,8 @@ fn samples_installed() -> bool {
 fn speaks_json_ctl(player: &Path) -> bool {
     use std::io::Read as _;
     use std::time::{Duration, Instant};
-    let Ok(mut child) = pi_rpc::command(player)
+    let Ok(mut child) = player_command(player)
         .args(["ctl", "status", "--json"])
-        .env("PATH", pi_rpc::child_path())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
@@ -126,8 +151,19 @@ fn speaks_json_ctl(player: &Path) -> bool {
 }
 
 /// Blocking: looks for the player, whether it speaks `ctl --json`, and its
-/// soundfont.
+/// soundfont (where agents run).
 pub fn status() -> MusicStatus {
+    if let Some(choice) = super::remote::backend() {
+        let player = remote_player(&choice);
+        let app = backend::toolchain(&choice)
+            .map(|t| PathBuf::from(format!("{t}/music/bin/gentle-stream")));
+        return MusicStatus {
+            json_ctl: player.as_deref().is_some_and(speaks_json_ctl),
+            app_owned: player.is_some() && player == app,
+            samples: backend::run(&choice, "sh", &["-c", REMOTE_SAMPLES]).is_some_and(|(ok, _)| ok),
+            player,
+        };
+    }
     let player = if SUPPORTED { player() } else { None };
     MusicStatus {
         json_ctl: player.as_deref().is_some_and(speaks_json_ctl),
@@ -135,6 +171,81 @@ pub fn status() -> MusicStatus {
         samples: samples_installed(),
         player,
     }
+}
+
+/// The player in a backend, in the same order as here.
+const REMOTE_PLAYER: &str = r#"for c in "$1/music/bin/gentle-stream" "$(command -v gentle-stream 2>/dev/null)" "$HOME/.gentle-shell/music/bin/gentle-stream"; do if [ -n "$c" ] && [ -x "$c" ]; then echo "$c"; exit 0; fi; done; exit 1"#;
+
+/// The soundfont in a backend's gentle-stream cache.
+const REMOTE_SAMPLES: &str =
+    r#"test -f "${XDG_CACHE_HOME:-$HOME/.cache}/gentle-stream/FluidR3_GM.sf2""#;
+
+fn remote_player(choice: &Backend) -> Option<PathBuf> {
+    let toolchain = backend::toolchain(choice)?;
+    let (ok, out) = backend::run(choice, "sh", &["-c", REMOTE_PLAYER, "sh", &toolchain])?;
+    let path = out.trim();
+    (ok && path.starts_with('/')).then(|| PathBuf::from(path))
+}
+
+/// uv and gentle-stream in a backend, the way [`install`] does here: uv
+/// for its machine is downloaded and verified here, copied there, and run
+/// there with everything inside `~/.local/share/gentle-shell-gpui/music`.
+fn remote_install(choice: &Backend, log: &Log) -> Result<(), String> {
+    let label = choice.label();
+    let reach = || format!("Couldn't reach {label}.");
+    let music = format!("{}/music", backend::toolchain(choice).ok_or_else(reach)?);
+    let arch = backend::arch(choice).ok_or_else(|| format!("Couldn't tell {label}'s machine."))?;
+    let here = toolchain_dir().ok_or("This system has no app data folder.")?;
+    let uv_here = here.join(format!(".backend-uv-{}", std::process::id()));
+    let fetched = fetch::download_uv(&uv_here, "linux", arch, log)
+        .and_then(|()| backend::put_file(choice, &uv_here, &format!("{music}/uv"), true));
+    let _ = std::fs::remove_file(&uv_here);
+    fetched?;
+    log(format!(
+        "Installing Python {PYTHON} and gentle-stream in {label}; this can take a few minutes…"
+    ));
+    let envs = [
+        format!("UV_TOOL_DIR={music}/tools"),
+        format!("UV_TOOL_BIN_DIR={music}/bin"),
+        format!("UV_PYTHON_INSTALL_DIR={music}/python"),
+        format!("UV_PYTHON_BIN_DIR={music}/python/bin"),
+        format!("UV_CACHE_DIR={music}/cache"),
+        format!("UV_PYTHON={PYTHON}"),
+        "UV_PYTHON_PREFERENCE=only-managed".to_string(),
+        "UV_PYTHON_DOWNLOADS=automatic".to_string(),
+        "UV_NO_CONFIG=1".to_string(),
+    ];
+    let uv = format!("{music}/uv");
+    let uv_command = |args: &[&str]| {
+        let mut argv: Vec<&str> = vec!["env", "-u", "VIRTUAL_ENV", "-u", "CONDA_PREFIX"];
+        argv.extend(envs.iter().map(String::as_str));
+        argv.push(&uv);
+        argv.extend(args);
+        backend::in_root(choice, &argv).ok_or_else(reach)
+    };
+    let install = |samples: bool| {
+        let spec = spec(samples);
+        run_logged(
+            uv_command(&["tool", "install", "--force", "--python", PYTHON, &spec])?,
+            "uv tool install",
+            log,
+        )
+    };
+    if install(true).is_err() {
+        log(
+            "The sampled instruments need the system FluidSynth library; installing without them…"
+                .into(),
+        );
+        install(false)?;
+    }
+    let _ = run_logged(uv_command(&["cache", "clean"])?, "uv cache clean", &|_| {});
+    if remote_player(choice).is_none() {
+        return Err(format!(
+            "uv finished, but gentle-stream isn't in {music}/bin."
+        ));
+    }
+    log("Done. The ♪ button in the title bar plays music.".into());
+    Ok(())
 }
 
 /// uv's environment for the app's music folder: tools, their executables,
@@ -172,6 +283,9 @@ fn uv_command(uv: &Path, music: &Path) -> Command {
 /// instruments' Python binding needs the system FluidSynth library; without
 /// it, gentle-stream installs without them (its instruments are synthesized).
 pub fn install(log: &Log) -> Result<(), String> {
+    if let Some(choice) = super::remote::backend() {
+        return remote_install(&choice, log);
+    }
     if !SUPPORTED {
         return Err("gentle-stream runs on macOS and Linux only.".into());
     }
@@ -218,7 +332,7 @@ pub fn install(log: &Log) -> Result<(), String> {
 pub fn install_samples(log: &Log) -> Result<(), String> {
     let player = player().ok_or("Install gentle-stream first.")?;
     log("Downloading the FluidR3_GM soundfont (about 120 MB)…".into());
-    let mut command = pi_rpc::command(&player);
+    let mut command = player_command(&player);
     command.arg("setup-samples");
     run_logged(command, "gentle-stream setup-samples", log)?;
     log("Sampled instruments are in place; the next piece uses them.".into());
@@ -228,6 +342,9 @@ pub fn install_samples(log: &Log) -> Result<(), String> {
 /// Stop the music, then delete what the app installed. A gentle-stream you
 /// installed yourself is left alone.
 pub fn remove(log: &Log) -> Result<(), String> {
+    if let Some(choice) = super::remote::backend() {
+        return remote_remove(&choice, log);
+    }
     if let Some(player) = app_player() {
         log("Stopping the music…".into());
         let mut stop = pi_rpc::command(&player);
@@ -242,6 +359,25 @@ pub fn remove(log: &Log) -> Result<(), String> {
     }
     refresh_paths();
     Ok(())
+}
+
+/// [`remove`] in a backend: what the app installed under
+/// `~/.local/share/gentle-shell-gpui/music` there.
+fn remote_remove(choice: &Backend, log: &Log) -> Result<(), String> {
+    let music = format!(
+        "{}/music",
+        backend::toolchain(choice).ok_or_else(|| format!("Couldn't reach {}.", choice.label()))?
+    );
+    let player = format!("{music}/bin/gentle-stream");
+    log("Stopping the music…".into());
+    if let Some(stop) = backend::in_root(choice, &[&player, "ctl", "stop"]) {
+        let _ = run_logged(stop, "gentle-stream ctl stop", &|_| {});
+    }
+    log(format!("Deleting {music} in {}…", choice.label()));
+    match backend::run(choice, "rm", &["-rf", &music]) {
+        Some((true, _)) => Ok(()),
+        _ => Err(format!("Couldn't delete {music} in {}.", choice.label())),
+    }
 }
 
 #[cfg(test)]

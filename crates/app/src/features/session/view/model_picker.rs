@@ -166,6 +166,18 @@ impl SessionView {
         let has_any = !self.models.available.is_empty();
         let loading = models_loading(self.models.loaded, &self.backend.status);
         let (empty_message, show_sign_in) = model_picker_empty_state(loading, has_any);
+        // A tab in a backend signs in there: say where.
+        let empty_message = match &self.runs_on {
+            Some(choice)
+                if !has_any && !loading && *choice != gentle_core::backend::Backend::Local =>
+            {
+                format!(
+                    "No models yet. Gentle Shell on {} signs in there: /login.",
+                    choice.label()
+                )
+            }
+            _ => empty_message.to_string(),
+        };
         let content_weak = weak.clone();
         let scroll = self.live.model_scroll.clone();
 
@@ -263,7 +275,7 @@ impl SessionView {
                             .py_4()
                             .text_size(rems(12. / 16.))
                             .text_color(ui::faint())
-                            .child(empty_message),
+                            .child(empty_message.clone()),
                     );
                 }
                 let sign_in = weak.clone();
