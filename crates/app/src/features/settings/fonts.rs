@@ -377,6 +377,9 @@ impl SettingsView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if keystroke.key == "escape" && self.cancel_size_edit(window, cx) {
+            return true;
+        }
         let Some(slot) = self.fonts.open else {
             return false;
         };
@@ -480,6 +483,28 @@ impl SettingsView {
                 });
             });
         window.push_notification(note, cx);
+    }
+
+    /// Esc in a size field: put the applied size back and leave the field,
+    /// instead of letting Esc close the whole screen. False when no size
+    /// field has focus.
+    fn cancel_size_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(slot) = FontSlot::ALL.into_iter().find(|&slot| {
+            self.fonts.sizes[slot_index(slot)]
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        }) else {
+            return false;
+        };
+        let applied = cx.global::<themes::Themes>().fonts.size(slot);
+        // Restore the text first: the blur that follows then has nothing
+        // new to apply.
+        self.fonts.texts[slot_index(slot)] = format_size(applied);
+        self.set_size_input(slot, window, cx);
+        window.blur(cx);
+        cx.notify();
+        true
     }
 
     /// Show the applied sizes in every field the user is not typing in.
