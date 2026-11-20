@@ -12,8 +12,13 @@ use super::SettingsView;
 use crate::shared::themes::{self, FontSlot, Themes};
 use crate::shared::ui;
 
-/// Glyph specimens are drawn this much larger than the slot's size.
-const MAGNIFY: f32 = 1.65;
+/// Every tile has the same fixed bands, at 100 % zoom, so the three stay
+/// aligned whatever family or size each one previews: the glyph band draws
+/// its specimen at one fixed size (it shows the shape), and the sample band
+/// draws the real size and clips what no longer fits instead of growing.
+const GLYPH_BAND: f32 = 44.;
+const GLYPH_SIZE: f32 = 26.;
+const SAMPLE_BAND: f32 = 92.;
 
 /// A theme color as an opaque fill.
 fn solid(color: u32) -> Hsla {
@@ -39,6 +44,7 @@ struct Spec {
     size: Pixels,
     /// The size as the user typed it (at 100 % zoom), for the caption.
     points: f32,
+    zoom: f32,
 }
 
 impl SettingsView {
@@ -90,9 +96,9 @@ impl SettingsView {
             family: draft.effective_family(slot, default_interface),
             size: px(draft.size(slot) * zoom),
             points: draft.size(slot),
+            zoom,
         };
         h_flex()
-            .items_start()
             .gap_3()
             .child(interface_tile(spec(FontSlot::Interface)))
             .child(code_tile(spec(FontSlot::Code)))
@@ -102,7 +108,8 @@ impl SettingsView {
 
 /// The theme card's frame: a preview well over a caption naming the slot,
 /// its family and its size.
-fn tile(spec: &Spec, glyphs: &'static str, preview: Div, bg: Hsla) -> Div {
+fn tile(spec: &Spec, glyphs: &'static str, accessory: Option<Div>, preview: Div, bg: Hsla) -> Div {
+    let zoom = spec.zoom;
     let caption = h_flex()
         .gap_1()
         .px(px(2.))
@@ -136,7 +143,6 @@ fn tile(spec: &Spec, glyphs: &'static str, preview: Div, bg: Hsla) -> Div {
         .border_color(ui::border())
         .child(
             v_flex()
-                .gap_2()
                 .px_2p5()
                 .py_2()
                 .rounded_lg()
@@ -146,15 +152,29 @@ fn tile(spec: &Spec, glyphs: &'static str, preview: Div, bg: Hsla) -> Div {
                 .overflow_hidden()
                 .font_family(spec.family.clone())
                 .child(
-                    div()
-                        .text_size(spec.size * MAGNIFY)
-                        .line_height(spec.size * MAGNIFY * 1.15)
-                        .text_color(ui::champagne())
-                        .whitespace_nowrap()
-                        .child(glyphs),
+                    h_flex()
+                        .h(px(GLYPH_BAND * zoom))
+                        .flex_none()
+                        .gap_2()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_size(px(GLYPH_SIZE * zoom))
+                                .line_height(px(GLYPH_BAND * zoom))
+                                .text_color(ui::champagne())
+                                .child(glyphs),
+                        )
+                        .children(accessory),
                 )
                 .child(
                     v_flex()
+                        .h(px(SAMPLE_BAND * zoom))
+                        .flex_none()
+                        .overflow_hidden()
                         .text_size(spec.size)
                         .line_height(spec.size * 1.45)
                         .child(preview),
@@ -174,17 +194,11 @@ fn trim(size: f32) -> String {
 
 fn interface_tile(spec: Spec) -> Div {
     let preview = v_flex()
-        .gap_1()
-        .child(
-            div()
-                .text_color(ui::fg())
-                .child("Review the latest changes"),
-        )
-        .child(
-            div()
-                .text_color(ui::muted())
-                .child("Résumé ready · 3 files · café, acción, 0123"),
-        )
+        .child(line([run("Review the latest changes", ui::fg())]))
+        .child(line([run(
+            "Résumé ready · 3 files · café, acción, 0123",
+            ui::muted(),
+        )]))
         .child(
             h_flex().pt_1().child(
                 div()
@@ -195,7 +209,7 @@ fn interface_tile(spec: Spec) -> Div {
                     .child("View changes"),
             ),
         );
-    tile(&spec, "Aa Éé Ññ", preview, ui::raised())
+    tile(&spec, "Aa Éé Ññ", None, preview, ui::raised())
 }
 
 fn code_tile(spec: Spec) -> Div {
@@ -227,7 +241,7 @@ fn code_tile(spec: Spec) -> Div {
             run("// l1 I| O0", comment),
         ]))
         .child(line([run("}", fg)]));
-    tile(&spec, "O0 Il1 {}", preview, solid(t.bg))
+    tile(&spec, "O0 Il1 {}", None, preview, solid(t.bg))
 }
 
 fn terminal_tile(spec: Spec) -> Div {
@@ -248,13 +262,12 @@ fn terminal_tile(spec: Spec) -> Div {
         .child(line([
             run(" desk.rs    |  4 ", fg),
             run("++++", solid(t.ansi[2])),
-        ]))
-        .child(
-            h_flex().gap_1().pt_1().children(
-                t.ansi[..8]
-                    .iter()
-                    .map(|&c| div().size_2().rounded_full().bg(solid(c))),
-            ),
-        );
-    tile(&spec, "❯ ~/ ", preview, solid(t.bg))
+        ]));
+    // The theme cards' swatches, in the glyph band where they never clip.
+    let swatches = h_flex().flex_none().gap_1().children(
+        t.ansi[..8]
+            .iter()
+            .map(|&c| div().size_2().rounded_full().bg(solid(c))),
+    );
+    tile(&spec, "❯ ~/", Some(swatches), preview, solid(t.bg))
 }
