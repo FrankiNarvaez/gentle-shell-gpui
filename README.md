@@ -477,6 +477,12 @@ Beside the permission chip, with a Gentle Shell newer than 4.8.0: "Review on / o
 
 ---
 
+### Where agents run — WSL2, a Linux VM or a container
+
+Configuration → General → **Where agents run** keeps the app as the native frontend and runs your agents, terminals, git and Setup elsewhere: on **WSL** (Windows: pick a distro; the ones with `gentle-shell` are marked, and the default one that has it is suggested) or through a **Command** that reaches another environment (OrbStack `orb -m dev --`, Lima `limactl shell dev`, a container `docker exec -i dev`). A project opened from `\\wsl.localhost\<distro>\` always runs in that distro. Setup checks Node.js, Gentle Shell and your providers there and opens a terminal there to fix what's missing; signing in to a provider is `/login` in that terminal. Engram, Maestro, Gentle Tower and the music player install and run there too. In WSL, Configuration, sessions and usage read the distro's own Gentle Shell home. Open agent tabs stay where they started.
+
+---
+
 ### Providers (🔑) — Sign in once, from the app
 
 Sign in with a subscription (Claude Pro/Max, ChatGPT, Copilot, …) or an API key (DeepSeek, OpenAI, Gemini, …), or sign out. It runs Pi's own `ModelRuntime.login` through a small Node helper, and Pi writes `auth.json` as `/login` does.

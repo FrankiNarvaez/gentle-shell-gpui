@@ -45,21 +45,24 @@ impl Drop for Server {
     }
 }
 
-/// `command` run so that it ends when its input closes. Unix wraps it in a
-/// shell: the server runs in the background, a watcher (off the output
-/// pipes, so they close when the server ends) stops it once stdin closes,
-/// and the shell exits with the server. Windows ends it on drop.
+/// `sh` that runs its arguments in the background, stops them once its
+/// stdin closes (a watcher off the output pipes, so they close when the
+/// server ends), and exits with them.
+const TIED: &str = concat!(
+    r#"exec 3<&0; "$@" <&- & child=$!; "#,
+    r#"{ read -r _ <&3; kill "$child"; } >/dev/null 2>&1 & "#,
+    r#"wait "$child""#,
+);
+
+/// `command` run so that it ends when its input closes. Unix wraps it in
+/// [`TIED`]; Windows ends it on drop.
 fn tied_to_stdin(command: Command) -> Command {
     if cfg!(not(unix)) {
         return command;
     }
     let mut tied = Command::new("/bin/sh");
     tied.arg("-c")
-        .arg(concat!(
-            r#"exec 3<&0; "$@" <&- & child=$!; "#,
-            r#"{ read -r _ <&3; kill "$child"; } >/dev/null 2>&1 & "#,
-            r#"wait "$child""#,
-        ))
+        .arg(TIED)
         .arg("sh")
         .arg(command.get_program())
         .args(command.get_args());
@@ -82,10 +85,22 @@ fn drain(pipe: impl std::io::Read + Send + 'static) {
 }
 
 /// Starts the server for `cwd` and waits for its URL (blocking: run off the
-/// main thread).
+/// main thread). Where the folder's agents run in a backend, the server
+/// runs there, tied to the same input inside it (stopping the local
+/// `wsl.exe` or `docker` wouldn't stop it); its page is reached through
+/// the backend's forwarded localhost.
 fn start(cwd: PathBuf) -> Result<(Server, String), String> {
-    let spec = pi_rpc::resolve_backend(&cwd).map_err(|e| format!("{e:#}"))?;
-    let mut child = tied_to_stdin(spec.launcher_command(["tower", "--no-open"]))
+    let mut command = match crate::features::backend::in_folder(
+        &cwd,
+        &["sh", "-c", TIED, "sh", "gentle-shell", "tower", "--no-open"],
+    ) {
+        Some(command) => command,
+        None => {
+            let spec = pi_rpc::resolve_backend(&cwd).map_err(|e| format!("{e:#}"))?;
+            tied_to_stdin(spec.launcher_command(["tower", "--no-open"]))
+        }
+    };
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

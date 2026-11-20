@@ -22,10 +22,8 @@ pub(super) fn walk_files(root: &Path, cap: usize) -> Vec<String> {
 }
 
 fn git_command(root: &Path) -> Command {
-    let mut command = pi_rpc::command("git");
+    let mut command = crate::features::backend::git(root, &[]);
     command
-        .arg("-C")
-        .arg(root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

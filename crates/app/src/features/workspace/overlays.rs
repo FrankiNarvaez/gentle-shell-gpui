@@ -492,6 +492,10 @@ impl Workspace {
                         tab.update(cx, |session, cx| session.reload_models(window, cx));
                     }
                 }
+                ProvidersEvent::Terminal(cwd, command) => {
+                    this.close_overlay(window, cx);
+                    this.open_setup_terminal(cwd.clone(), command.clone(), window, cx);
+                }
             },
         );
         self.overlay = Some((Overlay::Providers(view), subscription));
@@ -583,22 +587,23 @@ impl Workspace {
             }
             OnboardingEvent::Terminal(command) => {
                 self.close_overlay(window, cx);
-                self.open_setup_terminal(command.clone(), window, cx);
+                let home = dirs::home_dir().unwrap_or_else(|| self.active_cwd(cx));
+                self.open_setup_terminal(home, command.clone(), window, cx);
             }
         }
     }
 
-    /// A terminal tab with `command` typed at the prompt for the user to run
-    /// (it may ask for a password); the clipboard holds it when the terminal
-    /// can't take it.
+    /// A terminal tab in `cwd` (where its agents run) with `command` typed at
+    /// the prompt for the user to run (it may ask for a password); the
+    /// clipboard holds it when the terminal can't take it.
     pub(super) fn open_setup_terminal(
         &mut self,
+        cwd: PathBuf,
         command: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let home = dirs::home_dir().unwrap_or_else(|| self.active_cwd(cx));
-        let Some(pane) = self.new_pane(PaneKind::Terminal, home, None, None, window, cx) else {
+        let Some(pane) = self.new_pane(PaneKind::Terminal, cwd, None, None, window, cx) else {
             cx.write_to_clipboard(ClipboardItem::new_string(command));
             window.push_notification(
                 Notification::info("The setup command is on your clipboard: run it in a terminal."),

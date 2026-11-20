@@ -60,9 +60,8 @@ struct Output {
 /// Run `program args…` with the app's combined PATH, reading both pipes to
 /// the end and killing the child past `timeout`.
 fn spawn(program: &Path, args: &[OsString], timeout: Duration) -> Result<Output, String> {
-    let mut child = pi_rpc::command(program)
+    let mut child = crate::features::setup::music::player_command(program)
         .args(args)
-        .env("PATH", pi_rpc::child_path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

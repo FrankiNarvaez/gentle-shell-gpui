@@ -5,7 +5,6 @@
 //! when it changes ([`follow`]).
 
 use std::cell::Cell;
-use std::ffi::OsString;
 
 use gentle_core::genui::mode::{self, Mode};
 use gpui_kit::{App, Context, Global, Subscription};
@@ -46,8 +45,8 @@ pub fn set_mode(mode: Mode, cx: &mut App) {
 }
 
 /// The variable a new agent tab starts with, so its extension loads in `mode`.
-pub fn launch_env(mode: Mode) -> (String, OsString) {
-    (mode::ENV.to_string(), mode.id().into())
+pub fn launch_env(mode: Mode) -> (String, String) {
+    (mode::ENV.to_string(), mode.id().to_string())
 }
 
 /// Call `send` with each mode the user picks from now on (not the current

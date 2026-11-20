@@ -56,7 +56,7 @@ pub struct Launcher {
 }
 
 pub fn launcher() -> Result<Launcher, String> {
-    let spec = pi_rpc::resolve_backend(&user_home()).map_err(|e| format!("{e:#}"))?;
+    let spec = crate::features::backend::home_shell_spec().map_err(|e| format!("{e:#}"))?;
     let version = pi_rpc::version_output(&spec)
         .as_deref()
         .and_then(parse_launcher_version);
@@ -345,13 +345,16 @@ fn read_json(path: &Path) -> Option<Value> {
 
 /// `settings.json` `packages` lists `name` (string or `{source}` entries).
 pub fn lists_package(agent: &Path, name: &str) -> bool {
-    read_json(&agent.join("settings.json")).is_some_and(|settings| {
-        settings["packages"].as_array().is_some_and(|packages| {
-            packages
-                .iter()
-                .filter_map(|p| p.as_str().or(p["source"].as_str()))
-                .any(|source| crate::features::settings::npm_name(source) == Some(name))
-        })
+    read_json(&agent.join("settings.json")).is_some_and(|settings| settings_list(&settings, name))
+}
+
+/// Whether a `settings.json` value's `packages` lists `name`.
+pub fn settings_list(settings: &Value, name: &str) -> bool {
+    settings["packages"].as_array().is_some_and(|packages| {
+        packages
+            .iter()
+            .filter_map(|p| p.as_str().or(p["source"].as_str()))
+            .any(|source| crate::features::settings::npm_name(source) == Some(name))
     })
 }
 
@@ -469,7 +472,7 @@ pub fn check_bridge(agent: &Path) -> (Status, Fix) {
 
 /// `gentle-shell install npm:pi-claude-bridge` against the resolved home.
 pub fn install_bridge(log: &Log) -> Result<(), String> {
-    let spec = pi_rpc::resolve_backend(&user_home())
+    let spec = crate::features::backend::home_shell_spec()
         .map_err(|_| "Install Gentle Shell first.".to_string())?;
     let source = format!("npm:{BRIDGE}");
     log(format!("Installing {source}…"));

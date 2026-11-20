@@ -256,7 +256,7 @@ pub fn check_engram() -> (Status, Fix) {
 
 /// From `engram version` (`engram 1.18.0`, then an update notice). A version
 /// it can't read stays OK, as before.
-fn engram_status(text: &str) -> (Status, Fix) {
+pub(super) fn engram_status(text: &str) -> (Status, Fix) {
     let line = text.lines().next().unwrap_or("installed").trim();
     match line.split_whitespace().last().and_then(parse_version) {
         Some(version) if version < MIN_ENGRAM => (
@@ -284,8 +284,12 @@ fn brew() -> Option<PathBuf> {
     })
 }
 
-/// Homebrew's tap when Homebrew is there, else the GitHub release binary.
+/// Homebrew's tap when Homebrew is there, else the GitHub release binary;
+/// in the backend agents run in, when there is one.
 pub fn install_engram(log: &Log) -> Result<(), String> {
+    if let Some(choice) = super::remote::backend() {
+        return super::remote::install_engram(&choice, log).map(drop);
+    }
     if !cfg!(windows)
         && let Some(brew) = brew()
     {
@@ -311,13 +315,16 @@ pub fn install_engram(log: &Log) -> Result<(), String> {
     }
 }
 
-/// The version `engram version` reports, as `X.Y.Z`.
+/// The version `engram version` reports, as `X.Y.Z` (where agents run).
 pub fn engram_version() -> Option<String> {
-    let text = engram().and_then(|e| output_of(&e, &["version"]))?;
+    let text = match super::remote::backend() {
+        Some(choice) => super::remote::engram_version_text(&choice)?,
+        None => engram().and_then(|e| output_of(&e, &["version"]))?,
+    };
     engram_version_of(&text)
 }
 
-fn engram_version_of(text: &str) -> Option<String> {
+pub(super) fn engram_version_of(text: &str) -> Option<String> {
     let word = text.lines().next()?.split_whitespace().last()?;
     let version = word.strip_prefix('v').unwrap_or(word);
     gentle_core::version::stable_parts(version).map(|_| version.to_string())
@@ -327,6 +334,9 @@ fn engram_version_of(text: &str) -> Option<String> {
 /// else the latest release binary into the app's toolchain (which comes
 /// first on the app's PATH). The version it runs afterwards.
 pub fn upgrade_engram(log: &Log) -> Result<String, String> {
+    if let Some(choice) = super::remote::backend() {
+        return super::remote::install_engram(&choice, log);
+    }
     let installed = engram().ok_or("Engram isn't installed.")?;
     let real = dunce::canonicalize(&installed).unwrap_or(installed);
     let from_brew = real.components().any(|c| c.as_os_str() == "Cellar");

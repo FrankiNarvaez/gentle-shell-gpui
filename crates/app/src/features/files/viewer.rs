@@ -1538,7 +1538,8 @@ fn atomic_write(
 /// The unified diff for one file: staged and unstaged changes against HEAD,
 /// or the whole file as added when it is untracked.
 fn load_patch(root: &Path, abs: &Path, rel: &str) -> Result<String, Notice> {
-    let target = abs.to_string_lossy();
+    // The path as git reads it where the repository's agents run.
+    let target = crate::features::backend::there(root, abs);
     let diff = |extra: &[&str]| {
         let mut args = vec!["diff", "--no-color", "--no-ext-diff"];
         args.extend_from_slice(extra);
@@ -1674,9 +1675,8 @@ fn status_tint(label: &str) -> Hsla {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> Option<String> {
-    let out = pi_rpc::command("git")
+    let out = crate::features::backend::git(cwd, &[])
         .args(args)
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()

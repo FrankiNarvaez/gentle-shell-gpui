@@ -16,6 +16,8 @@ use super::fetch::{Staging, download};
 use super::probe::run_logged;
 use super::{Log, toolchain_dir};
 use crate::features::app_update::extract_tar_gz;
+use crate::features::backend;
+use gentle_core::backend::Backend;
 
 const REPO_TARBALL: &str =
     "https://codeload.github.com/Gentleman-Programming/gentle-shell/tar.gz/refs/tags";
@@ -80,8 +82,16 @@ fn version_of(package: &Path) -> Option<String> {
     json["version"].as_str().map(str::to_string)
 }
 
-/// Checks the Gentle Shell the app would run.
+/// Checks the Gentle Shell the app would run (in the backend agents run
+/// in, when there is one).
 pub fn status() -> TowerStatus {
+    if let Some(choice) = super::remote::backend() {
+        return remote_status(&choice).unwrap_or(TowerStatus {
+            package: None,
+            version: None,
+            built: false,
+        });
+    }
     let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
     let package = pi_rpc::resolve_backend(&home)
         .ok()
@@ -91,6 +101,59 @@ pub fn status() -> TowerStatus {
         built: package.as_deref().is_some_and(|p| index(p).is_file()),
         package,
     }
+}
+
+/// gentle-pi's package folder behind `gentle-shell` in a backend (its npm
+/// link, or the global `node_modules` beside it), its version and whether
+/// Tower is built there.
+const REMOTE_LOOK: &str = r#"g="$(command -v gentle-shell)" || exit 3; r="$(readlink -f "$g")"; for p in "$(dirname "$(dirname "$r")")" "$(dirname "$g")/../lib/node_modules/gentle-pi"; do if grep -q '"name": *"gentle-pi"' "$p/package.json" 2>/dev/null; then p="$(cd "$p" && pwd -P)"; echo "package=$p"; echo "version=$(node -p 'require(process.argv[1]).version' "$p/package.json")"; [ -f "$p/web/tower/dist/index.html" ] && echo built=yes; exit 0; fi; done; exit 4"#;
+
+fn remote_status(choice: &Backend) -> Option<TowerStatus> {
+    let (ok, out) = backend::run(choice, "sh", &["-c", REMOTE_LOOK])?;
+    let field = |key: &str| out.lines().find_map(|line| line.strip_prefix(key));
+    ok.then(|| TowerStatus {
+        package: field("package=").map(PathBuf::from),
+        version: field("version=").map(str::to_string),
+        built: field("built=").is_some(),
+    })
+}
+
+/// Builds Tower in a backend: the source downloaded here, copied there,
+/// built with that backend's Node (pnpm through npx) and put in its
+/// package, in one step.
+const REMOTE_BUILD: &str = r#"set -e; d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT; tar -xzf "$1" -C "$d"; rm -f "$1"; cd "$d"/*/web/tower; npx -y pnpm@10 install --frozen-lockfile; npx -y pnpm@10 build; test -f dist/index.html; w="$2/web/tower"; mkdir -p "$w"; rm -rf "$w/.dist-$$"; cp -R dist "$w/.dist-$$"; rm -rf "$w/dist"; mv "$w/.dist-$$" "$w/dist""#;
+
+fn remote_install(choice: &Backend, log: &Log) -> Result<(), String> {
+    let label = choice.label();
+    let found = remote_status(choice)
+        .ok_or_else(|| format!("Couldn't find Gentle Shell's package folder in {label}."))?;
+    if found.built {
+        log("Gentle Tower is already there.".into());
+        return Ok(());
+    }
+    let (Some(package), Some(version)) = (found.package, found.version) else {
+        return Err(format!("Couldn't read Gentle Shell's version in {label}."));
+    };
+    let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
+    fs::create_dir_all(&toolchain).map_err(|e| e.to_string())?;
+    let staging = Staging::new(&toolchain, "tower")?;
+    log(format!(
+        "Downloading Gentle Shell {version}'s source from GitHub…"
+    ));
+    let archive = staging.0.join("source.tar.gz");
+    download(&format!("{REPO_TARBALL}/v{version}"), &archive, log)?;
+    let there = format!(
+        "{}/tower-source-{version}.tar.gz",
+        backend::toolchain(choice).ok_or_else(|| format!("Couldn't reach {label}."))?
+    );
+    backend::put_file(choice, &archive, &there, false)?;
+    log(format!("Building Gentle Tower in {label} (pnpm)…"));
+    let package = package.to_string_lossy();
+    let command = backend::in_root(choice, &["sh", "-c", REMOTE_BUILD, "sh", &there, &package])
+        .ok_or_else(|| format!("Couldn't reach {label}."))?;
+    run_logged(command, "Gentle Tower's build", log)?;
+    log(format!("Gentle Tower is ready in {package}/web/tower."));
+    Ok(())
 }
 
 /// npm's `npx` script beside `node`: `lib/node_modules/npm` on macOS and
@@ -156,6 +219,9 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Builds Tower's web app for the Gentle Shell the app runs and installs it
 /// into its package. Does nothing when it's already there.
 pub fn install(log: &Log) -> Result<(), String> {
+    if let Some(choice) = super::remote::backend() {
+        return remote_install(&choice, log);
+    }
     let home = dirs::home_dir().unwrap_or_else(std::env::temp_dir);
     let spec = pi_rpc::resolve_backend(&home).map_err(|e| format!("{e:#}"))?;
     let package = package_root(&spec).ok_or("Couldn't find Gentle Shell's package folder.")?;
