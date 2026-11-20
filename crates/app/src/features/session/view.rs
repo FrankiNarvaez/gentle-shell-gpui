@@ -1173,20 +1173,44 @@ impl SessionView {
         let show_output =
             has_output && (spec.always_output || open || spec.status != ToolStatus::Done);
         let foldable = has_output && !spec.always_output;
+        // A subagent run's card would only say "Running": its line opens
+        // the Agents panel on that agent instead. A failed run keeps its
+        // card, which shows the error.
+        if let Item::Tool { name, args, .. } = item
+            && name == "subagent_run"
+            && spec.status != ToolStatus::Failed
+            && let Some(agent) = args["agent"].as_str()
+        {
+            let agent = agent.to_string();
+            let prompt = ["prompt", "task"]
+                .iter()
+                .find_map(|key| args[*key].as_str())
+                .map(str::to_string);
+            return self
+                .step_line(ix, spec, duration, None, cx)
+                .cursor_pointer()
+                .rounded_lg()
+                .hover(|s| s.bg(ui::surface_hover()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    let helper = this.helper_for_run(&agent, prompt.as_deref());
+                    this.open_agents(helper, cx);
+                }))
+                .into_any_element();
+        }
         // A finished tool step shows its quiet line first; a click unfolds
         // the whole card. What you ran yourself (`Shell`) always shows it.
         let step_key = fold_key(ix, 0, STEP);
         let step_open = !self.step_collapsed(ix, item);
         if !step_open {
             return self
-                .step_line(ix, spec, duration, step_key, false, cx)
+                .step_line(ix, spec, duration, Some((step_key, false)), cx)
                 .into_any_element();
         }
         let header = if matches!(item, Item::Shell { .. }) {
             self.card_header(ix, spec, out_key, foldable, cx)
                 .into_any_element()
         } else {
-            self.step_line(ix, spec, duration, step_key, true, cx)
+            self.step_line(ix, spec, duration, Some((step_key, true)), cx)
                 .into_any_element()
         };
         ui::card()
@@ -1222,14 +1246,14 @@ impl SessionView {
     /// A collapsed step: one quiet line, no card around it. The icon is
     /// faint (danger's cross when the step failed, pulsing while it runs),
     /// the rest is today's header restyled: title, subject, +n/−n, duration
-    /// and a chevron. Clicking it unfolds the whole step.
+    /// and a chevron. Clicking it unfolds the whole step when `fold` (its
+    /// key and whether the chevron points up) is given.
     fn step_line(
         &self,
         ix: usize,
         spec: &CardSpec,
         duration: Option<Duration>,
-        key: usize,
-        up: bool,
+        fold: Option<(usize, bool)>,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let failed = spec.status == ToolStatus::Failed;
@@ -1251,7 +1275,7 @@ impl SessionView {
             icon,
             StepRowStyle::Quiet,
             duration,
-            Some((key, up)),
+            fold,
             cx,
         )
         .w_full()
@@ -1311,6 +1335,7 @@ impl SessionView {
             .min_w_0()
             .when_some(fold, |this, (key, _)| {
                 this.cursor_pointer()
+                    .rounded_lg()
                     .hover(|s| s.bg(ui::surface_hover()))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(key, cx)))
             })
@@ -1655,9 +1680,20 @@ impl SessionView {
         };
         let narrow = self.pane_width.get() < NARROW;
         // Rows of consecutive steps sit close together: the top padding
-        // stays before and after a run of steps, not between its rows.
+        // stays before and after a run of steps, not between its rows. An
+        // open step is a card: it keeps a small gap from its neighbours so
+        // two cards never touch.
         let tight = matches!(row, Row::Item(i)
             if follows_step(&self.transcript.items, i));
+        let card_gap = match row {
+            Row::Item(i) if tight => {
+                let items = &self.transcript.items;
+                let open = |ix: usize| !self.step_collapsed(ix, &items[ix]);
+                let previous = items[..i].iter().rposition(assistant_visible);
+                open(i) || previous.is_some_and(open)
+            }
+            _ => false,
+        };
         h_flex()
             .w_full()
             .justify_center()
@@ -1669,6 +1705,7 @@ impl SessionView {
                     .map(|d| if narrow { d.px_3() } else { d.px_6() })
                     // The column's top padding before each row.
                     .when(!tight, |d| d.pt(rems(24. / 16.)))
+                    .when(card_gap, |d| d.pt(rems(8. / 16.)))
                     .child(content),
             )
             .into_any_element()

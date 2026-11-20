@@ -715,6 +715,25 @@ impl SessionView {
         }
     }
 
+    /// The helper a `subagent_run` call for `agent` started, by its prompt
+    /// in the activity widget; else the last helper for that agent.
+    pub(super) fn helper_for_run(&self, agent: &str, prompt: Option<&str>) -> Option<String> {
+        let helpers = self.helpers();
+        self.activity
+            .agents
+            .as_ref()
+            .and_then(|a| gentle_core::activity::task_for_run(&a.tasks, agent, prompt))
+            .filter(|id| helpers.iter().any(|helper| helper.id() == *id))
+            .or_else(|| {
+                helpers
+                    .iter()
+                    .rev()
+                    .find(|helper| helper.agent() == agent)
+                    .map(|helper| helper.id())
+            })
+            .map(str::to_string)
+    }
+
     fn selected_helper(&self) -> Option<Helper<'_>> {
         let helpers = self.helpers();
         let id = self.agents_panel.selected.as_deref();
