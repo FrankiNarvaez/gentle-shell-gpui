@@ -32,6 +32,20 @@ Many people work on this repository at once. These rules keep two people from do
 |Needs testing on Windows / Linux|The code is fine; someone with that system has to try it. If you have it, your help counts.|
 |Approved and CI green|It gets merged into `main`.|
 
+### For maintainers: where to look
+
+GitHub keeps each PR's state itself, so the pull request list filters by it:
+
+|To see…|Filter|
+|---|---|
+|Ready and waiting for review|`is:pr is:open draft:false review:none`|
+|Changes requested (the author's turn)|`is:pr is:open review:changes_requested`|
+|Approved (ready to merge)|`is:pr is:open review:approved`|
+|In progress|`is:pr is:open draft:true`|
+|Waiting for someone to test on Windows or Linux|`is:pr is:open label:"needs testing: windows"` (or `linux`)|
+
+The testing labels are the only state GitHub doesn't track: a maintainer sets them. A bot can't label fork PRs without `pull_request_target`, which [`docs/security.md`](docs/security.md) rules out.
+
 ## Project rules
 
 - **One PR, one topic.** A bug found along the way goes in its own PR ([ADR 0003](docs/adr/0003-behavior-preserving-refactors.md)).
