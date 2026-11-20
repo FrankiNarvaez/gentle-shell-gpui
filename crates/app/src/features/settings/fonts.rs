@@ -197,7 +197,7 @@ pub(super) struct FontsUi {
     /// Index into the entries: the Default entry (when shown), then families.
     /// Hover and ↑/↓ both move it; its family is what the desk previews.
     pub(super) cursor: usize,
-    scroll: ScrollHandle,
+    scroll: UniformListScrollHandle,
     /// The installed families, read when the picker opens.
     names: Vec<String>,
     pub(super) entries: Rc<[Option<String>]>,
@@ -270,7 +270,7 @@ impl FontsUi {
             open: None,
             search,
             cursor: 0,
-            scroll: ScrollHandle::new(),
+            scroll: UniformListScrollHandle::new(),
             names: Vec::new(),
             entries: Rc::from([]),
             query: String::new(),
@@ -289,7 +289,7 @@ impl FontsUi {
 
     fn select_cursor(&mut self, cursor: usize) {
         self.cursor = cursor;
-        self.scroll.scroll_to_item(cursor);
+        self.scroll.scroll_to_item(cursor, ScrollStrategy::Nearest);
     }
 }
 
@@ -634,68 +634,97 @@ impl SettingsView {
             .w(rems(360. / 16.))
             .appearance(false)
             .content(move |_, _, cx| {
-                let mut list = v_flex()
-                    .id("font-menu-list")
-                    .max_h(rems(320. / 16.))
-                    .overflow_y_scroll()
-                    .track_scroll(&scroll)
-                    .px(rems(6. / 16.))
-                    .pb(rems(6. / 16.));
-                for (index, entry) in entries.iter().enumerate() {
-                    let chosen = *entry == current;
-                    let title: SharedString = match entry {
-                        Some(name) => name.clone().into(),
-                        None => default_label(slot).into(),
-                    };
-                    let family = entry.clone();
-                    let weak = weak.clone();
-                    let hover = weak.clone();
-                    list = list.child(
-                        ui::picker_row(
-                            ("font-menu-row", index),
-                            index == cursor,
-                            chosen,
-                            None,
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(rems(13. / 16.))
-                                .text_color(match (chosen, entry) {
-                                    (true, _) => ui::accent(),
-                                    (_, Some(_)) => ui::fg(),
-                                    _ => ui::muted(),
-                                })
-                                .child(title),
-                        )
-                        .on_hover(move |hovered, _, cx| {
-                            if *hovered {
-                                let _ = hover.update(cx, |this, cx| {
-                                    if this.fonts.open == Some(slot) && this.fonts.cursor != index {
-                                        this.fonts.cursor = index;
-                                        cx.notify();
+                let entries_for_list = entries.clone();
+                let current_for_list = current.clone();
+                let weak_for_list = weak.clone();
+                let cursor_for_list = cursor;
+                let slot_for_list = slot;
+
+                let list = uniform_list(
+                    "font-menu-rows",
+                    entries.len(),
+                    move |range: std::ops::Range<usize>, _, _| {
+                        entries_for_list[range.start..range.end]
+                            .iter()
+                            .enumerate()
+                            .map(|(offset, entry)| {
+                                let index = range.start + offset;
+                                let entry = entry.clone();
+                                let chosen = entry == current_for_list;
+                                let title: SharedString = match &entry {
+                                    Some(name) => name.clone().into(),
+                                    None => default_label(slot_for_list).into(),
+                                };
+                                let family = entry.clone();
+                                let hover_weak = weak_for_list.clone();
+                                let click_weak = weak_for_list.clone();
+                                ui::picker_row(
+                                    ("font-menu-row", index),
+                                    index == cursor_for_list,
+                                    chosen,
+                                    None,
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(rems(13. / 16.))
+                                        .text_color(match (chosen, &entry) {
+                                            (true, _) => ui::accent(),
+                                            (_, Some(_)) => ui::fg(),
+                                            _ => ui::muted(),
+                                        })
+                                        .child(title),
+                                )
+                                .on_hover(move |hovered, _, cx| {
+                                    if *hovered {
+                                        let _ = hover_weak.update(cx, |this, cx| {
+                                            if this.fonts.open == Some(slot_for_list)
+                                                && this.fonts.cursor != index
+                                            {
+                                                this.fonts.cursor = index;
+                                                cx.notify();
+                                            }
+                                        });
                                     }
-                                });
-                            }
-                        })
-                        .on_click(move |_, window, cx| {
-                            let family = family.clone();
-                            let _ = weak.update(cx, |this, cx| {
-                                this.choose_font(slot, family.as_deref(), window, cx)
-                            });
-                        }),
-                    );
-                }
-                if entries.is_empty() || entries.as_ref() == [None] {
-                    list = list.child(
-                        div()
-                            .px_3()
-                            .py_1p5()
-                            .text_xs()
-                            .text_color(ui::faint())
-                            .child("No installed font matches."),
-                    );
-                }
+                                })
+                                .on_click(move |_, window, cx| {
+                                    let family = family.clone();
+                                    let _ = click_weak.update(cx, |this, cx| {
+                                        this.choose_font(
+                                            slot_for_list,
+                                            family.as_deref(),
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                })
+                                .into_any_element()
+                            })
+                            .collect::<Vec<_>>()
+                    },
+                )
+                .max_h(rems(320. / 16.))
+                .px(rems(6. / 16.))
+                .pb(rems(6. / 16.))
+                .track_scroll(&scroll);
+
+                let list = if entries.is_empty() || entries.as_ref() == [None] {
+                    v_flex()
+                        .id("font-menu-list")
+                        .child(list)
+                        .child(
+                            div()
+                                .px_3()
+                                .py_1p5()
+                                .text_xs()
+                                .text_color(ui::faint())
+                                .child("No installed font matches."),
+                        )
+                        .into_any_element()
+                } else {
+                    list.into_any_element()
+                };
+
                 let content = v_flex()
                     .w_full()
                     .font_family(cx.theme().font_family.clone())
