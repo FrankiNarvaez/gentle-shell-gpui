@@ -1,129 +1,260 @@
 //! Configuration › Appearance › Reading Desk: a collapsible specimen of the
 //! font draft. It draws fixed samples with the draft families and sizes only
 //! inside this panel, so nothing is applied, saved or re-rendered elsewhere
-//! until Apply.
+//! until Apply. The tiles follow the theme library's cards: a framed preview
+//! in the theme's own terminal colors over a caption row.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::{Icon, v_flex};
+use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
 use super::SettingsView;
-use crate::shared::themes::{FontSlot, Themes};
+use crate::shared::themes::{self, FontSlot, Themes};
 use crate::shared::ui;
 
 /// Glyph specimens are drawn this much larger than the slot's size.
 const MAGNIFY: f32 = 1.65;
 
+/// A theme color as an opaque fill.
+fn solid(color: u32) -> Hsla {
+    rgb(color).into()
+}
+
+/// One run of colored text inside a sample line.
+fn run(text: &'static str, color: Hsla) -> Div {
+    div().text_color(color).child(text)
+}
+
+fn line(runs: impl IntoIterator<Item = Div>) -> Div {
+    h_flex()
+        .whitespace_nowrap()
+        .overflow_hidden()
+        .children(runs)
+}
+
+/// Family, size and the tile's look for one slot.
+struct Spec {
+    slot: FontSlot,
+    family: SharedString,
+    size: Pixels,
+    /// The size as the user typed it (at 100 % zoom), for the caption.
+    points: f32,
+}
+
 impl SettingsView {
     pub(super) fn reading_desk(&self, cx: &mut Context<Self>) -> Div {
         let open = self.fonts.desk_open;
-        let toggle = div()
+        let dirty = self.fonts.draft.dirty();
+        let header = h_flex()
             .id("reading-desk-toggle")
-            .flex()
-            .items_center()
             .gap_2()
-            .py_1()
             .cursor_pointer()
-            .text_sm()
-            .text_color(ui::champagne())
-            .child(Icon::new(if open {
-                IconName::ChevronDown
-            } else {
-                IconName::ChevronRight
-            }))
-            .child("Reading Desk")
+            .child(
+                Icon::new(if open {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                .xsmall()
+                .text_color(ui::faint()),
+            )
+            .child(ui::section_label("Reading desk"))
             .child(
                 div()
                     .ml_auto()
                     .text_xs()
-                    .text_color(ui::faint())
-                    .child("Draft preview"),
+                    .text_color(if dirty { ui::accent() } else { ui::faint() })
+                    .child(if dirty {
+                        "Previewing unapplied changes"
+                    } else {
+                        "Live preview"
+                    }),
             )
             .on_click(cx.listener(|this, _, _, cx| {
                 this.fonts.desk_open = !this.fonts.desk_open;
                 cx.notify();
             }));
-        let mut desk = v_flex()
-            .mb_2()
-            .px_3()
-            .py_2()
-            .rounded_lg()
-            .bg(ui::well())
-            .child(toggle);
+        let mut desk = v_flex().gap_2().pt_2().pb_3().child(header);
         if open {
             let interface = ui::default_interface(cx);
             let zoom = f32::from(cx.global::<Themes>().interface_size) / 100.;
-            desk = desk.child(self.desk_body(&interface, zoom));
+            desk = desk.child(self.desk_tiles(&interface, zoom));
         }
         desk
     }
 
-    fn desk_body(&self, default_interface: &SharedString, zoom: f32) -> Div {
+    fn desk_tiles(&self, default_interface: &SharedString, zoom: f32) -> Div {
         let draft = &self.fonts.draft;
-        let family = |slot| draft.effective_family(slot, default_interface);
-        let size = |slot| px(draft.size(slot) * zoom);
-        let (ui_family, code_family, term_family) = (
-            family(FontSlot::Interface),
-            family(FontSlot::Code),
-            family(FontSlot::Terminal),
-        );
-        let (ui_size, code_size, term_size) = (
-            size(FontSlot::Interface),
-            size(FontSlot::Code),
-            size(FontSlot::Terminal),
-        );
-        let glyph =
-            |label: &'static str, text: &'static str, family: SharedString, size: Pixels| {
-                v_flex().gap_1().child(ui::section_label(label)).child(
-                    div()
-                        .font_family(family)
-                        .text_size(size * MAGNIFY)
-                        .text_color(ui::champagne())
-                        .child(text),
-                )
-            };
-        let sample = |label: &'static str, family: SharedString, size: Pixels, body: Div| {
-            v_flex().gap_1().child(ui::section_label(label)).child(
-                body.font_family(family)
-                    .text_size(size)
-                    .line_height(size * 1.45)
-                    .text_color(ui::fg()),
-            )
+        let spec = |slot| Spec {
+            slot,
+            family: draft.effective_family(slot, default_interface),
+            size: px(draft.size(slot) * zoom),
+            points: draft.size(slot),
         };
-        let specimens = v_flex()
-            .w(rems(150. / 16.))
-            .flex_shrink_0()
+        h_flex()
+            .items_start()
             .gap_3()
-            .p_3()
-            .rounded_md()
-            .bg(ui::raised())
-            .child(glyph("Interface", "Aa Éé", ui_family.clone(), ui_size))
-            .child(glyph("Code", "O0 Il1", code_family.clone(), code_size))
-            .child(glyph("Terminal", "❯ ~/", term_family.clone(), term_size));
-        let samples = v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_3()
-            .child(sample(
-                "Conversation",
-                ui_family,
-                ui_size,
-                div().child("Résumé ready. Review the latest changes. Café · acción · 0123456789"),
-            ))
-            .child(sample(
-                "Editor · preview.rs",
-                code_family,
-                code_size,
-                div().child("let id = \"O0Il1\"; // 1 l I | 0 O"),
-            ))
-            .child(sample(
-                "Terminal · zsh",
-                term_family,
-                term_size,
-                v_flex()
-                    .child("~/studio ❯ git diff --stat")
-                    .child(" fonts.rs | 12 +++++"),
-            ));
-        div().flex().gap_4().pt_2().child(specimens).child(samples)
+            .child(interface_tile(spec(FontSlot::Interface)))
+            .child(code_tile(spec(FontSlot::Code)))
+            .child(terminal_tile(spec(FontSlot::Terminal)))
     }
+}
+
+/// The theme card's frame: a preview well over a caption naming the slot,
+/// its family and its size.
+fn tile(spec: &Spec, glyphs: &'static str, preview: Div, bg: Hsla) -> Div {
+    let caption = h_flex()
+        .gap_1()
+        .px(px(2.))
+        .text_xs()
+        .child(div().text_color(ui::muted()).child(match spec.slot {
+            FontSlot::Interface => "Interface",
+            FontSlot::Code => "Code",
+            FontSlot::Terminal => "Terminal",
+        }))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(ui::fg())
+                .child(spec.family.clone()),
+        )
+        .child(
+            div()
+                .text_color(ui::faint())
+                .font_family(ui::mono())
+                .child(format!("{} px", trim(spec.points))),
+        );
+    v_flex()
+        .flex_1()
+        .min_w_0()
+        .gap_1p5()
+        .p_1p5()
+        .rounded_xl()
+        .border_2()
+        .border_color(ui::border())
+        .child(
+            v_flex()
+                .gap_2()
+                .px_2p5()
+                .py_2()
+                .rounded_lg()
+                .bg(bg)
+                .border_1()
+                .border_color(ui::border().opacity(0.7))
+                .overflow_hidden()
+                .font_family(spec.family.clone())
+                .child(
+                    div()
+                        .text_size(spec.size * MAGNIFY)
+                        .line_height(spec.size * MAGNIFY * 1.15)
+                        .text_color(ui::champagne())
+                        .whitespace_nowrap()
+                        .child(glyphs),
+                )
+                .child(
+                    v_flex()
+                        .text_size(spec.size)
+                        .line_height(spec.size * 1.45)
+                        .child(preview),
+                ),
+        )
+        .child(caption)
+}
+
+/// `13` rather than `13.0`, `12.5` as is.
+fn trim(size: f32) -> String {
+    if size.fract() == 0. {
+        format!("{size:.0}")
+    } else {
+        format!("{size:.1}")
+    }
+}
+
+fn interface_tile(spec: Spec) -> Div {
+    let preview = v_flex()
+        .gap_1()
+        .child(
+            div()
+                .text_color(ui::fg())
+                .child("Review the latest changes"),
+        )
+        .child(
+            div()
+                .text_color(ui::muted())
+                .child("Résumé ready · 3 files · café, acción, 0123"),
+        )
+        .child(
+            h_flex().pt_1().child(
+                div()
+                    .px_2()
+                    .rounded_md()
+                    .bg(ui::accent().opacity(0.16))
+                    .text_color(ui::accent())
+                    .child("View changes"),
+            ),
+        );
+    tile(&spec, "Aa Éé Ññ", preview, ui::raised())
+}
+
+fn code_tile(spec: Spec) -> Div {
+    let t = themes::term(|t| *t);
+    let (fg, keyword, string, comment, number) = (
+        solid(t.fg),
+        solid(t.ansi[5]),
+        solid(t.ansi[2]),
+        solid(t.dim_fg),
+        solid(t.ansi[3]),
+    );
+    let preview = v_flex()
+        .child(line([
+            run("fn ", keyword),
+            run("preview", solid(t.ansi[4])),
+            run("() {", fg),
+        ]))
+        .child(line([
+            run("    let ", keyword),
+            run("id = ", fg),
+            run("\"O0Il1\"", string),
+            run(";", fg),
+        ]))
+        .child(line([
+            run("    let ", keyword),
+            run("n = ", fg),
+            run("0x1F", number),
+            run("; ", fg),
+            run("// l1 I| O0", comment),
+        ]))
+        .child(line([run("}", fg)]));
+    tile(&spec, "O0 Il1 {}", preview, solid(t.bg))
+}
+
+fn terminal_tile(spec: Spec) -> Div {
+    let t = themes::term(|t| *t);
+    let fg = solid(t.fg);
+    let preview = v_flex()
+        .child(line([
+            run("~/studio ", solid(t.ansi[4])),
+            run("main ", solid(t.ansi[5])),
+            run("❯ ", ui::accent()),
+            run("git diff --stat", fg),
+        ]))
+        .child(line([
+            run(" fonts.rs   | 12 ", fg),
+            run("++++++", solid(t.ansi[2])),
+            run("--", solid(t.ansi[1])),
+        ]))
+        .child(line([
+            run(" desk.rs    |  4 ", fg),
+            run("++++", solid(t.ansi[2])),
+        ]))
+        .child(
+            h_flex().gap_1().pt_1().children(
+                t.ansi[..8]
+                    .iter()
+                    .map(|&c| div().size_2().rounded_full().bg(solid(c))),
+            ),
+        );
+    tile(&spec, "❯ ~/ ", preview, solid(t.bg))
 }
