@@ -30,7 +30,7 @@ The risk report lists sensitive files (CI, `build.rs`, `Cargo.*`, `packaging/`, 
 
 Also enforced in the workflows:
 
-- Every workflow runs with `permissions: contents: read` unless a job needs more (only `release` writes, and only on tags).
+- Every workflow runs with `permissions: contents: read` unless a job needs more: `release` writes, only on tags, and `issue-claims` writes issues (assignees, labels, comments) for `/take` and `/drop`, without checking out or running code.
 - PRs use `pull_request`, never `pull_request_target`: a fork's code gets no secrets and a read-only token.
 - Actions are pinned to a commit SHA (a moved tag can't change what runs); Dependabot keeps them current ([`.github/dependabot.yml`](../.github/dependabot.yml)).
 - `actions/checkout` runs with `persist-credentials: false`, so later steps can't reuse the token.

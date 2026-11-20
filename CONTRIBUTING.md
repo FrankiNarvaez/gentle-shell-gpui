@@ -4,9 +4,10 @@ Many people work on this repository at once. These rules keep two people from do
 
 ## Before you start an issue
 
-- **Check it isn't assigned.** Someone under "Assignees" is already working on it.
-- **Comment that you're taking it** ("I'll take this") and wait for a maintainer to assign you. From then on it's yours.
-- **No progress in 14 days** (no PR, no comment) frees the issue for someone else. Stuck or out of time? Say so in the issue and we'll free it.
+- **Check it isn't assigned.** Someone under "Assignees" (and the `in progress` label) is already working on it.
+- **Comment `/take`** on the issue: a bot assigns it to you and labels it `in progress`. From then on it's yours. If it's already taken, the bot says by whom.
+- **Can't continue?** Comment `/drop` and the issue is free again.
+- **No progress in 14 days** (no PR, no comment) frees the issue for someone else; a maintainer releases it.
 - **Something without an issue?** Open one first and describe what you propose, especially for a new feature or a design change, so we agree on it before you spend time.
 
 ## Opening your pull request

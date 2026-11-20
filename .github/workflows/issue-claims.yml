@@ -1,0 +1,79 @@
+name: Issue claims
+
+# `/take` in an issue comment assigns the issue to whoever wrote it and adds
+# the `in progress` label; `/drop` releases it. Outside contributors can't
+# assign themselves or set labels, so this does it for them (CONTRIBUTING.md).
+#
+# Runs from main's copy of this file with the repository's token, so it never
+# checks out or runs code, and the comment only reaches the script through
+# environment variables (no `${{ }}` inside `run`).
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: issue-claims-${{ github.event.issue.number }}
+
+jobs:
+  claim:
+    if: >-
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.type != 'Bot' &&
+      (startsWith(github.event.comment.body, '/take') ||
+       startsWith(github.event.comment.body, '/drop'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Assign or release the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+          AUTHOR: ${{ github.event.comment.user.login }}
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          label="in progress"
+          command=$(printf '%s\n' "$BODY" | head -n 1 | awk '{print $1}')
+          assignees() {
+            gh issue view "$ISSUE" --json assignees --jq '[.assignees[].login] | join(" ")'
+          }
+          current=$(assignees)
+          mine=false
+          case " $current " in *" $AUTHOR "*) mine=true ;; esac
+          case "$command" in
+            /take)
+              if [ "$mine" = true ]; then
+                exit 0
+              elif [ -n "$current" ]; then
+                taken=$(printf '@%s ' $current)
+                gh issue comment "$ISSUE" --body "This issue is already taken by ${taken% }. Look for an unassigned one, or ask here if it seems abandoned (see CONTRIBUTING.md)."
+                exit 0
+              fi
+              gh issue edit "$ISSUE" --add-assignee "$AUTHOR" --add-label "$label"
+              # GitHub drops an assignee it won't accept without failing.
+              case " $(assignees) " in
+                *" $AUTHOR "*)
+                  gh issue comment "$ISSUE" --body "@$AUTHOR, this issue is yours. Open your PR as a Draft with \`Closes #$ISSUE\`, and mark it Ready for review when the checklist is done. Write \`/drop\` if you can't continue; with no progress in 14 days it is freed (see CONTRIBUTING.md)."
+                  ;;
+                *)
+                  gh issue comment "$ISSUE" --body "@$AUTHOR, GitHub didn't accept the assignment. A maintainer will assign you."
+                  ;;
+              esac
+              ;;
+            /drop)
+              [ "$mine" = true ] || exit 0
+              gh issue edit "$ISSUE" --remove-assignee "$AUTHOR"
+              if [ -z "$(assignees)" ]; then
+                gh issue edit "$ISSUE" --remove-label "$label"
+              fi
+              gh issue comment "$ISSUE" --body "@$AUTHOR released this issue. It's free to take with \`/take\`."
+              ;;
+          esac
