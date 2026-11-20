@@ -29,7 +29,7 @@ pub enum RefsEvent {
     Changed,
     /// Open an agent tab in this worktree's folder.
     OpenAgent(PathBuf),
-    /// Show this repository's Commit History.
+    /// Show this repository's Git pane.
     OpenHistory(PathBuf),
 }
 
@@ -870,7 +870,7 @@ impl RefsView {
                                 .ghost()
                                 .xsmall()
                                 .icon(Icon::new(IconName::GitGraph))
-                                .tooltip("Commit history")
+                                .tooltip("Open in the Git pane")
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.emit(RefsEvent::OpenHistory(toplevel.clone()))
                                 })),

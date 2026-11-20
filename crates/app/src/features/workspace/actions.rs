@@ -232,6 +232,50 @@ impl Workspace {
         self.close_pane(id, window, cx);
     }
 
+    /// The Git pane's file row: what a commit changed in that file, placed
+    /// like a preview.
+    pub(super) fn on_open_commit_diff(
+        &mut self,
+        action: &OpenCommitDiff,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(factory) = PaneFactories::get(cx).commit_diff else {
+            return;
+        };
+        let item = factory(action, window, cx);
+        let id = self.file_pane(item, action.root.join(&action.path), cx);
+        self.place_preview(id, window, cx);
+    }
+
+    /// A new agent tab in `cwd` that starts with `prompt` (Explain with the
+    /// agent, in the Git pane).
+    pub(super) fn on_ask_agent(
+        &mut self,
+        action: &AskAgent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_tab(
+            PaneKind::Agent,
+            action.cwd.clone(),
+            Some(action.prompt.clone()),
+            None,
+            window,
+            cx,
+        );
+    }
+
+    /// A terminal beside the focused pane, in `cwd`.
+    pub(super) fn on_open_terminal_at(
+        &mut self,
+        action: &OpenTerminalAt,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tile(Some((PaneKind::Terminal, action.cwd.clone())), window, cx);
+    }
+
     pub(super) fn on_close_overlay(
         &mut self,
         _: &CloseOverlay,

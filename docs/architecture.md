@@ -55,9 +55,9 @@ flowchart TD
 | `fuzzy`: fuzzy scoring and file ranking | `palette/`: walking files, reading branches with git. |
 | `prompt_history`: the composer's sent prompts and where ↑/↓ are in them (draft kept, seeded from a resumed conversation) | `session/submit.rs`: recording at send, the ↑/↓ keystrokes (first and last line, `/` menu first) and putting a prompt in the composer. |
 | `backend`: where agents, terminals, git and Setup run (this computer, a WSL distro, a command), its `settings.json` value, the WSL distro a folder implies, host ↔ backend paths both ways, the launch and terminal argv, the login PATH probe and `wsl.exe --list --verbose` | `backend/`: reading and saving the choice, probing the backend, staging the app's files there, `git` and `gentle-shell` commands through it, the backend's homes, listing WSL's distros; `setup/remote.rs`: Setup's checks there; `settings/runs_on.rs`: the Configuration section. |
-| `ides`: code editors and IDEs (VS Code and its forks, Zed, Sublime Text, Xcode, Visual Studio, Android Studio, JetBrains, …), where each installs per OS, versioned-folder matching and the launch command | `platform/ides.rs`: probing those folders and the PATH, launching the editor; `files/tree.rs`: the ⋯ menu's "Open in …". |
+| `ides`: code editors and IDEs (VS Code and its forks, Zed, Sublime Text, Xcode, Visual Studio, Android Studio, JetBrains, …), where each installs per OS, versioned-folder matching and the launch command | `platform/ides.rs`: probing those folders and the PATH, launching the editor; `files/tree.rs` and `history/view.rs`: the ⋯ menus' "Open in …". |
 | `sessions`: session summary, folder name from cwd, ordering, ISO dates and relative time | `sessions/`: finding and reading `.jsonl` files (line scanning is tied to reading), cache. |
-| `git`: status parsers (v1 and v2), numstat, refs, stash, worktrees (and where a new one goes), submodules, ahead/behind; `log` records and the commit graph's lanes; diff trimming | `git/`: running `git`, counting lines of untracked files, stage, commit, push and branch operations, reading a branch's history; `history/`: the Commit History pane and painting the graph. |
+| `git`: status parsers (v1 and v2), numstat, refs, stash, worktrees (and where a new one goes), submodules, ahead/behind; `log` records, the commit graph's lanes and the Git pane's filter; `ops` pull modes, reset modes, the command git stopped in (merge, rebase, cherry-pick, revert) and how to continue or abort it, a commit's changed files, rewording a summary; diff trimming | `git/`: running `git`, counting lines of untracked files, stage, commit, push and branch operations, reading the commits a scope reaches (`log.rs`), the Git pane's actions (`ops.rs`); `history/`: the Git pane and painting the graph. |
 | `version`: stable versions, comparison and Gentle Shell update offer | `updates/`: launcher cache, npm query, clock. |
 | `engram`: observation model and query encoding | `memory/`: HTTP requests to Engram. |
 | `workspaces`: unique workspace names | `workspaces/`: saved model (uses `PaneTree`), reading and writing `workspaces.json`. |
@@ -222,9 +222,10 @@ git/
 ├── snapshot.rs     # changes for the panel and the tree
 ├── changes.rs      # Changes tab: stage, discard, stash, commit, push
 ├── refs.rs         # Branches tab: branches, stash, remote checkout, worktrees (add, remove, prune)
-└── log.rs          # Commit History: a branch's commits, total, local branches, dirty work tree
+├── log.rs          # Git pane: the commits of HEAD, a branch or every ref, total, branches, dirty work tree, upstream, remotes, a command stopped midway
+└── ops.rs          # Git pane: fetch, pull, branch, tag, switch, checkout, cherry-pick, revert, reset, reword, remotes, LFS, continue or abort
 
-history/            # mod.rs: HistoryView (a `PaneKind::History` pane), paging, selection; graph.rs (paints a row's lanes), view.rs (rows, hover card)
+history/            # mod.rs: HistoryView (a `PaneKind::History` pane, the Git pane), scope, paging, filter, selection and its details; ops.rs (actions off the UI thread, the inline prompt, confirmations); avatars.rs (authors' pictures: lookup, disk cache); graph.rs (paints a row's lanes), view.rs (header, toolbar, rows and their menus, details, hover card, footer)
 
 genui/              # mod.rs: GenUi (surfaces rebuilt from the transcript, live card vs superseded rows, expanded); extension.rs + gentle-ui.ts (the Pi extension);
                     # diagram.rs: DiagramView (versions, local edits, undo, viewport, pointer and keys, send); view.rs (card, nodes, details, footer, conversation rows); paint.rs (groups, edges, arrowheads)

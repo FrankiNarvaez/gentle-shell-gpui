@@ -80,6 +80,7 @@ Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`, or 
 | `app-update.json` | `features/app_update/cache.rs` |
 | `toolchain/` | `features/setup/mod.rs` (Node, npm prefix, Engram, Maestro and its Java, and the diagram renderer `bin/merman-cli`, installed by the app) |
 | `diagnostics/` | `features/diagnostics/`: resource recordings (`diagnostics-<UTC>.jsonl`), only when diagnostics are on; the newest 10 are kept. |
+| `avatars/` | `features/history/avatars.rs`: commit authors' pictures for the Git pane, 64 px PNGs named by the SHA-256 of the address; an empty `<hash>.none` marks an address without one for a week. Deleting the folder makes the pane look them up again. |
 
 `dirs::data_dir()` is `~/Library/Application Support` on macOS, `$XDG_DATA_HOME` or `~/.local/share` on Linux and `%APPDATA%` on Windows. On macOS and Linux it is derived from `HOME`.
 

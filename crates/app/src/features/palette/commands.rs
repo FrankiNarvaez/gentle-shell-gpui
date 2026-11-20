@@ -56,8 +56,8 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         ),
         row(
             IconName::GitGraph,
-            "Commit history",
-            "The branch's commits as a graph, with authors, tags and changes",
+            "Git",
+            "Commits as a graph, branches, tags, pull, push, cherry-pick, revert and reset",
             PaletteAction::History,
         ),
         row(

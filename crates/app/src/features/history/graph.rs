@@ -70,6 +70,16 @@ impl RowGraph {
         }
     }
 
+    /// Only the node, for a row the filter kept: its neighbors in the list
+    /// aren't its neighbors in the graph.
+    pub fn node_only(row: &GraphRow, head: bool) -> Self {
+        Self {
+            top: Vec::new(),
+            bottom: Vec::new(),
+            ..Self::commit(row, head, false)
+        }
+    }
+
     pub fn uncommitted() -> Self {
         Self {
             top: Vec::new(),
