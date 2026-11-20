@@ -651,7 +651,7 @@ impl PanelView {
         let code = |text: String| {
             div()
                 .font_family(ui::mono())
-                .text_size(ui::code_rems(16.))
+                .text_size(ui::code_rems(12.))
                 .text_color(ui::fg())
                 .child(text)
         };

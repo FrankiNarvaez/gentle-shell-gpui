@@ -399,7 +399,7 @@ impl SessionView {
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .font_family(ui::mono())
-                        .text_size(ui::code_rems(16.))
+                        .text_size(ui::code_rems(12.))
                         .text_color(ui::champagne())
                         .child(git.branch.clone().unwrap_or_else(|| "detached".into())),
                 )
@@ -408,7 +408,7 @@ impl SessionView {
                         div()
                             .flex_shrink_0()
                             .font_family(ui::mono())
-                            .text_size(ui::code_rems(16.))
+                            .text_size(ui::code_rems(12.))
                             .text_color(ui::muted())
                             .child(format!("±{}", git.files.len())),
                     )
@@ -515,7 +515,7 @@ impl SessionView {
                                         .overflow_hidden()
                                         .text_ellipsis_start()
                                         .font_family(ui::mono())
-                                        .text_size(ui::code_rems(16.))
+                                        .text_size(ui::code_rems(12.))
                                         .text_color(ui::faint())
                                         .child(prefix),
                                 )
@@ -525,7 +525,7 @@ impl SessionView {
                                         .overflow_hidden()
                                         .text_ellipsis_start()
                                         .font_family(ui::mono())
-                                        .text_size(ui::code_rems(16.))
+                                        .text_size(ui::code_rems(12.))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(ui::fg())
                                         .child(leaf),
