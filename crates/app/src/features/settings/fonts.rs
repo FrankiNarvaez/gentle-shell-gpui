@@ -574,7 +574,7 @@ impl SettingsView {
             .items_center()
             .child(
                 div()
-                    .w(rems(64. / 16.))
+                    .w(rems(48. / 16.))
                     .rounded_md()
                     .when(invalid, |d| d.border_1().border_color(ui::danger()))
                     .child(Input::new(input).small()),
