@@ -15,11 +15,12 @@ use super::erd::Erd;
 use super::form::Form;
 use super::html::HtmlSpec;
 use super::kanban::Board;
-use super::layout::{self, GROUP_HEADER, Point, Rect};
+use super::layout::{self, Point, Rect};
 use super::refs::CodeRef;
 use super::review::{self, Review};
 use super::sequence::{self, FragmentKind, MessageKind, ParticipantKind, Sequence};
 use super::states::{Machine, StateKind};
+use super::style::Tint;
 use super::table::{Align, ColumnType, Table, cell_text, link_url};
 use super::timeline::{self, Timeline};
 
@@ -112,6 +113,8 @@ pub struct Palette {
     pub accent: String,
     /// One per series or node kind tone, cycled.
     pub series: Vec<String>,
+    /// One per [`Tint`], in [`Tint::ALL`] order: diagram elements' tones.
+    pub tints: [String; 9],
     pub font: String,
 }
 
@@ -130,6 +133,11 @@ impl Default for Palette {
             ]
             .map(String::from)
             .to_vec(),
+            tints: [
+                "#3b82f6", "#16a34a", "#d97706", "#dc2626", "#8b5cf6", "#0d9488", "#d4577c",
+                "#b08d57", "#6b7280",
+            ]
+            .map(String::from),
             font: "sans-serif".into(),
         }
     }
@@ -405,24 +413,62 @@ fn tone(palette: &Palette, i: usize) -> &str {
         .map_or(palette.accent.as_str(), String::as_str)
 }
 
-fn kind_tone(kind: NodeKind) -> usize {
+/// A diagram element's named color in the palette.
+fn tint(palette: &Palette, tint: Tint) -> &str {
+    // `tints` follows `Tint::ALL`, the declaration order.
+    &palette.tints[tint as usize]
+}
+
+/// A node kind's default tone, as the app draws it.
+fn kind_tint(kind: NodeKind) -> Tint {
     match kind {
-        NodeKind::Service | NodeKind::Function => 0,
-        NodeKind::Client => 1,
-        NodeKind::Database | NodeKind::Storage => 2,
-        NodeKind::Queue => 3,
-        NodeKind::Cache => 4,
-        NodeKind::External | NodeKind::Note => 7,
+        NodeKind::Service => Tint::Blue,
+        NodeKind::Function => Tint::Purple,
+        NodeKind::Database => Tint::Green,
+        NodeKind::Storage => Tint::Teal,
+        NodeKind::Queue => Tint::Yellow,
+        NodeKind::Cache => Tint::Red,
+        NodeKind::Client => Tint::Pink,
+        NodeKind::External => Tint::Gray,
+        NodeKind::Note => Tint::Gold,
     }
 }
 
-/// The diagram as laid out in the app, as a standalone SVG.
+/// An edge's color: its `color`, else its style's.
+fn edge_color<'a>(edge: &super::diagram::Edge, palette: &'a Palette) -> &'a str {
+    match (edge.color, edge.style) {
+        (Some(color), _) => tint(palette, color),
+        (None, EdgeStyle::Async) => tint(palette, Tint::Yellow),
+        (None, EdgeStyle::Data) => tint(palette, Tint::Blue),
+        (None, EdgeStyle::Sync | EdgeStyle::Dependency) => palette.muted.as_str(),
+    }
+}
+
+/// The diagram as laid out in the app, as a standalone SVG: tinted cards
+/// with their icon badge, groups as tinted containers with a caps tag,
+/// edges in their style's (or `color`'s) tone ending in open chevrons, and
+/// labels in pills.
 pub fn diagram_svg(d: &Diagram, palette: &Palette) -> String {
     const MARGIN: f32 = 24.;
+    // Card corner radius, badge side and group corner radius, as in the app.
+    const CARD_RADIUS: f32 = 12.;
+    const BADGE: f32 = 26.;
+    const GROUP_RADIUS: f32 = 16.;
+    // Where a group's tag sits inside its box, and the tag's height.
+    const TAG_INSET: f32 = 10.;
+    const TAG_H: f32 = 18.;
     let l = layout::layout(d);
     let b = l.bounds;
     let (ox, oy) = (MARGIN - b.x, MARGIN - b.y);
     let at = |p: Point| (p.x + ox, p.y + oy);
+    // SVG 1.1 markers can't take their line's color: one per color used.
+    let mut colors: Vec<&str> = Vec::new();
+    for edge in &d.edges {
+        let color = edge_color(edge, palette);
+        if !colors.contains(&color) {
+            colors.push(color);
+        }
+    }
     let mut out = String::new();
     svg_open(
         &mut out,
@@ -430,29 +476,40 @@ pub fn diagram_svg(d: &Diagram, palette: &Palette) -> String {
         b.h.max(1.) + MARGIN * 2.,
         palette,
     );
-    let _ = writeln!(
-        out,
-        r#"<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="{}"/></marker></defs>"#,
-        palette.muted
+    out.push_str(
+        r##"<defs><filter id="shadow" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#000000" flood-opacity="0.18"/></filter>"##,
     );
+    for (i, color) in colors.iter().enumerate() {
+        let _ = write!(
+            out,
+            r#"<marker id="arrow-{i}" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="12" markerHeight="12" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M2,1.5 L10,6 L2,10.5" fill="none" stroke="{color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker>"#
+        );
+    }
+    out.push_str("</defs>\n");
     for (group, rect) in d.groups.iter().zip(&l.groups) {
         let Some(r) = rect else { continue };
         let (x, y) = at(Point { x: r.x, y: r.y });
+        let color = group
+            .color
+            .map_or(palette.muted.as_str(), |c| tint(palette, c));
         let _ = writeln!(
             out,
-            r#"<rect x="{x:.1}" y="{y:.1}" width="{:.1}" height="{:.1}" rx="14" fill="{}" fill-opacity="0.55" stroke="{}"/>"#,
-            r.w, r.h, palette.surface, palette.border
+            r#"<rect x="{x:.1}" y="{y:.1}" width="{:.1}" height="{:.1}" rx="{GROUP_RADIUS}" fill="{color}" fill-opacity="0.05" stroke="{color}" stroke-opacity="0.42" stroke-width="1.5"/>"#,
+            r.w, r.h,
         );
+        // The tag: the label in caps on its tone, top-left inside the box.
+        let label = fit(&group.label, 40).to_uppercase();
+        let w = (label.chars().count() as f32 * 6.4 + 12.).min(r.w - 2. * TAG_INSET);
+        let (tx, ty) = (x + TAG_INSET, y + TAG_INSET);
         let _ = writeln!(
             out,
-            r#"<text x="{:.1}" y="{:.1}" font-size="12" fill="{}">{}</text>"#,
-            x + 12.,
-            y + GROUP_HEADER / 2. + 6.,
-            palette.muted,
-            xml(&fit(&group.label, 40))
+            r#"<rect x="{tx:.1}" y="{ty:.1}" width="{w:.1}" height="{TAG_H}" rx="5" fill="{color}" fill-opacity="0.16" stroke="{color}" stroke-opacity="0.4"/><text x="{:.1}" y="{:.1}" font-size="9.5" font-weight="600" fill="{color}">{}</text>"#,
+            tx + 6.,
+            ty + 12.5,
+            xml(&label)
         );
     }
-    for (edge, path) in d.edges.iter().zip(&l.edges) {
+    for ((edge, path), spot) in d.edges.iter().zip(&l.edges).zip(&l.labels) {
         let mut data = String::new();
         if let Some(first) = path.segments.first() {
             let (x, y) = at(first.from);
@@ -466,37 +523,40 @@ pub fn diagram_svg(d: &Diagram, palette: &Palette) -> String {
                 c1.0, c1.1, c2.0, c2.1, to.0, to.1
             );
         }
-        let (dash, width, color) = match edge.style {
-            EdgeStyle::Sync => ("", 1.5, palette.muted.as_str()),
-            EdgeStyle::Async => (r#" stroke-dasharray="6 4""#, 1.5, tone(palette, 3)),
-            EdgeStyle::Data => (r#" stroke-dasharray="8 4""#, 2.5, tone(palette, 0)),
-            EdgeStyle::Dependency => (r#" stroke-dasharray="2 4""#, 1.5, palette.muted.as_str()),
+        let (dash, width) = match edge.style {
+            EdgeStyle::Sync => ("", 1.5),
+            EdgeStyle::Async => (r#" stroke-dasharray="6 4""#, 1.5),
+            EdgeStyle::Data => (r#" stroke-dasharray="10 5""#, 2.25),
+            EdgeStyle::Dependency => (r#" stroke-dasharray="2 4""#, 1.5),
         };
+        let color = edge_color(edge, palette);
+        let marker = colors.iter().position(|c| *c == color).unwrap_or(0);
         let _ = writeln!(
             out,
-            r#"<path d="{data}" fill="none" stroke="{color}" stroke-width="{width}"{dash} marker-end="url(#arrow)"/>"#
+            r#"<path d="{data}" fill="none" stroke="{color}" stroke-width="{width}"{dash} marker-end="url(#arrow-{marker})"/>"#
         );
         if let Some(label) = &edge.label {
-            let (x, y) = at(path.label_at());
+            let (x, y) = at(spot.unwrap_or_else(|| path.label_at()));
             let lines = wrap(label, 24, 2);
             let style = (edge.style != EdgeStyle::Sync).then(|| edge.style.name());
             let rows = lines.len() + usize::from(style.is_some());
-            let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f32 * 6. + 8.;
+            let w = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as f32 * 6. + 12.;
             let h = rows as f32 * 13. + 4.;
             let top = y - h / 2.;
-            // A halo in the canvas color keeps the line out of the text.
+            // A pill in the canvas color keeps the line out of the text.
             let _ = write!(
                 out,
-                r#"<rect x="{:.1}" y="{top:.1}" width="{w:.1}" height="{h:.1}" rx="4" fill="{}"/>"#,
+                r#"<rect x="{:.1}" y="{top:.1}" width="{w:.1}" height="{h:.1}" rx="6" fill="{}" stroke="{}"/>"#,
                 x - w / 2.,
-                palette.background
+                palette.background,
+                palette.border,
             );
             for (i, line) in lines.iter().enumerate() {
                 let _ = write!(
                     out,
-                    r#"<text x="{x:.1}" y="{:.1}" font-size="11" text-anchor="middle" fill="{}">{}</text>"#,
+                    r#"<text x="{x:.1}" y="{:.1}" font-size="10.5" text-anchor="middle" fill="{}" fill-opacity="0.82">{}</text>"#,
                     top + 12. + i as f32 * 13.,
-                    palette.muted,
+                    palette.text,
                     xml(line)
                 );
             }
@@ -513,66 +573,61 @@ pub fn diagram_svg(d: &Diagram, palette: &Palette) -> String {
     }
     for (node, r) in d.nodes.iter().zip(&l.nodes) {
         let (x, y) = at(Point { x: r.x, y: r.y });
-        let actor = node.kind == NodeKind::Client;
-        let quiet = matches!(node.kind, NodeKind::External | NodeKind::Note);
+        let note = node.kind == NodeKind::Note;
+        // Notes and external systems sit flat, without the shadow.
+        let flat = note || node.kind == NodeKind::External;
+        let color = tint(palette, node.color.unwrap_or(kind_tint(node.kind)));
         let dash = if node.status == Some(Status::Planned) {
             r#" stroke-dasharray="5 4""#
         } else {
             ""
         };
-        let stroke = if node.status == Some(Status::Risk) {
-            tone(palette, 6)
+        let (stroke, stroke_opacity) = if node.status == Some(Status::Risk) {
+            (tint(palette, Tint::Red), 0.7)
         } else {
-            palette.border.as_str()
+            (color, 0.55)
         };
         let opacity = if node.status == Some(Status::Deprecated) {
             r#" opacity="0.55""#
         } else {
             ""
         };
-        let color = tone(palette, kind_tone(node.kind));
-        let fill = if quiet {
-            palette.background.as_str()
+        let shadow = if flat {
+            ""
         } else {
-            palette.surface.as_str()
+            r#" filter="url(#shadow)""#
         };
+        // An opaque base under the tint, so edges don't show through.
         let _ = write!(
             out,
-            r#"<g{opacity}><rect x="{x:.1}" y="{y:.1}" width="{:.1}" height="{:.1}" rx="10" fill="{fill}" stroke="{stroke}"{dash}/>"#,
-            r.w, r.h,
+            r#"<g{opacity}><rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" rx="{CARD_RADIUS}" fill="{}"{shadow}/><rect x="{x:.1}" y="{y:.1}" width="{w:.1}" height="{h:.1}" rx="{CARD_RADIUS}" fill="{color}" fill-opacity="0.10" stroke="{stroke}" stroke-opacity="{stroke_opacity}"{dash}/>"#,
+            palette.surface,
+            w = r.w,
+            h = r.h,
         );
-        // Text starts after the kind tile; an actor (no tile) is centered.
-        let (tx, anchor) = if actor {
-            (x + r.w / 2., "middle")
-        } else if node.kind == NodeKind::Note {
-            (x + 12., "start")
-        } else {
-            let _ = write!(
-                out,
-                r#"<rect x="{:.1}" y="{:.1}" width="22" height="22" rx="6" fill="{color}" fill-opacity="0.18"/>"#,
-                x + 12.,
-                y + 10.,
-            );
-            (x + 42., "start")
-        };
+        // The badge: a solid square in the tone (the icon stays in the app).
         let _ = write!(
             out,
-            r#"<text x="{tx:.1}" y="{:.1}" font-size="13" font-weight="600" text-anchor="{anchor}" fill="{}">{}</text>"#,
-            y + 26.,
+            r#"<rect x="{:.1}" y="{:.1}" width="{BADGE}" height="{BADGE}" rx="7.8" fill="{color}"/>"#,
+            x + 12.,
+            y + 8.,
+        );
+        let _ = write!(
+            out,
+            r#"<text x="{:.1}" y="{:.1}" font-size="13" font-weight="600" fill="{}">{}</text>"#,
+            x + 12. + BADGE + 8.,
+            y + 8. + BADGE / 2. + 4.5,
             palette.text,
-            xml(&fit(&node.label, 22)),
+            xml(&fit(&node.label, 20)),
         );
-        let (dx, danchor) = if actor {
-            (x + r.w / 2., "middle")
-        } else {
-            (x + 12., "start")
-        };
+        let italic = if note { r#" font-style="italic""# } else { "" };
         let description = node.description.as_deref().unwrap_or_default();
         for (i, line) in wrap(description, 32, 2).iter().enumerate() {
             let _ = write!(
                 out,
-                r#"<text x="{dx:.1}" y="{:.1}" font-size="11" text-anchor="{danchor}" fill="{}">{}</text>"#,
-                y + 48. + i as f32 * 14.,
+                r#"<text x="{:.1}" y="{:.1}" font-size="11"{italic} fill="{}">{}</text>"#,
+                x + 12.,
+                y + 48. + i as f32 * 13.,
                 palette.muted,
                 xml(line),
             );
@@ -583,25 +638,12 @@ pub fn diagram_svg(d: &Diagram, palette: &Palette) -> String {
         };
         let _ = write!(
             out,
-            r#"<text x="{dx:.1}" y="{:.1}" font-size="9.5" font-family="monospace" text-anchor="{danchor}" fill="{}">{}</text>"#,
+            r#"<text x="{:.1}" y="{:.1}" font-size="9.5" font-family="monospace" fill="{}">{}</text>"#,
+            x + 12.,
             y + r.h - 10.,
             palette.muted,
             xml(&fit(&meta, 34)),
         );
-        if actor {
-            // The actor's badge above the card: the client kind's monitor.
-            let (cx, cy) = (x + r.w / 2., y);
-            let _ = write!(
-                out,
-                r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="13" fill="{}" stroke="{}"/><rect x="{:.1}" y="{:.1}" width="12" height="8" rx="1.5" fill="none" stroke="{color}" stroke-width="1.5"/><path d="M{:.1},{:.1} h4" stroke="{color}" stroke-width="1.5"/>"#,
-                palette.surface,
-                palette.border,
-                cx - 6.,
-                cy - 6.,
-                cx - 2.,
-                cy + 5.,
-            );
-        }
         out.push_str("</g>\n");
     }
     out.push_str("</svg>\n");
@@ -1476,8 +1518,15 @@ mod tests {
         assert!(svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
         assert!(svg.trim_end().ends_with("</svg>"));
         assert_eq!(svg.matches("marker-end=").count(), 4);
+        // One open chevron per edge color: muted (sync, dependency), the
+        // data edge's blue and the async edge's yellow.
+        assert_eq!(svg.matches("<marker id=").count(), 3);
         assert!(svg.contains(">Orders DB</text>"));
-        assert!(svg.contains("Back &quot;end&quot;"));
+        // A database card wears green: tinted fill and its badge.
+        assert!(svg.contains(r##"fill="#16a34a" fill-opacity="0.10""##));
+        assert!(svg.contains(r##"rx="7.8" fill="#16a34a""##));
+        // The group's tag is in caps.
+        assert!(svg.contains("BACK &quot;END&quot;"));
         assert!(svg.contains("HTTPS | json"));
         assert!(svg.contains(">SERVICE · Rust</text>"));
     }

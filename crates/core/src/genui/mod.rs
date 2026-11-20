@@ -20,6 +20,7 @@ pub mod refs;
 pub mod review;
 pub mod sequence;
 pub mod states;
+pub mod style;
 pub mod table;
 pub mod template;
 pub mod timeline;

@@ -730,6 +730,7 @@ mod tests {
             to: "cache".into(),
             label: Some("hot reads".into()),
             style: EdgeStyle::Data,
+            color: None,
         });
         let changes = assert_round_trip(&old, &grown);
         assert_eq!(
@@ -790,6 +791,7 @@ mod tests {
                     to: "ghost".into(),
                     label: None,
                     style: EdgeStyle::Sync,
+                    color: None,
                 },
             },
             Change::AddEdge {
@@ -866,6 +868,7 @@ mod tests {
             to: "worker".into(),
             label: Some("spawns".into()),
             style: EdgeStyle::Sync,
+            color: None,
         });
         let (changes, sentences) = summarize(&old, &new);
         assert_eq!(changes.len(), sentences.len());
@@ -916,6 +919,7 @@ mod tests {
             id: "data".into(),
             label: "Data".into(),
             description: Some("stores".into()),
+            color: None,
         });
         new.nodes[0].group = None;
         new.nodes[1].group = Some("data".into());

@@ -3,6 +3,8 @@
 //! cardinality, laid out with the diagram's layered layout. The user moves
 //! and renames tables, adds and edits columns and relates columns.
 
+use std::collections::HashMap;
+
 use serde_json::{Map, Value, json};
 
 use super::diagram::{
@@ -12,6 +14,7 @@ use super::diagram::{
 use super::edits::{Editable, fresh_id, plural};
 use super::layout::{self, Cubic, EdgePath, Point, Rect};
 use super::refs::CodeRef;
+use super::style::{self, Tint};
 
 pub const MAX_TABLES: usize = 60;
 pub const MAX_COLUMNS: usize = 80;
@@ -85,6 +88,9 @@ pub struct Table {
     pub code_ref: Option<CodeRef>,
     pub x: Option<f32>,
     pub y: Option<f32>,
+    /// Overrides the table's color and icon (`color`, `icon`).
+    pub color: Option<Tint>,
+    pub icon: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +156,8 @@ impl Table {
             code_ref: None,
             x: None,
             y: None,
+            color: None,
+            icon: None,
         }
     }
 
@@ -188,6 +196,12 @@ impl Table {
         if let (Some(x), Some(y)) = (self.x, self.y) {
             map.insert("x".into(), json!(x.round() as i64));
             map.insert("y".into(), json!(y.round() as i64));
+        }
+        if let Some(color) = self.color {
+            map.insert("color".into(), json!(color.name()));
+        }
+        if let Some(icon) = self.icon {
+            map.insert("icon".into(), json!(icon));
         }
         Value::Object(map)
     }
@@ -291,6 +305,8 @@ impl Erd {
                 table.x = Some(x);
                 table.y = Some(y);
             }
+            table.color = Tint::field(raw);
+            table.icon = style::icon_field(raw);
             erd.tables.push(table);
         }
 
@@ -1287,6 +1303,7 @@ pub fn layout(erd: &Erd) -> ErdLayout {
                     to: to.clone(),
                     label: None,
                     style: EdgeStyle::Sync,
+                    color: None,
                 }
             })
             .collect(),
@@ -1325,11 +1342,7 @@ pub fn layout(erd: &Erd) -> ErdLayout {
             rect.y = y;
         }
     }
-    let relations: Vec<RelationGeom> = erd
-        .relations
-        .iter()
-        .map(|r| route(erd, &tables, r))
-        .collect();
+    let relations = routes(erd, &tables);
     let bounds = tables
         .iter()
         .copied()
@@ -1343,9 +1356,96 @@ pub fn layout(erd: &Erd) -> ErdLayout {
     }
 }
 
-/// From the side of one column's row to the side of the other's, leaving
-/// and arriving square to the tables.
-fn route(erd: &Erd, tables: &[Rect], r: &Relation) -> RelationGeom {
+/// How far a relation runs straight out of a table before turning: room
+/// for the crow's-foot marker and a corner.
+const MARKER_REACH: f32 = 40.;
+
+/// Square out of one column's row side and into the other's: across facing
+/// sides, a horizontal run, a vertical one in a channel of the gap next to
+/// the target (every relation turning in a gap gets its own) and a
+/// horizontal one in; when the tables overlap across, a bracket out of the
+/// same side of both.
+fn routes(erd: &Erd, tables: &[Rect]) -> Vec<RelationGeom> {
+    let ends: Vec<Option<(Point, Point, f32, f32)>> = erd
+        .relations
+        .iter()
+        .map(|r| relation_ends(erd, tables, r))
+        .collect();
+    // Facing relations that turn, by the gap they turn in (bounds rounded to
+    // half units so the same gap computed two ways matches), as jogs from
+    // left to right.
+    type Gap = (f32, f32, Vec<(usize, f32, f32)>);
+    let mut gaps: HashMap<(i32, i32), Gap> = HashMap::new();
+    for (i, end) in ends.iter().enumerate() {
+        let Some((from, to, da, db)) = *end else {
+            continue;
+        };
+        if da == db || (from.y - to.y).abs() < layout::ALIGNED {
+            continue;
+        }
+        let (lo, hi, enter, leave) = if da > 0. {
+            ((to.x - RANK_GAP).max(from.x), to.x, from.y, to.y)
+        } else {
+            (to.x, (to.x + RANK_GAP).min(from.x), to.y, from.y)
+        };
+        let key = ((lo * 2.).round() as i32, (hi * 2.).round() as i32);
+        gaps.entry(key)
+            .or_insert_with(|| (lo, hi, Vec::new()))
+            .2
+            .push((i, enter, leave));
+    }
+    let mut channel = vec![0.; ends.len()];
+    for (lo, hi, jogs) in gaps.into_values() {
+        // Pinned tables too close for both markers share the middle.
+        let inset = MARKER_REACH.min((hi - lo) / 2.);
+        for (i, x) in layout::channels(jogs, lo + inset, hi - inset) {
+            channel[i] = x;
+        }
+    }
+    ends.iter()
+        .zip(channel)
+        .map(|(end, x)| {
+            let Some((from, to, da, db)) = *end else {
+                let p = Point::default();
+                return RelationGeom {
+                    path: EdgePath {
+                        segments: vec![Cubic {
+                            from: p,
+                            c1: p,
+                            c2: p,
+                            to: p,
+                        }],
+                    },
+                    from_dir: Point { x: 1., y: 0. },
+                    to_dir: Point { x: -1., y: 0. },
+                };
+            };
+            let x = if da == db {
+                if da > 0. {
+                    from.x.max(to.x) + MARKER_REACH
+                } else {
+                    from.x.min(to.x) - MARKER_REACH
+                }
+            } else {
+                x
+            };
+            let path = if da != db && (from.y - to.y).abs() < layout::ALIGNED {
+                layout::orthogonal(&[from, to])
+            } else {
+                layout::orthogonal(&[from, Point { x, y: from.y }, Point { x, y: to.y }, to])
+            };
+            RelationGeom {
+                path,
+                from_dir: Point { x: da, y: 0. },
+                to_dir: Point { x: db, y: 0. },
+            }
+        })
+        .collect()
+}
+
+/// Where a relation leaves and enters (its columns' row middles, on the
+/// sides it uses) and which way each side faces; None when a column is gone.
+fn relation_ends(erd: &Erd, tables: &[Rect], r: &Relation) -> Option<(Point, Point, f32, f32)> {
     let place = |end: &End| -> Option<(Rect, f32)> {
         let t = erd.table_index(&end.table)?;
         let c = erd.tables[t]
@@ -1354,21 +1454,8 @@ fn route(erd: &Erd, tables: &[Rect], r: &Relation) -> RelationGeom {
             .position(|c| c.name == end.column)?;
         Some((tables[t], column_y(&tables[t], c)))
     };
-    let (Some((a, ya)), Some((b, yb))) = (place(&r.from), place(&r.to)) else {
-        let p = Point::default();
-        return RelationGeom {
-            path: EdgePath {
-                segments: vec![Cubic {
-                    from: p,
-                    c1: p,
-                    c2: p,
-                    to: p,
-                }],
-            },
-            from_dir: Point { x: 1., y: 0. },
-            to_dir: Point { x: -1., y: 0. },
-        };
-    };
+    let (a, ya) = place(&r.from)?;
+    let (b, yb) = place(&r.to)?;
     let (da, db) = if r.from.table == r.to.table {
         (1., 1.)
     } else if b.x > a.right() + 24. {
@@ -1379,37 +1466,18 @@ fn route(erd: &Erd, tables: &[Rect], r: &Relation) -> RelationGeom {
         (1., 1.)
     };
     let side = |rect: &Rect, d: f32| if d > 0. { rect.right() } else { rect.x };
-    let from = Point {
-        x: side(&a, da),
-        y: ya,
-    };
-    let to = Point {
-        x: side(&b, db),
-        y: yb,
-    };
-    let reach = if da == db {
-        48. + (from.x - to.x).abs() / 2.
-    } else {
-        ((to.x - from.x).abs() / 2.).max(40.)
-    };
-    RelationGeom {
-        path: EdgePath {
-            segments: vec![Cubic {
-                from,
-                c1: Point {
-                    x: from.x + da * reach,
-                    y: from.y,
-                },
-                c2: Point {
-                    x: to.x + db * reach,
-                    y: to.y,
-                },
-                to,
-            }],
+    Some((
+        Point {
+            x: side(&a, da),
+            y: ya,
         },
-        from_dir: Point { x: da, y: 0. },
-        to_dir: Point { x: db, y: 0. },
-    }
+        Point {
+            x: side(&b, db),
+            y: yb,
+        },
+        da,
+        db,
+    ))
 }
 
 /// The header's counts.

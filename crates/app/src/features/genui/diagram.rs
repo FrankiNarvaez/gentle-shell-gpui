@@ -545,6 +545,7 @@ impl DiagramView {
                 id: id.clone(),
                 label: "New group".into(),
                 description: None,
+                color: None,
             },
         }];
         edits.extend(nodes.into_iter().map(|node| Change::UpdateNode {
@@ -639,6 +640,7 @@ impl DiagramView {
             to: to.to_string(),
             label: None,
             style: EdgeStyle::default(),
+            color: None,
         };
         if self.edit(Change::AddEdge { edge }, cx) {
             self.selection = Some(Selection::Edge(id));
