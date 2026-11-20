@@ -7,6 +7,7 @@
 //! lays out the graph's lanes; `graph` paints them; `view` renders the pane;
 //! `ops` runs the actions and the prompts and confirmations they need.
 
+mod avatars;
 mod graph;
 mod ops;
 mod view;
@@ -95,13 +96,17 @@ impl HistoryView {
     /// `cwd` is any folder inside the repository.
     pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let filter = cx.new(|cx| InputState::new(window, cx).placeholder("Filter commits"));
-        let subscriptions = vec![cx.subscribe(&filter, |this, input, event, cx| {
-            if let InputEvent::Change = event {
-                this.query = input.read(cx).value().trim().to_lowercase();
-                this.relayout();
-                cx.notify();
-            }
-        })];
+        let subscriptions = vec![
+            cx.subscribe(&filter, |this, input, event, cx| {
+                if let InputEvent::Change = event {
+                    this.query = input.read(cx).value().trim().to_lowercase();
+                    this.relayout();
+                    cx.notify();
+                }
+            }),
+            // A picture arrived: the rows showing its author redraw.
+            cx.observe_global::<avatars::Avatars>(|_, cx| cx.notify()),
+        ];
         let mut this = Self {
             toplevel: cwd.clone(),
             scope: Scope::Head,
@@ -202,8 +207,13 @@ impl HistoryView {
         let commits = std::mem::take(&mut history.commits);
         self.commits = Rc::new(commits);
         self.graph = Rc::new(graph);
+        let github = history.github.clone();
         self.history = Some(Some(history));
         self.relayout();
+        let mut emails: Vec<&str> = self.commits.iter().map(|c| c.email.as_str()).collect();
+        emails.sort_unstable();
+        emails.dedup();
+        avatars::request(emails, github, cx);
         match &self.selected {
             Some(hash) if self.commits.iter().any(|c| &c.hash == hash) => {
                 // The same commit, re-read: an action may have changed it.

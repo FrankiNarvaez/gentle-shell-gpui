@@ -3,8 +3,10 @@
 //! pane. The app runs `git`; this module only reads its output. `status`
 //! covers porcelain v1/v2 and numstat, `refs` branches, remotes, tags,
 //! stashes, worktrees and submodules, `log` commits and their graph's lanes,
-//! `ops` the Git pane's operations and a commit's changed files.
+//! `ops` the Git pane's operations and a commit's changed files, `avatar`
+//! where an author's picture comes from.
 
+pub mod avatar;
 pub mod log;
 pub mod ops;
 pub mod refs;

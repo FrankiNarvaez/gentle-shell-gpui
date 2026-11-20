@@ -11,7 +11,7 @@ pub const LOG_ARGS: &[&str] = &[
     "--decorate=full",
     "--shortstat",
     "--no-color",
-    "--format=%x1e%H%x00%P%x00%an%x00%ct%x00%D%x00%s%x00%(trailers:key=Co-authored-by,valueonly,separator=%x1f)",
+    "--format=%x1e%H%x00%P%x00%an%x00%ae%x00%ct%x00%D%x00%s%x00%(trailers:key=Co-authored-by,valueonly,separator=%x1f)",
 ];
 
 /// A ref pointing at a commit.
@@ -35,6 +35,8 @@ pub struct Commit {
     pub hash: String,
     pub parents: Vec<String>,
     pub author: String,
+    /// The author's email address; its picture is looked up by it.
+    pub email: String,
     /// Committer time, Unix seconds.
     pub time: i64,
     /// HEAD points at it.
@@ -73,13 +75,14 @@ impl Commit {
 pub fn parse_log(raw: &str) -> Vec<Commit> {
     raw.split('\x1e')
         .filter_map(|record| {
-            let mut f = record.splitn(7, '\0');
+            let mut f = record.splitn(8, '\0');
             let hash = f.next()?.trim();
             if hash.is_empty() {
                 return None;
             }
             let parents = f.next()?.split_whitespace().map(str::to_string).collect();
             let author = f.next()?.to_string();
+            let email = f.next()?.trim().to_string();
             let time = f.next()?.trim().parse().unwrap_or(0);
             let (head, refs) = parse_decorations(f.next()?);
             let subject = f.next()?.to_string();
@@ -90,6 +93,7 @@ pub fn parse_log(raw: &str) -> Vec<Commit> {
                 hash: hash.to_string(),
                 parents,
                 author,
+                email,
                 time,
                 head,
                 refs,
@@ -405,6 +409,7 @@ mod tests {
             hash: hash.into(),
             parents: parents.iter().map(|p| p.to_string()).collect(),
             author: "A".into(),
+            email: "a@example.com".into(),
             time: 0,
             head: false,
             refs: Vec::new(),
@@ -420,9 +425,9 @@ mod tests {
 
     #[test]
     fn parses_records_with_refs_trailers_and_stats() {
-        let raw = "\x1eaaaaaaa1\0bbbbbbb2\0Maya Chen\x001700000000\0HEAD -> refs/heads/main, refs/remotes/origin/main, refs/remotes/origin/HEAD, tag: refs/tags/v2.4, refs/stash\0Released v2.4\0Claude <noreply@anthropic.com>\x1fLeo Martins <leo@x.dev>\n\n 6 files changed, 214 insertions(+), 38 deletions(-)\n\
-                   \x1ebbbbbbb2\0ccccccc3 ddddddd4\0Jonas Weber\x001699990000\0\0Merge branch 'feat'\0\n\
-                   \x1eccccccc3\0\0Sofia\x001699980000\0HEAD\0Initial\0\n\n 1 file changed, 3 deletions(-)\n";
+        let raw = "\x1eaaaaaaa1\0bbbbbbb2\0Maya Chen\0maya@example.com\x001700000000\0HEAD -> refs/heads/main, refs/remotes/origin/main, refs/remotes/origin/HEAD, tag: refs/tags/v2.4, refs/stash\0Released v2.4\0Claude <noreply@anthropic.com>\x1fLeo Martins <leo@x.dev>\n\n 6 files changed, 214 insertions(+), 38 deletions(-)\n\
+                   \x1ebbbbbbb2\0ccccccc3 ddddddd4\0Jonas Weber\0jonas@example.com\x001699990000\0\0Merge branch 'feat'\0\n\
+                   \x1eccccccc3\0\0Sofia\0sofia@example.com\x001699980000\0HEAD\0Initial\0\n\n 1 file changed, 3 deletions(-)\n";
         let commits = parse_log(raw);
         assert_eq!(commits.len(), 3);
 
@@ -430,6 +435,7 @@ mod tests {
         assert_eq!(first.short(), "aaaaaaa");
         assert_eq!(first.parents, vec!["bbbbbbb2"]);
         assert_eq!(first.author, "Maya Chen");
+        assert_eq!(first.email, "maya@example.com");
         assert_eq!(first.time, 1_700_000_000);
         assert!(first.head);
         assert_eq!(

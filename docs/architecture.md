@@ -225,7 +225,7 @@ git/
 ├── log.rs          # Git pane: the commits of HEAD, a branch or every ref, total, branches, dirty work tree, upstream, remotes, a command stopped midway
 └── ops.rs          # Git pane: fetch, pull, branch, tag, switch, checkout, cherry-pick, revert, reset, reword, remotes, LFS, continue or abort
 
-history/            # mod.rs: HistoryView (a `PaneKind::History` pane, the Git pane), scope, paging, filter, selection and its details; ops.rs (actions off the UI thread, the inline prompt, confirmations); graph.rs (paints a row's lanes), view.rs (header, toolbar, rows and their menus, details, hover card, footer)
+history/            # mod.rs: HistoryView (a `PaneKind::History` pane, the Git pane), scope, paging, filter, selection and its details; ops.rs (actions off the UI thread, the inline prompt, confirmations); avatars.rs (authors' pictures: lookup, disk cache); graph.rs (paints a row's lanes), view.rs (header, toolbar, rows and their menus, details, hover card, footer)
 
 genui/              # mod.rs: GenUi (surfaces rebuilt from the transcript, live card vs superseded rows, expanded); extension.rs + gentle-ui.ts (the Pi extension);
                     # diagram.rs: DiagramView (versions, local edits, undo, viewport, pointer and keys, send); view.rs (card, nodes, details, footer, conversation rows); paint.rs (groups, edges, arrowheads)

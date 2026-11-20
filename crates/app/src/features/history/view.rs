@@ -3,6 +3,7 @@
 //! in, the graph list with its context menus, the selected commit's details,
 //! the hover card of a commit, and the footer.
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gentle_core::git::log::{Commit, RefLabel, initials};
@@ -72,12 +73,14 @@ fn short_time(now_ms: i64, secs: i64) -> String {
         })
 }
 
-/// Initials in a circle; a petal dot marks a commit written with a co-author.
-fn avatar(name: &str, coauthored: bool, size: f32) -> Div {
+/// The author's picture in a circle, else their initials; a petal dot marks
+/// a commit written with a co-author.
+fn avatar(name: &str, picture: Option<PathBuf>, coauthored: bool, size: f32) -> Div {
     let circle = div()
         .size(rems(size / 16.))
         .flex_none()
         .rounded_full()
+        .overflow_hidden()
         .flex()
         .items_center()
         .justify_center()
@@ -87,7 +90,10 @@ fn avatar(name: &str, coauthored: bool, size: f32) -> Div {
         .text_size(rems(size * 0.4 / 16.))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(ui::muted())
-        .child(initials(name));
+        .map(|d| match picture {
+            Some(path) => d.child(img(path).size_full().rounded_full()),
+            None => d.child(initials(name)),
+        });
     div()
         .relative()
         .flex_none()
@@ -898,7 +904,12 @@ impl HistoryView {
                         .flex_none()
                         .when(fit == Fit::Wide, |d| d.w(rems(AUTHOR_WIDTH / 16.)))
                         .gap_2()
-                        .child(avatar(&commit.author, !commit.coauthors.is_empty(), 18.))
+                        .child(avatar(
+                            &commit.author,
+                            super::avatars::picture(&commit.email, cx),
+                            !commit.coauthors.is_empty(),
+                            18.,
+                        ))
                         .when(fit == Fit::Wide, |d| {
                             d.child(
                                 div()
@@ -1204,7 +1215,12 @@ impl HistoryView {
         let hash = commit.hash.clone();
         let header = h_flex()
             .gap_2()
-            .child(avatar(&commit.author, !commit.coauthors.is_empty(), 18.))
+            .child(avatar(
+                &commit.author,
+                super::avatars::picture(&commit.email, cx),
+                !commit.coauthors.is_empty(),
+                18.,
+            ))
             .child(
                 div()
                     .min_w_0()
@@ -1561,7 +1577,12 @@ impl Render for CommitCard {
                 .child(
                     h_flex()
                         .gap_3()
-                        .child(avatar(&commit.author, coauthors.is_some(), 30.))
+                        .child(avatar(
+                            &commit.author,
+                            super::avatars::picture(&commit.email, cx),
+                            coauthors.is_some(),
+                            30.,
+                        ))
                         .child(
                             v_flex()
                                 .min_w_0()

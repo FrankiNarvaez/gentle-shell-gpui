@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use gentle_core::git::avatar::github_repo;
 use gentle_core::git::log::{Commit, LOG_ARGS, parse_log};
 use gentle_core::git::ops::InProgress;
 use gentle_core::git::refs::parse_left_right;
@@ -44,6 +45,9 @@ pub struct History {
     pub remotes: Vec<String>,
     /// A merge, rebase, cherry-pick or revert waiting on the user.
     pub in_progress: Option<InProgress>,
+    /// `(owner, repository)` when the main remote is on GitHub: its API
+    /// names the accounts behind commit authors.
+    pub github: Option<(String, String)>,
 }
 
 impl History {
@@ -127,9 +131,15 @@ pub fn history(toplevel: &Path, scope: &Scope, limit: usize) -> Option<History> 
         .unwrap_or((0, 0));
         (name, ahead, behind)
     });
-    let remotes = git(toplevel, &["remote"])
+    let remotes: Vec<String> = git(toplevel, &["remote"])
         .map(|raw| raw.lines().map(str::to_string).collect())
         .unwrap_or_default();
+    let github = remotes
+        .iter()
+        .find(|r| *r == "origin")
+        .or(remotes.first())
+        .and_then(|remote| git(toplevel, &["remote", "get-url", remote]))
+        .and_then(|url| github_repo(&url));
     Some(History {
         commits,
         total,
@@ -139,6 +149,7 @@ pub fn history(toplevel: &Path, scope: &Scope, limit: usize) -> Option<History> 
         dirty,
         upstream,
         remotes,
+        github,
         in_progress: in_progress(toplevel),
     })
 }
