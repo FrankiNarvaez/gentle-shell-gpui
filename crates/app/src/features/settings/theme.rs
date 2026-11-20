@@ -293,6 +293,39 @@ impl SettingsView {
                         ),
                 )
             })
+            .child({
+                use gentle_core::typing_kisses::TypingKisses;
+                let choice = crate::shared::kisses::typing(cx);
+                let labels = TypingKisses::ALL.map(TypingKisses::label);
+                h_flex()
+                    .pb_2()
+                    .gap_3()
+                    .child(
+                        div()
+                            .w(rems(120. / 16.))
+                            .text_sm()
+                            .text_color(ui::muted())
+                            .child("Typing kisses"),
+                    )
+                    .child(ui::segmented(
+                        "typing-kisses",
+                        &labels,
+                        TypingKisses::ALL.iter().position(|c| *c == choice),
+                        cx.listener(|_, index: &usize, _, cx| {
+                            crate::shared::kisses::set_typing(TypingKisses::ALL[*index], cx);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(ui::faint())
+                            .child(choice.summary()),
+                    )
+            })
             .when(active.oled, |d| {
                 d.child(
                     div()

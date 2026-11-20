@@ -39,6 +39,7 @@ pub fn run(
             crate::platform::icons::set_dock_icon();
             app_update::init(cx);
             crate::features::hydration::init(cx);
+            crate::shared::kisses::init(cx);
             crate::features::genui::mode::init(cx);
             crate::features::backend::init(cx);
             crate::features::diagnostics::start(cx);

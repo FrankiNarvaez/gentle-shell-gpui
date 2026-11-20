@@ -567,7 +567,7 @@ App paths: `dirs::data_dir()/gentle-shell-gpui/` (on macOS, `~/Library/Applicati
 
 | File | Owner | Read / write | Module |
 | --- | --- | --- | --- |
-| `<data>/gentle-shell-gpui/settings.json` (`theme`, `transparency`, `interfaceScale`, `interfaceFont`, `codeFont`, `terminalFont`, `codeFontSize`, `terminalFontSize`, `onboarding`) | App | R/W | `shared/themes.rs` (`store_path`, `write_key`, `write_fonts` through `apply_fonts`), `features/setup/mod.rs` (`first_run`, `mark_done`) |
+| `<data>/gentle-shell-gpui/settings.json` (`theme`, `transparency`, `interfaceScale`, `interfaceFont`, `codeFont`, `terminalFont`, `codeFontSize`, `terminalFontSize`, `composerParticles`, `onboarding`) | App | R/W | `shared/themes.rs` (`store_path`, `write_key`, `write_fonts` through `apply_fonts`), `shared/kisses.rs` (`set_typing`), `features/setup/mod.rs` (`first_run`, `mark_done`) |
 | `<data>/gentle-shell-gpui/workspaces.json` | App | R/W | `features/workspaces/store.rs` |
 | `<data>/gentle-shell-gpui/app-update.json` | App | R/W | `features/app_update/cache.rs` |
 | `<data>/gentle-shell-gpui/engram-update.json` (`checkedAt`, `latest`, `skipped`) | App | R/W | `features/updates/engram.rs` |
