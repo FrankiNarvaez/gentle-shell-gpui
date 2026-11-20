@@ -589,7 +589,7 @@ impl SessionView {
             .child(
                 div()
                     .font_family(ui::mono())
-                    .text_xs()
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::faint())
                     .child(if version.is_empty() { String::new() } else { format!("v{version}") }),
             )
@@ -1535,7 +1535,7 @@ impl SessionView {
                     .py_1()
                     .overflow_hidden()
                     .font_family(ui::mono())
-                    .text_xs()
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::muted())
                     .when(open && hidden > 0, |this| {
                         this.child(

@@ -1169,7 +1169,7 @@ impl FileTreeView {
                 d.child(
                     div()
                         .font_family(ui::mono())
-                        .text_size(rems(10.5 / 16.))
+                        .text_size(ui::code_rems(10.5))
                         .text_color(status_color(s))
                         .child(status_letter(s).to_string()),
                 )
@@ -1462,7 +1462,7 @@ impl FileTreeView {
                 d.child(
                     div()
                         .font_family(ui::mono())
-                        .text_size(rems(10.5 / 16.))
+                        .text_size(ui::code_rems(10.5))
                         .text_color(ui::warning())
                         .child(count.to_string()),
                 )

@@ -220,7 +220,7 @@ impl SettingsView {
                         div()
                             .w(rems(44. / 16.))
                             .text_right()
-                            .text_sm()
+                            .text_size(ui::code_rems(14.))
                             .font_family(ui::mono())
                             .text_color(ui::fg())
                             .child(format!("{percent:.0}%")),
@@ -483,7 +483,7 @@ fn interface_size_row(size: u16) -> Div {
             div()
                 .w(rems(44. / 16.))
                 .text_right()
-                .text_sm()
+                .text_size(ui::code_rems(14.))
                 .font_family(ui::mono())
                 .text_color(ui::fg())
                 .child(format!("{size}%")),
@@ -539,7 +539,7 @@ fn theme_card(
                 .border_1()
                 .border_color(solid(theme.border).opacity(0.7))
                 .font_family(ui::mono())
-                .text_xs()
+                .text_size(ui::code_rems(12.))
                 .child(
                     h_flex()
                         .gap_1()

@@ -251,7 +251,7 @@ impl DiagramView {
                     .min_w_0()
                     .truncate()
                     .font_family(ui::mono())
-                    .text_size(rems(12. / 16.))
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::muted())
                     .child(format!(
                         "{nodes} node{} · {edges} edge{}",
@@ -567,8 +567,8 @@ impl DiagramView {
                                     d.child(
                                         div()
                                             .font_family(ui::mono())
-                                            .text_size(px(9. * s))
-                                            .line_height(px(12. * s))
+                                            .text_size(px(9. * s * ui::code_scale()))
+                                            .line_height(px(12. * s * ui::code_scale()))
                                             .text_color(ui::faint())
                                             .child(style),
                                     )
@@ -695,7 +695,7 @@ impl DiagramView {
                         .child(
                             div()
                                 .font_family(ui::mono())
-                                .text_size(rems(11. / 16.))
+                                .text_size(ui::code_rems(11.))
                                 .text_color(ui::muted())
                                 .whitespace_normal()
                                 .child(error.clone()),
@@ -1162,8 +1162,8 @@ fn node_card(node: &Node, rect: Rect, s: f32, alpha: f32) -> Div {
                     .w_full()
                     .truncate()
                     .font_family(ui::mono())
-                    .text_size(px(9.5 * s))
-                    .line_height(px(12. * s))
+                    .text_size(px(9.5 * s * ui::code_scale()))
+                    .line_height(px(12. * s * ui::code_scale()))
                     .text_color(ui::faint())
                     .child(meta),
             )
@@ -1229,7 +1229,7 @@ pub(super) fn failed_card(title: &str, error: &str) -> AnyElement {
                 .px_3()
                 .pb_2()
                 .font_family(ui::mono())
-                .text_size(rems(12. / 16.))
+                .text_size(ui::code_rems(12.))
                 .text_color(ui::muted())
                 .whitespace_normal()
                 .child(error.to_string()),

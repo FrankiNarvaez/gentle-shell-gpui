@@ -930,7 +930,7 @@ impl HtmlView {
                 div()
                     .p_3()
                     .font_family(ui::mono())
-                    .text_size(rems(12. / 16.))
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::danger())
                     .whitespace_normal()
                     .child(error.clone()),
@@ -983,7 +983,7 @@ impl HtmlView {
                     .rounded_md()
                     .bg(ui::raised())
                     .font_family(ui::mono())
-                    .text_size(rems(12. / 16.))
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::muted())
                     .truncate()
                     .child(url.to_string()),

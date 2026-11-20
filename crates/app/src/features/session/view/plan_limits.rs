@@ -211,7 +211,7 @@ impl SessionView {
                                 .child(
                                     div()
                                         .flex_shrink_0()
-                                        .text_xs()
+                                        .text_size(ui::code_rems(12.))
                                         .font_family(ui::mono())
                                         .text_color(color)
                                         .child(format!("{}%", row.percent)),

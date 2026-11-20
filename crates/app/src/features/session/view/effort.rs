@@ -65,7 +65,7 @@ impl SessionView {
                             .child(
                                 div()
                                     .font_family(ui::mono())
-                                    .text_size(rems(11. / 16.))
+                                    .text_size(ui::code_rems(11.))
                                     .text_color(ui::muted())
                                     .child(current.clone()),
                             ),
@@ -409,7 +409,7 @@ fn effort_labels(levels: &[String], index: usize, weak: &WeakEntity<SessionView>
                 .flex()
                 .justify_center()
                 .font_family(ui::mono())
-                .text_size(rems(10.5 / 16.))
+                .text_size(ui::code_rems(10.5))
                 .cursor_pointer()
                 .text_color(if i == index { ui::petal() } else { ui::faint() })
                 .hover(|s| s.text_color(ui::fg()))

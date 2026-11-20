@@ -764,7 +764,7 @@ impl PanelView {
                     .min_w_0()
                     .truncate()
                     .font_family(ui::mono())
-                    .text_size(rems(12. / 16.))
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::muted())
                     .children(self.body.as_ref().map(Body::stats)),
             )
@@ -926,7 +926,7 @@ impl PanelView {
                         .child(
                             div()
                                 .font_family(ui::mono())
-                                .text_size(rems(11. / 16.))
+                                .text_size(ui::code_rems(11.))
                                 .text_color(ui::muted())
                                 .whitespace_normal()
                                 .child(error.clone()),

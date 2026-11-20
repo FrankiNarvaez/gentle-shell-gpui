@@ -279,7 +279,7 @@ impl Render for TowerView {
                 )
                 .child(
                     div()
-                        .text_xs()
+                        .text_size(ui::code_rems(12.))
                         .font_family(ui::mono())
                         .text_color(ui::muted())
                         .child(line.clone()),
@@ -307,7 +307,9 @@ impl Render for TowerView {
                                 )
                             })
                             .when(!missing_web, |d| {
-                                d.font_family(ui::mono()).child(why.clone())
+                                d.font_family(ui::mono())
+                                    .text_size(ui::code_rems(12.))
+                                    .child(why.clone())
                             }),
                     )
                     .child(

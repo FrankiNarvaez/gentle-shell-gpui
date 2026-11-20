@@ -112,6 +112,7 @@ impl SessionView {
                     this.child(
                         div()
                             .font_family(ui::mono())
+                            .text_size(ui::code_rems(16.))
                             .text_color(ui::muted())
                             .child(clock(since.elapsed())),
                     )
@@ -250,7 +251,7 @@ impl SessionView {
                     div()
                         .flex_shrink_0()
                         .font_family(ui::mono())
-                        .text_size(rems(10. / 16.))
+                        .text_size(ui::code_rems(10.))
                         .text_color(ui::faint())
                         .child(format_tokens(window_tokens)),
                 )
@@ -369,7 +370,7 @@ impl SessionView {
                             .map(|line| {
                                 div()
                                     .min_w_0()
-                                    .text_size(rems(12. / 16.))
+                                    .text_size(ui::code_rems(12.))
                                     .font_family(ui::mono())
                                     .text_color(ui::muted())
                                     .child(line.clone())
@@ -500,7 +501,7 @@ impl SessionView {
                                         .pl_4()
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(rems(11. / 16.))
+                                        .text_size(ui::code_rems(11.))
                                         .font_family(ui::mono())
                                         .text_color(ui::faint())
                                         .child(step),
@@ -555,6 +556,7 @@ impl SessionView {
                             .child(
                                 div()
                                     .font_family(ui::mono())
+                                    .text_size(ui::code_rems(12.))
                                     .text_color(ui::fg())
                                     .child(value.clone()),
                             )
@@ -673,7 +675,7 @@ pub(super) fn chip_popover(
                                 .when(!count.is_empty(), |d| {
                                     d.child(
                                         div()
-                                            .text_xs()
+                                            .text_size(ui::code_rems(12.))
                                             .font_family(ui::mono())
                                             .text_color(ui::muted())
                                             .child(count.clone()),

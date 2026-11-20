@@ -162,7 +162,7 @@ impl OnboardingView {
                             .child(div().text_xs().text_color(ui::muted()).child(check.summary))
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_size(ui::code_rems(12.))
                                     .font_family(ui::mono())
                                     .text_color(ui::faint())
                                     .truncate()
@@ -199,7 +199,7 @@ impl OnboardingView {
                 .rounded_lg()
                 .bg(ui::well())
                 .font_family(ui::mono())
-                .text_xs()
+                .text_size(ui::code_rems(12.))
                 .when(self.log.is_empty() && mine, |d| {
                     d.child(div().text_color(ui::faint()).child("Starting…"))
                 })

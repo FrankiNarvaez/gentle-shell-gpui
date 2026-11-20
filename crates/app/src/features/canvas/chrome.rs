@@ -798,7 +798,10 @@ impl CanvasView {
             option(
                 ("canvas-opacity", i),
                 style.opacity == o,
-                div().text_xs().font_family(ui::mono()).child(o.to_string()),
+                div()
+                    .text_size(ui::code_rems(12.))
+                    .font_family(ui::mono())
+                    .child(o.to_string()),
             )
             .on_click(cx.listener(move |this, _, _, cx| this.restyle(move |s| s.opacity = o, cx)))
         });

@@ -308,6 +308,13 @@ pub fn code_rems(px_at_100: f32) -> Rems {
     rems(px_at_100 * (code / gentle_core::fonts::DEFAULT_CODE_SIZE) / REM_AT_100)
 }
 
+/// Linear scale factor from the chosen code size to the default. Canvas/diagram
+/// mono text sized directly in px uses this so it follows the code size while
+/// keeping its own zoom factor; at the default code size it is exactly `1.0`.
+pub fn code_scale() -> f32 {
+    f32::from_bits(CODE_SIZE.load(Ordering::Relaxed)) / gentle_core::fonts::DEFAULT_CODE_SIZE
+}
+
 /// The rem at 100 % zoom: the interface text size, which only Interface size
 /// (the zoom) changes.
 const REM_AT_100: f32 = gentle_core::fonts::DEFAULT_INTERFACE_SIZE;
@@ -493,7 +500,7 @@ pub fn well_box() -> Div {
         .border_1()
         .border_color(border())
         .font_family(mono())
-        .text_xs()
+        .text_size(code_rems(12.))
 }
 
 /// Small pill: language, model, status.
@@ -573,7 +580,7 @@ pub fn kbd(text: impl Into<SharedString>) -> Div {
         .border_color(border_strong())
         .bg(surface())
         .font_family(mono())
-        .text_size(rems(10.5 / 16.))
+        .text_size(code_rems(10.5))
         .text_color(muted())
         .child(text.into())
 }
@@ -1179,5 +1186,37 @@ mod tests {
             // Layers above black stay opaque too, so nothing behind them glows.
             assert_eq!((p.surface.a, p.popover.a, p.raised.a), (1., 1., 1.));
         }
+    }
+
+    #[test]
+    fn code_rems_scales_with_the_chosen_code_size() {
+        use std::sync::atomic::Ordering;
+
+        struct Guard(u32);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                CODE_SIZE.store(self.0, Ordering::Relaxed);
+            }
+        }
+
+        let guard = Guard(CODE_SIZE.load(Ordering::Relaxed));
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+
+        CODE_SIZE.store(
+            gentle_core::fonts::DEFAULT_CODE_SIZE.to_bits(),
+            Ordering::Relaxed,
+        );
+        assert!(close(code_scale(), 1.0));
+        assert_eq!(code_rems(12.), rems(12. / 16.));
+        assert_eq!(code_rems(16.), rems(1.0));
+
+        CODE_SIZE.store(26_f32.to_bits(), Ordering::Relaxed);
+        assert!(close(
+            code_scale(),
+            26. / gentle_core::fonts::DEFAULT_CODE_SIZE
+        ));
+        assert_eq!(code_rems(12.), rems(24. / 16.));
+
+        drop(guard);
     }
 }

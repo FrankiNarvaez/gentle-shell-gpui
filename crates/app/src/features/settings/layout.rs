@@ -27,7 +27,7 @@ pub(super) fn row(label: &'static str, value: impl Into<SharedString>) -> impl I
             div()
                 .flex_1()
                 .min_w_0()
-                .text_xs()
+                .text_size(ui::code_rems(12.))
                 .font_family(ui::mono())
                 .text_color(ui::fg())
                 .child(value.into()),

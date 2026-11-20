@@ -221,7 +221,7 @@ fn changes_chip(
                     this.child(
                         h_flex()
                             .gap_1p5()
-                            .text_xs()
+                            .text_size(ui::code_rems(12.))
                             .font_family(ui::mono())
                             .child(div().text_color(ui::success()).child(format!("+{added}")))
                             .child(div().text_color(ui::danger()).child(format!("−{deleted}"))),
@@ -357,6 +357,7 @@ fn file_rows(list: &Changes, selected: Option<&FileKey>, on_select: &Select) -> 
                             .w(rems(12. / 16.))
                             .flex_none()
                             .font_family(ui::mono())
+                            .text_size(ui::code_rems(12.))
                             .text_color(color)
                             .child(mark),
                     )
@@ -373,7 +374,7 @@ fn file_rows(list: &Changes, selected: Option<&FileKey>, on_select: &Select) -> 
                             .flex_none()
                             .gap_1p5()
                             .font_family(ui::mono())
-                            .text_xs()
+                            .text_size(ui::code_rems(12.))
                             .child(
                                 div()
                                     .text_color(ui::success())

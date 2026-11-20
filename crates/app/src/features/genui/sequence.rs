@@ -403,6 +403,8 @@ impl PanelView {
                     .child(
                         div()
                             .font_family(ui::mono())
+                            .text_size(px(10. * scale * ui::code_scale()))
+                            .line_height(px(12. * scale * ui::code_scale()))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::accent())
                             .child(fragment_name(f.kind)),
@@ -555,7 +557,7 @@ impl PanelView {
                                 d.child(
                                     div()
                                         .font_family(ui::mono())
-                                        .text_size(px(10.5 * scale))
+                                        .text_size(px(10.5 * scale * ui::code_scale()))
                                         .text_color(ui::faint())
                                         .child(p.kind.name()),
                                 )

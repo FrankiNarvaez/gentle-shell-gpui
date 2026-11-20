@@ -385,7 +385,7 @@ impl PanelView {
                             div()
                                 .min_w(rems(40. / 16.))
                                 .font_family(ui::mono())
-                                .text_size(rems(12. / 16.))
+                                .text_size(ui::code_rems(12.))
                                 .text_color(ui::fg())
                                 .child(field.display(&json!(value))),
                         )

@@ -81,7 +81,7 @@ pub fn chip<V: EventEmitter<DiagramEvent>>(
         .rounded_md()
         .cursor_pointer()
         .font_family(ui::mono())
-        .text_size(rems(11. / 16.))
+        .text_size(ui::code_rems(11.))
         .text_color(color)
         .hover(|d| d.bg(ui::surface_hover()))
         .child(Icon::new(icon).xsmall())

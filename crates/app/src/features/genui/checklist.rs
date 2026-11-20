@@ -1026,7 +1026,7 @@ impl PanelView {
                 div()
                     .flex_shrink_0()
                     .font_family(ui::mono())
-                    .text_size(rems(11. / 16.))
+                    .text_size(ui::code_rems(11.))
                     .text_color(ui::faint())
                     .child(p)
             }))

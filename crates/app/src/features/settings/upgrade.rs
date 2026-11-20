@@ -618,7 +618,7 @@ fn upgrade_output(lines: Vec<String>, failed: bool) -> Div {
         .rounded_md()
         .bg(ui::well())
         .font_family(ui::mono())
-        .text_xs()
+        .text_size(ui::code_rems(12.))
         .text_color(if failed { ui::danger() } else { ui::muted() })
         .children(lines.into_iter().map(|line| div().child(line)))
 }

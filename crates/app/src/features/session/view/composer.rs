@@ -399,6 +399,7 @@ impl SessionView {
                         .text_ellipsis()
                         .whitespace_nowrap()
                         .font_family(ui::mono())
+                        .text_size(ui::code_rems(16.))
                         .text_color(ui::champagne())
                         .child(git.branch.clone().unwrap_or_else(|| "detached".into())),
                 )
@@ -407,6 +408,7 @@ impl SessionView {
                         div()
                             .flex_shrink_0()
                             .font_family(ui::mono())
+                            .text_size(ui::code_rems(16.))
                             .text_color(ui::muted())
                             .child(format!("±{}", git.files.len())),
                     )
@@ -513,6 +515,7 @@ impl SessionView {
                                         .overflow_hidden()
                                         .text_ellipsis_start()
                                         .font_family(ui::mono())
+                                        .text_size(ui::code_rems(16.))
                                         .text_color(ui::faint())
                                         .child(prefix),
                                 )
@@ -522,6 +525,7 @@ impl SessionView {
                                         .overflow_hidden()
                                         .text_ellipsis_start()
                                         .font_family(ui::mono())
+                                        .text_size(ui::code_rems(16.))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(ui::fg())
                                         .child(leaf),
@@ -533,7 +537,7 @@ impl SessionView {
                                 div()
                                     .flex_shrink_0()
                                     .font_family(ui::mono())
-                                    .text_size(rems(11. / 16.))
+                                    .text_size(ui::code_rems(11.))
                                     .text_color(ui::faint())
                                     .child(format!("${:.2}", self.usage.cost)),
                             )
@@ -649,8 +653,8 @@ fn pasted_card(n: usize, paste: &PastedText) -> Div {
                 .border_color(ui::border())
                 .bg(ui::well())
                 .font_family(ui::mono())
-                .text_size(rems(5. / 16.))
-                .line_height(rems(6. / 16.))
+                .text_size(ui::code_rems(5.))
+                .line_height(ui::code_rems(6.))
                 .text_color(ui::faint())
                 .whitespace_nowrap()
                 .child(paste.preview.clone()),

@@ -516,6 +516,7 @@ pub(super) fn job_row(
                 .min_w_0()
                 .truncate()
                 .font_family(ui::mono())
+                .text_size(ui::code_rems(16.))
                 .text_color(ui::fg())
                 .child(row.label.clone()),
         )
@@ -594,7 +595,7 @@ fn job_output_well(output: Option<(String, bool)>, failure: Option<Failure>) -> 
         .border_color(ui::border())
         .overflow_hidden()
         .font_family(ui::mono())
-        .text_xs()
+        .text_size(ui::code_rems(12.))
         .text_color(ui::muted());
     let note = |text: &'static str| div().text_color(ui::faint()).child(text);
     match (output, failure) {
@@ -854,7 +855,7 @@ impl SessionView {
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_xs()
+                    .text_size(ui::code_rems(12.))
                     .font_family(ui::mono())
                     .text_color(ui::faint())
                     .child(count.to_string()),
@@ -1193,7 +1194,7 @@ impl SessionView {
                                 .min_w(rems(48. / 16.))
                                 .max_w(rems(200. / 16.))
                                 .truncate()
-                                .text_sm()
+                                .text_size(ui::code_rems(14.))
                                 .font_family(ui::mono())
                                 .text_color(ui::fg())
                                 .child(name),
@@ -1205,7 +1206,7 @@ impl SessionView {
                                     .flex_shrink_0()
                                     .max_w(rems(220. / 16.))
                                     .truncate()
-                                    .text_xs()
+                                    .text_size(ui::code_rems(12.))
                                     .font_family(ui::mono())
                                     .text_color(ui::info())
                                     .child(model),
@@ -1229,19 +1230,19 @@ impl SessionView {
                 )
                 .child(
                     column(56., duration(helper.elapsed_ms(now)))
-                        .text_xs()
+                        .text_size(ui::code_rems(12.))
                         .font_family(ui::mono())
                         .text_color(ui::muted()),
                 )
                 .child(
                     column(40., count(helper.turns()))
-                        .text_xs()
+                        .text_size(ui::code_rems(12.))
                         .font_family(ui::mono())
                         .text_color(ui::muted()),
                 )
                 .child(
                     column(40., count(helper.tool_calls()))
-                        .text_xs()
+                        .text_size(ui::code_rems(12.))
                         .font_family(ui::mono())
                         .text_color(ui::muted()),
                 );
@@ -1260,7 +1261,9 @@ impl SessionView {
                 div()
                     .text_sm()
                     .text_color(ui::fg())
-                    .when(mono, |d| d.font_family(ui::mono()).text_xs())
+                    .when(mono, |d| {
+                        d.font_family(ui::mono()).text_size(ui::code_rems(12.))
+                    })
                     .child(value),
             )
         };
@@ -1275,7 +1278,7 @@ impl SessionView {
                 .child(
                     div()
                         .truncate()
-                        .text_sm()
+                        .text_size(ui::code_rems(14.))
                         .font_family(ui::mono())
                         .text_color(ui::fg())
                         .child(value),
@@ -1392,7 +1395,7 @@ impl SessionView {
                                 )
                                 .child(
                                     div()
-                                        .text_xs()
+                                        .text_size(ui::code_rems(12.))
                                         .font_family(ui::mono())
                                         .text_color(ui::danger())
                                         .child(error),
@@ -1526,6 +1529,7 @@ impl SessionView {
                                             .text_ellipsis()
                                             .whitespace_nowrap()
                                             .font_family(ui::mono())
+                                            .text_size(ui::code_rems(16.))
                                             .text_color(ui::muted())
                                             .child(ThreadItem::tool_subject(args)),
                                     )
@@ -1541,7 +1545,7 @@ impl SessionView {
                                         .bg(ui::well())
                                         .overflow_hidden()
                                         .font_family(ui::mono())
-                                        .text_xs()
+                                        .text_size(ui::code_rems(12.))
                                         .text_color(ui::muted())
                                         .when(hidden > 0, |d| {
                                             d.child(

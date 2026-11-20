@@ -274,7 +274,7 @@ impl UsageView {
                         div()
                             .w(rems(44. / 16.))
                             .flex_shrink_0()
-                            .text_xs()
+                            .text_size(ui::code_rems(12.))
                             .font_family(ui::mono())
                             .text_color(color)
                             .text_right()

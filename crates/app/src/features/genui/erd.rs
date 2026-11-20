@@ -311,6 +311,8 @@ impl PanelView {
                             .truncate()
                             .cursor_pointer()
                             .font_family(ui::mono())
+                            .text_size(px(10.5 * scale * ui::code_scale()))
+                            .line_height(px(13. * scale * ui::code_scale()))
                             .child(text)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -416,7 +418,7 @@ impl PanelView {
             .child(
                 div()
                     .font_family(ui::mono())
-                    .text_size(px(10.5 * scale))
+                    .text_size(px(10.5 * scale * ui::code_scale()))
                     .text_color(ui::faint())
                     .child(t.columns.len().to_string()),
             )
@@ -521,7 +523,7 @@ impl PanelView {
                         .max_w(px(90. * scale))
                         .truncate()
                         .font_family(ui::mono())
-                        .text_size(px(10.5 * scale))
+                        .text_size(px(10.5 * scale * ui::code_scale()))
                         .text_color(ui::faint())
                         .child(format!(
                             "{}{}{}",
@@ -705,6 +707,7 @@ impl PanelView {
                 let mut rows = vec![
                     div()
                         .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .text_color(ui::muted())
                         .child(col.ty.clone().unwrap_or_else(|| "no type".into()))
                         .into_any_element(),

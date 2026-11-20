@@ -586,7 +586,7 @@ impl PanelView {
                         .flex_shrink_0()
                         .items_end()
                         .font_family(ui::mono())
-                        .text_size(rems(10.5 / 16.))
+                        .text_size(ui::code_rems(10.5))
                         .child(
                             h_flex()
                                 .gap_1()
@@ -676,7 +676,7 @@ fn file_tools(
         .child(
             div()
                 .font_family(ui::mono())
-                .text_size(rems(11. / 16.))
+                .text_size(ui::code_rems(11.))
                 .text_color(ui::faint())
                 .child(format!("{decided}/{total}")),
         )
