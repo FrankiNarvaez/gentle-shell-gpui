@@ -111,7 +111,8 @@ impl SessionView {
                 .when_some(since, |this, since| {
                     this.child(
                         div()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(16.))
                             .text_color(ui::muted())
                             .child(clock(since.elapsed())),
                     )
@@ -249,8 +250,8 @@ impl SessionView {
                 this.child(
                     div()
                         .flex_shrink_0()
-                        .font_family(ui::MONO)
-                        .text_size(rems(10. / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(10.))
                         .text_color(ui::faint())
                         .child(format_tokens(window_tokens)),
                 )
@@ -369,8 +370,8 @@ impl SessionView {
                             .map(|line| {
                                 div()
                                     .min_w_0()
-                                    .text_size(rems(12. / 16.))
-                                    .font_family(ui::MONO)
+                                    .text_size(ui::code_rems(12.))
+                                    .font_family(ui::mono())
                                     .text_color(ui::muted())
                                     .child(line.clone())
                                     .into_any_element()
@@ -500,8 +501,8 @@ impl SessionView {
                                         .pl_4()
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(rems(11. / 16.))
-                                        .font_family(ui::MONO)
+                                        .text_size(ui::code_rems(11.))
+                                        .font_family(ui::mono())
                                         .text_color(ui::faint())
                                         .child(step),
                                 )
@@ -554,7 +555,8 @@ impl SessionView {
                             .child(div().flex_1().text_color(ui::muted()).child(*name))
                             .child(
                                 div()
-                                    .font_family(ui::MONO)
+                                    .font_family(ui::mono())
+                                    .text_size(ui::code_rems(12.))
                                     .text_color(ui::fg())
                                     .child(value.clone()),
                             )
@@ -575,7 +577,7 @@ pub(super) type ChipHeaderAction =
 
 /// The slots of a chip card's header, shared by every chip popover: the
 /// trigger's id, icon and color, its label, the card's title, and either a
-/// count in `MONO` or a header action where the count would sit.
+/// count in `ui::mono()` or a header action where the count would sit.
 pub(super) struct ChipPopoverOptions {
     id: SharedString,
     icon: IconName,
@@ -610,7 +612,7 @@ impl ChipPopoverOptions {
         self
     }
 
-    /// A right-side count in `MONO` ("2/3", "3.4k of 200k").
+    /// A right-side count in `ui::mono()` ("2/3", "3.4k of 200k").
     pub(super) fn count(mut self, count: impl Into<SharedString>) -> Self {
         self.count = count.into();
         self
@@ -673,8 +675,8 @@ pub(super) fn chip_popover(
                                 .when(!count.is_empty(), |d| {
                                     d.child(
                                         div()
-                                            .text_xs()
-                                            .font_family(ui::MONO)
+                                            .text_size(ui::code_rems(12.))
+                                            .font_family(ui::mono())
                                             .text_color(ui::muted())
                                             .child(count.clone()),
                                     )

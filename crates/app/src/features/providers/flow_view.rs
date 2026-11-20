@@ -79,8 +79,8 @@ impl ProvidersView {
                     .child(
                         ui::well_box().items_center().py_3().child(
                             div()
-                                .text_2xl()
-                                .font_family(ui::MONO)
+                                .text_size(ui::code_rems(24.))
+                                .font_family(ui::mono())
                                 .text_color(ui::champagne())
                                 .child(code.clone()),
                         ),

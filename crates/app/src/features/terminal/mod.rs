@@ -32,9 +32,10 @@ const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 const PADDING: f32 = 10.;
 
-/// The terminal's font size at the window's rem size (the interface size).
+/// The terminal's font size: its own chosen size at the interface zoom,
+/// independent of the interface font size (which sets the rem).
 fn font_size(window: &Window) -> Pixels {
-    rems(FONT_SIZE / 16.).to_pixels(window.rem_size())
+    ui::terminal_px(FONT_SIZE, window.rem_size())
 }
 
 /// Events a terminal pane reports to its host.
@@ -118,9 +119,9 @@ pub struct TerminalView {
     osc_title: Option<String>,
     exited: bool,
     geometry: Rc<RefCell<Geometry>>,
-    /// The cell measured for a font size; measured again when the interface
-    /// size changes the font size.
-    cell: Option<(Pixels, Size<Pixels>)>,
+    /// The cell measured for a font size and family; measured again when the
+    /// interface size or the terminal font changes.
+    cell: Option<(Pixels, SharedString, Size<Pixels>)>,
     selecting: bool,
     scroll_accum: f32,
     /// Dead-key / IME composition in progress.
@@ -214,7 +215,7 @@ fn spawn_pty(
 }
 
 fn mono_font() -> Font {
-    font(ui::MONO)
+    font(ui::terminal_mono())
 }
 
 impl TerminalView {
@@ -275,7 +276,7 @@ impl TerminalView {
             osc_title: None,
             exited: false,
             geometry: Rc::new(RefCell::new(geometry)),
-            cell: Some((font_size, cell)),
+            cell: Some((font_size, ui::terminal_mono(), cell)),
             selecting: false,
             scroll_accum: 0.,
             marked: None,
@@ -314,11 +315,16 @@ impl TerminalView {
 
     fn cell_size(&mut self, window: &mut Window) -> Size<Pixels> {
         let font_size = font_size(window);
-        match self.cell {
-            Some((measured, cell)) if measured == font_size => cell,
+        let family = ui::terminal_mono();
+        match &self.cell {
+            Some((measured, measured_family, cell))
+                if *measured == font_size && *measured_family == family =>
+            {
+                *cell
+            }
             _ => {
                 let cell = Self::measure_cell(font_size, window);
-                self.cell = Some((font_size, cell));
+                self.cell = Some((font_size, family, cell));
                 cell
             }
         }
@@ -1027,7 +1033,7 @@ impl Render for TerminalView {
             .relative()
             .size_full()
             .p(rems(PADDING / 16.))
-            .font_family(ui::MONO)
+            .font_family(ui::terminal_mono())
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))

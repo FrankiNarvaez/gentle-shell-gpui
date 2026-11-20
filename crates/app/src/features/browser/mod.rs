@@ -406,8 +406,8 @@ impl BrowserPanel {
                     .min_w_0()
                     .flex_1()
                     .truncate()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(address),
             )

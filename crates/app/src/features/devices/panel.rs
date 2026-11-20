@@ -713,8 +713,8 @@ impl DevicePanel {
                     div()
                         .px_3()
                         .pb_1()
-                        .text_size(rems(10.5 / 16.))
-                        .font_family(ui::MONO)
+                        .text_size(ui::code_rems(10.5))
+                        .font_family(ui::mono())
                         .text_color(ui::faint())
                         .truncate()
                         .child(activity),

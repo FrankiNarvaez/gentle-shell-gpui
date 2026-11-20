@@ -275,8 +275,8 @@ impl Workspace {
                     .child(
                         div()
                             .flex_none()
-                            .font_family(ui::MONO)
-                            .text_size(rems(10.5 / 16.))
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(10.5))
                             .text_color(ui::faint())
                             .child(space.tab_count().to_string()),
                     ),

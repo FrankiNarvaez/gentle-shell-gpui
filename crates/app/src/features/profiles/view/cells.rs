@@ -79,7 +79,8 @@ impl ProfilesView {
             .ghost()
             .xsmall()
             .w_full()
-            .font_family(ui::MONO)
+            .font_family(ui::mono())
+            .text_size(ui::code_rems(12.))
             .text_color(color)
             .label(label)
             .dropdown_caret(true)
@@ -168,7 +169,8 @@ impl ProfilesView {
             .ghost()
             .xsmall()
             .w_full()
-            .font_family(ui::MONO)
+            .font_family(ui::mono())
+            .text_size(ui::code_rems(12.))
             .text_color(color)
             .label(label)
             .dropdown_caret(true)
@@ -206,7 +208,9 @@ impl ProfilesView {
                                 .min_w_0()
                                 .truncate()
                                 .text_size(rems(13. / 16.))
-                                .when(level.is_some(), |d| d.font_family(ui::MONO))
+                                .when(level.is_some(), |d| {
+                                    d.font_family(ui::mono()).text_size(ui::code_rems(13.))
+                                })
                                 .text_color(if chosen {
                                     ui::accent()
                                 } else if level.is_some() {

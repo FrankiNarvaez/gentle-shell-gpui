@@ -11,6 +11,7 @@ pub mod devices;
 pub mod diagnostics;
 pub mod docs;
 pub mod engram;
+pub mod fonts;
 pub mod fuzzy;
 pub mod gentle_state;
 pub mod genui;

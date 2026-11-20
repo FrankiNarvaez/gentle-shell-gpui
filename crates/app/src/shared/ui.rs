@@ -5,15 +5,19 @@
 //!
 //! Views use these instead of ad-hoc colors so every screen looks alike.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
-use gpui_kit::component::ActiveTheme as _;
-use gpui_kit::component::Sizable as _;
+use gpui_kit::assets::IconName;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     Animation, AnimationElement, AnimationExt as _, App, BoxShadow, Div, ElementId, EntityId,
-    FontWeight, Hsla, IntoElement, ParentElement as _, SharedString, Stateful, Styled, Window,
-    canvas, div, ease_out_quint, point, px, rems, rgb,
+    FontWeight, Hsla, IntoElement, ParentElement as _, Pixels, Rems, SharedString, Stateful,
+    Styled, Window, canvas, div, ease_out_quint, point, px, rems, rgb,
 };
 
 use crate::shared::themes::{self, Theme, mix};
@@ -272,7 +276,8 @@ pub fn backdrop() -> Hsla {
     themes::palette(|p| p.backdrop)
 }
 
-pub const MONO: &str = if cfg!(target_os = "macos") {
+/// The monospace family the app uses when the user hasn't chosen one.
+const DEFAULT_MONO: &str = if cfg!(target_os = "macos") {
     "Menlo"
 } else if cfg!(target_os = "windows") {
     "Consolas"
@@ -280,14 +285,99 @@ pub const MONO: &str = if cfg!(target_os = "macos") {
     "DejaVu Sans Mono"
 };
 
+/// The kit's default interface and monospace families.
+static KIT_FAMILIES: OnceLock<(SharedString, SharedString)> = OnceLock::new();
+
+/// The chosen code and terminal families, set by `apply_theme`; `None` is
+/// the default. Render code has no `cx` to ask, so they live here.
+static CODE_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
+static TERMINAL_FONT: RwLock<Option<SharedString>> = RwLock::new(None);
+
+/// The code and terminal sizes in px at 100 % zoom (f32 bits), set by
+/// `apply_theme`. Render code reads them without a `cx`.
+static CODE_SIZE: AtomicU32 = AtomicU32::new(gentle_core::fonts::DEFAULT_CODE_SIZE.to_bits());
+static TERMINAL_SIZE: AtomicU32 =
+    AtomicU32::new(gentle_core::fonts::DEFAULT_TERMINAL_SIZE.to_bits());
+
+/// Code text of `px_at_100` px (at the default code size and 100 % zoom) as
+/// rems: it follows the chosen code size and the zoom (the rem), and at the
+/// default code size it is exactly `rems(px_at_100 / 16.)`. Every
+/// `ui::mono()` text is sized through it.
+pub fn code_rems(px_at_100: f32) -> Rems {
+    let code = f32::from_bits(CODE_SIZE.load(Ordering::Relaxed));
+    rems(px_at_100 * (code / gentle_core::fonts::DEFAULT_CODE_SIZE) / REM_AT_100)
+}
+
+/// Linear scale factor from the chosen code size to the default. Canvas/diagram
+/// mono text sized directly in px uses this so it follows the code size while
+/// keeping its own zoom factor; at the default code size it is exactly `1.0`.
+pub fn code_scale() -> f32 {
+    f32::from_bits(CODE_SIZE.load(Ordering::Relaxed)) / gentle_core::fonts::DEFAULT_CODE_SIZE
+}
+
+/// The rem at 100 % zoom: the interface text size, which only Interface size
+/// (the zoom) changes.
+const REM_AT_100: f32 = gentle_core::fonts::DEFAULT_INTERFACE_SIZE;
+
+/// The terminal font size in px for a window whose rem size is `rem`: the
+/// chosen terminal size times the interface zoom.
+pub fn terminal_px(px_at_100: f32, rem: Pixels) -> Pixels {
+    let terminal = f32::from_bits(TERMINAL_SIZE.load(Ordering::Relaxed));
+    let zoom = f32::from(rem) / REM_AT_100;
+    px(px_at_100 * (terminal / gentle_core::fonts::DEFAULT_TERMINAL_SIZE) * zoom)
+}
+
+fn chosen_or_default(slot: &RwLock<Option<SharedString>>) -> SharedString {
+    slot.read()
+        .ok()
+        .and_then(|chosen| chosen.clone())
+        .unwrap_or_else(default_mono)
+}
+
+pub(crate) fn default_mono() -> SharedString {
+    SharedString::new_static(DEFAULT_MONO)
+}
+
+/// The kit's interface family before any app font override.
+pub(crate) fn default_interface(cx: &App) -> SharedString {
+    KIT_FAMILIES.get().map_or_else(
+        || cx.theme().font_family.clone(),
+        |(family, _)| family.clone(),
+    )
+}
+
+fn store_font(slot: &RwLock<Option<SharedString>>, family: Option<SharedString>) {
+    if let Ok(mut chosen) = slot.write() {
+        *chosen = family;
+    }
+}
+
+/// The monospace family for code, paths and numbers in the interface.
+pub fn mono() -> SharedString {
+    chosen_or_default(&CODE_FONT)
+}
+
+/// The family of terminal panes: its own choice, else the code font.
+pub fn terminal_mono() -> SharedString {
+    chosen_or_default(&TERMINAL_FONT)
+}
+
 /// Map the gpui-component theme onto the active palette so stock components
 /// match. Switches gpui-component's light/dark mode with the theme first.
 /// The interface size sets the font size, which gpui-component's root makes
-/// every window's rem size: everything sized in rems follows it.
+/// every window's rem size: everything sized in rems follows it. The chosen
+/// fonts replace the kit's families; with none chosen they stay as they are.
 pub fn apply_theme(cx: &mut App) {
     use gpui_kit::component::{Theme as KitTheme, ThemeMode};
     let p = themes::palette(|p| *p);
     let scale = f32::from(cx.global::<themes::Themes>().interface_size) / 100.;
+    let fonts = cx.global::<themes::Themes>().fonts.clone();
+    store_font(&CODE_FONT, fonts.code.clone());
+    store_font(&TERMINAL_FONT, fonts.terminal_family().cloned());
+    use themes::FontSlot;
+    let code_size = fonts.size(FontSlot::Code);
+    CODE_SIZE.store(code_size.to_bits(), Ordering::Relaxed);
+    TERMINAL_SIZE.store(fonts.size(FontSlot::Terminal).to_bits(), Ordering::Relaxed);
     let mode = if p.light {
         ThemeMode::Light
     } else {
@@ -298,6 +388,11 @@ pub fn apply_theme(cx: &mut App) {
     }
     let clear = color(0x000000, 0.);
     KitTheme::update(cx, |theme| {
+        // The kit's own families, taken before the first override.
+        let (family, mono_family) = KIT_FAMILIES
+            .get_or_init(|| (theme.font_family.clone(), theme.mono_font_family.clone()));
+        theme.font_family = fonts.interface.clone().unwrap_or_else(|| family.clone());
+        theme.mono_font_family = fonts.code.clone().unwrap_or_else(|| mono_family.clone());
         let c = &mut theme.colors;
         c.background = p.window_bg;
         c.foreground = p.fg;
@@ -375,8 +470,8 @@ pub fn apply_theme(cx: &mut App) {
         c.sidebar_primary = p.accent;
         c.sidebar_primary_foreground = p.on_accent;
         // 16 px at 100 %: the rem every `rems(px_at_100 / 16.)` is written for.
-        theme.font_size = px(16. * scale);
-        theme.mono_font_size = px(13. * scale);
+        theme.font_size = px(REM_AT_100 * scale);
+        theme.mono_font_size = px(code_size * scale);
         theme.radius = px(8. * scale);
         theme.radius_lg = px(12. * scale);
     });
@@ -404,8 +499,8 @@ pub fn well_box() -> Div {
         .bg(well())
         .border_1()
         .border_color(border())
-        .font_family(MONO)
-        .text_xs()
+        .font_family(mono())
+        .text_size(code_rems(12.))
 }
 
 /// Small pill: language, model, status.
@@ -484,8 +579,8 @@ pub fn kbd(text: impl Into<SharedString>) -> Div {
         .border_1()
         .border_color(border_strong())
         .bg(surface())
-        .font_family(MONO)
-        .text_size(rems(10.5 / 16.))
+        .font_family(mono())
+        .text_size(code_rems(10.5))
         .text_color(muted())
         .child(text.into())
 }
@@ -589,10 +684,68 @@ pub fn island(cx: &App) -> Div {
         }])
 }
 
+/// A tooltip that stands off the UI behind it: the stock tooltip with the
+/// island's outline and a small soft shadow, so a glass popover surface does
+/// not blend into what it covers. Use it with `.tooltip(|window, cx|
+/// ui::tooltip(text).build(window, cx))`.
+pub fn tooltip(text: impl Into<SharedString>) -> Tooltip {
+    Tooltip::new(text.into())
+        .border_color(border_strong().opacity(0.8))
+        .shadow(vec![BoxShadow {
+            color: backdrop().opacity(0.3),
+            offset: point(px(0.), px(4.)),
+            blur_radius: px(14.),
+            spread_radius: px(0.),
+            inset: false,
+        }])
+}
+
 /// Corner radius (px at 100 %) of a row inside an [`island`] with 6 px
 /// padding, so the row's corners follow the card's:
 /// `.rounded(rems(ISLAND_ROW / 16.))`.
 pub const ISLAND_ROW: f32 = 12.;
+
+/// The inset search field for an island picker. The caller owns input state and focus.
+pub fn search_well(search: &gpui_kit::Entity<InputState>) -> Div {
+    div().p(rems(6. / 16.)).child(
+        h_flex()
+            .items_center()
+            .gap_2()
+            .h(rems(36. / 16.))
+            .px_3()
+            .rounded(rems(ISLAND_ROW / 16.))
+            .bg(well())
+            .child(Icon::new(IconName::Search).xsmall().text_color(faint()))
+            .child(div().flex_1().child(Input::new(search).appearance(false))),
+    )
+}
+
+/// An island picker row. Highlight follows the cursor, while the check marks
+/// the applied choice. The caller supplies the row content and click handler.
+pub fn picker_row(
+    id: impl Into<ElementId>,
+    highlighted: bool,
+    chosen: bool,
+    icon: Option<IconName>,
+    content: impl IntoElement,
+) -> Stateful<Div> {
+    use gpui_kit::InteractiveElement as _;
+    h_flex()
+        .id(id)
+        .w_full()
+        .gap_2()
+        .px_3()
+        .py_1p5()
+        .rounded(rems(ISLAND_ROW / 16.))
+        .cursor_pointer()
+        .hover(|s| s.bg(surface_hover()))
+        .when(highlighted, |d| d.bg(surface_hover()))
+        .children(icon.map(|icon| Icon::new(icon).xsmall().text_color(muted())))
+        .child(content)
+        .when(chosen, |d| {
+            d.child(Icon::new(IconName::Check).xsmall().text_color(accent()))
+        })
+}
 
 /// Segmented toggle (tabs inside a well): one shared look for every
 /// "This project / All", "Agents / Activity", "Pro / Max" switch.
@@ -1033,5 +1186,37 @@ mod tests {
             // Layers above black stay opaque too, so nothing behind them glows.
             assert_eq!((p.surface.a, p.popover.a, p.raised.a), (1., 1., 1.));
         }
+    }
+
+    #[test]
+    fn code_rems_scales_with_the_chosen_code_size() {
+        use std::sync::atomic::Ordering;
+
+        struct Guard(u32);
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                CODE_SIZE.store(self.0, Ordering::Relaxed);
+            }
+        }
+
+        let guard = Guard(CODE_SIZE.load(Ordering::Relaxed));
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+
+        CODE_SIZE.store(
+            gentle_core::fonts::DEFAULT_CODE_SIZE.to_bits(),
+            Ordering::Relaxed,
+        );
+        assert!(close(code_scale(), 1.0));
+        assert_eq!(code_rems(12.), rems(12. / 16.));
+        assert_eq!(code_rems(16.), rems(1.0));
+
+        CODE_SIZE.store(26_f32.to_bits(), Ordering::Relaxed);
+        assert!(close(
+            code_scale(),
+            26. / gentle_core::fonts::DEFAULT_CODE_SIZE
+        ));
+        assert_eq!(code_rems(12.), rems(24. / 16.));
+
+        drop(guard);
     }
 }

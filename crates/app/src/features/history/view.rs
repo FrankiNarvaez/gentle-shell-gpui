@@ -268,8 +268,8 @@ impl HistoryView {
                                     .items_center()
                                     .justify_center()
                                     .bg(ui::info().opacity(0.16))
-                                    .font_family(ui::MONO)
-                                    .text_size(rems(10. / 16.))
+                                    .font_family(ui::mono())
+                                    .text_size(ui::code_rems(10.))
                                     .text_color(ui::info())
                                     .child(count.to_string()),
                             ),
@@ -395,8 +395,8 @@ impl HistoryView {
                     .w(rems(TIME_WIDTH / 16.))
                     .whitespace_nowrap()
                     .text_right()
-                    .font_family(ui::MONO)
-                    .text_xs()
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::faint())
                     .child(short_time(self.now_ms, commit.time)),
             )
@@ -473,7 +473,8 @@ impl HistoryView {
                 .child(
                     div()
                         .flex_none()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .text_color(ui::fg())
                         .child(commit.short().to_string()),
                 )
@@ -586,13 +587,15 @@ impl Render for CommitCard {
                 )))
                 .child(
                     div()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .text_color(ui::success())
                         .child(format!("+{}", stat.insertions)),
                 )
                 .child(
                     div()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .text_color(ui::danger())
                         .child(format!("\u{2212}{}", stat.deletions)),
                 )
@@ -648,7 +651,8 @@ impl Render for CommitCard {
                         .child(detail(
                             "Commit",
                             div()
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
+                                .text_size(ui::code_rems(12.))
                                 .text_color(ui::fg())
                                 .child(commit.short().to_string())
                                 .into_any_element(),

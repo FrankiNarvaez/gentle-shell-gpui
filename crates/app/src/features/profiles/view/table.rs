@@ -41,8 +41,8 @@ impl ProfilesView {
                             .child(
                                 div()
                                     .truncate()
-                                    .font_family(ui::MONO)
-                                    .text_xs()
+                                    .font_family(ui::mono())
+                                    .text_size(ui::code_rems(12.))
                                     .text_color(if key == ALL_ROW {
                                         ui::muted()
                                     } else {

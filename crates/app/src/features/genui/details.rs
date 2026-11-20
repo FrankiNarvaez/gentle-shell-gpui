@@ -246,8 +246,8 @@ impl DiagramView {
                         .when_some(node.tech.clone(), |d, tech| {
                             d.child(
                                 div()
-                                    .font_family(ui::MONO)
-                                    .text_size(rems(11. / 16.))
+                                    .font_family(ui::mono())
+                                    .text_size(ui::code_rems(11.))
                                     .text_color(ui::muted())
                                     .child(tech),
                             )
@@ -266,8 +266,8 @@ impl DiagramView {
                 }
                 panel = panel.child(
                     div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(10.5 / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(10.5))
                         .text_color(ui::faint())
                         .child(node.id.clone()),
                 );

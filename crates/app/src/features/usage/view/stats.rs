@@ -107,9 +107,9 @@ impl UsageView {
                     .child(
                         div()
                             .truncate()
-                            .text_lg()
+                            .text_size(ui::code_rems(18.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
                             .text_color(color)
                             .child(value),
                     ),
@@ -124,7 +124,8 @@ impl UsageView {
                 .child(
                     div()
                         .text_color(ui::muted())
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .child(format_tokens(value)),
                 )
         };
@@ -268,13 +269,18 @@ impl UsageView {
                     .text_color(ui::faint())
                     .child(first)
                     .child(div().flex_1())
-                    .child(div().font_family(ui::MONO).child(format!(
-                        "peak {}",
-                        match metric {
-                            Metric::Tokens => format_tokens(max as u64),
-                            Metric::Cost => format_cost(max),
-                        }
-                    )))
+                    .child(
+                        div()
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(12.))
+                            .child(format!(
+                                "peak {}",
+                                match metric {
+                                    Metric::Tokens => format_tokens(max as u64),
+                                    Metric::Cost => format_cost(max),
+                                }
+                            )),
+                    )
                     .child(div().flex_1())
                     .child(last),
             )
@@ -305,8 +311,8 @@ impl UsageView {
             .w(rems(width / 16.))
             .flex_shrink_0()
             .text_right()
-            .text_xs()
-            .font_family(ui::MONO)
+            .text_size(ui::code_rems(12.))
+            .font_family(ui::mono())
             .text_color(ui::muted())
             .child(text)
     }

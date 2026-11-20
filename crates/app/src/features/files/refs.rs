@@ -457,8 +457,8 @@ impl RefsView {
             )
             .child(
                 div()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(count.to_string()),
             )
@@ -566,8 +566,8 @@ impl RefsView {
             Some(
                 div()
                     .flex_none()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(stash.trim_start_matches("stash").to_string())
                     .into_any_element(),
@@ -976,8 +976,8 @@ fn ahead_behind(ahead: u32, behind: u32) -> Div {
     h_flex()
         .flex_none()
         .gap_1p5()
-        .font_family(ui::MONO)
-        .text_size(rems(11. / 16.))
+        .font_family(ui::mono())
+        .text_size(ui::code_rems(11.))
         .child(
             div()
                 .text_color(if ahead > 0 { ui::fg() } else { ui::muted() })
