@@ -293,6 +293,18 @@ impl FontsUi {
     }
 }
 
+/// A virtual list as tall as its rows, up to `max`, then scrolling. Inside
+/// a popover, which has no height of its own, a `uniform_list` alone either
+/// collapses to nothing or, sized from its rows, stops at its own cap while
+/// still stretching the popover to every row; the wrapper holds the cap.
+fn fit_rows(list: UniformList, max: Rems) -> Div {
+    v_flex().max_h(max).child(
+        list.with_sizing_behavior(ListSizingBehavior::Infer)
+            .flex_1()
+            .min_h_0(),
+    )
+}
+
 fn slot_label(slot: FontSlot) -> &'static str {
     match slot {
         FontSlot::Interface => "Interface font",
@@ -703,10 +715,10 @@ impl SettingsView {
                             .collect::<Vec<_>>()
                     },
                 )
-                .max_h(rems(320. / 16.))
                 .px(rems(6. / 16.))
                 .pb(rems(6. / 16.))
                 .track_scroll(&scroll);
+                let list = fit_rows(list, rems(320. / 16.));
 
                 let list = if entries.is_empty() || entries.as_ref() == [None] {
                     v_flex()
@@ -745,11 +757,18 @@ impl SettingsView {
 #[cfg(test)]
 mod tests {
     use super::{
-        Change, FontSlot, HashSet, SizeInput, effective_family, entry_cursor, format_size,
-        parse_size, picker_entries, preview_fonts,
+        Change, FontSlot, HashSet, SizeInput, effective_family, entry_cursor, fit_rows,
+        format_size, parse_size, picker_entries, preview_fonts,
     };
     use crate::shared::themes::Fonts;
     use crate::shared::ui;
+    // Not a glob: GPUI exports a `test` attribute that would shadow `#[test]`.
+    use gpui_kit::component::v_flex;
+    use gpui_kit::{
+        Context, InteractiveElement as _, IntoElement, ParentElement as _, Pixels, Render,
+        Styled as _, TestAppContext, VisualTestContext, Window, anchored, div, px, rems,
+        uniform_list,
+    };
 
     fn texts(fonts: &Fonts) -> [String; 3] {
         FontSlot::ALL.map(|slot| format_size(fonts.size(slot)))
@@ -896,6 +915,48 @@ mod tests {
         assert_eq!(after, [None, Some("Menlo".into()), Some("Arial".into())]);
         assert_eq!(entry_cursor(&after, before.get(1)), 2);
         assert_eq!(entry_cursor(&after, before.first()), 0);
+    }
+
+    /// A popover-like host: a content-sized column, positioned like the
+    /// popover, with a header and the font list of `rows` 28 px rows.
+    struct ListHost(usize);
+
+    impl Render for ListHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let list = uniform_list("rows", self.0, |range, _, _| {
+                range
+                    .map(|i| div().h(px(28.)).child(format!("Font {i}")))
+                    .collect::<Vec<_>>()
+            })
+            .pb(px(6.));
+            div().size_full().child(
+                anchored().child(
+                    v_flex()
+                        .w(px(360.))
+                        .debug_selector(|| "popover".into())
+                        .child(div().h(px(30.)))
+                        .child(fit_rows(list, rems(20.)).debug_selector(|| "list".into())),
+                ),
+            )
+        }
+    }
+
+    fn heights(rows: usize, cx: &mut TestAppContext) -> (Pixels, Pixels) {
+        let (_, cx) = cx.add_window_view(|_, _| ListHost(rows));
+        cx.run_until_parked();
+        let height = |cx: &mut VisualTestContext, selector| {
+            cx.debug_bounds(selector).expect("drawn").size.height
+        };
+        (height(cx, "list"), height(cx, "popover"))
+    }
+
+    #[gpui_kit::test]
+    fn the_font_list_fits_its_rows_up_to_the_cap(cx: &mut TestAppContext) {
+        // Two rows: the list shows both, and the popover hugs them.
+        assert_eq!(heights(2, cx), (px(62.), px(92.)));
+        // Many rows: the list stops at 320 px and so does the popover,
+        // instead of growing to every row.
+        assert_eq!(heights(200, cx), (px(320.), px(350.)));
     }
 
     #[test]
