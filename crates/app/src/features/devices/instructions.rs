@@ -25,8 +25,9 @@ path to look at). Targets are refs, `text/…`, `aria/[role/]name`, `xpath/…` 
 use the Agent profile, apart from the user's sign-ins; `--profile shared` uses theirs. \
 `gentle-browser tabs` lists every page, the user's too; `release <tab>` hands one back. After a \
 click in a single-page app, `wait` for what you expect before reading the page. Run \
-`gentle-browser` alone for every command. Never drive a page with Playwright, Puppeteer or a \
-browser of your own.
+`gentle-browser` alone for every command. To look at or use a page yourself, don't start Playwright, \
+Puppeteer or a browser of your own; the project's own test suites (`npx playwright test`, Cypress) run \
+as usual.
 ";
 
 const DEVICES: &str = "\
