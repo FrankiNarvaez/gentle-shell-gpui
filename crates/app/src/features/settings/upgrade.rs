@@ -28,6 +28,9 @@ pub(super) struct ShellUpdates {
     /// The tab's Shell did not answer: the npm path, until Configuration
     /// opens again.
     failed: bool,
+    /// A read asked while the tab was still starting (its probe had not
+    /// answered), and whether it refreshes: asked once the probe answers.
+    awaiting: Option<bool>,
 }
 
 impl SettingsView {
@@ -42,12 +45,16 @@ impl SettingsView {
         let Some(session) = self.session.clone() else {
             return false;
         };
-        if session
+        match session
             .read(cx)
             .read_support(DesktopMethod::GetUpdateStatus)
-            != ReadSupport::Rpc
         {
-            return false;
+            ReadSupport::Rpc => {}
+            ReadSupport::NotReady => {
+                self.shell_updates.awaiting = Some(refresh);
+                return false;
+            }
+            ReadSupport::Legacy => return false,
         }
         match session.update(cx, |session, cx| {
             session.read(ReadRequest::UpdateStatus { refresh }, cx)
@@ -63,9 +70,17 @@ impl SettingsView {
     /// Configuration reads Gentle Shell's own update status (not the npm
     /// path), and whether a refresh is in flight.
     pub(super) fn shell_reports_updates(&self) -> Option<bool> {
-        let checking = matches!(self.shell_updates.pending, Some((_, true)));
-        (self.shell_updates.status.is_some() || self.shell_updates.pending.is_some())
-            .then_some(checking)
+        let checking =
+            matches!(self.shell_updates.pending, Some((_, true))) || self.waiting_for_tab();
+        (self.shell_updates.status.is_some()
+            || self.shell_updates.pending.is_some()
+            || self.waiting_for_tab())
+        .then_some(checking)
+    }
+
+    /// The status waits for the agent tab to finish starting.
+    pub(super) fn waiting_for_tab(&self) -> bool {
+        self.shell_updates.awaiting.is_some()
     }
 
     /// The tab changed: take Gentle Shell's answer once it arrived. A plain
@@ -74,6 +89,15 @@ impl SettingsView {
     /// that fails falls back to the npm path; one replaced meanwhile (an
     /// upgrade restarts the tabs) keeps the last answer.
     pub(super) fn update_status_changed(&mut self, cx: &mut Context<Self>) {
+        if self.shell_updates.pending.is_none()
+            && let Some(refresh) = self.shell_updates.awaiting.take()
+        {
+            // Asked again: it waits once more while the probe is still out.
+            if self.ask_update_status(refresh, cx) {
+                cx.notify();
+            }
+            return;
+        }
         let (Some((ticket, refreshed)), Some(session)) =
             (self.shell_updates.pending, self.session.clone())
         else {
