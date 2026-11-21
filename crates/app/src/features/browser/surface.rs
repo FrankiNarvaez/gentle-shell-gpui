@@ -8,6 +8,8 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
+use gentle_core::browser::Profile;
+
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -50,10 +52,15 @@ pub struct WebSurface {
     script: Option<String>,
     /// Set for a page the app serves itself, locked down (see [`Sandbox`]).
     sandbox: Option<Sandbox>,
+    /// Where the page keeps its cookies and storage.
+    profile: Profile,
+    /// An agent drives it: out of sight it keeps its native view (and its
+    /// page) instead of dropping them.
+    live: bool,
     /// A screen covers the window: the native view must not show over it.
     covered: bool,
     /// Not on screen (the card is in the tray, the tab isn't active): no
-    /// native view exists.
+    /// native view exists, unless it is live.
     hidden: bool,
     /// The native web view, created after the surface is first laid out.
     view: Option<native::NativeView>,
@@ -65,7 +72,13 @@ pub struct WebSurface {
     /// Re-places the view when the window moves (Windows hosts it in a popup
     /// positioned in screen coordinates).
     _window_moves: Option<Subscription>,
+    /// New-window requests (`target="_blank"`) load here; see
+    /// [`Self::follow_popups`].
+    popups: Option<(super::Popups, Task<()>)>,
 }
+
+/// The size a page out of sight is laid out at (an agent's parked page).
+const PARKED: (f32, f32) = (1280., 800.);
 
 impl WebSurface {
     pub fn new(url: String, script: Option<String>) -> Self {
@@ -73,6 +86,8 @@ impl WebSurface {
             url,
             script,
             sandbox: None,
+            profile: Profile::Shared,
+            live: false,
             covered: false,
             hidden: false,
             view: None,
@@ -80,7 +95,24 @@ impl WebSurface {
             failed: None,
             _pump: None,
             _window_moves: None,
+            popups: None,
         }
+    }
+
+    /// Load what the page asks to open in a new window (`target="_blank"`,
+    /// `window.open`) here instead: a browser card has no other window, and
+    /// an agent following a link must land somewhere it can see. Takes
+    /// effect on the next native view.
+    pub fn follow_popups(&mut self, cx: &mut Context<Self>) {
+        let (tx, rx) = async_channel::bounded::<String>(8);
+        let task = cx.spawn(async move |this, cx| {
+            while let Ok(url) = rx.recv().await {
+                if this.update(cx, |s, cx| s.load(url, cx)).is_err() {
+                    return;
+                }
+            }
+        });
+        self.popups = Some((tx, task));
     }
 
     /// An isolated page served by `sandbox`, starting at `url` (one of its
@@ -90,6 +122,86 @@ impl WebSurface {
             sandbox: Some(sandbox),
             ..Self::new(url, None)
         }
+    }
+
+    pub fn profile(&self) -> &Profile {
+        &self.profile
+    }
+
+    /// Keep the page's data in `profile`: a different one starts the page
+    /// again in that store.
+    pub fn set_profile(&mut self, profile: Profile, cx: &mut Context<Self>) {
+        if self.profile != profile {
+            self.profile = profile;
+            self.view = None;
+            self._pump = None;
+            self.failed = None;
+            cx.notify();
+        }
+    }
+
+    /// While live, hiding keeps the page running out of sight.
+    pub fn set_live(&mut self, live: bool, cx: &mut Context<Self>) {
+        self.live = live;
+        if !live && self.hidden {
+            self.hide(cx);
+        }
+    }
+
+    /// The page runs: its native view exists.
+    pub fn is_running(&self) -> bool {
+        self.view.is_some()
+    }
+
+    /// Make sure the page runs, even out of sight (an agent drives it): a
+    /// view is built at [`PARKED`] size when none exists.
+    pub fn ensure_running(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.view.is_some() || self.creating || self.failed.is_some() {
+            return;
+        }
+        let (w, h) = PARKED;
+        self.build(
+            Bounds::new(point(px(0.), px(0.)), size(px(w), px(h))),
+            false,
+            window,
+            cx,
+        );
+    }
+
+    /// Why the page can't run, if it can't.
+    pub fn failure(&self) -> Option<&str> {
+        self.failed.as_deref()
+    }
+
+    /// Run `script`; `done` gets its value as JSON. False when no view runs.
+    pub fn evaluate_with(&self, script: &str, done: impl Fn(String) + Send + 'static) -> bool {
+        match &self.view {
+            Some(view) => {
+                view.evaluate_with(script, done);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// A PNG of the page; false when no view runs.
+    pub fn screenshot(&self, done: super::Shot) -> bool {
+        match &self.view {
+            Some(view) => {
+                view.screenshot(done);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Forget the profile's website data (signs the page out).
+    pub fn clear_data(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.clear_data();
+            view.reload();
+        }
+        cx.notify();
     }
 
     /// Run `script` in the page, if its view exists (nothing otherwise: a
@@ -108,6 +220,17 @@ impl WebSurface {
             } else {
                 view.load_url(&url);
             }
+        }
+        self.url = url;
+        cx.notify();
+    }
+
+    /// Load `url` even when it is the address showing (an agent's `goto`
+    /// after a form posted there, a link opening in a new window): a
+    /// fresh GET, not a reload.
+    pub fn load(&mut self, url: String, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.load_url(&url);
         }
         self.url = url;
         cx.notify();
@@ -134,12 +257,19 @@ impl WebSurface {
         }
     }
 
-    /// Off screen: drop the native view, and the web process behind it.
-    /// Showing it again builds a fresh view on the current URL.
+    /// Off screen: drop the native view, and the web process behind it,
+    /// unless an agent drives the page (then it only hides). Showing it again
+    /// builds a fresh view on the current URL.
     pub fn hide(&mut self, cx: &mut Context<Self>) {
         self.hidden = true;
-        self.view = None;
-        self._pump = None;
+        if self.live {
+            if let Some(view) = &mut self.view {
+                view.conceal();
+            }
+        } else {
+            self.view = None;
+            self._pump = None;
+        }
         cx.notify();
     }
 
@@ -160,6 +290,18 @@ impl WebSurface {
             view.place(window, bounds, !self.covered);
             return;
         }
+        self.build(bounds, true, window, cx);
+    }
+
+    /// Build the native view in a task, then place it at `bounds` (shown when
+    /// `shown`, the next frame places a shown one anyway).
+    fn build(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        shown: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         let host = match native::host(window) {
             Ok(host) => host,
             Err(error) => {
@@ -172,7 +314,10 @@ impl WebSurface {
         let url = self.url.clone();
         let script = self.script.clone();
         let sandbox = self.sandbox.clone();
+        let profile = self.profile.clone();
+        let popups = self.popups.as_ref().map(|(tx, _)| tx.clone());
         let background = page_background();
+        let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
             let view = native::NativeView::new(
                 host,
@@ -180,31 +325,39 @@ impl WebSurface {
                 background,
                 script.as_deref(),
                 sandbox.as_ref(),
+                &profile,
+                popups,
             );
             // A surface dropped meanwhile drops the view, and its popup with
-            // it; one hidden meanwhile drops the view right here.
-            let _ = this.update(cx, |surface, cx| {
-                surface.creating = false;
-                if surface.hidden {
-                    return;
-                }
-                match view {
-                    Ok(view) => {
-                        // The page moved on while the view was starting.
-                        if surface.url != url {
-                            view.load_url(&surface.url);
-                        }
-                        surface.view = Some(view);
-                        // GTK's loop only needs pumping while a view exists;
-                        // `hide` drops the pump with the view.
-                        if native::NEEDS_PUMP {
-                            surface._pump = Some(shared_pump(cx));
-                        }
+            // it; one hidden meanwhile (and not driven) drops it right here.
+            let _ = handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |surface, cx| {
+                    surface.creating = false;
+                    if surface.hidden && !surface.live {
+                        return;
                     }
-                    Err(error) => surface.failed = Some(error),
-                }
-                // The next frame places the view.
-                cx.notify();
+                    match view {
+                        Ok(mut view) => {
+                            // The page moved on while the view was starting.
+                            if surface.url != url {
+                                view.load_url(&surface.url);
+                            }
+                            // A parked page gets its size right away; a shown
+                            // one is placed by the next frame.
+                            if !shown {
+                                view.place(window, bounds, false);
+                            }
+                            surface.view = Some(view);
+                            // GTK's loop only needs pumping while a view
+                            // exists; `hide` drops the pump with the view.
+                            if native::NEEDS_PUMP {
+                                surface._pump = Some(shared_pump(cx));
+                            }
+                        }
+                        Err(error) => surface.failed = Some(error),
+                    }
+                    cx.notify();
+                });
             });
         })
         .detach();

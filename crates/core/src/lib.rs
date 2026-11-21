@@ -5,6 +5,7 @@
 pub mod activity;
 pub mod alert_timing;
 pub mod backend;
+pub mod browser;
 pub mod canvas;
 pub mod commands;
 pub mod devices;

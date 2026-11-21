@@ -21,6 +21,23 @@ pub fn summarize(name: &str, args: &Value, details: &Value) -> ToolSummary {
         "find" => ("Find", arg("pattern")),
         "ls" => ("List", arg("path")),
         "todo" => ("Todo", arg("action")),
+        // `click app · text/Save`, `open https://… `, `screenshot app`.
+        "browser" => {
+            let head = [arg("op"), arg("tab")]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let detail = ["url", "target", "js", "text"]
+                .iter()
+                .map(|k| arg(k))
+                .find(|s| !s.is_empty());
+            let subject = match detail {
+                Some(detail) => format!("{head} · {detail}"),
+                None => head,
+            };
+            ("Browser", crate::text::first_line(&subject, 120))
+        }
         _ => {
             let mut title: String = name.replace('_', " ");
             if let Some(first) = title.get_mut(0..1) {
@@ -123,6 +140,18 @@ mod tests {
             (s.title.as_str(), s.subject.as_str()),
             ("Web search", "gpui")
         );
+    }
+
+    #[test]
+    fn browser_cards_name_the_op_page_and_target() {
+        let s = summarize(
+            "browser",
+            &json!({"op": "click", "tab": "app", "target": "text/Save"}),
+            &Value::Null,
+        );
+        assert_eq!(s.subject, "click app · text/Save");
+        let s = summarize("browser", &json!({"op": "tabs"}), &Value::Null);
+        assert_eq!(s.subject, "tabs");
     }
 
     #[test]
