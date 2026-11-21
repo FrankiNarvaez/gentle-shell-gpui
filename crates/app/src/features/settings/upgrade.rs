@@ -20,9 +20,9 @@ use crate::features::updates::status::offer_from_status;
 use crate::shared::ui;
 
 /// How long "Waiting for the agent tab to start…" shows. A tab whose probe
-/// never answers stays undecided, so the section then falls back to the
-/// Versions row alone, as before the wait; the read is still asked if the
-/// tab gets ready later.
+/// never answers stays undecided, so the section then shows what the npm
+/// path found, as before the wait (the Versions row and any update it
+/// offers); the read is still asked if the tab gets ready later.
 const TAB_START_WAIT: Duration = Duration::from_secs(60);
 
 /// Gentle Shell's update status, when the active agent tab's Shell reports
@@ -36,7 +36,8 @@ pub(super) struct ShellUpdates {
     /// opens again.
     failed: bool,
     /// A read asked while the tab was still starting (its probe had not
-    /// answered), and whether it refreshes: asked if the probe answers.
+    /// answered), and whether it refreshes: asked if the probe answers. A
+    /// refresh asked meanwhile is kept by later plain reads.
     awaiting: Option<bool>,
     /// Hides the waiting notice after `TAB_START_WAIT`.
     wait_notice: Option<Task<()>>,
@@ -62,6 +63,7 @@ impl SettingsView {
         {
             ReadSupport::Rpc => {}
             ReadSupport::NotReady => {
+                let refresh = refresh || self.shell_updates.awaiting == Some(true);
                 self.shell_updates.awaiting = Some(refresh);
                 if self.shell_updates.wait_notice.is_none() {
                     self.shell_updates.wait_notice = Some(cx.spawn(async move |this, cx| {
@@ -98,7 +100,8 @@ impl SettingsView {
         .then_some(checking)
     }
 
-    /// The status waits for the agent tab to finish starting.
+    /// The "Waiting for the agent tab to start…" notice shows: a read waits
+    /// for the tab and `TAB_START_WAIT` has not passed.
     pub(super) fn waiting_for_tab(&self) -> bool {
         self.shell_updates.awaiting.is_some() && !self.shell_updates.wait_expired
     }
