@@ -46,7 +46,8 @@ export default function gentleBrowser(pi: ExtensionAPI) {
 			"press {tab, text: keys like Enter or Meta+a}; scroll {tab, target?, dy?}; wait {tab, target, gone?, timeout?}; " +
 			"goto {tab, url}; back / forward / reload / state {tab}; eval {tab, js} (an expression, or statements with return; awaited); " +
 			"screenshot {tab} shows you the page; pick {tab} waits for the user to click an element; release {tab} hands it back; close {tab}. " +
-			"Targets: a ref (e12), text/<text>, aria/[role/]<name>, xpath/<path>, or CSS. Take a snapshot after the page changes; refs go stale.",
+			"Targets: a ref (e12), text/<text>, aria/[role/]<name>, xpath/<path>, or CSS. Take a snapshot after the page changes; refs go stale. " +
+			"A link or form that loads a new page answers with that page (navigated: true); a single-page app may change a moment after the answer, so wait for what you expect before reading it.",
 		parameters: Type.Object({
 			op: StringEnum(OPS, { description: "What to do" }),
 			tab: Type.Optional(Type.String({ description: "The page: the name it was opened with, or its number in tabs" })),

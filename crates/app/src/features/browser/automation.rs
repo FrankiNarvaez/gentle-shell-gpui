@@ -33,10 +33,14 @@ pub async fn run(op: Op, surface: Entity<WebSurface>, cx: &mut AsyncWindowContex
         Op::Goto { url, .. } => goto(&surface, url, deadline, cx).await,
         Op::Back { .. } => history(&surface, -1, deadline, cx).await,
         Op::Forward { .. } => history(&surface, 1, deadline, cx).await,
-        Op::Reload { .. } => {
-            surface.update(cx, |s, cx| s.reload(cx));
-            settle(&surface, deadline, cx).await.map(ok)
-        }
+        Op::Reload { .. } => match mark(&surface, cx).await {
+            Ok(mark) => {
+                surface.update(cx, |s, cx| s.reload(cx));
+                left(&surface, &mark, cx).await;
+                settle(&surface, deadline, cx).await.map(ok)
+            }
+            Err(answer) => Err(answer),
+        },
         Op::State { .. } => call(&surface, "state", json!([]), deadline, cx).await,
         Op::Eval { js, .. } => {
             let id = next_id();
@@ -250,10 +254,8 @@ async fn settle(
     deadline: Instant,
     cx: &mut AsyncWindowContext,
 ) -> Result<Value, Value> {
-    // A navigation that just started still shows the old document.
-    cx.background_executor()
-        .timer(Duration::from_millis(250))
-        .await;
+    // Leave a moment for a navigation that is starting to show.
+    cx.background_executor().timer(POLL).await;
     loop {
         if let Ok(reply) = call(surface, "state", json!([]), deadline, cx).await
             && reply["ok"]["loading"] == Value::Bool(false)
@@ -267,6 +269,38 @@ async fn settle(
     }
 }
 
+/// Mark the current document, so [`left`] can tell when a navigation
+/// replaced it.
+async fn mark(surface: &Entity<WebSurface>, cx: &mut AsyncWindowContext) -> Result<String, Value> {
+    let id = next_id();
+    let script = format!(
+        "window.__gentleMark = {}; \"marked\"",
+        Value::from(id.as_str())
+    );
+    evaluate(surface, &script, cx).await?;
+    Ok(id)
+}
+
+/// Wait until the document marked `id` is gone (a navigation replaced it),
+/// up to 3 s: one that stays was a same-document navigation (a hash, a
+/// single-page app's route) or none at all.
+async fn left(surface: &Entity<WebSurface>, id: &str, cx: &mut AsyncWindowContext) {
+    let script = format!(
+        "window.__gentleMark === {} ? \"same\" : \"new\"",
+        Value::from(id)
+    );
+    let until = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < until {
+        // A page between loads answers nothing, or only late.
+        if let Ok(raw) = evaluate(surface, &script, cx).await
+            && as_text(&raw) == "new"
+        {
+            return;
+        }
+        cx.background_executor().timer(POLL).await;
+    }
+}
+
 async fn goto(
     surface: &Entity<WebSurface>,
     url: String,
@@ -276,7 +310,9 @@ async fn goto(
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(error("bad_url", "only http(s) pages open here"));
     }
-    surface.update(cx, |s, cx| s.navigate(url, cx));
+    let mark = mark(surface, cx).await?;
+    surface.update(cx, |s, cx| s.load(url, cx));
+    left(surface, &mark, cx).await;
     settle(surface, deadline, cx).await.map(ok)
 }
 
@@ -286,8 +322,10 @@ async fn history(
     deadline: Instant,
     cx: &mut AsyncWindowContext,
 ) -> Result<Value, Value> {
+    let mark = mark(surface, cx).await?;
     let id = next_id();
     start(surface, &run_script(&id, "history", &json!([step])), cx).await?;
+    left(surface, &mark, cx).await;
     settle(surface, deadline, cx).await.map(ok)
 }
 

@@ -300,6 +300,38 @@
 
 	async function act(action, target, text, dy) {
 		const el = target ? find(target) : null;
+		// A link, a form or a script may start a navigation: then the answer
+		// is the next page (the app sees this one go), not this one. A form
+		// posts a moment later, so its submit counts; a single-page app's
+		// route change ends in `navigatesuccess` without leaving.
+		let leaving = false;
+		const leave = () => (leaving = true);
+		const stay = () => (leaving = false);
+		const navigating = (e) => {
+			if (!e.hashChange) leaving = true;
+		};
+		const submitting = (e) =>
+			setTimeout(() => {
+				if (!e.defaultPrevented) leaving = true;
+			}, 0);
+		const nav = window.navigation;
+		addEventListener("beforeunload", leave);
+		document.addEventListener("submit", submitting, true);
+		nav?.addEventListener("navigate", navigating);
+		nav?.addEventListener("navigatesuccess", stay);
+		nav?.addEventListener("navigateerror", stay);
+		try {
+			return await perform(el, action, text, dy, () => leaving);
+		} finally {
+			removeEventListener("beforeunload", leave);
+			document.removeEventListener("submit", submitting, true);
+			nav?.removeEventListener("navigate", navigating);
+			nav?.removeEventListener("navigatesuccess", stay);
+			nav?.removeEventListener("navigateerror", stay);
+		}
+	}
+
+	async function perform(el, action, text, dy, leaving) {
 		if (el && action !== "scroll") el.scrollIntoView({ block: "center", inline: "center" });
 		switch (action) {
 			case "click":
@@ -360,8 +392,12 @@
 			default:
 				throw fail("bad_op", `unknown action ${action}`);
 		}
-		// Let the page react before the answer (a menu opening, a request).
-		await sleep(80);
+		// Let the page react before the answer (a menu opening, a request, a
+		// form posting); while it is leaving, wait for it to go (a navigation
+		// that never happens, like a download, answers after 10 s).
+		await sleep(150);
+		const until = Date.now() + 10000;
+		while (leaving() && Date.now() < until) await sleep(50);
 		return { done: true, url: location.href, title: document.title };
 	}
 

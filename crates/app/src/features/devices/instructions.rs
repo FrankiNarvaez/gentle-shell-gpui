@@ -23,7 +23,8 @@ then `snapshot app` (an outline with refs like e12), `click app e12`, `fill app 
 `press app Enter`, `wait app \"text/Saved\"`, `eval app \"document.title\"`, `screenshot app` (a PNG \
 path to look at). Targets are refs, `text/…`, `aria/[role/]name`, `xpath/…` or CSS. Pages you open \
 use the Agent profile, apart from the user's sign-ins; `--profile shared` uses theirs. \
-`gentle-browser tabs` lists every page, the user's too; `release <tab>` hands one back. Run \
+`gentle-browser tabs` lists every page, the user's too; `release <tab>` hands one back. After a \
+click in a single-page app, `wait` for what you expect before reading the page. Run \
 `gentle-browser` alone for every command. Never drive a page with Playwright, Puppeteer or a \
 browser of your own.
 ";

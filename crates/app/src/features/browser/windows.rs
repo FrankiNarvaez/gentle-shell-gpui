@@ -104,6 +104,7 @@ impl NativeView {
         script: Option<&str>,
         sandbox: Option<&super::Sandbox>,
         profile: &Profile,
+        popups: Option<super::Popups>,
     ) -> Result<Self, String> {
         let owner = host.0;
         register_class();
@@ -153,6 +154,7 @@ impl NativeView {
             position: wry::dpi::PhysicalPosition::new(0, 0).into(),
             size: wry::dpi::PhysicalSize::new(1u32, 1u32).into(),
         });
+        let builder = super::follow_popups(builder, popups);
         let webview = match sandbox {
             Some(sandbox) => super::isolate(builder, sandbox),
             None => builder,

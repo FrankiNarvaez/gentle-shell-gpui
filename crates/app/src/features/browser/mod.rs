@@ -101,6 +101,27 @@ pub fn sandbox_url(path: &str) -> String {
     }
 }
 
+/// Where a page's requests for a new window (`target="_blank"`,
+/// `window.open`) go: the card loads them itself.
+type Popups = async_channel::Sender<String>;
+
+/// `builder` handing new-window requests to `popups`, when given, instead
+/// of opening a window (a sandbox's own rule, set after, still denies them).
+fn follow_popups<'a>(
+    builder: wry::WebViewBuilder<'a>,
+    popups: Option<Popups>,
+) -> wry::WebViewBuilder<'a> {
+    let Some(popups) = popups else {
+        return builder;
+    };
+    builder.with_new_window_req_handler(move |url, _| {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            let _ = popups.try_send(url);
+        }
+        wry::NewWindowResponse::Deny
+    })
+}
+
 /// `builder` locked down for `sandbox` (see [`Sandbox`]).
 fn isolate<'a>(builder: wry::WebViewBuilder<'a>, sandbox: &Sandbox) -> wry::WebViewBuilder<'a> {
     let serve = sandbox.serve.clone();
@@ -394,7 +415,11 @@ impl EventEmitter<BrowserEvent> for BrowserPanel {}
 
 impl BrowserPanel {
     pub fn new(url: String, label: Option<String>, cx: &mut Context<Self>) -> Self {
-        let surface = cx.new(|_| WebSurface::new(url.clone(), None));
+        let surface = cx.new(|cx| {
+            let mut surface = WebSurface::new(url.clone(), None);
+            surface.follow_popups(cx);
+            surface
+        });
         Self {
             url,
             label,

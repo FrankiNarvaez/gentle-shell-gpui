@@ -72,6 +72,9 @@ pub struct WebSurface {
     /// Re-places the view when the window moves (Windows hosts it in a popup
     /// positioned in screen coordinates).
     _window_moves: Option<Subscription>,
+    /// New-window requests (`target="_blank"`) load here; see
+    /// [`Self::follow_popups`].
+    popups: Option<(super::Popups, Task<()>)>,
 }
 
 /// The size a page out of sight is laid out at (an agent's parked page).
@@ -92,7 +95,24 @@ impl WebSurface {
             failed: None,
             _pump: None,
             _window_moves: None,
+            popups: None,
         }
+    }
+
+    /// Load what the page asks to open in a new window (`target="_blank"`,
+    /// `window.open`) here instead: a browser card has no other window, and
+    /// an agent following a link must land somewhere it can see. Takes
+    /// effect on the next native view.
+    pub fn follow_popups(&mut self, cx: &mut Context<Self>) {
+        let (tx, rx) = async_channel::bounded::<String>(8);
+        let task = cx.spawn(async move |this, cx| {
+            while let Ok(url) = rx.recv().await {
+                if this.update(cx, |s, cx| s.load(url, cx)).is_err() {
+                    return;
+                }
+            }
+        });
+        self.popups = Some((tx, task));
     }
 
     /// An isolated page served by `sandbox`, starting at `url` (one of its
@@ -205,6 +225,17 @@ impl WebSurface {
         cx.notify();
     }
 
+    /// Load `url` even when it is the address showing (an agent's `goto`
+    /// after a form posted there, a link opening in a new window): a
+    /// fresh GET, not a reload.
+    pub fn load(&mut self, url: String, cx: &mut Context<Self>) {
+        if let Some(view) = &self.view {
+            view.load_url(&url);
+        }
+        self.url = url;
+        cx.notify();
+    }
+
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         if let Some(view) = &self.view {
             view.reload();
@@ -284,6 +315,7 @@ impl WebSurface {
         let script = self.script.clone();
         let sandbox = self.sandbox.clone();
         let profile = self.profile.clone();
+        let popups = self.popups.as_ref().map(|(tx, _)| tx.clone());
         let background = page_background();
         let handle = window.window_handle();
         cx.spawn(async move |this, cx| {
@@ -294,6 +326,7 @@ impl WebSurface {
                 script.as_deref(),
                 sandbox.as_ref(),
                 &profile,
+                popups,
             );
             // A surface dropped meanwhile drops the view, and its popup with
             // it; one hidden meanwhile (and not driven) drops it right here.
