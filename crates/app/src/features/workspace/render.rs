@@ -156,7 +156,7 @@ impl Render for Workspace {
                                                         cx.stop_propagation()
                                                     })
                                                     .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.open_settings(window, cx)
+                                                        this.open_app_updates(window, cx)
                                                     }))
                                                     .child(ui::chip(label, ui::accent())),
                                             )

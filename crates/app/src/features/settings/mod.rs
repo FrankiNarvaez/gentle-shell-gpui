@@ -194,6 +194,11 @@ impl SettingsView {
         self.setup.read(cx).usable()
     }
 
+    /// Open on the Updates page, where this app's update is installed.
+    pub fn show_updates(&mut self, cx: &mut Context<Self>) {
+        self.navigate_to(SettingsPage::Updates, cx);
+    }
+
     /// Reuse a single navigation path for the sidebar, compact picker and search.
     fn navigate_to(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
         self.compact_categories_open = false;
