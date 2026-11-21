@@ -338,6 +338,14 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Configuration on its Updates page, for the title-bar update pill.
+    pub(super) fn open_app_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(window, cx);
+        if let Some((Overlay::Settings(view), _)) = &self.overlay {
+            view.update(cx, |view, cx| view.show_updates(cx));
+        }
+    }
+
     /// Configuration's update status is asked of the window's active agent
     /// tab when its Gentle Shell reports it.
     pub(super) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
