@@ -180,8 +180,7 @@ fn surface_png(surface: gtk::cairo::Surface) -> Result<Vec<u8>, String> {
     image
         .with_data(|data| {
             for row in data.chunks(stride).take(height as usize) {
-                for px in row[..width as usize * 4].chunks_exact(4) {
-                    let (b, g, r, a) = (px[0], px[1], px[2], px[3]);
+                for &[b, g, r, a] in row[..width as usize * 4].as_chunks::<4>().0 {
                     let unmul = |c: u8| {
                         if a == 0 {
                             0
