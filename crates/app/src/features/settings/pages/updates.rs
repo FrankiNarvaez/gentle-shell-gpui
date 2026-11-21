@@ -49,7 +49,9 @@ fn backend_updates_section(
                         .small()
                         .ghost()
                         .icon(Icon::new(IconName::RefreshCw))
-                        .label(if checking {
+                        .label(if view.waiting_for_tab() {
+                            "Waiting for the agent tab to start…"
+                        } else if checking {
                             "Checking Gentle Shell for updates…"
                         } else {
                             "Check for updates"

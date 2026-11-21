@@ -2,6 +2,7 @@
 //! upgrade`, and how it ended as the app sees it afterwards.
 
 use std::path::Path;
+use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -18,6 +19,12 @@ use crate::features::updates::UpdateOffer;
 use crate::features::updates::status::offer_from_status;
 use crate::shared::ui;
 
+/// How long "Waiting for the agent tab to start…" shows. A tab whose probe
+/// never answers stays undecided, so the section then shows what the npm
+/// path found, as before the wait (the Versions row and any update it
+/// offers); the read is still asked if the tab gets ready later.
+const TAB_START_WAIT: Duration = Duration::from_secs(60);
+
 /// Gentle Shell's update status, when the active agent tab's Shell reports
 /// it.
 #[derive(Default)]
@@ -28,6 +35,14 @@ pub(super) struct ShellUpdates {
     /// The tab's Shell did not answer: the npm path, until Configuration
     /// opens again.
     failed: bool,
+    /// A read asked while the tab was still starting (its probe had not
+    /// answered), and whether it refreshes: asked if the probe answers. A
+    /// refresh asked meanwhile is kept by later plain reads.
+    awaiting: Option<bool>,
+    /// Hides the waiting notice after `TAB_START_WAIT`.
+    wait_notice: Option<Task<()>>,
+    /// The waiting notice timed out; the read stays awaited.
+    wait_expired: bool,
 }
 
 impl SettingsView {
@@ -42,12 +57,26 @@ impl SettingsView {
         let Some(session) = self.session.clone() else {
             return false;
         };
-        if session
+        match session
             .read(cx)
             .read_support(DesktopMethod::GetUpdateStatus)
-            != ReadSupport::Rpc
         {
-            return false;
+            ReadSupport::Rpc => {}
+            ReadSupport::NotReady => {
+                let refresh = refresh || self.shell_updates.awaiting == Some(true);
+                self.shell_updates.awaiting = Some(refresh);
+                if self.shell_updates.wait_notice.is_none() {
+                    self.shell_updates.wait_notice = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(TAB_START_WAIT).await;
+                        let _ = this.update(cx, |this, cx| {
+                            this.shell_updates.wait_expired = true;
+                            cx.notify();
+                        });
+                    }));
+                }
+                return false;
+            }
+            ReadSupport::Legacy => return false,
         }
         match session.update(cx, |session, cx| {
             session.read(ReadRequest::UpdateStatus { refresh }, cx)
@@ -63,9 +92,18 @@ impl SettingsView {
     /// Configuration reads Gentle Shell's own update status (not the npm
     /// path), and whether a refresh is in flight.
     pub(super) fn shell_reports_updates(&self) -> Option<bool> {
-        let checking = matches!(self.shell_updates.pending, Some((_, true)));
-        (self.shell_updates.status.is_some() || self.shell_updates.pending.is_some())
-            .then_some(checking)
+        let checking =
+            matches!(self.shell_updates.pending, Some((_, true))) || self.waiting_for_tab();
+        (self.shell_updates.status.is_some()
+            || self.shell_updates.pending.is_some()
+            || self.waiting_for_tab())
+        .then_some(checking)
+    }
+
+    /// The "Waiting for the agent tab to start…" notice shows: a read waits
+    /// for the tab and `TAB_START_WAIT` has not passed.
+    pub(super) fn waiting_for_tab(&self) -> bool {
+        self.shell_updates.awaiting.is_some() && !self.shell_updates.wait_expired
     }
 
     /// The tab changed: take Gentle Shell's answer once it arrived. A plain
@@ -74,6 +112,21 @@ impl SettingsView {
     /// that fails falls back to the npm path; one replaced meanwhile (an
     /// upgrade restarts the tabs) keeps the last answer.
     pub(super) fn update_status_changed(&mut self, cx: &mut Context<Self>) {
+        if self.shell_updates.pending.is_none()
+            && let Some(refresh) = self.shell_updates.awaiting.take()
+        {
+            // Asked again: it waits once more while the probe is still out.
+            let asked = self.ask_update_status(refresh, cx);
+            if self.shell_updates.awaiting.is_none() {
+                // Decided (asked, or the npm path): the notice goes.
+                self.shell_updates.wait_notice = None;
+                self.shell_updates.wait_expired = false;
+            }
+            if asked || self.shell_updates.awaiting.is_none() {
+                cx.notify();
+            }
+            return;
+        }
         let (Some((ticket, refreshed)), Some(session)) =
             (self.shell_updates.pending, self.session.clone())
         else {
