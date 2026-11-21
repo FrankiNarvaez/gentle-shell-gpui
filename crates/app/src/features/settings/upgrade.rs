@@ -2,6 +2,7 @@
 //! upgrade`, and how it ended as the app sees it afterwards.
 
 use std::path::Path;
+use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -18,6 +19,12 @@ use crate::features::updates::UpdateOffer;
 use crate::features::updates::status::offer_from_status;
 use crate::shared::ui;
 
+/// How long "Waiting for the agent tab to start…" shows. A tab whose probe
+/// never answers stays undecided, so the section then falls back to the
+/// Versions row alone, as before the wait; the read is still asked if the
+/// tab gets ready later.
+const TAB_START_WAIT: Duration = Duration::from_secs(60);
+
 /// Gentle Shell's update status, when the active agent tab's Shell reports
 /// it.
 #[derive(Default)]
@@ -29,8 +36,12 @@ pub(super) struct ShellUpdates {
     /// opens again.
     failed: bool,
     /// A read asked while the tab was still starting (its probe had not
-    /// answered), and whether it refreshes: asked once the probe answers.
+    /// answered), and whether it refreshes: asked if the probe answers.
     awaiting: Option<bool>,
+    /// Hides the waiting notice after `TAB_START_WAIT`.
+    wait_notice: Option<Task<()>>,
+    /// The waiting notice timed out; the read stays awaited.
+    wait_expired: bool,
 }
 
 impl SettingsView {
@@ -52,6 +63,15 @@ impl SettingsView {
             ReadSupport::Rpc => {}
             ReadSupport::NotReady => {
                 self.shell_updates.awaiting = Some(refresh);
+                if self.shell_updates.wait_notice.is_none() {
+                    self.shell_updates.wait_notice = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(TAB_START_WAIT).await;
+                        let _ = this.update(cx, |this, cx| {
+                            this.shell_updates.wait_expired = true;
+                            cx.notify();
+                        });
+                    }));
+                }
                 return false;
             }
             ReadSupport::Legacy => return false,
@@ -80,7 +100,7 @@ impl SettingsView {
 
     /// The status waits for the agent tab to finish starting.
     pub(super) fn waiting_for_tab(&self) -> bool {
-        self.shell_updates.awaiting.is_some()
+        self.shell_updates.awaiting.is_some() && !self.shell_updates.wait_expired
     }
 
     /// The tab changed: take Gentle Shell's answer once it arrived. A plain
@@ -93,7 +113,13 @@ impl SettingsView {
             && let Some(refresh) = self.shell_updates.awaiting.take()
         {
             // Asked again: it waits once more while the probe is still out.
-            if self.ask_update_status(refresh, cx) {
+            let asked = self.ask_update_status(refresh, cx);
+            if self.shell_updates.awaiting.is_none() {
+                // Decided (asked, or the npm path): the notice goes.
+                self.shell_updates.wait_notice = None;
+                self.shell_updates.wait_expired = false;
+            }
+            if asked || self.shell_updates.awaiting.is_none() {
                 cx.notify();
             }
             return;
