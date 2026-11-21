@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use std::num::NonZeroIsize;
 use std::sync::Once;
 
+use gentle_core::browser::Profile;
 use gpui_kit::{Bounds, Pixels, Window};
 use raw_window_handle::{
     HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
@@ -34,6 +35,8 @@ pub(super) fn pump() {}
 pub(super) struct NativeView {
     /// Dropped before the popup it lives in is destroyed.
     webview: Option<wry::WebView>,
+    /// The profile's WebView2 user data folder; kept while the view lives.
+    _context: Option<wry::WebContext>,
     popup: HWND,
     owner: HWND,
     /// Screen rect (physical px) it was last placed at, and whether it showed.
@@ -100,6 +103,7 @@ impl NativeView {
         background: (u8, u8, u8, u8),
         script: Option<&str>,
         sandbox: Option<&super::Sandbox>,
+        profile: &Profile,
     ) -> Result<Self, String> {
         let owner = host.0;
         register_class();
@@ -131,15 +135,24 @@ impl NativeView {
                 std::mem::size_of_val(&corners) as u32,
             );
         }
-        let builder = wry::WebViewBuilder::new()
-            .with_url(url)
-            // Runs before the page's own scripts (a device panel names its device).
-            .with_initialization_script(script.unwrap_or_default())
-            .with_background_color(background)
-            .with_bounds(wry::Rect {
-                position: wry::dpi::PhysicalPosition::new(0, 0).into(),
-                size: wry::dpi::PhysicalSize::new(1u32, 1u32).into(),
-            });
+        // Each profile is a WebView2 user data folder of its own; Private is
+        // InPrivate; Shared keeps the default folder every page used before.
+        let mut context = (!profile.is_shared() && !profile.is_private())
+            .then(|| super::profile_dir(profile).map(|dir| wry::WebContext::new(Some(dir))))
+            .flatten();
+        let builder = match context.as_mut() {
+            Some(context) => wry::WebViewBuilder::new_with_web_context(context),
+            None => wry::WebViewBuilder::new(),
+        }
+        .with_incognito(profile.is_private())
+        .with_url(url)
+        // Runs before the page's own scripts (a device panel names its device).
+        .with_initialization_script(script.unwrap_or_default())
+        .with_background_color(background)
+        .with_bounds(wry::Rect {
+            position: wry::dpi::PhysicalPosition::new(0, 0).into(),
+            size: wry::dpi::PhysicalSize::new(1u32, 1u32).into(),
+        });
         let webview = match sandbox {
             Some(sandbox) => super::isolate(builder, sandbox),
             None => builder,
@@ -148,6 +161,7 @@ impl NativeView {
         match webview {
             Ok(webview) => Ok(Self {
                 webview: Some(webview),
+                _context: context,
                 popup,
                 owner,
                 placed: None,
@@ -221,6 +235,57 @@ impl NativeView {
         }
     }
 
+    /// Run `script`; `done` gets its value as JSON (nothing if it never ran).
+    pub(super) fn evaluate_with(&self, script: &str, done: impl Fn(String) + Send + 'static) {
+        if let Some(webview) = &self.webview {
+            let _ = webview.evaluate_script_with_callback(script, done);
+        }
+    }
+
+    /// The page as WebView2 draws it (CapturePreview), as PNG bytes.
+    pub(super) fn screenshot(&self, done: super::Shot) {
+        use webview2_com::CapturePreviewCompletedHandler;
+        use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG;
+        use windows::Win32::UI::Shell::SHCreateMemStream;
+        use wry::WebViewExtWindows as _;
+
+        let Some(webview) = &self.webview else {
+            done(Err("The page isn't open.".into()));
+            return;
+        };
+        let Some(stream) = (unsafe { SHCreateMemStream(None) }) else {
+            done(Err("No memory for the picture.".into()));
+            return;
+        };
+        let read = stream.clone();
+        let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
+            done(
+                result
+                    .map_err(|error| format!("WebView2 couldn't take the picture: {error}"))
+                    .and_then(|()| read_stream(&read)),
+            );
+            Ok(())
+        }));
+        // SAFETY: the stream and handler live until WebView2 calls back.
+        let started = unsafe {
+            webview.webview().CapturePreview(
+                COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                &stream,
+                &handler,
+            )
+        };
+        if let Err(error) = started {
+            eprintln!("gentle-shell-gpui: CapturePreview failed: {error}");
+        }
+    }
+
+    /// Forget the profile's cookies, storage and caches.
+    pub(super) fn clear_data(&self) {
+        if let Some(webview) = &self.webview {
+            let _ = webview.clear_all_browsing_data();
+        }
+    }
+
     /// Hide the popup now; the next `place` shows it again.
     pub(super) fn conceal(&mut self) {
         unsafe {
@@ -250,3 +315,30 @@ impl Drop for NativeView {
 /// The page lives in its own native window here, which gives the keyboard
 /// back when the app's window is clicked.
 pub(super) fn reclaim_keyboard(_window: &Window) {}
+
+/// Everything written to `stream`, from the start.
+fn read_stream(stream: &windows::Win32::System::Com::IStream) -> Result<Vec<u8>, String> {
+    use windows::Win32::System::Com::{STATFLAG_NONAME, STATSTG, STREAM_SEEK_SET};
+    let mut stat = STATSTG::default();
+    // SAFETY: a memory stream WebView2 finished writing to.
+    unsafe {
+        stream
+            .Stat(&mut stat, STATFLAG_NONAME)
+            .map_err(|error| error.to_string())?;
+        stream
+            .Seek(0, STREAM_SEEK_SET, None)
+            .map_err(|error| error.to_string())?;
+        let mut bytes = vec![0u8; stat.cbSize as usize];
+        let mut got = 0u32;
+        stream
+            .Read(
+                bytes.as_mut_ptr().cast(),
+                bytes.len() as u32,
+                Some(&mut got),
+            )
+            .ok()
+            .map_err(|error| error.to_string())?;
+        bytes.truncate(got as usize);
+        Ok(bytes)
+    }
+}

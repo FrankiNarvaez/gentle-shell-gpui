@@ -214,6 +214,181 @@ impl Workspace {
         cx.notify();
     }
 
+    // ── Agents driving pages (`gentle-browser`) ─────────────────────────────
+
+    /// Answer a `gentle-browser` operation; the answer goes to `reply`, now
+    /// or once the page did it.
+    pub fn browser_request(
+        &mut self,
+        op: serde_json::Value,
+        reply: std::sync::mpsc::Sender<serde_json::Value>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gentle_core::browser::{Op, Profile, error, ok};
+        use serde_json::json;
+        let op = match serde_json::from_value::<Op>(op) {
+            Ok(op) => op,
+            Err(err) => {
+                let _ = reply.send(error("bad_op", err.to_string()));
+                return;
+            }
+        };
+        let not_found = |tab: &str| {
+            error(
+                "not_found",
+                format!("no page named \"{tab}\" is open (see `gentle-browser tabs`)"),
+            )
+        };
+        match op {
+            Op::Tabs => {
+                let _ = reply.send(ok(json!({ "tabs": self.browser_tabs(cx) })));
+            }
+            Op::Open {
+                name,
+                url,
+                profile,
+                show,
+            } => {
+                if let Some(url) = &url
+                    && !(url.starts_with("http://") || url.starts_with("https://"))
+                {
+                    let _ = reply.send(error("bad_url", "only http(s) pages open here"));
+                    return;
+                }
+                let profile = profile.as_deref().map(Profile::parse);
+                let found = name.as_deref().and_then(|name| self.find_stage(name, cx));
+                let (id, panel) = match found {
+                    Some((id, panel)) => {
+                        panel.update(cx, |panel, cx| {
+                            if let Some(profile) = profile {
+                                panel.set_profile(profile, cx);
+                            }
+                            panel.set_driven(true, cx);
+                            if let Some(url) = url {
+                                panel.navigate(url, None, cx);
+                            }
+                        });
+                        (id, panel)
+                    }
+                    None => {
+                        let Some(url) = url else {
+                            let _ = reply.send(error("bad_op", "open needs a URL for a new page"));
+                            return;
+                        };
+                        let root = self.root().display().to_string();
+                        let panel = cx.new(|cx| {
+                            let mut panel = BrowserPanel::new(url, None, cx);
+                            panel.set_name(name.clone(), cx);
+                            panel.set_repository(Some(root));
+                            panel.set_profile(profile.unwrap_or(Profile::Agent), cx);
+                            panel.set_driven(true, cx);
+                            panel
+                        });
+                        let id = self.next_stage;
+                        self.add_stage(panel.clone(), None, show, window, cx);
+                        (id, panel)
+                    }
+                };
+                if show {
+                    self.set_stage_shown(id, true, window, cx);
+                }
+                let tab = self.tab_label(id, cx);
+                let surface = panel.read(cx).surface().clone();
+                cx.spawn_in(window, async move |_, cx| {
+                    let mut answer =
+                        crate::features::browser::automation::opened(surface, cx).await;
+                    if let Some(state) = answer.get_mut("ok") {
+                        state["tab"] = json!(tab);
+                    }
+                    let _ = reply.send(answer);
+                })
+                .detach();
+            }
+            other => {
+                let tab = other.tab().unwrap_or_default().to_string();
+                let Some((id, panel)) = self.find_stage(&tab, cx) else {
+                    let _ = reply.send(not_found(&tab));
+                    return;
+                };
+                match other {
+                    Op::Close { .. } => {
+                        self.remove_stage(id, window, cx);
+                        let _ = reply.send(ok(json!({ "closed": tab })));
+                    }
+                    Op::Release { .. } => {
+                        panel.update(cx, |panel, cx| panel.set_driven(false, cx));
+                        let _ = reply.send(ok(json!({ "released": tab })));
+                    }
+                    op => {
+                        if op.drives() {
+                            panel.update(cx, |panel, cx| panel.set_driven(true, cx));
+                        }
+                        // The user picks on a page they can see.
+                        if matches!(op, Op::Pick { .. }) {
+                            self.set_stage_shown(id, true, window, cx);
+                        }
+                        let surface = panel.read(cx).surface().clone();
+                        let weak = panel.downgrade();
+                        cx.spawn_in(window, async move |_, cx| {
+                            let answer =
+                                crate::features::browser::automation::run(op, surface, cx).await;
+                            // The header follows where the agent took the page.
+                            if let Some(url) = answer["ok"]["url"].as_str() {
+                                let url = url.to_string();
+                                let _ = weak.update(cx, |panel, cx| panel.set_url(url, cx));
+                            }
+                            let _ = reply.send(answer);
+                        })
+                        .detach();
+                    }
+                }
+            }
+        }
+    }
+
+    /// A page by the name it was opened with, or its number in `tabs`.
+    fn find_stage(&self, tab: &str, cx: &App) -> Option<(u64, Entity<BrowserPanel>)> {
+        let tab = tab.trim();
+        self.stages
+            .iter()
+            .find(|stage| stage.panel.read(cx).name() == Some(tab))
+            .or_else(|| {
+                let n: usize = tab.parse().ok()?;
+                self.stages.get(n.checked_sub(1)?)
+            })
+            .map(|stage| (stage.id, stage.panel.clone()))
+    }
+
+    /// What `gentle-browser` calls a page: its name, or its number.
+    fn tab_label(&self, id: u64, cx: &App) -> String {
+        let Some(index) = self.stages.iter().position(|stage| stage.id == id) else {
+            return String::new();
+        };
+        self.stages[index]
+            .panel
+            .read(cx)
+            .name()
+            .map_or_else(|| (index + 1).to_string(), str::to_string)
+    }
+
+    fn browser_tabs(&self, cx: &App) -> Vec<serde_json::Value> {
+        self.stages
+            .iter()
+            .map(|stage| {
+                let panel = stage.panel.read(cx);
+                serde_json::json!({
+                    "tab": self.tab_label(stage.id, cx),
+                    "url": panel.url(),
+                    "title": panel.title(),
+                    "shown": stage.shown,
+                    "driven": panel.is_driven(),
+                    "profile": panel.profile(cx).key(),
+                })
+            })
+            .collect()
+    }
+
     /// A screen or dialog opened or closed over the window: web views hide
     /// under it.
     pub(super) fn set_stages_covered(&self, covered: bool, cx: &mut App) {

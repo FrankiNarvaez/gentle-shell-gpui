@@ -219,6 +219,7 @@ fn tool_item(id: &str, kind: &str, spec: Value) -> Item {
         args: json!({"action": "show", "id": id, "kind": kind}),
         status: ToolStatus::Done,
         output: String::new(),
+        images: Vec::new(),
         details: json!({"id": id, "version": 1, "kind": kind, "title": id, "spec": spec}),
         duration_ms: None,
     }

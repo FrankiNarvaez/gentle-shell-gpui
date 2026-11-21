@@ -35,12 +35,27 @@ struct Record {
 #[derive(Serialize, Deserialize)]
 struct Message {
     token: String,
+    #[serde(default)]
     request: OpenRequest,
+    /// A `gentle-browser` operation; answered with one JSON line instead
+    /// of "ok".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    browser: Option<serde_json::Value>,
+}
+
+/// What reaches the running app from a later launch or a command.
+pub enum Incoming {
+    Open(OpenRequest),
+    /// A `gentle-browser` operation and where its answer goes.
+    Browser {
+        op: serde_json::Value,
+        reply: std::sync::mpsc::Sender<serde_json::Value>,
+    },
 }
 
 pub enum Role {
     /// This process owns the app; requests from later launches arrive here.
-    Primary(async_channel::Receiver<OpenRequest>),
+    Primary(async_channel::Receiver<Incoming>),
     /// Another instance took the request; exit.
     Forwarded,
 }
@@ -70,11 +85,15 @@ pub fn send(request: &OpenRequest) -> bool {
     record_path().is_some_and(|path| forward(&path, request))
 }
 
-fn forward(path: &Path, request: &OpenRequest) -> bool {
-    let Some(record) = std::fs::read_to_string(path)
+/// The running app's address and token, if one is recorded.
+fn record(path: &Path) -> Option<Record> {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|raw| serde_json::from_str::<Record>(&raw).ok())
-    else {
+}
+
+fn forward(path: &Path, request: &OpenRequest) -> bool {
+    let Some(record) = record(path) else {
         return false;
     };
     let addr = SocketAddr::from(([127, 0, 0, 1], record.port));
@@ -85,6 +104,7 @@ fn forward(path: &Path, request: &OpenRequest) -> bool {
     let message = Message {
         token: record.token,
         request: request.clone(),
+        browser: None,
     };
     let Ok(mut line) = serde_json::to_vec(&message) else {
         return false;
@@ -98,7 +118,33 @@ fn forward(path: &Path, request: &OpenRequest) -> bool {
     BufReader::new(stream).read_line(&mut reply).is_ok() && reply.trim() == "ok"
 }
 
-fn listen(path: &Path) -> std::io::Result<async_channel::Receiver<OpenRequest>> {
+/// Hand a `gentle-browser` operation to the running app and wait up to
+/// `timeout` for its answer.
+pub fn browser(op: &serde_json::Value, timeout: Duration) -> Result<serde_json::Value, String> {
+    let not_running = || "the Gentle Shell app isn't running".to_string();
+    let record = record_path()
+        .and_then(|path| record(&path))
+        .ok_or_else(not_running)?;
+    let addr = SocketAddr::from(([127, 0, 0, 1], record.port));
+    let mut stream =
+        TcpStream::connect_timeout(&addr, Duration::from_millis(400)).map_err(|_| not_running())?;
+    let _ = stream.set_read_timeout(Some(timeout));
+    let message = Message {
+        token: record.token,
+        request: OpenRequest::default(),
+        browser: Some(op.clone()),
+    };
+    let mut line = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
+    line.push(b'\n');
+    stream.write_all(&line).map_err(|e| e.to_string())?;
+    let mut reply = String::new();
+    BufReader::new(stream)
+        .read_line(&mut reply)
+        .map_err(|_| "the app didn't answer in time".to_string())?;
+    serde_json::from_str(reply.trim()).map_err(|_| "the app didn't answer".to_string())
+}
+
+fn listen(path: &Path) -> std::io::Result<async_channel::Receiver<Incoming>> {
     let listener = TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     let token = new_token();
@@ -136,13 +182,42 @@ fn listen(path: &Path) -> std::io::Result<async_channel::Receiver<OpenRequest>> 
                 if message.token != token {
                     continue;
                 }
+                if let Some(op) = message.browser {
+                    // An operation may wait (for the page, or for the user to
+                    // pick an element): answered on a thread of its own.
+                    let tx = tx.clone();
+                    let _ = std::thread::Builder::new()
+                        .name("browser-op".into())
+                        .spawn(move || answer_browser(stream, op, &tx));
+                    continue;
+                }
                 let _ = stream.write_all(b"ok\n");
-                if tx.send_blocking(message.request).is_err() {
+                if tx.send_blocking(Incoming::Open(message.request)).is_err() {
                     return;
                 }
             }
         })?;
     Ok(rx)
+}
+
+/// Hand `op` to the app and write its answer back as one JSON line.
+fn answer_browser(
+    mut stream: TcpStream,
+    op: serde_json::Value,
+    tx: &async_channel::Sender<Incoming>,
+) {
+    let (reply, answer) = std::sync::mpsc::channel();
+    let wait = gentle_core::browser::answer_within(&op);
+    let answer = if tx.send_blocking(Incoming::Browser { op, reply }).is_err() {
+        gentle_core::browser::error("closed", "the app is closing")
+    } else {
+        answer.recv_timeout(wait).unwrap_or_else(|_| {
+            gentle_core::browser::error("timeout", "the app didn't answer in time")
+        })
+    };
+    let mut line = answer.to_string();
+    line.push('\n');
+    let _ = stream.write_all(line.as_bytes());
 }
 
 /// 128 random bits from the OS clock, pid and address-space layout; enough
@@ -168,7 +243,7 @@ fn new_token() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{OpenRequest, forward, listen};
+    use super::{Incoming, OpenRequest, forward, listen};
 
     #[test]
     fn second_launch_is_forwarded_to_the_primary() {
@@ -183,7 +258,10 @@ mod tests {
             device: None,
         };
         assert!(forward(&path, &request), "a live primary accepts");
-        assert_eq!(rx.recv_blocking().unwrap(), request);
+        match rx.recv_blocking().unwrap() {
+            Incoming::Open(received) => assert_eq!(received, request),
+            Incoming::Browser { .. } => panic!("an open request arrives as Open"),
+        }
 
         // A record pointing at a dead listener means "become primary".
         std::fs::write(&path, r#"{"port":1,"token":"x","pid":1}"#).unwrap();

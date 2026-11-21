@@ -6,6 +6,8 @@
 //! opened.
 
 use std::ffi::c_ulong;
+
+use gentle_core::browser::Profile;
 use std::sync::LazyLock;
 
 use gpui_kit::{Bounds, Pixels, Window};
@@ -57,6 +59,8 @@ pub(super) fn host(window: &Window) -> Result<Host, String> {
 
 pub(super) struct NativeView {
     webview: wry::WebView,
+    /// The profile's WebKit context (its data folder); kept while the view lives.
+    _context: Option<wry::WebContext>,
     /// Where it was last placed, and whether it showed.
     placed: Option<(Bounds<Pixels>, bool)>,
 }
@@ -68,14 +72,24 @@ impl NativeView {
         background: (u8, u8, u8, u8),
         script: Option<&str>,
         sandbox: Option<&super::Sandbox>,
+        profile: &Profile,
     ) -> Result<Self, String> {
         GTK.clone()?;
-        let builder = wry::WebViewBuilder::new()
-            .with_url(url)
-            // Runs before the page's own scripts (a device panel names its device).
-            .with_initialization_script(script.unwrap_or_default())
-            .with_background_color(background)
-            .with_visible(false);
+        // Each profile is a WebKit context with a data folder of its own;
+        // Private keeps nothing; Shared is the default every page used before.
+        let mut context = (!profile.is_shared() && !profile.is_private())
+            .then(|| super::profile_dir(profile).map(|dir| wry::WebContext::new(Some(dir))))
+            .flatten();
+        let builder = match context.as_mut() {
+            Some(context) => wry::WebViewBuilder::new_with_web_context(context),
+            None => wry::WebViewBuilder::new(),
+        }
+        .with_incognito(profile.is_private())
+        .with_url(url)
+        // Runs before the page's own scripts (a device panel names its device).
+        .with_initialization_script(script.unwrap_or_default())
+        .with_background_color(background)
+        .with_visible(false);
         let webview = match sandbox {
             Some(sandbox) => super::isolate(builder, sandbox),
             None => builder,
@@ -86,6 +100,7 @@ impl NativeView {
         })?;
         Ok(Self {
             webview,
+            _context: context,
             placed: None,
         })
     }
@@ -111,6 +126,34 @@ impl NativeView {
         let _ = self.webview.evaluate_script(script);
     }
 
+    /// Run `script`; `done` gets its value as JSON (nothing if it never ran).
+    pub(super) fn evaluate_with(&self, script: &str, done: impl Fn(String) + Send + 'static) {
+        let _ = self.webview.evaluate_script_with_callback(script, done);
+    }
+
+    /// The page as WebKitGTK draws it, as PNG bytes.
+    pub(super) fn screenshot(&self, done: super::Shot) {
+        use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebViewExt as _};
+        use wry::WebViewExtUnix as _;
+        self.webview.webview().snapshot(
+            SnapshotRegion::Visible,
+            SnapshotOptions::NONE,
+            None::<&gtk::gio::Cancellable>,
+            move |result| {
+                done(
+                    result
+                        .map_err(|error| format!("WebKitGTK couldn't take the picture: {error}"))
+                        .and_then(surface_png),
+                )
+            },
+        );
+    }
+
+    /// Forget the profile's cookies, storage and caches.
+    pub(super) fn clear_data(&self) {
+        let _ = self.webview.clear_all_browsing_data();
+    }
+
     /// Hide the view now; the next `place` shows it again.
     pub(super) fn conceal(&mut self) {
         let _ = self.webview.set_visible(false);
@@ -121,3 +164,33 @@ impl NativeView {
 /// The page lives in its own native window here, which gives the keyboard
 /// back when the app's window is clicked.
 pub(super) fn reclaim_keyboard(_window: &Window) {}
+
+/// A cairo surface (premultiplied BGRA) as PNG bytes.
+fn surface_png(surface: gtk::cairo::Surface) -> Result<Vec<u8>, String> {
+    let image = gtk::cairo::ImageSurface::try_from(surface)
+        .map_err(|_| "WebKitGTK's picture isn't an image".to_string())?;
+    let (width, height, stride) = (
+        image.width().max(0) as u32,
+        image.height().max(0) as u32,
+        image.stride().max(0) as usize,
+    );
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    image
+        .with_data(|data| {
+            for row in data.chunks(stride).take(height as usize) {
+                for px in row[..width as usize * 4].chunks_exact(4) {
+                    let (b, g, r, a) = (px[0], px[1], px[2], px[3]);
+                    let unmul = |c: u8| {
+                        if a == 0 {
+                            0
+                        } else {
+                            (u16::from(c) * 255 / u16::from(a)).min(255) as u8
+                        }
+                    };
+                    rgba.extend_from_slice(&[unmul(r), unmul(g), unmul(b), a]);
+                }
+            }
+        })
+        .map_err(|error| error.to_string())?;
+    super::png_from_rgba(width, height, rgba)
+}

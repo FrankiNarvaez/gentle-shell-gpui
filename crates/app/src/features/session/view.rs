@@ -470,8 +470,8 @@ impl SessionView {
         live
     }
 
-    /// Decode images of user items `from..` off the UI thread (all shown
-    /// images when the transcript was replaced, forgetting the rest).
+    /// Decode images of user and tool items `from..` off the UI thread (all
+    /// shown images when the transcript was replaced, forgetting the rest).
     fn request_images(&mut self, from: usize, prune: bool, cx: &mut Context<Self>) {
         let start = if prune { 0 } else { from };
         let shown = self
@@ -481,7 +481,7 @@ impl SessionView {
             .unwrap_or_default()
             .iter()
             .filter_map(|item| match item {
-                Item::User { images, .. } => Some(images),
+                Item::User { images, .. } | Item::Tool { images, .. } => Some(images),
                 _ => None,
             })
             .flatten();
@@ -1239,6 +1239,34 @@ impl SessionView {
                     cx,
                 ))
             })
+            .when_some(
+                match item {
+                    Item::Tool { images, .. } if !images.is_empty() => Some(images),
+                    _ => None,
+                },
+                |this, images| {
+                    // A page screenshot, whole: its width, at most 360 px high.
+                    this.child(v_flex().px_3().pb_2().gap_2().children(images.iter().map(
+                        |image| {
+                            match self.image_cache.get(image) {
+                                Some(image) => div()
+                                    .w_full()
+                                    .rounded_lg()
+                                    .overflow_hidden()
+                                    .border_1()
+                                    .border_color(ui::border_strong())
+                                    .child(
+                                        img(image)
+                                            .w_full()
+                                            .max_h(rems(360. / 16.))
+                                            .object_fit(ObjectFit::Contain),
+                                    ),
+                                None => image_tile(None, rems(160. / 16.), rems(100. / 16.)),
+                            }
+                        },
+                    )))
+                },
+            )
             .child(status_footer(spec.status, duration))
             .into_any_element()
     }
@@ -2614,6 +2642,7 @@ mod tests {
             args: serde_json::json!({}),
             status,
             output: String::new(),
+            images: Vec::new(),
             details: serde_json::json!({}),
             duration_ms: None,
         }
