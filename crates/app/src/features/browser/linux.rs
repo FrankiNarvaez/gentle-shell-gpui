@@ -111,8 +111,36 @@ impl NativeView {
         if self.placed == Some((bounds, visible)) {
             return;
         }
+        // GTK only allocates a size to shown widgets, and showing the
+        // window wry wraps the page in sizes it to its natural size (about
+        // 200 px): the page must be shown when it gets its bounds, or it
+        // stays laid out at that size in a corner of the card. A page placed
+        // hidden at a new size (parked, or under a screen) is shown for the
+        // call and hidden again; it keeps its size.
+        let resized = self.placed.is_none_or(|(old, _)| old.size != bounds.size);
+        if visible || resized {
+            let _ = self.webview.set_visible(true);
+        }
         let _ = self.webview.set_bounds(super::logical_rect(bounds));
-        let _ = self.webview.set_visible(visible);
+        if resized {
+            use gtk::prelude::*;
+            use wry::WebViewExtUnix as _;
+            // GTK's own idea of the window's size, for its later layouts.
+            if let Some(window) = self
+                .webview
+                .webview()
+                .toplevel()
+                .and_then(|w| w.downcast::<gtk::Window>().ok())
+            {
+                window.resize(
+                    bounds.size.width.as_f32().round().max(1.) as i32,
+                    bounds.size.height.as_f32().round().max(1.) as i32,
+                );
+            }
+        }
+        if !visible {
+            let _ = self.webview.set_visible(false);
+        }
         self.placed = Some((bounds, visible));
     }
 
