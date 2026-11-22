@@ -81,7 +81,9 @@ impl ReviewView {
         }
     }
 
-    /// Swap in `path`'s diff, in the mode the last one had (Split at first).
+    /// Swap in `path`'s diff, in the mode the last one had (Unified at
+    /// first: the review's half of the window is too narrow for two sides
+    /// of real code; Split wraps each side to fit).
     fn show_diff(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if self.shown.as_ref() == Some(&path) {
             return;
@@ -89,7 +91,7 @@ impl ReviewView {
         let mode = self
             .diff
             .as_ref()
-            .map_or(DiffMode::Split, |diff| diff.read(cx).diff_mode());
+            .map_or(DiffMode::Unified, |diff| diff.read(cx).diff_mode());
         let root = self.root.clone();
         let diff = cx.new(|cx| FileView::diff(root, path.clone(), window, cx));
         diff.update(cx, |diff, cx| diff.set_diff_mode(mode, cx));

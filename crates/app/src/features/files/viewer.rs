@@ -1206,6 +1206,10 @@ impl Render for FileView {
             Body::Diff(state) => Diff::new(state)
                 .header_visible(false)
                 .hover_highlight(DiffHoverHighlight::Line)
+                // Side by side, each side wraps to its half of the pane:
+                // unwrapped, the widest line sets both columns and pushes
+                // the new side out of view.
+                .soft_wrap(self.diff_mode == DiffMode::Split)
                 .size_full()
                 .into_any_element(),
             Body::Notice {

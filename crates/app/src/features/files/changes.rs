@@ -1109,7 +1109,50 @@ impl ChangesView {
                                 .text_color(ui::muted())
                                 .child("Writing…"),
                         )
-                    }),
+                    })
+                    // Secondary actions on the left, the primary last on the
+                    // right (the design system's footer), its key in the
+                    // tooltip rather than a cap on the button.
+                    .child(
+                        DropdownButton::new("changes-commit")
+                            .primary()
+                            .small()
+                            .disabled(!ready || working)
+                            .button(
+                                Button::new("changes-commit-main")
+                                    .label(primary_label)
+                                    .tooltip(format!("{primary_label} ({})", ui::shortcut("↵")))
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| this.primary(window, cx)),
+                                    ),
+                            )
+                            .dropdown_menu(move |menu, _, _| {
+                                let item =
+                                    |label: &'static str, icon: IconName, push: Option<bool>| {
+                                        let weak = weak.clone();
+                                        PopupMenuItem::new(label).icon(Icon::new(icon)).on_click(
+                                            move |_, window, cx| {
+                                                let _ = weak.update(cx, |this, cx| match push {
+                                                    Some(push) => this.commit(push, window, cx),
+                                                    None => this.generate(window, cx),
+                                                });
+                                            },
+                                        )
+                                    };
+                                menu.item(item(
+                                    "Commit",
+                                    IconName::GitCommitHorizontal,
+                                    Some(false),
+                                ))
+                                .item(item("Commit & Push", IconName::Upload, Some(true)))
+                                .separator()
+                                .item(item(
+                                    "Generate message",
+                                    IconName::Sparkles,
+                                    None,
+                                ))
+                            }),
+                    ),
             )
             .when_some(self.error.clone(), |d, error| {
                 d.child(
@@ -1122,37 +1165,6 @@ impl ChangesView {
                         .child(error),
                 )
             })
-            .child(
-                DropdownButton::new("changes-commit")
-                    .primary()
-                    .small()
-                    .w_full()
-                    .disabled(!ready || working)
-                    .button(
-                        Button::new("changes-commit-main")
-                            .flex_1()
-                            .label(primary_label)
-                            .child(ui::kbd(ui::shortcut("↵")))
-                            .on_click(cx.listener(|this, _, window, cx| this.primary(window, cx))),
-                    )
-                    .dropdown_menu(move |menu, _, _| {
-                        let item = |label: &'static str, icon: IconName, push: Option<bool>| {
-                            let weak = weak.clone();
-                            PopupMenuItem::new(label).icon(Icon::new(icon)).on_click(
-                                move |_, window, cx| {
-                                    let _ = weak.update(cx, |this, cx| match push {
-                                        Some(push) => this.commit(push, window, cx),
-                                        None => this.generate(window, cx),
-                                    });
-                                },
-                            )
-                        };
-                        menu.item(item("Commit", IconName::GitCommitHorizontal, Some(false)))
-                            .item(item("Commit & Push", IconName::Upload, Some(true)))
-                            .separator()
-                            .item(item("Generate message", IconName::Sparkles, None))
-                    }),
-            )
     }
 }
 
