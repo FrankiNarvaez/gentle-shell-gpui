@@ -159,7 +159,18 @@ gpui_kit::assets::icon_assets!(
         PenTool,
         Signature,
         Spline,
-        Hash
+        Hash,
+        // Workspace badges (`workspaces::BadgeIcon`).
+        Rocket,
+        Gem,
+        Crown,
+        Coffee,
+        Gamepad2,
+        FlaskConical,
+        Atom,
+        Bug,
+        Puzzle,
+        Cat
     ]
 );
 

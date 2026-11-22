@@ -97,6 +97,7 @@ impl Workspace {
                     tabs,
                     active_tab,
                     last_active: space.last_active,
+                    badge: space.badge,
                 }
             })
             .collect();

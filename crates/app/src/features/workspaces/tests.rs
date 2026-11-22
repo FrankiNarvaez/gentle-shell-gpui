@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
 use super::store::{load_from, save_to};
-use super::{SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout, VERSION};
+use super::{
+    Badge, BadgeColor, BadgeIcon, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
+    VERSION,
+};
 use crate::shared::pane::{PaneKind, PaneTree, SplitAxis};
 
 fn sample() -> SavedState {
@@ -37,6 +40,7 @@ fn sample() -> SavedState {
                 }],
                 active_tab: 0,
                 last_active: 10,
+                badge: Badge::default(),
             },
             SavedWorkspace {
                 name: "project".into(),
@@ -58,11 +62,34 @@ fn sample() -> SavedState {
                 }],
                 active_tab: 0,
                 last_active: 20,
+                badge: Badge {
+                    icon: Some(BadgeIcon::Rocket),
+                    color: Some(BadgeColor::Teal),
+                },
             },
         ],
         sidebar: false,
         tab_layout: TabLayout::Vertical,
     }
+}
+
+/// An icon or color saved by a newer build reads as unset, keeping the rest
+/// of the badge and the workspace.
+#[test]
+fn unknown_badge_values_read_as_unset() {
+    let mut json = serde_json::to_value(sample()).unwrap();
+    json["workspaces"][1]["badge"]["icon"] = "unicorn".into();
+    let state: SavedState = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        state.workspaces[1].badge,
+        Badge {
+            icon: None,
+            color: Some(BadgeColor::Teal),
+        }
+    );
+    // A workspace without a chosen badge doesn't write one.
+    let plain = serde_json::to_value(&state.workspaces[0]).unwrap();
+    assert!(plain.get("badge").is_none());
 }
 
 #[test]

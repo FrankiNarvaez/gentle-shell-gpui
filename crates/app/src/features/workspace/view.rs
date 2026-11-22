@@ -1,5 +1,6 @@
 //! Title bar chrome, tabs, pane tree and pane rendering.
 
+use super::badge::{Mark, workspace_avatar};
 use super::*;
 use gpui_kit::component::Selectable as _;
 
@@ -73,12 +74,17 @@ impl Workspace {
             .pr(rems(6. / 16.))
             .gap(rems(7. / 16.))
             .flex_none()
-            // Same shape and hover as a tab, but no resting fill: it labels the
-            // workspace (as in Tern) instead of competing with the active tab.
+            // Same shape and hover as a tab, with a lighter backing than the
+            // active tab's: it labels the workspace (as in Tern) without
+            // competing with it, and stays readable over a see-through
+            // window or a busy backdrop.
             .rounded(rems(8. / 16.))
+            .border_1()
+            .border_color(ui::border().opacity(0.6))
+            .bg(ui::popover_bg().opacity(0.55))
             .text_size(rems(12.5 / 16.))
             .cursor_pointer()
-            .hover(|s| s.bg(ui::surface_hover().opacity(0.6)))
+            .hover(|s| s.bg(ui::popover_bg().opacity(0.8)))
             .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
             // Keep clicks on the chip from turning into window drags: `occlude`
             // hides the title bar's drag area from Windows' hit test, and
@@ -88,7 +94,8 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_palette(Category::Workspaces, window, cx)
             }))
-            .child(workspace_avatar(&name))
+            .child(workspace_avatar(&Mark::of(self.space())))
+            .map(|chip| self.with_badge_picker(chip, self.current, cx))
             .child(
                 div()
                     .max_w(rems(160. / 16.))
@@ -155,14 +162,21 @@ impl Workspace {
                     .text_size(rems(12.5 / 16.))
                     .cursor_pointer()
                     .relative()
-                    // The fill alone marks the active tab, like Tern; the petal
-                    // icon carries the accent.
+                    // The fill marks the active tab, like Tern; the petal icon
+                    // carries the accent. The fill is the opaque popover layer
+                    // with a hairline, so it reads over a see-through window
+                    // and a busy backdrop alike; every tab keeps the border's
+                    // width so none shifts when another is picked.
+                    .border_1()
                     .when(active, |this| {
-                        this.bg(ui::surface_hover().opacity(0.7))
+                        this.bg(ui::popover_bg().opacity(0.92))
+                            .border_color(ui::border())
+                            .shadow_sm()
                             .text_color(ui::fg())
                     })
                     .when(!active, |this| {
-                        this.text_color(ui::muted())
+                        this.border_color(gpui_kit::transparent_black())
+                            .text_color(ui::muted())
                             .hover(|s| s.bg(ui::surface_hover().opacity(0.6)).text_color(ui::fg()))
                     })
                     // Keep clicks on tabs from turning into window drags (see the
@@ -776,38 +790,6 @@ pub(super) const TITLE_ITEM: f32 = 28.;
 /// A quiet square icon button for the title bar.
 pub(super) fn title_button(id: &'static str, icon: IconName) -> Button {
     Button::new(id).ghost().xsmall().icon(Icon::new(icon))
-}
-
-/// A stable hue per workspace name, for its letter badge.
-fn avatar_color(name: &str) -> Hsla {
-    let hash = name
-        .bytes()
-        .fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b));
-    hsla((hash % 360) as f32 / 360., 0.55, 0.65, 1.)
-}
-
-/// A workspace's letter badge: its first letter on its own hue, as in the
-/// title bar's workspace chip and the vertical tab navigator.
-pub(super) fn workspace_avatar(name: &str) -> Div {
-    let color = avatar_color(name);
-    let initial = name
-        .chars()
-        .find(|c| c.is_alphanumeric())
-        .map(|c| c.to_uppercase().collect::<String>())
-        .unwrap_or_else(|| "·".into());
-    div()
-        .size(rems(18. / 16.))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(rems(5. / 16.))
-        .bg(color.opacity(0.18))
-        .text_color(color)
-        .text_size(rems(10.5 / 16.))
-        .font_weight(FontWeight::BOLD)
-        .line_height(relative(1.))
-        .child(initial)
 }
 
 /// The new-tab menu (Agent, Terminal, Canvas, Tower), shared by the title

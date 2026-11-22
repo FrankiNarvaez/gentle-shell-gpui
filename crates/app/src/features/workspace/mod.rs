@@ -36,7 +36,7 @@ use crate::features::tower::TowerView;
 use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
 use crate::features::workspaces::{
-    self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
+    self, Badge, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
 };
 use crate::shared::pane::{
     AskAgent, CloseViewer, OpenCommitDiff, OpenTerminalAt, PaneFactories, PaneId, PaneItem,
@@ -46,12 +46,14 @@ use crate::shared::ui;
 use gentle_core::commands::Screen;
 
 mod actions;
+mod badge;
 mod closed;
 mod layout;
 mod overlays;
 mod panes;
 mod persistence;
 mod render;
+mod sidebars;
 mod spaces;
 mod stages;
 mod tab_panel;
@@ -170,6 +172,8 @@ struct Space {
     /// Restored layout not built yet: workspaces start their panes the first
     /// time they are shown.
     saved: Option<(Vec<SavedTab>, usize)>,
+    /// The badge's chosen icon and color.
+    badge: Badge,
 }
 
 impl Space {
@@ -181,6 +185,7 @@ impl Space {
             tabs: Vec::new(),
             active: 0,
             saved: None,
+            badge: Badge::default(),
         }
     }
 
@@ -265,6 +270,11 @@ pub struct Workspace {
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     tab_layout: TabLayout,
+    /// Workspaces opened or closed by hand in the sidebar, by name; one not
+    /// listed is open while it is the shown one.
+    sidebar_open_spaces: HashMap<String, bool>,
+    /// The workspace whose badge picker is open, and where it opened.
+    badge_picker: Option<(usize, Point<Pixels>)>,
     tab_search: Entity<InputState>,
     save_task: Option<Task<()>>,
     /// Re-reads every pane's title and busy state once a second (non-agent
@@ -321,6 +331,7 @@ impl Workspace {
                 tabs: Vec::new(),
                 active: 0,
                 saved: Some((w.tabs, w.active_tab)),
+                badge: w.badge,
             })
             .collect();
         let tab_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tabs"));
@@ -384,6 +395,8 @@ impl Workspace {
             sidebar: None,
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
+            sidebar_open_spaces: HashMap::new(),
+            badge_picker: None,
             tab_search,
             save_task: None,
             notices: cx.new(|_| Notices::default()),
