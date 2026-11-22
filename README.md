@@ -116,7 +116,9 @@ Tabs remain horizontal by default. To move them to the left, choose **Configurat
 
 <br>
 
-The vertical navigator is built like the Files sidebar: a header with **+** (the title bar's new-tab menu: Agent, Terminal, Canvas, Tower) and the button that moves tabs back to the title bar, a search field, and the projects as a tree. Each project shows its letter badge, its tab count and its agents' activity (a dot: accent while working, amber when one needs you); the current one unfolds to its tabs, and search filters them. **Agent** and **Terminal** at the bottom of the sidebar open a tab in the current project. A tab's icon takes the same colors. Hover a tab for its grip (drag to reorder) and its ⋯ menu (pin/unpin, rename, move up/down, close). Pinned tabs stay at the top with a pin. Moving tabs back to the title bar leaves the Files sidebar and the pane tiling as they are.
+The vertical sidebar is built like the Files sidebar: a header with the current project (a click switches projects), **+** (the title bar's new-tab menu: Agent, Terminal, Canvas, Tower) and the button that moves tabs back to the title bar, then a search field and every project as a group that opens in place, several at once, its tabs on an indent guide. A click on a project opens or closes its group, a double-click switches to it, and a tab of another project opens it (switching to it first); while searching, every project with a match opens. Each project shows its badge, its tab count and its agents' activity (a dot: accent while working, amber when one needs you), and a tab's icon takes the same colors; the shown tab is raised with an accent marker on the guide. Right-click a tab of the current project for its menu (pin/unpin, rename, move up/down, close), drag it to reorder, double-click an agent tab to rename it; pinned tabs stay at the top with a pin. **Agent** and **Terminal** at the bottom open a tab in the current project. Moving tabs back to the title bar leaves the Files sidebar and the pane tiling as they are.
+
+Each project's badge shows its initials or an icon you choose, in a color from the current theme. Right-click a project's badge (in the sidebar, or the title bar's project chip) to pick one of 32 icons and one of the theme's colors; with none chosen, the name picks a theme color, so badges follow every theme. The choice is saved with the project.
 
 </details>
 
@@ -131,6 +133,8 @@ Your login shell in a real PTY (alacritty_terminal) with the Gentleman colors; �
 ### Files sidebar (⌘B) — Files, changes and branches beside the agent
 
 Files, Changes and Branches tabs. The tree respects `.gitignore` (⋯ → Show Ignored Files lists the rest dimmed), navigates with the arrow keys, and has New File / New Folder buttons with inline naming. The ⋯ menu also opens the workspace folder in any code editor installed on macOS, Windows or Linux (VS Code, Insiders, Cursor, Windsurf, Kiro, VSCodium, Zed, Sublime Text, Xcode, Visual Studio, Android Studio, IntelliJ IDEA, WebStorm, PyCharm, GoLand, RustRover, CLion, PhpStorm, Rider, Nova, BBEdit), found in the usual install folders, JetBrains Toolbox, Flatpak, Snap or the PATH.
+
+The open tab names itself; a **Search files** field under the tabs opens the file finder, and in a repository a footer shows the branch (a click opens Branches) and what has changed (`±3`, or *clean*; a click opens Changes).
 
 <details>
 <summary><kbd>More</kbd> <strong>Tree, editors, changes, branches and file viewer</strong></summary>
@@ -239,6 +243,8 @@ Enter sends; while the agent runs, Enter steers it and Esc, ⌘. (Ctrl+. elsewhe
 
 ↑ on the composer's first line brings back the prompts you sent before, newest first, as in Gentle Shell's terminal (a resumed conversation's prompts included); ↓ on its last line walks back to the newest and then to what you were writing. A recalled prompt is only put in the composer, never sent. Inside a multi-line prompt the arrows move the cursor as usual, and while attachments or long pastes are in the composer they stay out of it.
 
+The composer comes in five input styles, in **Configuration → Appearance → Composer**, for every tab at once: **Card** (a floating card with its controls inside, folder and branch below), **Bar** (docked across the pane on a hairline: flat model and effort chips, the folder and branch in one row under the text, a ↵ keycap or a **Stop · esc** button at its end), **Prompt** (a framed `❯` line in the code font over a terminal status strip along the pane's bottom edge: the rose, model, effort, folder, branch, cost and `↵ send` / `esc stop` in segments), **Pill** (one rounded pill with attach, text and send on the same line) and **Soft** (a soft rounded box: the text on top, then a row with a round **+**, the model and a filled send button; folder and branch below).
+
 <details>
 <summary><kbd>More</kbd> <strong>Slash commands, context and effort</strong></summary>
 
@@ -267,7 +273,7 @@ Each image becomes an `[Image #N]` token and a thumbnail, and the agent receives
 
 ### Session chips — What the session tracks, above the composer
 
-As in Tern, what a session tracks sits in chips over the composer instead of a side panel, so every pane keeps its full width: background **Jobs**, **Helpers 1/3** (each subagent's status, task and last step, with a button to the full Agents window), extension widgets and the last response's tokens.
+As in Tern, what a session tracks sits in chips over the composer instead of a side panel, so every pane keeps its full width: background **Jobs**, **Helpers 1/3** (each subagent's status, task and last step, with a button to the full Agents window) and extension widgets. The row only spells out what needs you: extension statuses fold into one ⓘ (their text in its tooltip), plan limits show once one runs high, the context chip (to compact) joins once the window passes the alert threshold, and Normal permissions and Review on are an icon each (any other mode keeps its name and tint). The context itself is a hairline on the composer's top edge, after Tern's: it fills as the window is used, with the percent at the fill's end and the window's size at the line's, turns amber past the threshold and red near the end, and a comet runs along it while the agent works. Under the composer, the folder shows by name (the full path in its tooltip), and what the session spent opens the last response's tokens; the key hints show until the first message.
 
 <details>
 <summary><kbd>More</kbd> <strong>Jobs, helpers and the Todos island</strong></summary>
