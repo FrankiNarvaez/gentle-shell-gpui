@@ -17,6 +17,7 @@ mod agents;
 mod attachments;
 mod builtins;
 mod events;
+pub mod input_style;
 mod lifecycle;
 mod reads;
 mod rpc;
@@ -306,6 +307,8 @@ impl SessionView {
                 this.redraw_diagrams(cx)
             }),
             cx.observe_global::<crate::shared::themes::Themes>(|this, cx| this.redraw_diagrams(cx)),
+            // Configuration › Appearance › Input style changed: draw in it.
+            input_style::follow(cx),
         ];
         let mut this = Self {
             cwd,

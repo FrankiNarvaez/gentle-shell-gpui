@@ -29,20 +29,25 @@ impl SessionView {
         };
         let tooltip = match (current, pending) {
             (Some(_), Some(next)) => {
-                format!("Switches to {} when the current turn ends", next.label())
+                format!(
+                    "{label} · switches to {} when the current turn ends",
+                    next.label()
+                )
             }
-            _ => "Permission mode".to_string(),
+            _ => format!("Permission mode: {label}"),
         };
+        // Every mode is its icon alone, in its color: Normal quiet, the
+        // riskier ones in their warning tones; the name is in the tooltip.
         let trigger = Button::new("mode-picker")
             .ghost()
             .xsmall()
             .rounded(px(999.))
-            .text_color(color)
-            .bg(color.opacity(0.10))
-            .border_1()
-            .border_color(color.opacity(0.25))
             .icon(Icon::new(icon))
-            .label(label)
+            .text_color(if current == Some(PermissionMode::Normal) {
+                ui::faint()
+            } else {
+                color
+            })
             .tooltip(tooltip);
         Popover::new("mode-popover")
             .anchor(Anchor::BottomRight)

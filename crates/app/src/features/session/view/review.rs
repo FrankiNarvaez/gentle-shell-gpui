@@ -77,14 +77,16 @@ pub(super) fn review_chip(
     on_pick: Pick,
 ) -> Popover {
     let (icon, color, label) = chip_look(mode.effective);
+    // Its icon alone, as the permission chip: an eye when on, a struck eye
+    // in amber when off; the state is in the tooltip.
+    let quiet = mode.effective == ReviewEffective::Enabled;
     let trigger = Button::new("review-mode-chip")
         .debug_selector(|| "review-mode-chip".into())
         .ghost()
         .xsmall()
-        .text_color(color)
+        .text_color(if quiet { ui::faint() } else { color })
         .icon(Icon::new(icon))
-        .label(label)
-        .tooltip("Review mode (receipt-driven development)");
+        .tooltip(format!("{label} (receipt-driven development)"));
     let mode = *mode;
     let known = mode.effective != ReviewEffective::Unknown;
     Popover::new("review-mode-popover")

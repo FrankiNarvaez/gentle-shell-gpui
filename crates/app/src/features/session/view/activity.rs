@@ -9,7 +9,7 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use super::{NARROW, TINY, clock};
+use super::{TINY, clock};
 use crate::features::session::SessionView;
 use crate::features::session::agents::{JobRow, JobTail, job_row};
 use crate::shared::ui;
@@ -148,13 +148,6 @@ impl SessionView {
             });
 
         let width = self.pane_width.get();
-        let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
-        let window_tokens = self
-            .models
-            .current
-            .as_ref()
-            .map(|m| m.context_window)
-            .unwrap_or(0);
         let statuses: Vec<(String, String)> = self
             .extension
             .statuses
@@ -162,45 +155,52 @@ impl SessionView {
             .filter(|(k, _)| !matches!(k.as_str(), "gentle:mode" | "gentle:yolo" | "gentle-jobs"))
             .map(|(k, s)| (k.clone(), s.clone()))
             .collect();
-        // Tiny panes fold every extension status (and limits) into one chip.
+        // Only what needs you shows by itself; the rest waits one hover away.
+        // Extension statuses (a memory's "ready", a server's state) fold into
+        // one quiet chip, as do the plan limits until one runs high; tiny
+        // panes fold every limit.
         let collapse = width < f32::from(rems(TINY / 16.).to_pixels(rem_size));
-        let folded: Vec<String> = if collapse {
-            statuses
-                .iter()
-                .map(|(_, s)| s.clone())
-                .chain(self.extension.rate_limits.values().map(|l| l.text.clone()))
-                .collect()
-        } else {
-            Vec::new()
+        let limit_color = |percent: u32| {
+            use gentle_core::usage::subscription::LimitTone;
+            match gentle_core::usage::subscription::limit_tone(f64::from(percent)) {
+                LimitTone::Danger => Some(ui::danger()),
+                LimitTone::Warning => Some(ui::warning()),
+                LimitTone::Calm => None,
+            }
         };
+        let folded: Vec<String> = statuses
+            .iter()
+            .map(|(_, s)| s.clone())
+            .chain(
+                self.extension
+                    .rate_limits
+                    .values()
+                    .filter(|l| collapse || limit_color(l.percent).is_none())
+                    .map(|l| l.text.clone()),
+            )
+            .collect();
+        // The context: the line over the composer tells it; the chip (to
+        // compact, or follow compaction) joins it once the window runs full.
+        let context_full = self.usage.compacting
+            || self
+                .usage
+                .context_percent
+                .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
         let right = h_flex()
             .flex_shrink_0()
             .gap_2()
-            .when(!collapse, |this| {
-                this.children(statuses.into_iter().map(|(key, s)| {
-                    if narrow {
-                        // Icon-only, the text lives in the tooltip.
-                        div()
-                            .id(ElementId::Name(format!("status-{key}").into()))
-                            .child(Icon::new(IconName::Info).xsmall().text_color(ui::faint()))
-                            .tooltip(move |window, cx| Tooltip::new(s.clone()).build(window, cx))
-                            .into_any_element()
-                    } else {
-                        div()
-                            .max_w(rems(220. / 16.))
-                            .truncate()
-                            .text_color(ui::faint())
-                            .child(s)
-                            .into_any_element()
-                    }
-                }))
-            })
             .when(!folded.is_empty(), |this| {
                 let tip = folded.join("\n");
                 this.child(
                     div()
                         .id("status-overflow")
-                        .child(ui::chip(format!("+{}", folded.len()), ui::muted()))
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .text_color(ui::faint())
+                        .hover(|s| s.text_color(ui::muted()))
+                        .child(Icon::new(IconName::Info).xsmall())
+                        .when(folded.len() > 1, |d| d.child(folded.len().to_string()))
                         .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx)),
                 )
             })
@@ -217,44 +217,37 @@ impl SessionView {
                     ui::warning(),
                 ))
             })
-            // Tern-style: jobs, widgets and last-response usage live in chips
-            // here instead of a side panel. The task list floats at the top of
-            // the conversation instead (see `render_todo_island`).
+            // Tern-style: jobs and widgets live in chips here instead of a
+            // side panel. The task list floats at the top of the
+            // conversation instead (see `render_todo_island`).
             .when(!collapse, |this| this.children(self.render_widget_chips()))
-            .when(!narrow, |this| this.children(self.render_usage_chip()))
             .when(self.helpers_visible(), |this| {
                 this.child(self.render_helpers_chip(cx))
             })
-            .children(self.extension.rate_limits.iter().filter(|_| !collapse).map(
-                |(window, limit)| {
-                    use gentle_core::usage::subscription::LimitTone;
-                    let color = match gentle_core::usage::subscription::limit_tone(f64::from(
-                        limit.percent,
-                    )) {
-                        LimitTone::Danger => ui::danger(),
-                        LimitTone::Warning => ui::warning(),
-                        LimitTone::Calm => ui::muted(),
-                    };
-                    let tip = limit.text.clone();
-                    div()
-                        .id(ElementId::Name(format!("limit-{window}").into()))
-                        .child(ui::chip(
-                            format!("{} {}%", limit_label(window), limit.percent),
-                            color,
-                        ))
-                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                },
-            ))
-            .child(self.render_context_chip(cx))
-            .when(window_tokens > 0, |this| {
-                this.child(
-                    div()
-                        .flex_shrink_0()
-                        .font_family(ui::mono())
-                        .text_size(ui::code_rems(10.))
-                        .text_color(ui::faint())
-                        .child(format_tokens(window_tokens)),
-                )
+            .children(
+                self.extension
+                    .rate_limits
+                    .iter()
+                    .filter(|_| !collapse)
+                    .filter_map(|(window, limit)| {
+                        let color = limit_color(limit.percent)?;
+                        let tip = limit.text.clone();
+                        Some(
+                            div()
+                                .id(ElementId::Name(format!("limit-{window}").into()))
+                                .child(ui::chip(
+                                    format!("{} {}%", limit_label(window), limit.percent),
+                                    color,
+                                ))
+                                .tooltip(move |window, cx| {
+                                    Tooltip::new(tip.clone()).build(window, cx)
+                                }),
+                        )
+                    }),
+            )
+            // The window's size rides the context line over the composer.
+            .when(context_full, |this| {
+                this.child(self.render_context_chip(cx))
             })
             // The review switch sits with the permission chip: both are this
             // workspace's rules for the agent (Gentle Shell `main`).
@@ -531,22 +524,32 @@ impl SessionView {
         )
     }
 
-    /// The last response's tokens: output on the chip, the breakdown on click.
-    fn render_usage_chip(&self) -> Option<impl IntoElement + use<>> {
-        let usage = self.transcript.last_usage?;
-        let rows = [
-            ("Input", format_tokens(usage.input)),
-            ("Output", format_tokens(usage.output)),
-            ("Cache read", format_tokens(usage.cache_read)),
-        ];
+    /// What the session spent, quietly beside the folder: the cost (or the
+    /// last response's output) on the chip, the last response's tokens on
+    /// click.
+    pub(super) fn render_usage_chip(&self) -> Option<impl IntoElement + use<>> {
+        let usage = self.transcript.last_usage;
+        let cost = self.usage.cost;
+        let label = if cost > 0.0 {
+            format!("${cost:.2}")
+        } else {
+            format!("out {}", format_tokens(usage?.output))
+        };
+        let rows: Vec<(&'static str, String)> = usage
+            .map(|usage| {
+                vec![
+                    ("Input", format_tokens(usage.input)),
+                    ("Output", format_tokens(usage.output)),
+                    ("Cache read", format_tokens(usage.cache_read)),
+                ]
+            })
+            .unwrap_or_default()
+            .into_iter()
+            .chain((cost > 0.0).then(|| ("Session cost", format!("${cost:.2}"))))
+            .collect();
         Some(chip_popover(
-            ChipPopoverOptions::new(
-                "last-usage",
-                IconName::ChartPie,
-                ui::faint(),
-                format!("out {}", format_tokens(usage.output)),
-            )
-            .title("Last response"),
+            ChipPopoverOptions::new("last-usage", IconName::ChartPie, ui::faint(), label)
+                .title("Usage"),
             move || {
                 rows.iter()
                     .map(|(name, value)| {

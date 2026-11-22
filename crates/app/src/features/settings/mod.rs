@@ -19,6 +19,7 @@ mod diagnostics;
 mod events;
 mod fonts;
 mod hydration;
+mod input_style;
 mod interface;
 mod layout;
 mod maestro;

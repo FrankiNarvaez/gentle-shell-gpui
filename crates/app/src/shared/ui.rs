@@ -1004,6 +1004,27 @@ pub fn shimmer(text: impl Into<SharedString>, base: Hsla, highlight: Hsla) -> Di
         .child(slow_frames())
 }
 
+/// A short bright streak running along a thin track, for a line that shows
+/// work in progress: place it in a `relative`, clipped track. It enters
+/// past the left edge and leaves past the right one.
+#[track_caller]
+pub fn comet(color: Hsla) -> Div {
+    const LENGTH: f32 = 0.24;
+    let left = -LENGTH + live_phase(1.6) * (1. + LENGTH);
+    div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(gpui_kit::relative(left))
+        .w(gpui_kit::relative(LENGTH))
+        .bg(gpui_kit::linear_gradient(
+            90.,
+            gpui_kit::linear_color_stop(color.opacity(0.), 0.),
+            gpui_kit::linear_color_stop(color, 0.7),
+        ))
+        .child(slow_frames())
+}
+
 /// `~/a/b/leaf` split into a muted prefix and the leaf, for path labels.
 pub fn split_path(path: &std::path::Path) -> (String, String) {
     let display = match dirs::home_dir() {
