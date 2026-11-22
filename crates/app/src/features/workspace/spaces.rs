@@ -56,16 +56,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.switch_workspace_with_fill(index, true, window, cx);
-    }
-
-    pub(super) fn switch_workspace_with_fill(
-        &mut self,
-        index: usize,
-        fill: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
         if index >= self.spaces.len() {
             return;
         }
@@ -74,7 +64,7 @@ impl Workspace {
         self.finish_workspace_rename(true, window, cx);
         let changed = index != self.current;
         self.current = index;
-        self.ensure_open(index, fill, window, cx);
+        self.ensure_open(index, true, window, cx);
         if !self.space().tabs.is_empty() {
             let active = self.space().active;
             self.activate(active, window, cx);

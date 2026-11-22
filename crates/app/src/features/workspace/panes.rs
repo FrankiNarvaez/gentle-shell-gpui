@@ -252,6 +252,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PaneId> {
+        let root = self.space().root.clone();
+        self.new_factory_pane_at(kind, target, &root, window, cx)
+    }
+
+    fn new_factory_pane_at(
+        &mut self,
+        kind: PaneKind,
+        target: PathBuf,
+        root: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<PaneId> {
         let factories = PaneFactories::get(cx);
         let factory = match kind {
             PaneKind::Terminal => factories.terminal,
@@ -292,11 +304,11 @@ impl Workspace {
                 target
                     .parent()
                     .map(Path::to_path_buf)
-                    .unwrap_or_else(|| self.space().root.clone()),
+                    .unwrap_or_else(|| root.to_path_buf()),
                 Some(target),
             ),
             PaneKind::Canvas => (
-                canvas_cwd.unwrap_or_else(|| self.space().root.clone()),
+                canvas_cwd.unwrap_or_else(|| root.to_path_buf()),
                 Some(target),
             ),
             _ => (target, None),
@@ -408,16 +420,18 @@ impl Workspace {
         }
     }
 
-    pub(super) fn restore_pane(
+    pub(super) fn restore_pane_in_space(
         &mut self,
+        space: usize,
         saved: &SavedPane,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PaneId> {
+        let root = self.spaces[space].root.clone();
         let cwd = if saved.cwd.is_dir() {
             saved.cwd.clone()
-        } else if self.space().root.is_dir() {
-            self.space().root.clone()
+        } else if root.is_dir() {
+            root.clone()
         } else {
             crate::cli::default_cwd()
         };
@@ -429,25 +443,25 @@ impl Workspace {
             }
             PaneKind::Terminal => {
                 PaneFactories::get(cx).terminal.as_ref()?;
-                self.new_factory_pane(PaneKind::Terminal, cwd, window, cx)
+                self.new_factory_pane_at(PaneKind::Terminal, cwd, &root, window, cx)
             }
             PaneKind::File => {
                 let path = saved.path.clone().filter(|p| p.is_file())?;
                 PaneFactories::get(cx).file.as_ref()?;
-                self.new_factory_pane(PaneKind::File, path, window, cx)
+                self.new_factory_pane_at(PaneKind::File, path, &root, window, cx)
             }
             PaneKind::Tower => {
                 PaneFactories::get(cx).tower.as_ref()?;
-                self.new_factory_pane(PaneKind::Tower, cwd, window, cx)
+                self.new_factory_pane_at(PaneKind::Tower, cwd, &root, window, cx)
             }
             PaneKind::History => {
                 PaneFactories::get(cx).history.as_ref()?;
-                self.new_factory_pane(PaneKind::History, cwd, window, cx)
+                self.new_factory_pane_at(PaneKind::History, cwd, &root, window, cx)
             }
             PaneKind::Canvas => {
                 let path = saved.path.clone()?;
                 PaneFactories::get(cx).canvas.as_ref()?;
-                let id = self.new_factory_pane(PaneKind::Canvas, path, window, cx)?;
+                let id = self.new_factory_pane_at(PaneKind::Canvas, path, &root, window, cx)?;
                 // Its agent works in the folder it had and picks up its
                 // conversation the next time it opens.
                 let resume = saved.session.clone().filter(|p| p.exists());
@@ -484,8 +498,7 @@ impl Workspace {
     }
 
     /// Build tab `tab_index` of workspace `space_index` if it is still an
-    /// unbuilt placeholder. `restore_pane` reads `self.space().root`, so
-    /// `self.current` is temporarily set to the target workspace.
+    /// unbuilt placeholder.
     fn ensure_tab_built(
         &mut self,
         space_index: usize,
@@ -502,16 +515,13 @@ impl Workspace {
         let Some(saved) = saved else {
             return;
         };
-        let previous = self.current;
-        self.current = space_index;
         let leaves = saved.layout.leaves();
         let mut built = Vec::new();
         let tree = saved.layout.filter_map(&mut |pane: &SavedPane| {
-            let id = self.restore_pane(pane, window, cx);
+            let id = self.restore_pane_in_space(space_index, pane, window, cx);
             built.push(id);
             id
         });
-        self.current = previous;
         let Some(tree) = tree else {
             // Nothing in this tab could be restored; drop it and start fresh.
             self.spaces[space_index].tabs.remove(tab_index);
