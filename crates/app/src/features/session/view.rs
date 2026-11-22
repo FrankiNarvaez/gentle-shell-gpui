@@ -4,6 +4,7 @@
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,7 @@ use super::{CONTEXT, SessionView};
 use crate::shared::ui;
 use gentle_core::input_style::InputStyle;
 use gentle_core::tools;
+use gentle_core::transcript::steps::{self, StepKind};
 use gentle_core::transcript::{Block, Item, NoticeLevel, ToolStatus, assistant_visible};
 
 mod activity;
@@ -42,7 +44,7 @@ pub(super) use cards::markdown_custom;
 pub(super) use live::{Live, RateLimit};
 use live::{Span, TICK, label_stamp, ticker_needed, track};
 pub(super) use transcript_list::TranscriptList;
-use transcript_list::{HeaderKey, Prepared, Row, Tail};
+use transcript_list::{GroupRow, HeaderKey, Prepared, Row, Tail};
 
 /// How long a finished answer's petal line takes to draw back and fade.
 const ANSWER_FADE: Duration = Duration::from_millis(500);
@@ -56,6 +58,12 @@ const STEP: usize = 3;
 
 fn fold_key(ix: usize, sub: usize, slot: usize) -> usize {
     (ix << 16) | (sub << 2) | slot
+}
+
+/// The fold key of the run of finished steps that starts at item `start`
+/// (sub 1 keeps it apart from the step's own fold).
+fn group_key(start: usize) -> usize {
+    fold_key(start, 1, STEP)
 }
 
 /// Lines of a collapsed tool input and output.
@@ -205,6 +213,20 @@ impl SessionView {
                 let collapsed = self.step_collapsed(ix, item);
                 self.list.set_step_collapsed(ix, collapsed);
             }
+            // A step that finishes next to others joins their run, and the
+            // run's rows change height: restate every run from the one
+            // around `from` (earlier items can sit in it) on.
+            let items = &self.transcript.items;
+            let (lo, len) = (
+                items[..from]
+                    .iter()
+                    .rposition(|item| !steps::groupable(item) && assistant_visible(item))
+                    .map_or(0, |ix| ix + 1),
+                items.len(),
+            );
+            if let Some(changed) = self.sync_groups(lo..len) {
+                self.list.remeasure_items(changed);
+            }
             self.request_images(from, dirty.reset, cx);
             self.genui.set_root(&self.cwd, cx);
             self.genui
@@ -344,6 +366,7 @@ impl SessionView {
             .child(
                 TextView::new(state)
                     .selectable(true)
+                    .style(ui::prose_style())
                     .image_source(move |uri| {
                         diagrams.image(uri).unwrap_or_else(|| uri.clone().into())
                     }),
@@ -559,8 +582,62 @@ impl SessionView {
             let collapsed = self.step_collapsed(ix, item);
             self.list.set_step_collapsed(ix, collapsed);
         }
-        self.list.remeasure_item(ix);
+        self.list.remeasure_items(ix..ix + 1);
         cx.notify();
+    }
+
+    /// Fold or unfold the run of finished steps that starts at `start`.
+    fn toggle_group(&mut self, start: usize, cx: &mut Context<Self>) {
+        let key = group_key(start);
+        if !self.expanded.remove(&key) {
+            self.expanded.insert(key);
+        }
+        if let Some(changed) = self.sync_groups(start..start + 1) {
+            self.list.remeasure_items(changed);
+        }
+        cx.notify();
+    }
+
+    /// Tell the list how the items of every run of finished steps that
+    /// touches `range` render: a folded run shows only its summary line
+    /// (at its first step), an unfolded one the line above its steps; items
+    /// outside runs render as themselves. Returns the items whose rows
+    /// changed, each touched run whole.
+    fn sync_groups(&mut self, range: Range<usize>) -> Option<Range<usize>> {
+        let items = &self.transcript.items;
+        let mut changed: Option<Range<usize>> = None;
+        let mut mark = |span: Range<usize>| {
+            changed = Some(match changed.take() {
+                Some(c) => c.start.min(span.start)..c.end.max(span.end),
+                None => span,
+            });
+        };
+        let mut ix = range.start;
+        while ix < range.end {
+            let Some(run) = steps::step_run(items, ix) else {
+                if self.list.set_group(ix, None) {
+                    mark(ix..ix + 1);
+                }
+                ix += 1;
+                continue;
+            };
+            let open = self.expanded.contains(&group_key(run.start));
+            let mut touched = false;
+            for member in run.clone() {
+                let group = match (member == run.start, open) {
+                    (true, false) => Some(GroupRow::Summary),
+                    (true, true) => Some(GroupRow::Open),
+                    (false, false) => Some(GroupRow::Hidden),
+                    (false, true) => None,
+                };
+                touched |= self.list.set_group(member, group);
+            }
+            if touched {
+                mark(run.clone());
+            }
+            ix = run.end;
+        }
+        changed
     }
 
     /// Whether step `ix` shows its quiet one-line row (`Item::Shell` never
@@ -750,25 +827,33 @@ impl SessionView {
                     .iter()
                     .any(|b| matches!(b, Block::Text(t) if !t.is_empty()));
                 let mut thinking_live = false;
+                // The answer starts a step away from the thought before it,
+                // so the eye finds where to begin reading.
+                let mut after_thought = false;
                 for (block_ix, block) in blocks.iter().enumerate() {
                     match block {
                         Block::Text(text) => {
                             if let Some((state, ..)) = self.markdown.get(&(ix, block_ix)) {
                                 column = column.child(
-                                    div().text_size(rems(14. / 16.)).text_color(ui::fg()).child(
-                                        self.markdown_view(
+                                    div()
+                                        .when(std::mem::take(&mut after_thought), |d| {
+                                            d.pt(rems(8. / 16.))
+                                        })
+                                        .text_size(rems(14. / 16.))
+                                        .text_color(ui::fg())
+                                        .child(self.markdown_view(
                                             state,
                                             text,
                                             ("mermaid-install", ix * 64 + block_ix),
                                             cx,
-                                        ),
-                                    ),
+                                        )),
                                 );
                             }
                         }
                         Block::Thinking(text) if !text.trim().is_empty() => {
                             let live = *streaming && block_ix + 1 == blocks.len();
                             thinking_live |= live;
+                            after_thought = true;
                             column =
                                 column.child(self.render_thinking(ix, block_ix, text, live, cx));
                         }
@@ -1271,8 +1356,9 @@ impl SessionView {
             .into_any_element()
     }
 
-    /// A collapsed step: one quiet line, no card around it. The icon is
-    /// faint (danger's cross when the step failed, pulsing while it runs),
+    /// A collapsed step: one quiet line, no card around it. The icon takes
+    /// its kind's tint ([`step_tone`]; danger's cross when the step failed,
+    /// pulsing while it runs),
     /// the rest is today's header restyled: title, subject, +n/−n, duration
     /// and a chevron. Clicking it unfolds the whole step when `fold` (its
     /// key and whether the chevron points up) is given.
@@ -1287,7 +1373,11 @@ impl SessionView {
         let failed = spec.status == ToolStatus::Failed;
         let running = spec.status == ToolStatus::Running;
         let icon = if failed { IconName::CircleX } else { spec.icon };
-        let icon_color = if failed { ui::danger() } else { ui::faint() };
+        let icon_color = if failed {
+            ui::danger()
+        } else {
+            step_tone(spec.icon)
+        };
         let icon = if running {
             ui::pulse(div().child(Icon::new(icon).small().text_color(icon_color)))
                 .into_any_element()
@@ -1325,7 +1415,7 @@ impl SessionView {
             spec,
             Icon::new(spec.icon)
                 .small()
-                .text_color(ui::muted())
+                .text_color(step_tone(spec.icon))
                 .into_any_element(),
             StepRowStyle::Card,
             None,
@@ -1637,6 +1727,78 @@ impl Focusable for SessionView {
 }
 
 impl SessionView {
+    /// The summary line of the run of finished steps that starts at item
+    /// `start`, a quiet step line itself: per kind of step its icon (toned
+    /// like the steps') and a count in words, then the run's total time
+    /// and a chevron (up when `open`). A click folds or unfolds the run.
+    fn run_line(&self, start: usize, open: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let items = &self.transcript.items;
+        let run = steps::step_run(items, start).unwrap_or(start..start + 1);
+        let took: Duration = (run.clone())
+            .filter_map(|ix| match &items[ix] {
+                Item::Tool {
+                    status,
+                    duration_ms,
+                    ..
+                } => self.tool_duration(ix, *status, *duration_ms),
+                _ => None,
+            })
+            .sum();
+        let parts = steps::run_summary(items, run)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(n, (kind, count))| {
+                let icon = kind_icon(kind);
+                let separator =
+                    (n > 0).then(|| div().text_color(ui::faint()).child("·").into_any_element());
+                separator.into_iter().chain([h_flex()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .child(Icon::new(icon).small().text_color(step_tone(icon)))
+                    .child(div().text_color(ui::muted()).child(kind.label(count)))
+                    .into_any_element()])
+            });
+        h_flex()
+            .id(("run", start))
+            .w_full()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .min_w_0()
+            .cursor_pointer()
+            .rounded_lg()
+            .hover(|s| s.bg(ui::surface_hover()))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_group(start, cx)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .gap_2()
+                    .whitespace_nowrap()
+                    .text_size(rems(13. / 16.))
+                    .children(parts),
+            )
+            .when(!took.is_zero(), |this| {
+                this.child(
+                    div()
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(11.))
+                        .text_color(ui::faint())
+                        .child(ui::format_duration(took.as_millis() as u64)),
+                )
+            })
+            .child(
+                Icon::new(if open {
+                    IconName::ChevronUp
+                } else {
+                    IconName::ChevronDown
+                })
+                .xsmall()
+                .text_color(ui::faint()),
+            )
+    }
+
     /// One row of the transcript list; `cx.processor` calls it for the
     /// rows on screen (and in the overdraw) only.
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1662,6 +1824,12 @@ impl SessionView {
                     .into_any_element()
             }
             Row::Item(i) => {
+                // A folded run of finished steps shows only its summary
+                // line, at its first step: the others render no row.
+                let group = self.list.group(i);
+                if group == Some(GroupRow::Hidden) {
+                    return div().into_any_element();
+                }
                 self.ensure_markdown(i, cx);
                 let Some(item) = self.transcript.items.get(i) else {
                     return div().into_any_element();
@@ -1672,7 +1840,17 @@ impl SessionView {
                 if !assistant_visible(item) {
                     return div().into_any_element();
                 }
-                let element = self.render_item(i, item, narrow, cx);
+                let element = match group {
+                    Some(GroupRow::Summary) => self.run_line(i, false, cx).into_any_element(),
+                    // Unfolded: the summary line above the first step.
+                    Some(GroupRow::Open) => v_flex()
+                        .w_full()
+                        .when(!self.step_collapsed(i, item), |d| d.gap(rems(8. / 16.)))
+                        .child(self.run_line(i, true, cx))
+                        .child(self.render_item(i, item, narrow, cx))
+                        .into_any_element(),
+                    _ => self.render_item(i, item, narrow, cx),
+                };
                 // Keyed by index: items animate in once, never again.
                 self.list
                     .appear(("item", i), now, div().w_full().child(element))
@@ -1722,8 +1900,15 @@ impl SessionView {
             Row::Item(i) if tight => {
                 let items = &self.transcript.items;
                 let open = |ix: usize| !self.step_collapsed(ix, &items[ix]);
+                // A run's summary line is a quiet line: the row starts with
+                // it, and a folded run ends with it.
+                let group = |ix: usize| self.list.group(ix);
+                let card_top = group(i).is_none() && open(i);
+                let card_bottom = |ix: usize| {
+                    !matches!(group(ix), Some(GroupRow::Summary | GroupRow::Hidden)) && open(ix)
+                };
                 let previous = items[..i].iter().rposition(assistant_visible);
-                open(i) || previous.is_some_and(open)
+                card_top || previous.is_some_and(card_bottom)
             }
             _ => false,
         };
@@ -1821,6 +2006,9 @@ impl Render for SessionView {
                         // A wheel or trackpad scroll takes over from a glide and
                         // shows the rail's thumb.
                         .on_scroll(cx.listener(|this, _, _, cx| this.on_user_scroll(cx)))
+                        // Text over a busy theme backdrop: dim it behind
+                        // the reading column (as wide as a row's column).
+                        .child(ui::reading_veil(rems(760. / 16.)))
                         .child(
                             list(
                                 self.list.state(),
@@ -1841,9 +2029,12 @@ impl Render for SessionView {
                 let dock = super::input_style::style(cx) == InputStyle::Bar;
                 main.child(
                     h_flex()
+                        .relative()
                         .w_full()
                         .justify_center()
                         .map(|d| if narrow { d.px_3() } else { d.px_6() })
+                        // The activity line's icons sit on glass too.
+                        .when(!dock, |d| d.child(ui::reading_veil(rems(760. / 16.))))
                         .when(dock, |d| {
                             d.pt_3()
                                 .border_t_1()
@@ -2150,6 +2341,21 @@ fn card_texts(item: &Item) -> (Option<(&str, bool)>, &str) {
     }
 }
 
+/// A step's icon tint by kind, so a glance tells commands, reads, edits,
+/// helpers and the web apart without reading: commands in champagne,
+/// reading and searching in info, edits in teal, helpers in purple, the
+/// web in the accent, anything else muted.
+fn step_tone(icon: IconName) -> Hsla {
+    match icon {
+        IconName::CodeXml => ui::champagne(),
+        IconName::FileText | IconName::Search | IconName::Folder => ui::info(),
+        IconName::FilePen => ui::teal(),
+        IconName::Users => ui::purple(),
+        IconName::Globe => ui::accent(),
+        _ => ui::muted(),
+    }
+}
+
 fn tool_icon(name: &str) -> IconName {
     match name {
         "bash" | "bash_background" | "monitor" | "codemode" => IconName::CodeXml,
@@ -2168,6 +2374,20 @@ fn tool_icon(name: &str) -> IconName {
             IconName::Globe
         }
         _ => IconName::Wrench,
+    }
+}
+
+/// The icon a run's summary line shows for a kind of step: the one its
+/// steps' own lines show ([`tool_icon`]).
+fn kind_icon(kind: StepKind) -> IconName {
+    match kind {
+        StepKind::Read => IconName::FileText,
+        StepKind::Search => IconName::Search,
+        StepKind::Edit => IconName::FilePen,
+        StepKind::Command => IconName::CodeXml,
+        StepKind::Delegate => IconName::Users,
+        StepKind::Web => IconName::Globe,
+        StepKind::Other => IconName::Wrench,
     }
 }
 

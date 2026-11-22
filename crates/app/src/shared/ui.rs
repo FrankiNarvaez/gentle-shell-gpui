@@ -969,6 +969,67 @@ pub fn spinner(size: impl Into<gpui_kit::component::Size>, color: Hsla) -> Div {
         .child(slow_frames())
 }
 
+/// Markdown the agent writes: more air between blocks than the reader's
+/// default, so a glance finds where each part starts, and code spans
+/// (paths, commands, names) in their own tint, so they stand out of the
+/// prose as landmarks. Their backing is solid (the popover color with a
+/// touch of the tint): the panes are glass, and a translucent wash over a
+/// busy theme backdrop lets the code get lost. The tint goes through the
+/// highlight every code span takes, table cells included.
+pub fn prose_style() -> gpui_kit::component::text::TextViewStyle {
+    let backing = solid_mix(popover_bg(), teal(), 0.14);
+    gpui_kit::component::text::TextViewStyle::default()
+        .paragraph_gap(rems(1.))
+        .inline_code(gpui_kit::HighlightStyle {
+            color: Some(teal()),
+            background_color: Some(backing),
+            ..Default::default()
+        })
+}
+
+/// `base` moved `t` of the way to `tint`, fully opaque.
+fn solid_mix(base: Hsla, tint: Hsla, t: f32) -> Hsla {
+    let (a, b) = (gpui_kit::Rgba::from(base), gpui_kit::Rgba::from(tint));
+    let lerp = |x: f32, y: f32| x + (y - x) * t;
+    gpui_kit::Rgba {
+        r: lerp(a.r, b.r),
+        g: lerp(a.g, b.g),
+        b: lerp(a.b, b.b),
+        a: 1.,
+    }
+    .into()
+}
+
+/// A soft layer of the solid popover color behind a reading column `width`
+/// wide, fading out over `FADE` on each side: the panes are glass, and a
+/// busy theme backdrop under the text makes it hard to read. The backdrop
+/// still shows at the sides and, dimmed, behind the text. Place it first
+/// in a `relative` container; it takes no input.
+pub fn reading_veil(width: Rems) -> Div {
+    const FADE: f32 = 48.;
+    let veil = popover_bg().opacity(0.55);
+    let fade = |from: Hsla, to: Hsla| {
+        div()
+            .flex_none()
+            .w(px(FADE))
+            .h_full()
+            .bg(gpui_kit::linear_gradient(
+                90.,
+                gpui_kit::linear_color_stop(from, 0.),
+                gpui_kit::linear_color_stop(to, 1.),
+            ))
+    };
+    div().absolute().inset_0().flex().justify_center().child(
+        div()
+            .flex()
+            .h_full()
+            .max_w_full()
+            .child(fade(veil.opacity(0.), veil))
+            .child(div().w(width).flex_shrink(1.).min_w_0().h_full().bg(veil))
+            .child(fade(veil, veil.opacity(0.))),
+    )
+}
+
 /// `text` with a soft highlight sweeping across it, from `base` to
 /// `highlight` and back.
 #[track_caller]
