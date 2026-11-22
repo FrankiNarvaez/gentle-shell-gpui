@@ -204,17 +204,12 @@ impl Workspace {
                 self.open_palette(Category::Commands, window, cx);
             }
             Screen::Changes => {
-                let Some(tree) = self
-                    .sidebar
-                    .clone()
-                    .and_then(|view| view.downcast::<FileTreeView>().ok())
-                else {
-                    return;
+                let cwd = match &session {
+                    Some(session) => session.read(cx).cwd().clone(),
+                    None => self.active_cwd(cx),
                 };
-                if !self.sidebar_visible {
-                    self.toggle_sidebar(cx);
-                }
-                tree.update(cx, |tree, cx| tree.show_changes(window, cx));
+                self.close_overlay(window, cx);
+                self.open_review(cwd, window, cx);
             }
             Screen::Tower => {
                 self.close_overlay(window, cx);
@@ -238,6 +233,34 @@ impl Workspace {
                 self.open_tab(PaneKind::Tower, cwd, None, None, window, cx);
             }
         }
+    }
+
+    /// The review screen of the repository `cwd` is in, as a modal over the
+    /// window (Esc closes it).
+    pub(super) fn open_review(
+        &mut self,
+        cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| ReviewView::new(cwd, window, cx));
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &ReviewEvent, window, cx| match event {
+                ReviewEvent::Close => this.close_overlay(window, cx),
+                // Opened like the Files sidebar opens it, once the review
+                // is out of the way.
+                ReviewEvent::OpenFile(path) => {
+                    this.close_overlay(window, cx);
+                    this.open_file(path.clone(), window, cx);
+                }
+            },
+        );
+        // Focused, so Esc reaches the workspace's CloseOverlay through it.
+        view.focus_handle(cx).focus(window, cx);
+        self.overlay = Some((Overlay::Review(view), subscription));
+        cx.notify();
     }
 
     /// The window's active agent tab (`active_session`) is the one the

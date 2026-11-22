@@ -141,6 +141,8 @@ gpui_kit::assets::icon_assets!(
         ArrowLeftRight,
         CircleDot,
         ChartGantt,
+        // The session's spend beside the send.
+        DollarSign,
         Flag,
         // Pinned tabs and pinned generative UI surfaces.
         Pin,

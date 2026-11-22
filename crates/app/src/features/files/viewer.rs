@@ -18,7 +18,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::diff::{Diff, DiffFile, DiffFileStatus, DiffHoverHighlight, DiffState};
+use gpui_kit::component::diff::{
+    Diff, DiffFile, DiffFileStatus, DiffHoverHighlight, DiffMode, DiffState,
+};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, Rope, RopeExt as _};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{FrontmatterPlugin, MarkdownExtensions, TextView, TextViewState};
@@ -88,7 +90,14 @@ pub struct FileView {
     focus: FocusHandle,
     /// The header's width in the last frame, for fitting its facts.
     header_width: Rc<Cell<f32>>,
+    /// How a diff shows its two sides (Unified until the header's toggle or
+    /// [`Self::set_diff_mode`] picks another).
+    diff_mode: DiffMode,
 }
+
+/// A diff pane's Split · Unified toggle, in header order.
+const DIFF_MODES: [DiffMode; 2] = [DiffMode::Split, DiffMode::Unified];
+const DIFF_LABELS: [&str; 2] = ["Split", "Unified"];
 
 /// How a Markdown pane shows its buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,6 +283,7 @@ impl FileView {
             markdown,
             focus,
             header_width: Rc::default(),
+            diff_mode: DiffMode::Unified,
         };
         this.draw_diagrams(drawing, cx);
         this
@@ -362,6 +372,7 @@ impl FileView {
             markdown: None,
             focus: cx.focus_handle(),
             header_width: Rc::default(),
+            diff_mode: DiffMode::Unified,
         }
     }
 
@@ -402,6 +413,20 @@ impl FileView {
         self.edit.as_ref().is_some_and(|e| e.dirty)
     }
 
+    /// How a diff shows its sides (see [`Self::set_diff_mode`]).
+    pub fn diff_mode(&self) -> DiffMode {
+        self.diff_mode
+    }
+
+    /// Show a diff's sides apart (Split) or in one column (Unified).
+    pub fn set_diff_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
+        self.diff_mode = mode;
+        if let Body::Diff(state) = &self.body {
+            state.update(cx, |state, cx| state.set_mode(mode, cx));
+        }
+        cx.notify();
+    }
+
     fn install_patch(&mut self, patch: Result<String, Notice>, cx: &mut Context<Self>) {
         self.body = match patch.and_then(|p| parse_patch(&p)) {
             Ok(file) => {
@@ -410,7 +435,8 @@ impl FileView {
                     file.additions(),
                     file.deletions(),
                 ));
-                Body::Diff(cx.new(|cx| DiffState::new([file], cx)))
+                let mode = self.diff_mode;
+                Body::Diff(cx.new(|cx| DiffState::new([file], cx).with_mode(mode)))
             }
             Err(notice) => notice.into_body(),
         };
@@ -818,17 +844,23 @@ impl FileView {
             Some(_) if dirty => 28. + chars(SAVE_HINT) * 7. + 8.,
             Some(_) => 28.,
         };
-        // A Markdown pane's Edit · Split · Preview toggle.
+        // A Markdown pane's Edit · Split · Preview toggle, or a diff's
+        // Split · Unified one.
         let mode = self.markdown.as_ref().map(|m| m.mode);
-        let toggle_width = match mode {
-            None => 0.,
-            Some(_) => {
-                MdMode::LABELS
-                    .iter()
-                    .map(|l| chars(l) * 6.5 + 22.)
-                    .sum::<f32>()
-                    + 14.
-            }
+        let diff_mode = matches!(self.body, Body::Diff(_)).then_some(self.diff_mode);
+        let toggle_labels: &[&str] = match (mode, diff_mode) {
+            (Some(_), _) => &MdMode::LABELS,
+            (None, Some(_)) => &DIFF_LABELS,
+            (None, None) => &[],
+        };
+        let toggle_width = if toggle_labels.is_empty() {
+            0.
+        } else {
+            toggle_labels
+                .iter()
+                .map(|l| chars(l) * 6.5 + 22.)
+                .sum::<f32>()
+                + 14.
         };
         let path_width = chars(&self.crumbs.1) * 7.6
             + (chars(&self.crumbs.0) * 6.8).min(90.)
@@ -952,6 +984,19 @@ impl FileView {
                     move |ix, window, cx| {
                         if let Some(&mode) = MdMode::ALL.get(*ix) {
                             let _ = view.update(cx, |this, cx| this.set_mode(mode, window, cx));
+                        }
+                    },
+                ))
+            })
+            .when_some(diff_mode, |d, current| {
+                let view = cx.entity().downgrade();
+                d.child(ui::segmented(
+                    "file-view-diff-mode",
+                    &DIFF_LABELS,
+                    DIFF_MODES.iter().position(|m| *m == current),
+                    move |ix, _, cx| {
+                        if let Some(&mode) = DIFF_MODES.get(*ix) {
+                            let _ = view.update(cx, |this, cx| this.set_diff_mode(mode, cx));
                         }
                     },
                 ))

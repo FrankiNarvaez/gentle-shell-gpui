@@ -188,7 +188,9 @@ impl SessionView {
                 .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
         let right = h_flex()
             .flex_shrink_0()
-            .gap_2()
+            // Each control brings its own 4px inset (an xsmall button's box),
+            // so a hairline gap reads as one group: ~10px between glyphs.
+            .gap_0p5()
             .when(!folded.is_empty(), |this| {
                 let tip = folded.join("\n");
                 this.child(
@@ -196,6 +198,9 @@ impl SessionView {
                         .id("status-overflow")
                         .flex()
                         .items_center()
+                        // The box of an xsmall ghost button, as its neighbours.
+                        .h_5()
+                        .px_1()
                         .gap_1()
                         .text_color(ui::faint())
                         .hover(|s| s.text_color(ui::muted()))
@@ -207,9 +212,10 @@ impl SessionView {
             .when(self.jobs_visible(), |this| {
                 this.child(self.render_jobs_chip(cx))
             })
-            // What the agent's session changed (Gentle Shell `main`).
+            // The working tree has changes: `±` and the count; a click
+            // opens the review.
             .when(!collapse, |this| {
-                this.children(self.render_changes_chip(cx))
+                this.children(self.render_changes_button(cx))
             })
             .when(self.activity.queued > 0, |this| {
                 this.child(ui::chip(
@@ -524,16 +530,59 @@ impl SessionView {
         )
     }
 
-    /// What the session spent, quietly beside the folder: the cost (or the
-    /// last response's output) on the chip, the last response's tokens on
-    /// click.
+    /// The working tree's changes: the `±` icon with the file count in
+    /// amber, as on the sidebar's Changes tab; a click opens the review.
+    fn render_changes_button(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        let files = self.git.snapshot.as_ref()?.files.len();
+        if files == 0 {
+            return None;
+        }
+        let tip = format!(
+            "Review changes · {files} {}",
+            if files == 1 { "file" } else { "files" }
+        );
+        Some(
+            h_flex()
+                .id("review-changes")
+                .flex_none()
+                // The box of an xsmall ghost button, as its neighbours.
+                .h_5()
+                .px_1()
+                .gap_0p5()
+                .rounded_md()
+                .cursor_pointer()
+                .text_color(ui::faint())
+                .hover(|s| s.text_color(ui::muted()).bg(ui::surface_hover()))
+                .child(Icon::new(IconName::Diff).xsmall())
+                .child(
+                    div()
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(10.5))
+                        .text_color(ui::warning())
+                        .child(files.to_string()),
+                )
+                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.emit(crate::features::session::SessionEvent::OpenScreen(
+                        gentle_core::commands::Screen::Changes,
+                    ))
+                })),
+        )
+    }
+
+    /// What the session spent, quietly beside the send: the cost in the
+    /// code font after a dollar sign (or the last response's output), the
+    /// last response's tokens on click.
     pub(super) fn render_usage_chip(&self) -> Option<impl IntoElement + use<>> {
         let usage = self.transcript.last_usage;
         let cost = self.usage.cost;
-        let label = if cost > 0.0 {
-            format!("${cost:.2}")
+        let (icon, label) = if cost > 0.0 {
+            (IconName::DollarSign, format!("{cost:.2}"))
         } else {
-            format!("out {}", format_tokens(usage?.output))
+            (
+                IconName::ChartPie,
+                format!("out {}", format_tokens(usage?.output)),
+            )
         };
         let rows: Vec<(&'static str, String)> = usage
             .map(|usage| {
@@ -548,8 +597,9 @@ impl SessionView {
             .chain((cost > 0.0).then(|| ("Session cost", format!("${cost:.2}"))))
             .collect();
         Some(chip_popover(
-            ChipPopoverOptions::new("last-usage", IconName::ChartPie, ui::faint(), label)
-                .title("Usage"),
+            ChipPopoverOptions::new("last-usage", icon, ui::faint(), label)
+                .title("Usage")
+                .mono(),
             move || {
                 rows.iter()
                     .map(|(name, value)| {
@@ -589,6 +639,7 @@ pub(super) struct ChipPopoverOptions {
     title: SharedString,
     count: SharedString,
     action: Option<ChipHeaderAction>,
+    mono: bool,
 }
 
 impl ChipPopoverOptions {
@@ -606,6 +657,7 @@ impl ChipPopoverOptions {
             title: "".into(),
             count: "".into(),
             action: None,
+            mono: false,
         }
     }
 
@@ -626,6 +678,12 @@ impl ChipPopoverOptions {
         self.action = Some(action);
         self
     }
+
+    /// The trigger's label in `ui::mono()`, for figures.
+    pub(super) fn mono(mut self) -> Self {
+        self.mono = true;
+        self
+    }
 }
 
 /// A status chip over the composer that opens a card above it: icon, title,
@@ -643,11 +701,13 @@ pub(super) fn chip_popover(
         title,
         count,
         action,
+        mono,
     } = options;
     let trigger = Button::new(SharedString::from(format!("{id}-chip")))
         .ghost()
         .xsmall()
         .text_color(color)
+        .when(mono, |b| b.font_family(ui::mono()))
         .icon(Icon::new(icon))
         .label(label);
     Popover::new(SharedString::from(format!("{id}-popover")))

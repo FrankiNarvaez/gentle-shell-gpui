@@ -111,6 +111,8 @@ pub struct ChangesView {
     busy: Option<&'static str>,
     error: Option<String>,
     visible: bool,
+    /// [`Self::open_diff`] came before the first read: run it once it lands.
+    open_pending: bool,
     _poll: Task<()>,
     _commit: Task<()>,
     _generate: Task<()>,
@@ -151,6 +153,7 @@ impl ChangesView {
             busy: None,
             error: None,
             visible: true,
+            open_pending: false,
             _poll: Task::ready(()),
             _commit: Task::ready(()),
             _generate: Task::ready(()),
@@ -234,7 +237,36 @@ impl ChangesView {
         if self.change_count() != before {
             cx.emit(ChangesEvent::Changed);
         }
+        if std::mem::take(&mut self.open_pending) {
+            self.open_diff(cx);
+        }
         cx.notify();
+    }
+
+    /// Show a diff (the composer's review button): the selected file's, else
+    /// the first listed. Before the first read, once it lands.
+    pub fn open_diff(&mut self, cx: &mut Context<Self>) {
+        if self.repo.is_none() {
+            self.open_pending = true;
+            return;
+        }
+        let Some(tree) = self.tree() else { return };
+        // The selected file while it's still changed, else the first listed.
+        let target = self
+            .selected
+            .clone()
+            .filter(|(_, path)| tree.entries.iter().any(|e| e.path == *path))
+            .or_else(|| {
+                self.lines.iter().find_map(|line| match line {
+                    Line::Entry { side, entry, .. } => {
+                        Some((*side, tree.entries.get(*entry)?.path.clone()))
+                    }
+                    _ => None,
+                })
+            });
+        if let Some((side, path)) = target {
+            self.click_entry(&path, side, cx);
+        }
     }
 
     /// Rebuild the flat row model: per side a header, the untracked count,
@@ -812,12 +844,19 @@ impl ChangesView {
             .selected
             .as_ref()
             .is_some_and(|(s, path)| *s == side && *path == entry.path);
+        // The name first, always whole; its folder after it, quieter, giving
+        // way from its start so the part nearest the file stays readable.
         let (dir, name) = match entry.path.rsplit_once('/') {
-            Some((dir, name)) if indent == 0. => (format!("{dir}/"), name.to_string()),
+            Some((dir, name)) if indent == 0. => (dir.to_string(), name.to_string()),
             Some((_, name)) => (String::new(), name.to_string()),
             None => (String::new(), entry.path.clone()),
         };
         let deleted = badge == 'D';
+        let lines = match side {
+            Side::Unstaged => entry.unstaged_lines,
+            Side::Staged => entry.staged_lines,
+        }
+        .filter(|&(added, removed)| added + removed > 0);
         let id = format!("change-{side:?}-{}", entry.path);
         let weak = cx.entity().downgrade();
         let check = {
@@ -838,10 +877,13 @@ impl ChangesView {
         };
         let path = entry.path.clone();
         let menu_entry = entry.clone();
-        h_flex()
+        // A list item is laid out as its own root, so the row only gets the
+        // list's width (and its folder only gives way) when it asks for it:
+        // the wrapper takes the full width, the row fills it inside the inset.
+        let row = h_flex()
             .id(SharedString::from(id))
+            .w_full()
             .h(rems(ROW_HEIGHT / 16.))
-            .mx_1p5()
             .pl(rems((6. + indent) / 16.))
             .pr_1p5()
             .gap_2()
@@ -855,16 +897,9 @@ impl ChangesView {
                 h_flex()
                     .flex_1()
                     .min_w_0()
+                    .gap_1p5()
+                    .items_baseline()
                     .text_size(rems(13. / 16.))
-                    .when(!dir.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(ui::faint())
-                                .child(dir),
-                        )
-                    })
                     .child(
                         div()
                             .flex_none()
@@ -873,8 +908,40 @@ impl ChangesView {
                             .text_color(if deleted { ui::muted() } else { ui::fg() })
                             .when(deleted, |d| d.line_through())
                             .child(name),
-                    ),
+                    )
+                    .when(!dir.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis_start()
+                                .text_size(rems(11.5 / 16.))
+                                .text_color(ui::faint())
+                                .child(dir),
+                        )
+                    }),
             )
+            .when_some(lines, |d, (added, removed)| {
+                d.child(
+                    h_flex()
+                        .flex_none()
+                        .gap_1()
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(11.))
+                        .when(added > 0, |d| {
+                            d.child(div().text_color(ui::success()).child(format!("+{added}")))
+                        })
+                        .when(removed > 0, |d| {
+                            d.child(
+                                div()
+                                    .text_color(ui::danger())
+                                    .child(format!("\u{2212}{removed}")),
+                            )
+                        }),
+                )
+            })
             .on_click(cx.listener(move |this, _, _, cx| this.click_entry(&path, side, cx)))
             .context_menu(move |menu, _, _| {
                 let entry = menu_entry.clone();
@@ -928,8 +995,8 @@ impl ChangesView {
                         .disabled(entry.kind == EntryKind::Conflict)
                         .on_click(discard),
                 )
-            })
-            .into_any_element()
+            });
+        div().w_full().px_1p5().child(row).into_any_element()
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {

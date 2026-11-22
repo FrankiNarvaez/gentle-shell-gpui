@@ -244,7 +244,6 @@ pub(in crate::features::session) mod desktop {
         ConfigChange, ConfigFailure, ConfigOutcome, ConfigSupport, ConfigTicket, ProfileApply,
     };
 
-    pub(in crate::features::session) mod changes;
     #[cfg(test)]
     mod live;
     #[cfg(test)]
@@ -369,8 +368,6 @@ pub(in crate::features::session) mod desktop {
         output: output::Output,
         /// The review-mode switch (`get_review_mode`/`set_review_mode`).
         review: review::Review,
-        /// What this session changed (`get_changes`/`get_change_diff`).
-        changes: changes::ChangeSet,
     }
 
     impl Default for Desktop {
@@ -399,7 +396,6 @@ pub(in crate::features::session) mod desktop {
                 snapshot_sections: false,
                 output: output::Output::default(),
                 review: review::Review::default(),
-                changes: changes::ChangeSet::default(),
             }
         }
 
@@ -424,7 +420,6 @@ pub(in crate::features::session) mod desktop {
             self.snapshot_sections = false;
             self.output.reset();
             self.review.reset();
-            self.changes.reset();
         }
 
         /// The backend is ready and Pi listed (or did not list) the extension's
@@ -492,7 +487,6 @@ pub(in crate::features::session) mod desktop {
                             self.sections.set_capabilities(&capabilities);
                             self.output.set_capabilities(capabilities.clone());
                             self.review.set_capabilities(capabilities.clone());
-                            self.changes.set_capabilities(capabilities.clone());
                             self.design.set_capabilities(capabilities);
                             Applied {
                                 sends: self.issue(DesktopMethod::GetSnapshot, Step::Snapshot),
@@ -1120,59 +1114,6 @@ pub(in crate::features::session) mod desktop {
             self.review.outer(&mut self.session, generation, handled)
         }
 
-        /// The session's change set, for its chip and card.
-        pub(in crate::features::session) fn changes(&self) -> &changes::ChangeSet {
-            &self.changes
-        }
-
-        /// The change set may have moved (turn end, a `changes` section, the
-        /// card opened): read it again.
-        pub(in crate::features::session) fn changes_mark_stale(&mut self) {
-            self.changes.mark_stale();
-        }
-
-        /// Show one file's diff, or close it.
-        pub(in crate::features::session) fn changes_select(
-            &mut self,
-            file: Option<changes::FileKey>,
-        ) {
-            self.changes.select(file);
-        }
-
-        /// Send what the changes slice owes once the probe has landed, no
-        /// resync is owed and no other request is in flight.
-        pub(in crate::features::session) fn changes_pump(&mut self) -> changes::Applied {
-            if self.step != Step::Ready || self.pending_resync {
-                return changes::Applied::default();
-            }
-            self.changes.pump(&mut self.session)
-        }
-
-        /// One incoming UI request for the changes slice.
-        pub(in crate::features::session) fn changes_apply(
-            &mut self,
-            request: &UiRequest,
-        ) -> changes::Applied {
-            self.changes.apply(&mut self.session, request)
-        }
-
-        /// The pending timeout for a changes request.
-        pub(in crate::features::session) fn changes_expire(
-            &mut self,
-            generation: u64,
-        ) -> changes::Applied {
-            self.changes.expire(&mut self.session, generation)
-        }
-
-        /// Pi answered the outer prompt of a changes request.
-        pub(in crate::features::session) fn changes_outer(
-            &mut self,
-            generation: u64,
-            handled: bool,
-        ) -> changes::Applied {
-            self.changes.outer(&mut self.session, generation, handled)
-        }
-
         /// Stop asking this backend and say why once: the channel is unusable
         /// here until the backend is replaced.
         fn unavailable(&mut self, report: Report) -> Applied {
@@ -1192,12 +1133,10 @@ pub(in crate::features::session) mod desktop {
             // be among the lost events: the canvas re-seeds behind the
             // snapshot. Lost `config_changed` events mean any store may have
             // moved: the screen re-reads them behind it. A lost
-            // `review_mode_changed` or `session_snapshot` means the switch and
-            // the change set are read again.
+            // `review_mode_changed` means the switch is read again.
             self.design.rearm();
             self.config.rearm();
             self.review.rearm();
-            self.changes.mark_stale();
             if self.session.pending().is_some() {
                 // A request is in flight. A channel probe or resync already
                 // covers the gap; a permission request owes one resync once it
@@ -6949,20 +6888,14 @@ mod tests {
     }
 
     #[test]
-    fn review_and_changes_read_once_the_probe_lands_and_never_on_an_older_shell() {
+    fn review_reads_once_the_probe_lands_and_never_on_an_older_shell() {
         // Before the probe nothing is asked.
         let mut idle = Desktop::new();
         assert!(idle.review_pump().sends.is_empty());
-        assert!(idle.changes_pump().sends.is_empty());
 
         let mut desktop = config_probed(
             1,
-            &[
-                "get_review_mode",
-                "set_review_mode",
-                "get_changes",
-                "get_change_diff",
-            ],
+            &["get_review_mode", "set_review_mode"],
             &["review_mode_changed", "session_snapshot"],
         );
         let review = desktop.review_pump();
@@ -6970,8 +6903,6 @@ mod tests {
             review.sends[0].request.method(),
             DesktopMethod::GetReviewMode
         );
-        // One slot: the change set waits for the review read.
-        assert!(desktop.changes_pump().sends.is_empty());
         let id = review.sends[0].request.request_id().to_string();
         let _ = desktop.review_apply(&desktop_widget(config_response_lines(
             &id,
@@ -6979,14 +6910,8 @@ mod tests {
                    "scopes": {"global": "unset", "clone": "unset"}}),
         )));
         assert!(desktop.review().mode().is_some());
-        let changes = desktop.changes_pump();
-        assert_eq!(changes.sends[0].request.method(), DesktopMethod::GetChanges);
 
-        // A gap re-reads both behind the resync snapshot.
-        let _ = desktop.changes_apply(&desktop_widget(config_response_lines(
-            changes.sends[0].request.request_id(),
-            json!({"roots": [], "files": [], "truncated": false}),
-        )));
+        // A gap re-reads it behind the resync snapshot.
         let resync = desktop.resync();
         assert_eq!(resync[0].request.method(), DesktopMethod::GetSnapshot);
         assert!(
@@ -7002,14 +6927,11 @@ mod tests {
             DesktopMethod::GetReviewMode
         );
 
-        // 4.8.0 offers neither: nothing is ever sent and nothing shows.
+        // 4.8.0 offers none: nothing is ever sent and nothing shows.
         let mut old = config_probed(1, &["get_config", "set_config"], &["config_changed"]);
         old.review_refresh();
-        old.changes_mark_stale();
         assert!(old.review_pump().sends.is_empty());
-        assert!(old.changes_pump().sends.is_empty());
         assert!(old.review().mode().is_none());
-        assert!(old.changes().list().is_none());
     }
 
     #[test]
