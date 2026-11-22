@@ -135,9 +135,16 @@ impl Workspace {
 
     /// The picker: the badge's preview, an icon grid (initials first) and the
     /// theme's colors (the name's own first). Changes apply at once.
-    pub(super) fn render_badge_picker(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_badge_picker(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let (index, position) = self.badge_picker?;
-        let space = self.spaces.get(index)?;
+        let Some(space) = self.spaces.get(index) else {
+            self.close_badge_picker(window, cx);
+            return None;
+        };
         let mark = Mark::of(space);
         let badge = space.badge;
         let hue = mark.hue();

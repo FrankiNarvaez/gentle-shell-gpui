@@ -72,6 +72,8 @@ impl Workspace {
         if index >= self.spaces.len() {
             return;
         }
+        self.close_popups(window, cx);
+        self.cancel_workspace_rename_state(cx);
         self.ensure_open(index, true, window, cx);
         let changed = index != self.current;
         self.current = index;
@@ -103,7 +105,7 @@ impl Workspace {
 
     pub(super) fn pick_workspace_folder(
         &mut self,
-        name: String,
+        name: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -119,7 +121,7 @@ impl Workspace {
             };
             let Some(path) = paths.pop() else { return };
             let _ = this.update_in(cx, |this, window, cx| {
-                this.create_workspace(Some(name), path, window, cx)
+                this.create_workspace(name, path, window, cx)
             });
         })
         .detach();
@@ -290,6 +292,8 @@ impl Workspace {
         if index >= self.spaces.len() || self.spaces.len() < 2 {
             return;
         }
+        self.close_popups(window, cx);
+        self.finish_workspace_rename(false, window, cx);
         if index == self.current {
             let next = (0..self.spaces.len())
                 .filter(|i| *i != index)

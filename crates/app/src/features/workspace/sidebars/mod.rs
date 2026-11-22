@@ -266,7 +266,9 @@ impl Workspace {
             },
         ));
         let Some(id) = tab.id.filter(|_| space == self.current) else {
-            return row.into_any_element();
+            return row
+                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+                .into_any_element();
         };
         let tabs = &self.space().tabs;
         let actions = TabMenu {
@@ -353,6 +355,7 @@ impl Workspace {
             .icon(Icon::new(IconName::Plus))
             .when_some(label, |b, label| b.label(label))
             .tooltip("New tab")
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .dropdown_menu(move |menu, window, _| new_tab_menu(menu, weak.clone(), window))
             .on_open_change(move |open, window, cx| {
                 crate::features::browser::popover_open(id, *open, window, cx)

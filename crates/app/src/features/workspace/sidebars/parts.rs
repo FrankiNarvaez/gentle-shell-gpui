@@ -96,6 +96,7 @@ impl Workspace {
                 .on_click(
                     cx.listener(|this, _, _, cx| this.set_tab_layout(TabLayout::Horizontal, cx)),
                 )
+                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                 .into_any_element(),
         ]
     }

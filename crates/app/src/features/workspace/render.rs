@@ -106,12 +106,20 @@ impl Render for Workspace {
                             .justify_between()
                             .child(
                                 h_flex()
+                                    .id("title-bar-chip-strip")
                                     .gap_2()
                                     .flex_1()
                                     // Width 0: the tabs take what the buttons leave.
                                     .w_0()
                                     .min_w_0()
                                     .overflow_hidden()
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                            cx.stop_propagation();
+                                            this.open_empty_area_menu(event.position, window, cx);
+                                        }),
+                                    )
                                     .child(self.render_workspace_chip(cx))
                                     .child(
                                         div()
@@ -129,6 +137,9 @@ impl Render for Workspace {
                                     // Without this, Windows answers clicks on these
                                     // buttons as title-bar drags (HTCAPTION).
                                     .occlude()
+                                    .on_mouse_down(MouseButton::Right, |_, _, cx| {
+                                        cx.stop_propagation()
+                                    })
                                     // Tern keeps pane layout in the title bar, so
                                     // panes carry no header: one menu acts on the
                                     // focused pane, each entry with its shortcut.
@@ -305,7 +316,7 @@ impl Render for Workspace {
                     }),
             )
             .children(self.stages.iter().filter_map(Stage::element))
-            .children(self.render_badge_picker(cx))
+            .children(self.render_badge_picker(window, cx))
             .children(self.render_context_menu(cx))
             .when(devices_floating, |root| root.child(self.devices.clone()))
             .children(self.overlay.as_ref().map(|(overlay, _)| {

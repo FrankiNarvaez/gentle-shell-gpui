@@ -138,7 +138,7 @@ impl Workspace {
             PaletteAction::CreateWorkspace {
                 name,
                 pick_folder: true,
-            } => self.pick_workspace_folder(name, window, cx),
+            } => self.pick_workspace_folder(Some(name), window, cx),
             PaletteAction::OpenFile(path) => self.open_file(path, window, cx),
             PaletteAction::SwitchBranch(branch) => self.confirm_switch_branch(branch, window, cx),
         }

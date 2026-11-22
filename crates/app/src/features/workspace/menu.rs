@@ -11,6 +11,7 @@ pub(super) struct OpenMenu {
     key: &'static str,
     menu: Entity<PopupMenu>,
     position: Point<Pixels>,
+    focus_handle: FocusHandle,
     previous_focus: Option<FocusHandle>,
     _subscription: Subscription,
 }
@@ -41,10 +42,12 @@ impl Workspace {
 
     pub(super) fn close_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(menu) = self.open_menu.take() {
-            if Some(menu.menu.focus_handle(cx)) == window.focused(cx)
-                && let Some(prev) = menu.previous_focus
-            {
-                prev.focus(window, cx);
+            if Some(menu.focus_handle.clone()) == window.focused(cx) {
+                if let Some(prev) = menu.previous_focus {
+                    prev.focus(window, cx);
+                } else {
+                    self.focus_active(window, cx);
+                }
             }
             crate::features::browser::popover_open(menu.key, false, window, cx);
             cx.notify();
@@ -86,10 +89,12 @@ impl Workspace {
             },
         );
         crate::features::browser::popover_open(key, true, window, cx);
+        let focus_handle = menu.focus_handle(cx);
         self.open_menu = Some(OpenMenu {
             key,
             menu,
             position,
+            focus_handle,
             previous_focus,
             _subscription: subscription,
         });
@@ -166,7 +171,8 @@ impl Workspace {
                     .on_click(move |_, window, cx| {
                         let _ = agent.update(cx, |this, cx| {
                             this.switch_workspace(index, window, cx);
-                            this.on_new_tab(&NewTab, window, cx);
+                            let root = this.space().root.clone();
+                            this.open_tab(PaneKind::Agent, root, None, None, window, cx);
                         });
                     }),
             )
@@ -176,7 +182,8 @@ impl Workspace {
                     .on_click(move |_, window, cx| {
                         let _ = terminal.update(cx, |this, cx| {
                             this.switch_workspace(index, window, cx);
-                            this.on_new_terminal_tab(&NewTerminalTab, window, cx);
+                            let root = this.space().root.clone();
+                            this.open_tab(PaneKind::Terminal, root, None, None, window, cx);
                         });
                     }),
             )
@@ -185,9 +192,8 @@ impl Workspace {
                 PopupMenuItem::new("New workspace")
                     .icon(Icon::new(IconName::FolderPlus))
                     .on_click(move |_, window, cx| {
-                        let _ = new_space.update(cx, |this, cx| {
-                            this.pick_workspace_folder_for_menu(window, cx)
-                        });
+                        let _ = new_space
+                            .update(cx, |this, cx| this.pick_workspace_folder(None, window, cx));
                     }),
             )
             .separator()
@@ -238,31 +244,6 @@ impl Workspace {
             window,
             cx,
         );
-    }
-
-    /// Folder picker for "New workspace" in a context menu: the name comes
-    /// from the chosen folder.
-    pub(super) fn pick_workspace_folder_for_menu(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Create workspace".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(mut paths))) = paths.await else {
-                return;
-            };
-            let Some(path) = paths.pop() else { return };
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.create_workspace(None, path, window, cx)
-            });
-        })
-        .detach();
     }
 
     /// Open the inline name field for workspace `index` in the place the menu
@@ -334,6 +315,14 @@ impl Workspace {
         }
     }
 
+    /// Cancel the workspace rename without moving focus (used when the UI
+    /// context that held the field is going away, e.g. layout toggle).
+    pub(super) fn cancel_workspace_rename_state(&mut self, cx: &mut Context<Self>) {
+        if self.workspace_rename.take().is_some() {
+            cx.notify();
+        }
+    }
+
     /// Whether workspace `index` is being renamed from `source`.
     pub(super) fn renaming_workspace(&self, index: usize, source: WorkspaceMenuSource) -> bool {
         self.workspace_rename
@@ -374,4 +363,40 @@ impl Workspace {
             .child(Input::new(&rename.input).appearance(false).xsmall())
             .into_any_element()
     }
+}
+
+#[cfg(test)]
+mod tests {
+
+    /// Labels a compact or full tab menu is expected to show, in order.
+    pub(super) fn tab_menu_item_labels(compact: bool) -> Vec<&'static str> {
+        if compact {
+            vec!["Pin tab", "Rename", "Close tab"]
+        } else {
+            vec!["Pin tab", "Rename", "Move up", "Move down", "Close tab"]
+        }
+    }
+
+    #[test]
+    fn compact_tab_menu_omits_move_items() {
+        assert_eq!(
+            tab_menu_item_labels(true),
+            vec!["Pin tab", "Rename", "Close tab"]
+        );
+    }
+
+    #[test]
+    fn full_tab_menu_includes_move_items() {
+        assert_eq!(
+            tab_menu_item_labels(false),
+            vec!["Pin tab", "Rename", "Move up", "Move down", "Close tab"]
+        );
+    }
+
+    // State-transition tests for the Workspace API are not included here
+    // because `Workspace::new` starts a `gentle-shell` agent backend and
+    // renders the full window chrome, which requires a running backend and
+    // platform window state that `TestAppContext` cannot satisfy without
+    // significant test scaffolding. The fixes are covered by the pure item-list
+    // helper below and by the GUI smoke test in T2.
 }

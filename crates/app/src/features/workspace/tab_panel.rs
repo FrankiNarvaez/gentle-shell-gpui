@@ -19,6 +19,7 @@ impl Workspace {
         if self.tab_layout == layout {
             return;
         }
+        self.cancel_workspace_rename_state(cx);
         self.tab_layout = layout;
         // File browsing is a separate right sidebar; switching tab placement
         // must neither open nor hide that independent panel.
@@ -223,9 +224,8 @@ impl Workspace {
                 PopupMenuItem::new("New workspace")
                     .icon(Icon::new(IconName::FolderPlus))
                     .on_click(move |_, window, cx| {
-                        let _ = new_space.update(cx, |this, cx| {
-                            this.pick_workspace_folder_for_menu(window, cx)
-                        });
+                        let _ = new_space
+                            .update(cx, |this, cx| this.pick_workspace_folder(None, window, cx));
                     }),
             )
             .separator();

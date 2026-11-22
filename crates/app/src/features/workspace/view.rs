@@ -114,7 +114,11 @@ impl Workspace {
             .child(workspace_avatar(&Mark::of(self.space())))
             .map(|chip| {
                 if self.renaming_workspace(self.current, WorkspaceMenuSource::Chip) {
-                    chip.child(self.workspace_rename_input(cx))
+                    chip.child(
+                        div()
+                            .w(rems(160. / 16.))
+                            .child(self.workspace_rename_input(cx)),
+                    )
                 } else {
                     chip.child(
                         div()
