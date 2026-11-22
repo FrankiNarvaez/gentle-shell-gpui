@@ -136,24 +136,11 @@ impl SessionView {
             .current
             .as_ref()
             .map_or(ui::faint(), |m| ui::provider_color(&m.provider));
-        // The context in use, always at hand here: the line over the
-        // composer only shows once it nears the alert threshold.
-        let window = self
-            .models
-            .current
-            .as_ref()
-            .map(|m| m.context_window)
-            .filter(|w| *w > 0);
-        let tip = match (self.usage.context_percent, window) {
-            (Some(p), Some(w)) => format!("Choose model · {p:.0}% of {} context", format_tokens(w)),
-            (Some(p), None) => format!("Choose model · {p:.0}% of context"),
-            _ => "Choose model".to_string(),
-        };
         let trigger = Button::new("model")
             .ghost()
             .xsmall()
             .text_color(ui::info())
-            .tooltip(tip)
+            .tooltip("Choose model")
             .child(if busy {
                 ui::spinner(Size::XSmall, ui::info()).into_any_element()
             } else {

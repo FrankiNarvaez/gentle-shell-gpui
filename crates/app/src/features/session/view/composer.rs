@@ -31,23 +31,25 @@ impl SessionView {
     /// The context line, after Tern's: a thin line just over the
     /// composer's top edge that fills as the conversation uses its window,
     /// the percent riding the fill's end and the window's size at the
-    /// line's. It only shows once it matters: amber past the alert
-    /// threshold, red near the end; below that the percent stays in the
-    /// model picker's tooltip (work in progress is the composer's
-    /// [`ui::orbit`]). It stays clear of the composer: drawn over its edge,
-    /// the composer (painted after) would cover it.
+    /// line's. Quiet until it matters (a faint fill, faint captions), then
+    /// amber past the alert threshold and red near the end. Work in
+    /// progress is the composer's [`ui::orbit`], not this line. It stays
+    /// clear of the composer: drawn over its edge, the composer (painted
+    /// after) would cover it.
     fn render_context_bar(&self, cx: &App) -> Option<Div> {
         let percent = self
             .usage
             .context_percent
             .map(|p| p.clamp(0.0, 100.0) as f32)?;
-        let tone = if percent >= 90. {
-            ui::danger()
+        let alert = if percent >= 90. {
+            Some(ui::danger())
         } else if f64::from(percent) >= crate::features::alerts::context_threshold(cx) {
-            ui::warning()
+            Some(ui::warning())
         } else {
-            return None;
+            None
         };
+        let fill = alert.unwrap_or(ui::fg().opacity(0.35));
+        let tone = alert.unwrap_or(ui::faint());
         let used = percent / 100.;
         let window = self
             .models
@@ -87,17 +89,19 @@ impl SessionView {
                                 .h(px(2.))
                                 .rounded_full()
                                 .overflow_hidden()
-                                .bg(ui::fg().opacity(0.16))
-                                .child(div().h_full().w(relative(used)).bg(tone)),
+                                .bg(ui::fg().opacity(0.1))
+                                .child(div().h_full().w(relative(used)).bg(fill)),
                         )
-                        .child(
-                            caption(div())
-                                .left(relative(used))
-                                .ml(rems(-16. / 16.))
-                                .w(rems(32. / 16.))
-                                .text_center()
-                                .child(format!("{percent:.0}%")),
-                        )
+                        .when(percent >= 1., |d| {
+                            d.child(
+                                caption(div())
+                                    .left(relative(used))
+                                    .ml(rems(-16. / 16.))
+                                    .w(rems(32. / 16.))
+                                    .text_center()
+                                    .child(format!("{percent:.0}%")),
+                            )
+                        })
                         .when_some(window, |d, window| {
                             d.child(caption(div()).right_0().child(window))
                         }),
