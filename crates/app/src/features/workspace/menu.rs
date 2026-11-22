@@ -364,39 +364,3 @@ impl Workspace {
             .into_any_element()
     }
 }
-
-#[cfg(test)]
-mod tests {
-
-    /// Labels a compact or full tab menu is expected to show, in order.
-    pub(super) fn tab_menu_item_labels(compact: bool) -> Vec<&'static str> {
-        if compact {
-            vec!["Pin tab", "Rename", "Close tab"]
-        } else {
-            vec!["Pin tab", "Rename", "Move up", "Move down", "Close tab"]
-        }
-    }
-
-    #[test]
-    fn compact_tab_menu_omits_move_items() {
-        assert_eq!(
-            tab_menu_item_labels(true),
-            vec!["Pin tab", "Rename", "Close tab"]
-        );
-    }
-
-    #[test]
-    fn full_tab_menu_includes_move_items() {
-        assert_eq!(
-            tab_menu_item_labels(false),
-            vec!["Pin tab", "Rename", "Move up", "Move down", "Close tab"]
-        );
-    }
-
-    // State-transition tests for the Workspace API are not included here
-    // because `Workspace::new` starts a `gentle-shell` agent backend and
-    // renders the full window chrome, which requires a running backend and
-    // platform window state that `TestAppContext` cannot satisfy without
-    // significant test scaffolding. The fixes are covered by the pure item-list
-    // helper below and by the GUI smoke test in T2.
-}

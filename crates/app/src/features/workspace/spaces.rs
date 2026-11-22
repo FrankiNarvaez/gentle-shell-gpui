@@ -73,7 +73,8 @@ impl Workspace {
             return;
         }
         self.close_popups(window, cx);
-        self.cancel_workspace_rename_state(cx);
+        // A rename left by switching keeps its name, like a blur.
+        self.finish_workspace_rename(true, window, cx);
         self.ensure_open(index, true, window, cx);
         let changed = index != self.current;
         self.current = index;
