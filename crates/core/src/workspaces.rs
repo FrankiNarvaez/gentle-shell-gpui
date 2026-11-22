@@ -53,7 +53,9 @@ pub fn select_tab(
     shift: bool,
 ) -> SelectionUpdate {
     if shift {
-        let anchor = anchor.unwrap_or(clicked);
+        // An anchor that is not among the tabs shown (filtered out, closed)
+        // falls back to the clicked tab.
+        let anchor = anchor.filter(|a| tabs.contains(a)).unwrap_or(clicked);
         let range = range_between(tabs, anchor, clicked);
         SelectionUpdate {
             selected: range,
@@ -123,12 +125,50 @@ pub fn active_after_removals(len: usize, active: usize, removed: &[usize]) -> us
         .min(remaining.saturating_sub(1))
 }
 
-/// Return `indices` sorted from highest to lowest so removing each one does
-/// not shift the remaining indices.
-pub fn removal_order(indices: &[usize]) -> Vec<usize> {
+/// What a left click on a tab does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabClick {
+    /// Show the tab (and keep it as the range anchor).
+    Activate,
+    /// Start renaming the tab (plain double-click).
+    Rename,
+    /// Toggle or range-select; never activates.
+    Select,
+    /// Nothing: the second click of a modified double-click.
+    Ignore,
+}
+
+/// Decide a tab click from its count and modifiers. Modifiers win over the
+/// click count, so a Cmd/Ctrl/Shift double-click never starts a rename.
+pub fn tab_click_action(click_count: usize, platform_modifier: bool, shift: bool) -> TabClick {
+    match (platform_modifier || shift, click_count) {
+        (true, 0 | 1) => TabClick::Select,
+        (true, _) => TabClick::Ignore,
+        (false, 0 | 1) => TabClick::Activate,
+        (false, _) => TabClick::Rename,
+    }
+}
+
+/// Return the indices of tabs removed in one batch from highest to lowest:
+/// removing in this order keeps every remaining index valid, and pushing
+/// closes onto the reopen stack in this order makes the lowest index pop
+/// (reopen) first.
+pub fn close_stack_order(indices: &[usize]) -> Vec<usize> {
     let mut sorted = indices.to_vec();
     sorted.sort_unstable_by(|a, b| b.cmp(a));
     sorted
+}
+
+/// Adjust a workspace index after another workspace is deleted.
+/// Returns `None` when the indexed state referred to the deleted workspace.
+pub fn adjust_workspace_index_after_delete(index: usize, deleted: usize) -> Option<usize> {
+    if index == deleted {
+        None
+    } else if index > deleted {
+        Some(index - 1)
+    } else {
+        Some(index)
+    }
 }
 
 /// Reorder workspaces by moving the workspace at `from` to `to`.
@@ -235,9 +275,46 @@ mod tests {
     }
 
     #[test]
-    fn removal_order_is_descending() {
-        assert_eq!(removal_order(&[1, 5, 2]), vec![5, 2, 1]);
-        assert_eq!(removal_order(&[0]), vec![0]);
+    fn close_stack_order_is_descending() {
+        assert_eq!(close_stack_order(&[1, 5, 2]), vec![5, 2, 1]);
+        assert_eq!(close_stack_order(&[0]), vec![0]);
+    }
+
+    #[test]
+    fn modifiers_win_over_click_count() {
+        use TabClick::*;
+        assert_eq!(tab_click_action(1, false, false), Activate);
+        assert_eq!(tab_click_action(2, false, false), Rename);
+        assert_eq!(tab_click_action(1, true, false), Select);
+        assert_eq!(tab_click_action(1, false, true), Select);
+        assert_eq!(tab_click_action(2, true, false), Ignore);
+        assert_eq!(tab_click_action(2, false, true), Ignore);
+        assert_eq!(tab_click_action(3, true, true), Ignore);
+    }
+
+    #[test]
+    fn shift_with_a_hidden_anchor_falls_back_to_the_clicked_tab() {
+        // The anchor (99) is not among the tabs shown (filtered by search).
+        let update = select_tab(&[1, 2, 3], &[], Some(99), 2, false, true);
+        assert_eq!(update.selected, vec![2]);
+        assert_eq!(update.anchor, Some(2));
+    }
+
+    #[test]
+    fn shift_after_an_ordinary_click_selects_from_that_tab() {
+        let tabs = [1, 2, 3, 4];
+        let click = select_tab(&tabs, &[], None, 2, false, false);
+        assert!(click.activate);
+        let range = select_tab(&tabs, &click.selected, click.anchor, 4, false, true);
+        assert_eq!(range.selected, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn adjust_workspace_index_after_delete_shifts_or_drops() {
+        assert_eq!(adjust_workspace_index_after_delete(0, 0), None);
+        assert_eq!(adjust_workspace_index_after_delete(1, 0), Some(0));
+        assert_eq!(adjust_workspace_index_after_delete(2, 1), Some(1));
+        assert_eq!(adjust_workspace_index_after_delete(0, 2), Some(0));
     }
 
     #[test]

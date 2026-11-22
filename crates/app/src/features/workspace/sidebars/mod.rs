@@ -227,10 +227,14 @@ impl Workspace {
                 target.active = index;
             }
             self.switch_workspace(space, window, cx);
-        } else if event.click_count() >= 2 {
-            self.start_tab_rename(index, window, cx);
         } else {
-            self.on_tab_click(index, event, window, cx);
+            // Ranges follow the tabs the search leaves visible.
+            let visible: Vec<usize> = self
+                .visible_tabs(space, cx)
+                .iter()
+                .filter_map(|t| t.id)
+                .collect();
+            self.on_tab_click(index, event, Some(visible), window, cx);
         }
     }
 

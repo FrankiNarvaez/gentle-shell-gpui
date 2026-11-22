@@ -525,6 +525,7 @@ impl Workspace {
         let Some(tree) = tree else {
             // Nothing in this tab could be restored; drop it and start fresh.
             self.spaces[space_index].tabs.remove(tab_index);
+            self.prune_tab_selection(cx);
             let len = self.spaces[space_index].tabs.len();
             if len == 0 {
                 let root = self.spaces[space_index].root.clone();

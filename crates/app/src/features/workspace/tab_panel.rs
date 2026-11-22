@@ -250,73 +250,65 @@ impl Workspace {
         }
     }
 
-    /// Remove tab ids that no longer exist in their workspace. Call after
-    /// any operation that may have removed tabs.
+    /// Drop selected ids that no longer exist in their workspace; a closed
+    /// anchor falls back to the shown tab. Call after anything that may have
+    /// removed tabs.
     pub(super) fn prune_tab_selection(&mut self, cx: &mut Context<Self>) {
         let Some(sel) = self.tab_selection.as_ref() else {
             return;
         };
-        let space = sel.space;
-        let Some(existing): Option<std::collections::HashSet<usize>> = self
-            .spaces
-            .get(space)
-            .map(|s| s.tabs.iter().map(|t| t.id).collect())
-        else {
-            self.tab_selection = None;
-            cx.notify();
-            return;
-        };
-        let before = sel.selected.len();
-        let selected: std::collections::HashSet<usize> =
-            sel.selected.intersection(&existing).copied().collect();
-        if selected.is_empty() {
-            self.tab_selection = None;
-        } else if selected.len() != before {
-            self.tab_selection = Some(TabSelection {
-                space,
-                anchor: sel.anchor,
-                selected,
-            });
-        } else {
-            return;
-        }
+        let pruned = self.spaces.get(sel.space).and_then(|space| {
+            let existing: Vec<usize> = space.tabs.iter().map(|t| t.id).collect();
+            let active = space.tabs.get(space.active).map(|t| t.id);
+            pruned_selection(sel, &existing, active)
+        });
+        self.tab_selection = pruned;
         cx.notify();
     }
 
-    /// Handle a left click on a tab of the shown workspace. Double-click is
-    /// handled separately and always starts a rename.
+    /// A left click on a tab of the shown workspace. Modifiers decide before
+    /// the click count, so a Cmd/Ctrl/Shift double-click never renames.
+    /// `visible` are the tab ids shown (the sidebar's search filter), for
+    /// range selection; `None` means every tab of the workspace.
     pub(super) fn on_tab_click(
         &mut self,
         index: usize,
         event: &ClickEvent,
+        visible: Option<Vec<usize>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.space().tabs.get(index).is_none() {
-            return;
-        };
+        use gentle_core::workspaces::TabClick;
         let platform = platform_select_modifier(event, cx);
         let shift = event.modifiers().shift;
-        if platform || shift {
-            self.update_tab_selection(index, platform, shift, cx);
-        } else {
-            self.clear_tab_selection(cx);
-            self.activate(index, window, cx);
+        match gentle_core::workspaces::tab_click_action(event.click_count(), platform, shift) {
+            TabClick::Rename => self.start_tab_rename(index, window, cx),
+            TabClick::Ignore => {}
+            TabClick::Select | TabClick::Activate => {
+                self.apply_tab_click(index, platform, shift, visible.as_deref(), window, cx)
+            }
         }
     }
 
-    fn update_tab_selection(
+    /// Apply a click on tab `index` of the shown workspace to the selection
+    /// (and show the tab on an ordinary click).
+    pub(super) fn apply_tab_click(
         &mut self,
         index: usize,
         platform: bool,
         shift: bool,
+        visible: Option<&[usize]>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let space = self.current;
         let Some(tab_id) = self.space().tabs.get(index).map(|t| t.id) else {
             return;
         };
-        let tabs: Vec<usize> = self.space().tabs.iter().map(|t| t.id).collect();
+        let tabs: Vec<usize> = match visible {
+            Some(visible) => visible.to_vec(),
+            None => self.space().tabs.iter().map(|t| t.id).collect(),
+        };
         let (selected, anchor) = self
             .tab_selection
             .as_ref()
@@ -330,14 +322,15 @@ impl Workspace {
             .unwrap_or_default();
         let update =
             gentle_core::workspaces::select_tab(&tabs, &selected, anchor, tab_id, platform, shift);
-        if update.selected.is_empty() {
-            self.tab_selection = None;
-        } else {
-            self.tab_selection = Some(TabSelection {
-                space,
-                anchor: update.anchor.unwrap_or(tab_id),
-                selected: update.selected.iter().copied().collect(),
-            });
+        // An ordinary click empties the selection but keeps the clicked tab as
+        // the anchor, so a later Shift-click selects a range from it.
+        self.tab_selection = Some(TabSelection {
+            space,
+            anchor: update.anchor.unwrap_or(tab_id),
+            selected: update.selected.iter().copied().collect(),
+        });
+        if update.activate {
+            self.activate(index, window, cx);
         }
         cx.notify();
     }
@@ -351,35 +344,7 @@ impl Workspace {
         ids: Vec<usize>,
         cx: &mut Context<Self>,
     ) {
-        let Some(new_pinned) = gentle_core::workspaces::pin_state_for_selection(
-            |id| {
-                self.spaces
-                    .get(space)
-                    .and_then(|s| s.tabs.iter().find(|t| t.id == id))
-                    .is_some_and(|t| t.pinned)
-            },
-            &ids,
-        ) else {
-            return;
-        };
-        self.with_reordered_tabs(
-            space,
-            |tabs| {
-                for tab in tabs.iter_mut() {
-                    if ids.contains(&tab.id) {
-                        tab.pinned = new_pinned;
-                    }
-                }
-                // Keep pinned tabs ahead while preserving relative order inside
-                // each group. reorder_keeping_active preserves the shown tab.
-                let mut pinned: Vec<Tab> = tabs.iter().filter(|t| t.pinned).cloned().collect();
-                let mut unpinned: Vec<Tab> = tabs.iter().filter(|t| !t.pinned).cloned().collect();
-                tabs.clear();
-                tabs.append(&mut pinned);
-                tabs.append(&mut unpinned);
-            },
-            cx,
-        );
+        self.with_reordered_tabs(space, |tabs| pin_tabs(tabs, &ids), cx);
     }
 
     /// Close every selected tab of `space`. Built tabs follow the existing
@@ -431,6 +396,45 @@ impl Workspace {
         }
     }
 
+    /// Remember every close of a batch (`(index, built)` per tab) so reopen
+    /// can undo it, lowest index last pushed so it reopens first.
+    pub(super) fn remember_closes(&mut self, space: usize, removals: &[(usize, bool)], cx: &App) {
+        let order = gentle_core::workspaces::close_stack_order(
+            &removals.iter().map(|(i, _)| *i).collect::<Vec<_>>(),
+        );
+        for idx in &order {
+            let Some(is_built) = removals.iter().find(|(i, _)| i == idx).map(|(_, b)| *b) else {
+                continue;
+            };
+            let Some(tab) = self.spaces.get(space).and_then(|s| s.tabs.get(*idx)) else {
+                continue;
+            };
+            if is_built {
+                let leaves = tab.leaves();
+                self.remember_close(space, *idx, &leaves, cx);
+            } else if let Some(saved) = tab.state.unbuilt().cloned() {
+                let title = saved
+                    .layout
+                    .leaves()
+                    .get(
+                        saved
+                            .focused
+                            .min(saved.layout.leaves().len().saturating_sub(1)),
+                    )
+                    .map(super::sidebars::saved_title)
+                    .unwrap_or_default();
+                if let Some(closed) =
+                    closed::Closed::unbuilt(space, tab.id, *idx, tab.pinned, saved, title)
+                {
+                    if self.closed.len() == closed::KEEP {
+                        self.closed.remove(0);
+                    }
+                    self.closed.push(closed);
+                }
+            }
+        }
+    }
+
     /// Close a set of tabs by id, built or unbuilt, in one batch.
     fn close_tab_ids_now(
         &mut self,
@@ -455,38 +459,11 @@ impl Workspace {
         let original_len = space_ref.tabs.len();
         let original_active = space_ref.active;
 
-        // Remember every close for reopen.
-        for (idx, is_built) in &removals {
-            let tab = &self.spaces[space].tabs[*idx];
-            if *is_built {
-                let leaves = tab.leaves();
-                self.remember_close(space, *idx, &leaves, cx);
-            } else if let Some(saved) = tab.state.unbuilt().cloned() {
-                let title = saved
-                    .layout
-                    .leaves()
-                    .get(
-                        saved
-                            .focused
-                            .min(saved.layout.leaves().len().saturating_sub(1)),
-                    )
-                    .map(super::sidebars::saved_title)
-                    .unwrap_or_default();
-                if let Some(closed) =
-                    closed::Closed::unbuilt(space, tab.id, *idx, tab.pinned, saved, title)
-                {
-                    if self.closed.len() == closed::KEEP {
-                        self.closed.remove(0);
-                    }
-                    self.closed.push(closed);
-                }
-            }
-        }
+        self.remember_closes(space, &removals, cx);
 
         // Remove from highest index to lowest so indices stay valid.
-        let mut indices: Vec<usize> = removals.iter().map(|(i, _)| *i).collect();
-        indices.sort_unstable_by(|a, b| b.cmp(a));
-        for idx in indices {
+        let indices: Vec<usize> = removals.iter().map(|(i, _)| *i).collect();
+        for idx in gentle_core::workspaces::close_stack_order(&indices) {
             let tab = self.spaces[space].tabs.remove(idx);
             if tab.is_built() {
                 for pane in tab.leaves() {
@@ -637,6 +614,59 @@ fn move_by(tabs: &mut [Tab], id: usize, direction: isize) {
     }
 }
 
+/// Pin or unpin `ids` together: if any is unpinned they all get pinned,
+/// otherwise they all get unpinned. Pinned tabs stay ahead, each group in
+/// its previous order.
+fn pin_tabs(tabs: &mut Vec<Tab>, ids: &[usize]) {
+    let Some(pinned) = gentle_core::workspaces::pin_state_for_selection(
+        |id| tabs.iter().any(|t| t.id == id && t.pinned),
+        ids,
+    ) else {
+        return;
+    };
+    for tab in tabs.iter_mut().filter(|t| ids.contains(&t.id)) {
+        tab.pinned = pinned;
+    }
+    let (mut ahead, rest): (Vec<Tab>, Vec<Tab>) = tabs.drain(..).partition(|t| t.pinned);
+    ahead.extend(rest);
+    *tabs = ahead;
+}
+
+/// The selection with its workspace index changed to `space`; none when the
+/// workspace is gone.
+pub(super) fn remap_selection_space(
+    selection: Option<TabSelection>,
+    space: Option<usize>,
+) -> Option<TabSelection> {
+    let mut selection = selection?;
+    selection.space = space?;
+    Some(selection)
+}
+
+/// The selection restricted to the tabs that still exist (`existing`, in
+/// order). A closed anchor falls back to the shown tab (`active`).
+fn pruned_selection(
+    selection: &TabSelection,
+    existing: &[usize],
+    active: Option<usize>,
+) -> Option<TabSelection> {
+    let anchor = if existing.contains(&selection.anchor) {
+        selection.anchor
+    } else {
+        active?
+    };
+    Some(TabSelection {
+        space: selection.space,
+        anchor,
+        selected: selection
+            .selected
+            .iter()
+            .copied()
+            .filter(|id| existing.contains(id))
+            .collect(),
+    })
+}
+
 /// Keep the selected tab after removal, or select its neighbour if it closed.
 pub(super) fn after_removal(space: &mut Space, index: usize) {
     let active = space.active - usize::from(index < space.active);
@@ -647,7 +677,10 @@ pub(super) fn after_removal(space: &mut Space, index: usize) {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Space, Tab, TabState, after_removal, move_by, reorder_keeping_active, toggle_pin};
+    use super::{
+        Space, Tab, TabState, after_removal, move_by, pin_tabs, pruned_selection,
+        remap_selection_space, reorder_keeping_active, toggle_pin,
+    };
     use crate::features::workspaces::{SavedPane, SavedTab};
     use crate::shared::pane::{PaneKind, PaneTree};
 
@@ -736,73 +769,229 @@ mod tests {
         assert_eq!(space.tabs[space.active].id, 3);
     }
 
-    /// Pinning a multi-selection sets every selected tab to the same pin
-    /// state, keeps pinned tabs ahead, and leaves the active tab selected.
     #[test]
-    fn multi_pin_pins_all_when_any_unpinned_and_keeps_active() {
-        use gentle_core::workspaces::pin_state_for_selection;
-
-        let mut space = Space::new("w".into(), PathBuf::from("/w"));
-        space.tabs = vec![
+    fn pin_tabs_pins_all_when_any_is_unpinned_and_keeps_groups_ordered() {
+        let mut tabs = vec![
             unbuilt(1, false),
             unbuilt(2, true),
             unbuilt(3, false),
             unbuilt(4, true),
         ];
-        space.active = 2;
-
-        let selected = vec![2, 3];
-        let new_pinned = pin_state_for_selection(
-            |id| {
-                space
-                    .tabs
-                    .iter()
-                    .find(|t| t.id == id)
-                    .is_some_and(|t| t.pinned)
-            },
-            &selected,
-        )
-        .unwrap();
-        assert!(new_pinned, "one unpinned tab => pin the whole selection");
-
-        reorder_keeping_active(&mut space, |tabs| {
-            for tab in tabs.iter_mut() {
-                if selected.contains(&tab.id) {
-                    tab.pinned = new_pinned;
-                }
-            }
-            let mut pinned: Vec<Tab> = tabs.iter().filter(|t| t.pinned).cloned().collect();
-            let mut unpinned: Vec<Tab> = tabs.iter().filter(|t| !t.pinned).cloned().collect();
-            tabs.clear();
-            tabs.append(&mut pinned);
-            tabs.append(&mut unpinned);
-        });
-
-        assert_eq!(ids(&space.tabs), [2, 3, 4, 1]);
-        assert!(space.tabs.iter().take(3).all(|t| t.pinned));
-        assert!(!space.tabs[3].pinned);
-        assert_eq!(space.tabs[space.active].id, 3, "active tab stays selected");
+        pin_tabs(&mut tabs, &[2, 3]);
+        assert_eq!(ids(&tabs), [2, 3, 4, 1]);
+        assert!(tabs.iter().take(3).all(|t| t.pinned));
+        assert!(!tabs[3].pinned);
+        // All selected are pinned now: the same selection unpins together.
+        pin_tabs(&mut tabs, &[2, 3]);
+        assert_eq!(ids(&tabs), [4, 2, 3, 1]);
+        assert!(tabs[0].pinned);
+        assert!(tabs.iter().skip(1).all(|t| !t.pinned));
+        // Unknown or empty selections change nothing.
+        pin_tabs(&mut tabs, &[]);
+        assert_eq!(ids(&tabs), [4, 2, 3, 1]);
     }
 
-    /// Removing several tabs at once keeps the active index valid.
     #[test]
-    fn multi_close_keeps_active_valid() {
-        use gentle_core::workspaces::active_after_removals;
-
+    fn pin_tabs_through_the_reorder_path_keeps_the_shown_tab() {
         let mut space = Space::new("w".into(), PathBuf::from("/w"));
-        space.tabs = vec![
-            unbuilt(1, false),
-            unbuilt(2, false),
-            unbuilt(3, false),
-            unbuilt(4, false),
-        ];
+        space.tabs = vec![unbuilt(1, false), unbuilt(2, false), unbuilt(3, false)];
         space.active = 2;
-        let removed = vec![0, 2];
-        for idx in gentle_core::workspaces::removal_order(&removed) {
-            space.tabs.remove(idx);
+        reorder_keeping_active(&mut space, |tabs| pin_tabs(tabs, &[2, 3]));
+        assert_eq!(ids(&space.tabs), [2, 3, 1]);
+        assert_eq!(space.tabs[space.active].id, 3);
+    }
+
+    fn selection(space: usize, anchor: usize, selected: &[usize]) -> TabSelection {
+        TabSelection {
+            space,
+            anchor,
+            selected: selected.iter().copied().collect(),
         }
-        space.active = active_after_removals(4, 2, &removed);
-        assert_eq!(ids(&space.tabs), [2, 4]);
-        assert_eq!(space.active, 1);
+    }
+
+    #[test]
+    fn selection_follows_its_workspace_or_goes_with_it() {
+        let moved = remap_selection_space(Some(selection(2, 7, &[7, 8])), Some(0)).unwrap();
+        assert_eq!(moved.space, 0);
+        assert_eq!(moved.selected.len(), 2);
+        assert!(remap_selection_space(Some(selection(2, 7, &[7])), None).is_none());
+        assert!(remap_selection_space(None, Some(1)).is_none());
+    }
+
+    #[test]
+    fn pruning_keeps_what_exists_and_falls_back_to_the_shown_tab() {
+        let sel = selection(0, 1, &[1, 2, 3]);
+        let kept = pruned_selection(&sel, &[1, 3, 4], Some(4)).unwrap();
+        assert_eq!(kept.anchor, 1);
+        assert_eq!(kept.selected, [1, 3].into_iter().collect());
+        // The anchor closed: the shown tab takes over; the selection stays.
+        let moved = pruned_selection(&sel, &[2, 3, 4], Some(4)).unwrap();
+        assert_eq!(moved.anchor, 4);
+        assert_eq!(moved.selected, [2, 3].into_iter().collect());
+        // Nothing left to anchor on.
+        assert!(pruned_selection(&sel, &[], None).is_none());
+    }
+
+    // ── Headless: the real workspace operations ───────────────────────────
+
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    use gpui_kit::component::input::InputState;
+    use gpui_kit::{AppContext as _, Context, Task, TestAppContext, Window, WindowOptions};
+
+    use super::super::{
+        DevicePanel, Invisible, Music, Notices, PaneFactories, PaneItem, TabLayout, TabSelection,
+        Workspace,
+    };
+
+    fn space_with(name: &str, ids: &[usize]) -> Space {
+        let mut space = Space::new(name.into(), std::env::temp_dir());
+        space.tabs = ids.iter().map(|id| unbuilt(*id, false)).collect();
+        space
+    }
+
+    /// Runs `body` on a workspace with `spaces` shown at `current`, without
+    /// startup, saving or a real PTY (terminals are inert views).
+    fn with_workspace(
+        cx: &mut TestAppContext,
+        spaces: Vec<Space>,
+        current: usize,
+        body: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    ) {
+        cx.update(gpui_kit::init);
+        let built = Rc::new(RefCell::new(0usize));
+        let counter = built.clone();
+        let terminal = move |_cwd, _window: &mut Window, cx: &mut gpui_kit::App| {
+            *counter.borrow_mut() += 1;
+            PaneItem {
+                kind: PaneKind::Terminal,
+                view: cx.new(|_| Invisible).into(),
+                focus: cx.focus_handle(),
+                title: Rc::new(|_| "Terminal".into()),
+                unsaved: None,
+            }
+        };
+        let (handle, _) = cx
+            .update(|cx| {
+                cx.set_global(PaneFactories {
+                    terminal: Some(Rc::new(terminal)),
+                    ..Default::default()
+                });
+                gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| cx.new(|_| Invisible))
+            })
+            .unwrap();
+        cx.update(|cx| {
+            handle
+                .update(cx, |_, window, cx| {
+                    let workspace = cx.new(|cx| Workspace {
+                        spaces,
+                        current,
+                        panes: HashMap::new(),
+                        next_id: 100,
+                        overlay: None,
+                        web_shown: Default::default(),
+                        sidebar: None,
+                        sidebar_visible: false,
+                        tab_layout: TabLayout::Horizontal,
+                        sidebar_open_spaces: HashMap::new(),
+                        badge_picker: None,
+                        open_menu: None,
+                        workspace_rename: None,
+                        tab_selection: None,
+                        tab_search: cx.new(|cx| InputState::new(window, cx)),
+                        save_task: Some(Task::ready(())),
+                        _title_poll: Task::ready(()),
+                        _lifecycle: Vec::new(),
+                        notices: cx.new(|_| Notices::default()),
+                        renaming: None,
+                        surge: None,
+                        surge_runs: 0,
+                        _surge_end: None,
+                        stages: Vec::new(),
+                        next_stage: 1,
+                        resume_welcome: None,
+                        drop_hint: None,
+                        closed: Vec::new(),
+                        music: cx.new(|cx| Music::new(window, cx)),
+                        devices: cx.new(DevicePanel::new),
+                    });
+                    workspace.update(cx, |workspace, cx| body(workspace, window, cx));
+                })
+                .unwrap();
+        });
+    }
+
+    fn sorted(ids: Vec<usize>) -> Vec<usize> {
+        let mut ids = ids;
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Deleting a workspace below the shown one, then dragging a workspace,
+    /// leaves the selection and the shown workspace pointing at the same
+    /// workspaces (it used to index out of range).
+    #[gpui::test]
+    fn deleting_then_moving_workspaces_keeps_the_selection_consistent(cx: &mut TestAppContext) {
+        let spaces = vec![
+            space_with("A", &[1, 2]),
+            space_with("B", &[3, 4]),
+            space_with("C", &[5, 6, 7]),
+        ];
+        with_workspace(cx, spaces, 2, |ws, window, cx| {
+            ws.tab_selection = Some(selection(2, 5, &[5, 6]));
+            ws.delete_workspace(0, window, cx);
+            assert_eq!(ws.current, 1);
+            assert_eq!(ws.space().name, "C");
+            let sel = ws.tab_selection.as_ref().expect("selection kept");
+            assert_eq!(sel.space, 1);
+            assert_eq!(sorted(ws.selected_tab_ids(1)), [5, 6]);
+
+            ws.move_workspace(0, 1, window, cx);
+            assert_eq!(ws.spaces[0].name, "C");
+            assert_eq!(ws.current, 0);
+            assert_eq!(ws.tab_selection.as_ref().unwrap().space, 0);
+            assert_eq!(sorted(ws.selected_tab_ids(0)), [5, 6]);
+        });
+    }
+
+    /// An ordinary click keeps the clicked tab as the anchor, so a later
+    /// Shift-click selects the range from it.
+    #[gpui::test]
+    fn shift_click_after_an_ordinary_click_selects_the_range(cx: &mut TestAppContext) {
+        with_workspace(
+            cx,
+            vec![space_with("A", &[1, 2, 3, 4])],
+            0,
+            |ws, window, cx| {
+                ws.apply_tab_click(1, false, false, None, window, cx);
+                assert_eq!(ws.space().active, 1);
+                assert_eq!(ws.selected_tab_count(0), 0);
+                ws.apply_tab_click(3, false, true, None, window, cx);
+                assert_eq!(sorted(ws.selected_tab_ids(0)), [2, 3, 4]);
+                // The range follows only the tabs shown by a filter.
+                ws.apply_tab_click(0, false, false, None, window, cx);
+                ws.apply_tab_click(3, false, true, Some(&[1, 4]), window, cx);
+                assert_eq!(sorted(ws.selected_tab_ids(0)), [1, 4]);
+            },
+        );
+    }
+
+    /// A batch close is remembered so reopening restores the lowest index
+    /// first.
+    #[gpui::test]
+    fn a_multi_close_reopens_the_lowest_index_first(cx: &mut TestAppContext) {
+        with_workspace(
+            cx,
+            vec![space_with("A", &[1, 2, 3, 4])],
+            0,
+            |ws, _window, cx| {
+                ws.remember_closes(0, &[(0, false), (2, false)], cx);
+                let indices: Vec<usize> = ws.closed.iter().map(|c| c.index).collect();
+                // The last one pushed is the first one reopened.
+                assert_eq!(indices, [2, 0]);
+            },
+        );
     }
 }

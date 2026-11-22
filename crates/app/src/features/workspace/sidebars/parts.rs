@@ -311,8 +311,8 @@ impl Workspace {
                 |drag, _, _, cx| cx.new(|_| DragChip(drag.name.clone())),
             )
             .drag_over::<WorkspaceDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
-            .on_drop(cx.listener(move |this, drag: &WorkspaceDrag, _, cx| {
-                this.move_workspace(drag.index, index, cx);
+            .on_drop(cx.listener(move |this, drag: &WorkspaceDrag, window, cx| {
+                this.move_workspace(drag.index, index, window, cx);
             }))
     }
 }

@@ -21,7 +21,7 @@ pub(super) struct Closed {
     pub(super) space: usize,
     /// The tab, by id, and where it sat among the tabs.
     tab: usize,
-    index: usize,
+    pub(super) index: usize,
     /// Pin state to restore when an entire tab is reopened.
     pinned: bool,
     /// The tab's layout just before the close.

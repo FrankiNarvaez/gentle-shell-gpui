@@ -256,11 +256,7 @@ impl Workspace {
                     )
                     // A double-click on an agent tab renames its session.
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        if event.click_count() >= 2 {
-                            this.start_tab_rename(i, window, cx);
-                        } else {
-                            this.on_tab_click(i, event, window, cx);
-                        }
+                        this.on_tab_click(i, event, None, window, cx);
                     }))
                     // Drag a tab onto another to put it there.
                     .on_drag(drag, |drag, _, _, cx| {

@@ -304,42 +304,60 @@ impl Workspace {
         if self.current > index {
             self.current -= 1;
         }
+        // Workspace-indexed state follows the shift, or goes with the workspace.
+        self.tab_selection = self.tab_selection.take().and_then(|sel| {
+            let moved =
+                gentle_core::workspaces::adjust_workspace_index_after_delete(sel.space, index);
+            super::tab_panel::remap_selection_space(Some(sel), moved)
+        });
         self.schedule_save(cx);
         cx.notify();
     }
 
     /// Drag a workspace row in the vertical sidebar to reorder workspaces.
-    /// The current workspace is tracked by identity, and every
-    /// workspace-indexed state is remapped so menus, badge picker, rename,
-    /// closed-tab history and the current selection stay consistent.
-    pub(super) fn move_workspace(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+    /// The shown workspace is tracked by identity and every
+    /// workspace-indexed state is remapped (dropped when it has no new
+    /// index). Open menus and the badge picker close, since they hold
+    /// workspace indexes.
+    pub(super) fn move_workspace(
+        &mut self,
+        from: usize,
+        to: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if from == to || from >= self.spaces.len() || to >= self.spaces.len() {
             return;
         }
+        self.close_popups(window, cx);
         let order = gentle_core::workspaces::reorder_workspaces(self.spaces.len(), from, to);
         let remap = gentle_core::workspaces::workspace_index_remap(&order);
 
-        // Reorder the spaces vector without requiring Space: Default.
-        let mut temp: Vec<Option<Space>> = self.spaces.drain(..).map(Some).collect();
-        let mut new_spaces = Vec::with_capacity(temp.len());
-        for old_idx in &order {
-            new_spaces.push(temp[*old_idx].take().expect("workspace moved once"));
-        }
-        self.spaces = new_spaces;
+        let mut old: Vec<Option<Space>> = self.spaces.drain(..).map(Some).collect();
+        self.spaces = order
+            .iter()
+            .filter_map(|old_index| old.get_mut(*old_index).and_then(Option::take))
+            .collect();
 
-        self.current = remap[self.current];
-        if let Some((idx, _)) = self.badge_picker.as_mut() {
-            *idx = remap[*idx];
-        }
-        if let Some(rename) = self.workspace_rename.as_mut() {
-            rename.index = remap[rename.index];
-        }
-        for closed in &mut self.closed {
-            closed.space = remap[closed.space];
-        }
-        if let Some(sel) = self.tab_selection.as_mut() {
-            sel.space = remap[sel.space];
-        }
+        self.current = remap.get(self.current).copied().unwrap_or(0);
+        self.workspace_rename = self.workspace_rename.take().and_then(|mut rename| {
+            rename.index = *remap.get(rename.index)?;
+            Some(rename)
+        });
+        self.closed
+            .retain_mut(|closed| match remap.get(closed.space) {
+                Some(new) => {
+                    closed.space = *new;
+                    true
+                }
+                None => false,
+            });
+        let selection_space = self
+            .tab_selection
+            .as_ref()
+            .and_then(|sel| remap.get(sel.space).copied());
+        self.tab_selection =
+            super::tab_panel::remap_selection_space(self.tab_selection.take(), selection_space);
         self.schedule_save(cx);
         cx.notify();
     }
