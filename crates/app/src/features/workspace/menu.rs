@@ -2,7 +2,7 @@
 //! workspace, so their open state can suppress tooltips and hide native web
 //! views under them.
 
-use super::tab_panel::TabMenu;
+use super::tab_panel::{MultiTabMenu, TabMenu};
 use super::*;
 
 /// A context menu built and positioned by the workspace. Kept here instead
@@ -223,6 +223,25 @@ impl Workspace {
             "tab-menu",
             position,
             move |menu, _, _cx| Self::tab_actions_menu(menu, weak, tab),
+            window,
+            cx,
+        );
+    }
+
+    /// Right-click on a tab that is part of a 2+ selection opens this menu
+    /// with exactly Pin/Unpin and Close for the whole selection.
+    pub(super) fn open_multi_tab_menu(
+        &mut self,
+        selection: MultiTabMenu,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let weak = cx.entity().downgrade();
+        self.open_owned_menu(
+            "tab-menu",
+            position,
+            move |menu, _, _cx| Self::multi_tab_actions_menu(menu, weak.clone(), selection.clone()),
             window,
             cx,
         );

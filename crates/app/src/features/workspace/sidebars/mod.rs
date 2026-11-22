@@ -3,7 +3,7 @@
 //! `parts`. It acts through the same operations as the horizontal strip.
 
 use super::badge::Mark;
-use super::tab_panel::TabMenu;
+use super::tab_panel::{MultiTabMenu, TabMenu};
 use super::view::new_tab_menu;
 use super::*;
 
@@ -208,12 +208,13 @@ impl Workspace {
     }
 
     /// A click on a tab of any workspace: switch there first, then show it;
-    /// a double-click on one of the shown workspace renames it.
+    /// a double-click on one of the shown workspace renames it. Modifier
+    /// clicks in the shown workspace update the multi-selection instead.
     pub(super) fn open_sidebar_tab(
         &mut self,
         space: usize,
         index: usize,
-        clicks: usize,
+        event: &ClickEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -226,10 +227,10 @@ impl Workspace {
                 target.active = index;
             }
             self.switch_workspace(space, window, cx);
-        } else if clicks >= 2 {
+        } else if event.click_count() >= 2 {
             self.start_tab_rename(index, window, cx);
         } else {
-            self.activate(index, window, cx);
+            self.on_tab_click(index, event, window, cx);
         }
     }
 
@@ -263,7 +264,7 @@ impl Workspace {
         let (space, index) = (tab.space, tab.index);
         let row = row.cursor_pointer().on_click(cx.listener(
             move |this, event: &ClickEvent, window, cx| {
-                this.open_sidebar_tab(space, index, event.click_count(), window, cx)
+                this.open_sidebar_tab(space, index, event, window, cx)
             },
         ));
         let Some(id) = tab.id else {
@@ -287,7 +288,30 @@ impl Workspace {
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                this.open_tab_menu(actions, event.position, window, cx);
+                let selection_count = this.selected_tab_count(space);
+                let is_selected = this.is_tab_selected(space, id);
+                if is_selected && selection_count >= 2 {
+                    let ids = this.selected_tab_ids(space);
+                    let any_unpinned = ids.iter().any(|&sel_id| {
+                        this.spaces[space]
+                            .tabs
+                            .iter()
+                            .any(|t| t.id == sel_id && !t.pinned)
+                    });
+                    this.open_multi_tab_menu(
+                        MultiTabMenu {
+                            space,
+                            ids,
+                            any_unpinned,
+                            count: selection_count,
+                        },
+                        event.position,
+                        window,
+                        cx,
+                    );
+                } else {
+                    this.open_tab_menu(actions, event.position, window, cx);
+                }
             }),
         );
         if space != self.current {

@@ -18,7 +18,7 @@ pub(super) enum Slot {
 /// One close, to undo.
 pub(super) struct Closed {
     /// The workspace it happened in, by index.
-    space: usize,
+    pub(super) space: usize,
     /// The tab, by id, and where it sat among the tabs.
     tab: usize,
     index: usize,
@@ -340,6 +340,7 @@ mod tests {
                     badge_picker: None,
                     open_menu: None,
                     workspace_rename: None,
+                    tab_selection: None,
                     tab_search: cx.new(|cx| InputState::new(window, cx)),
                     save_task: Some(Task::ready(())),
                     _title_poll: Task::ready(()),

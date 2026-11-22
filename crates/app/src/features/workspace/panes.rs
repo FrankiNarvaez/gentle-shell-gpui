@@ -996,6 +996,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         tab_panel::after_removal(&mut self.spaces[space], index);
+        self.prune_tab_selection(cx);
         self.announce_close(window, cx);
         if space == self.current {
             if self.space().tabs.is_empty() {

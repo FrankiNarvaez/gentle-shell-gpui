@@ -241,6 +241,7 @@ impl TabState {
     }
 }
 
+#[derive(Clone)]
 struct Tab {
     id: usize,
     pinned: bool,
@@ -326,6 +327,24 @@ struct TabDrag {
     title: SharedString,
 }
 
+/// Dragged by a workspace row in the vertical sidebar: dropped on another
+/// workspace row it reorders the workspaces.
+#[derive(Clone)]
+struct WorkspaceDrag {
+    index: usize,
+    name: SharedString,
+}
+
+/// A multi-selection of tabs in the shown workspace. Ids are stable while
+/// indices move, so the selection survives pin/reorder/close of non-selected
+/// tabs and is cleared when one of its tabs disappears.
+#[derive(Clone)]
+struct TabSelection {
+    space: usize,
+    anchor: usize,
+    selected: std::collections::HashSet<usize>,
+}
+
 /// The inline name field of an agent tab being renamed (double-click).
 struct TabRename {
     pane: PaneId,
@@ -388,6 +407,7 @@ pub struct Workspace {
     /// Inline rename of a workspace, with the place it started (chip, header
     /// or sidebar row) so the text field draws there.
     workspace_rename: Option<WorkspaceRename>,
+    tab_selection: Option<TabSelection>,
     tab_search: Entity<InputState>,
     save_task: Option<Task<()>>,
     /// Re-reads every pane's title and busy state once a second (non-agent
@@ -512,6 +532,7 @@ impl Workspace {
             badge_picker: None,
             open_menu: None,
             workspace_rename: None,
+            tab_selection: None,
             tab_search,
             save_task: None,
             notices: cx.new(|_| Notices::default()),

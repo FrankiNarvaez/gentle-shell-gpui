@@ -169,7 +169,14 @@ impl Workspace {
             .gap_1p5()
             .rounded_md()
             .when(tab.shown, |d| d.bg(ui::raised()))
-            .when(!tab.shown, |d| d.hover(|s| s.bg(ui::surface_hover())))
+            .when(
+                !tab.shown && tab.id.is_some_and(|id| self.is_tab_selected(tab.space, id)),
+                |d| d.bg(ui::surface_hover().opacity(0.75)),
+            )
+            .when(
+                !tab.shown && tab.id.is_none_or(|id| !self.is_tab_selected(tab.space, id)),
+                |d| d.hover(|s| s.bg(ui::surface_hover())),
+            )
             .when(!self.popups_open(), |d| {
                 d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             })
@@ -211,7 +218,8 @@ impl Workspace {
 
     /// A workspace as a 26 px row: `chevron` (open or closed) when it
     /// folds, its badge, name, activity dot and tab count. A right-click
-    /// opens its menu; the caller adds what a click does.
+    /// opens its menu; the caller adds what a click does. Dragging a row
+    /// onto another reorders the workspaces.
     pub(super) fn space_row(
         &self,
         space: &SpaceEntry,
@@ -221,6 +229,7 @@ impl Workspace {
     ) -> Stateful<Div> {
         let tip = space.tooltip();
         let index = space.index;
+        let name = space.name.clone();
         h_flex()
             .id((id, space.index))
             .relative()
@@ -294,5 +303,16 @@ impl Workspace {
                     .text_color(ui::faint())
                     .child(space.tabs.to_string()),
             )
+            .on_drag(
+                WorkspaceDrag {
+                    index,
+                    name: name.clone(),
+                },
+                |drag, _, _, cx| cx.new(|_| DragChip(drag.name.clone())),
+            )
+            .drag_over::<WorkspaceDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
+            .on_drop(cx.listener(move |this, drag: &WorkspaceDrag, _, cx| {
+                this.move_workspace(drag.index, index, cx);
+            }))
     }
 }

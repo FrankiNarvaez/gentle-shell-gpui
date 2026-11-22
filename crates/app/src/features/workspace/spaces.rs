@@ -60,6 +60,8 @@ impl Workspace {
             return;
         }
         self.close_popups(window, cx);
+        // Selection belongs to the shown workspace; it does not survive a switch.
+        self.clear_tab_selection(cx);
         // A rename left by switching keeps its name, like a blur.
         self.finish_workspace_rename(true, window, cx);
         let changed = index != self.current;
@@ -301,6 +303,42 @@ impl Workspace {
         }
         if self.current > index {
             self.current -= 1;
+        }
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
+    /// Drag a workspace row in the vertical sidebar to reorder workspaces.
+    /// The current workspace is tracked by identity, and every
+    /// workspace-indexed state is remapped so menus, badge picker, rename,
+    /// closed-tab history and the current selection stay consistent.
+    pub(super) fn move_workspace(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to || from >= self.spaces.len() || to >= self.spaces.len() {
+            return;
+        }
+        let order = gentle_core::workspaces::reorder_workspaces(self.spaces.len(), from, to);
+        let remap = gentle_core::workspaces::workspace_index_remap(&order);
+
+        // Reorder the spaces vector without requiring Space: Default.
+        let mut temp: Vec<Option<Space>> = self.spaces.drain(..).map(Some).collect();
+        let mut new_spaces = Vec::with_capacity(temp.len());
+        for old_idx in &order {
+            new_spaces.push(temp[*old_idx].take().expect("workspace moved once"));
+        }
+        self.spaces = new_spaces;
+
+        self.current = remap[self.current];
+        if let Some((idx, _)) = self.badge_picker.as_mut() {
+            *idx = remap[*idx];
+        }
+        if let Some(rename) = self.workspace_rename.as_mut() {
+            rename.index = remap[rename.index];
+        }
+        for closed in &mut self.closed {
+            closed.space = remap[closed.space];
+        }
+        if let Some(sel) = self.tab_selection.as_mut() {
+            sel.space = remap[sel.space];
         }
         self.schedule_save(cx);
         cx.notify();

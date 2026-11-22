@@ -2,7 +2,7 @@
 
 use super::badge::{Mark, workspace_avatar};
 use super::menu::WorkspaceMenuSource;
-use super::tab_panel::TabMenu;
+use super::tab_panel::{MultiTabMenu, TabMenu};
 use super::*;
 use gpui_kit::component::Selectable as _;
 
@@ -172,6 +172,8 @@ impl Workspace {
                     _ => SharedString::default(),
                 };
                 let icon_color = if active { ui::petal() } else { ui::faint() };
+                let is_tab_selected = self.is_tab_selected(self.current, tab.id);
+                let selection_count = self.selected_tab_count(self.current);
                 let drag = TabDrag {
                     tab: tab.id,
                     title: title.clone(),
@@ -210,7 +212,12 @@ impl Workspace {
                             .shadow_sm()
                             .text_color(ui::fg())
                     })
-                    .when(!active, |this| {
+                    .when(!active && is_tab_selected, |this| {
+                        this.bg(ui::surface_hover().opacity(0.75))
+                            .border_color(ui::border().opacity(0.5))
+                            .text_color(ui::fg())
+                    })
+                    .when(!active && !is_tab_selected, |this| {
                         this.border_color(gpui_kit::transparent_black())
                             .text_color(ui::muted())
                             .hover(|s| s.bg(ui::surface_hover().opacity(0.6)).text_color(ui::fg()))
@@ -223,7 +230,28 @@ impl Workspace {
                         MouseButton::Right,
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            this.open_tab_menu(tab_menu, event.position, window, cx);
+                            if is_tab_selected && selection_count >= 2 {
+                                let ids = this.selected_tab_ids(this.current);
+                                let any_unpinned = ids.iter().any(|&id| {
+                                    this.spaces[this.current]
+                                        .tabs
+                                        .iter()
+                                        .any(|t| t.id == id && !t.pinned)
+                                });
+                                this.open_multi_tab_menu(
+                                    MultiTabMenu {
+                                        space: this.current,
+                                        ids,
+                                        any_unpinned,
+                                        count: selection_count,
+                                    },
+                                    event.position,
+                                    window,
+                                    cx,
+                                );
+                            } else {
+                                this.open_tab_menu(tab_menu, event.position, window, cx);
+                            }
                         }),
                     )
                     // A double-click on an agent tab renames its session.
@@ -231,7 +259,7 @@ impl Workspace {
                         if event.click_count() >= 2 {
                             this.start_tab_rename(i, window, cx);
                         } else {
-                            this.activate(i, window, cx);
+                            this.on_tab_click(i, event, window, cx);
                         }
                     }))
                     // Drag a tab onto another to put it there.
