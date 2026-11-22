@@ -130,12 +130,14 @@ impl Workspace {
             .hover(|s| s.bg(ui::surface_hover()).text_color(ui::fg()))
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .on_click(on_click)
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .child(Icon::new(icon).small())
             .child(div().min_w_0().truncate().child(label))
     }
 
-    /// Pin, rename, move and close one tab of the shown workspace: the
-    /// sidebar rows' right-click menu.
+    /// Pin, rename, move and close one tab of the shown workspace. Sidebar
+    /// rows keep Move up / Move down; horizontal tabs use `compact` to omit
+    /// them.
     pub(super) fn tab_actions_menu(
         menu: PopupMenu,
         weak: WeakEntity<Self>,
@@ -147,51 +149,55 @@ impl Workspace {
             pinned,
             can_up,
             can_down,
+            compact,
         } = tab;
         let (pin, rename, up, down, close) =
             (weak.clone(), weak.clone(), weak.clone(), weak.clone(), weak);
-        menu.item(
-            PopupMenuItem::new(if pinned { "Unpin tab" } else { "Pin tab" })
-                .icon(Icon::new(if pinned {
-                    IconName::PinOff
-                } else {
-                    IconName::Pin
-                }))
-                .on_click(move |_, _, cx| {
-                    let _ = pin.update(cx, |this, cx| this.toggle_tab_pin(id, cx));
-                }),
-        )
-        .item(
-            PopupMenuItem::new("Rename")
-                .icon(Icon::new(IconName::Pencil))
-                .disabled(kind != PaneKind::Agent)
-                .on_click(move |_, window, cx| {
-                    let _ = rename.update(cx, |this, cx| {
-                        if let Some(i) = this.space().tabs.iter().position(|t| t.id == id) {
-                            this.start_tab_rename(i, window, cx);
-                        }
-                    });
-                }),
-        )
-        .separator()
-        .item(
-            PopupMenuItem::new("Move up")
-                .icon(Icon::new(IconName::ArrowUp))
-                .disabled(!can_up)
-                .on_click(move |_, _, cx| {
-                    let _ = up.update(cx, |this, cx| this.move_tab_by(id, -1, cx));
-                }),
-        )
-        .item(
-            PopupMenuItem::new("Move down")
-                .icon(Icon::new(IconName::ArrowDown))
-                .disabled(!can_down)
-                .on_click(move |_, _, cx| {
-                    let _ = down.update(cx, |this, cx| this.move_tab_by(id, 1, cx));
-                }),
-        )
-        .separator()
-        .item(
+        let mut menu = menu
+            .item(
+                PopupMenuItem::new(if pinned { "Unpin tab" } else { "Pin tab" })
+                    .icon(Icon::new(if pinned {
+                        IconName::PinOff
+                    } else {
+                        IconName::Pin
+                    }))
+                    .on_click(move |_, _, cx| {
+                        let _ = pin.update(cx, |this, cx| this.toggle_tab_pin(id, cx));
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Rename")
+                    .icon(Icon::new(IconName::Pencil))
+                    .disabled(kind != PaneKind::Agent)
+                    .on_click(move |_, window, cx| {
+                        let _ = rename.update(cx, |this, cx| {
+                            if let Some(i) = this.space().tabs.iter().position(|t| t.id == id) {
+                                this.start_tab_rename(i, window, cx);
+                            }
+                        });
+                    }),
+            );
+        if !compact {
+            menu = menu
+                .separator()
+                .item(
+                    PopupMenuItem::new("Move up")
+                        .icon(Icon::new(IconName::ArrowUp))
+                        .disabled(!can_up)
+                        .on_click(move |_, _, cx| {
+                            let _ = up.update(cx, |this, cx| this.move_tab_by(id, -1, cx));
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Move down")
+                        .icon(Icon::new(IconName::ArrowDown))
+                        .disabled(!can_down)
+                        .on_click(move |_, _, cx| {
+                            let _ = down.update(cx, |this, cx| this.move_tab_by(id, 1, cx));
+                        }),
+                );
+        }
+        menu.separator().item(
             PopupMenuItem::new("Close tab")
                 .icon(Icon::new(IconName::X))
                 .on_click(move |_, window, cx| {
@@ -203,6 +209,28 @@ impl Workspace {
                 }),
         )
     }
+
+    /// Right-click on empty space of the tab area: create a workspace or
+    /// switch between horizontal and vertical tabs.
+    pub(super) fn empty_area_menu(
+        menu: PopupMenu,
+        weak: WeakEntity<Self>,
+        layout: TabLayout,
+    ) -> PopupMenu {
+        let new_space = weak.clone();
+        let menu = menu
+            .item(
+                PopupMenuItem::new("New workspace")
+                    .icon(Icon::new(IconName::FolderPlus))
+                    .on_click(move |_, window, cx| {
+                        let _ = new_space.update(cx, |this, cx| {
+                            this.pick_workspace_folder_for_menu(window, cx)
+                        });
+                    }),
+            )
+            .separator();
+        Self::tab_placement_menu(menu, layout, weak)
+    }
 }
 
 /// The tab a [`Workspace::tab_actions_menu`] acts on, and which moves it allows.
@@ -213,4 +241,6 @@ pub(super) struct TabMenu {
     pub pinned: bool,
     pub can_up: bool,
     pub can_down: bool,
+    /// Horizontal tabs omit Move up / Move down.
+    pub compact: bool,
 }

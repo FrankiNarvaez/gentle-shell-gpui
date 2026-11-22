@@ -11,7 +11,7 @@ use std::time::Duration;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
-use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _, TitleBar, WindowExt as _, h_flex, v_flex};
@@ -49,6 +49,7 @@ mod actions;
 mod badge;
 mod closed;
 mod layout;
+mod menu;
 mod overlays;
 mod panes;
 mod persistence;
@@ -59,6 +60,8 @@ mod stages;
 mod tab_panel;
 mod tabs;
 mod view;
+
+use menu::{OpenMenu, WorkspaceRename};
 
 use crate::features::devices::{DevicePanel, DevicePanelEvent};
 use crate::features::music::{Music, MusicChanged};
@@ -276,6 +279,12 @@ pub struct Workspace {
     sidebar_open_spaces: HashMap<String, bool>,
     /// The workspace whose badge picker is open, and where it opened.
     badge_picker: Option<(usize, Point<Pixels>)>,
+    /// A right-click context menu owned by the workspace so its open state
+    /// can suppress tooltips and hide native web views under it.
+    open_menu: Option<OpenMenu>,
+    /// Inline rename of a workspace, with the place it started (chip, header
+    /// or sidebar row) so the text field draws there.
+    workspace_rename: Option<WorkspaceRename>,
     tab_search: Entity<InputState>,
     save_task: Option<Task<()>>,
     /// Re-reads every pane's title and busy state once a second (non-agent
@@ -398,6 +407,8 @@ impl Workspace {
             tab_layout: saved.tab_layout,
             sidebar_open_spaces: HashMap::new(),
             badge_picker: None,
+            open_menu: None,
+            workspace_rename: None,
             tab_search,
             save_task: None,
             notices: cx.new(|_| Notices::default()),

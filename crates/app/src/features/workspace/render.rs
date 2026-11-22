@@ -248,19 +248,31 @@ impl Render for Workspace {
                     .gap_1p5()
                     // The vertical tab navigator remains independent of the Files panel.
                     .when(vertical_tabs, |row| {
-                        row.child(ui::appear(
-                            "tabs-sidebar-in",
+                        row.child(
                             div()
+                                .id("vertical-tab-panel")
                                 .w(rems(SIDEBAR_WIDTH / 16.))
                                 .flex_none()
                                 .h_full()
-                                .rounded_xl()
-                                .bg(ui::panel())
-                                .border_1()
-                                .border_color(gpui_kit::transparent_black())
-                                .overflow_hidden()
-                                .child(self.render_tab_sidebar(cx)),
-                        ))
+                                .on_mouse_down(
+                                    MouseButton::Right,
+                                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                                        cx.stop_propagation();
+                                        this.open_empty_area_menu(event.position, window, cx);
+                                    }),
+                                )
+                                .child(ui::appear(
+                                    "tabs-sidebar-in",
+                                    div()
+                                        .size_full()
+                                        .rounded_xl()
+                                        .bg(ui::panel())
+                                        .border_1()
+                                        .border_color(gpui_kit::transparent_black())
+                                        .overflow_hidden()
+                                        .child(self.render_tab_sidebar(cx)),
+                                )),
+                        )
                     })
                     .child(
                         div()
@@ -294,6 +306,7 @@ impl Render for Workspace {
             )
             .children(self.stages.iter().filter_map(Stage::element))
             .children(self.render_badge_picker(cx))
+            .children(self.render_context_menu(cx))
             .when(devices_floating, |root| root.child(self.devices.clone()))
             .children(self.overlay.as_ref().map(|(overlay, _)| {
                 let (view, full_window) = match overlay {

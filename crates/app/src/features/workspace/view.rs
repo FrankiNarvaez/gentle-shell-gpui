@@ -1,6 +1,8 @@
 //! Title bar chrome, tabs, pane tree and pane rendering.
 
 use super::badge::{Mark, workspace_avatar};
+use super::menu::WorkspaceMenuSource;
+use super::tab_panel::TabMenu;
 use super::*;
 use gpui_kit::component::Selectable as _;
 
@@ -85,7 +87,9 @@ impl Workspace {
             .text_size(rems(12.5 / 16.))
             .cursor_pointer()
             .hover(|s| s.bg(ui::popover_bg().opacity(0.8)))
-            .tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+            .when(!self.popups_open(), |chip| {
+                chip.tooltip(move |window, cx| Tooltip::new(tip).build(window, cx))
+            })
             // Keep clicks on the chip from turning into window drags: `occlude`
             // hides the title bar's drag area from Windows' hit test, and
             // stopping the mouse-down keeps TitleBar from starting a move.
@@ -94,18 +98,36 @@ impl Workspace {
             .on_click(cx.listener(|this, _, window, cx| {
                 this.open_palette(Category::Workspaces, window, cx)
             }))
-            .child(workspace_avatar(&Mark::of(self.space())))
-            .map(|chip| self.with_badge_picker(chip, self.current, cx))
-            .child(
-                div()
-                    .max_w(rems(160. / 16.))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .whitespace_nowrap()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(ui::fg())
-                    .child(name),
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_workspace_menu(
+                        this.current,
+                        WorkspaceMenuSource::Chip,
+                        event.position,
+                        window,
+                        cx,
+                    );
+                }),
             )
+            .child(workspace_avatar(&Mark::of(self.space())))
+            .map(|chip| {
+                if self.renaming_workspace(self.current, WorkspaceMenuSource::Chip) {
+                    chip.child(self.workspace_rename_input(cx))
+                } else {
+                    chip.child(
+                        div()
+                            .max_w(rems(160. / 16.))
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(ui::fg())
+                            .child(name),
+                    )
+                }
+            })
             .when_some(dot, |d, color| {
                 d.child(
                     div()
@@ -125,8 +147,6 @@ impl Workspace {
     pub(super) fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let space = self.space();
         let weak = cx.entity().downgrade();
-        let placement = weak.clone();
-        let layout = self.tab_layout;
         h_flex()
             .id("horizontal-tab-strip")
             .gap(px(2.))
@@ -148,6 +168,14 @@ impl Workspace {
                         .get(&tab.focused)
                         .map(|p| p.title.clone())
                         .unwrap_or_default(),
+                };
+                let tab_menu = TabMenu {
+                    id: tab.id,
+                    kind,
+                    pinned: tab.pinned,
+                    can_up: false,
+                    can_down: false,
+                    compact: true,
                 };
                 let item = h_flex()
                     .min_w_0()
@@ -183,6 +211,13 @@ impl Workspace {
                     // workspace chip).
                     .occlude()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_tab_menu(tab_menu, event.position, window, cx);
+                        }),
+                    )
                     // A double-click on an agent tab renames its session.
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         if event.click_count() >= 2 {
@@ -250,11 +285,11 @@ impl Workspace {
                                     .text_ellipsis()
                                     .whitespace_nowrap()
                                     .when(active, |d| d.font_weight(FontWeight::MEDIUM))
-                                    .tooltip({
+                                    .when(!self.popups_open(), |d| {
                                         let title = title.clone();
-                                        move |window, cx| {
+                                        d.tooltip(move |window, cx| {
                                             Tooltip::new(title.clone()).build(window, cx)
-                                        }
+                                        })
                                     })
                                     .child(title)
                                     .into_any_element()
@@ -316,9 +351,13 @@ impl Workspace {
                             }),
                     ),
             )
-            .context_menu(move |menu, _, _| {
-                Self::tab_placement_menu(menu, layout, placement.clone())
-            })
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    this.open_empty_area_menu(event.position, window, cx);
+                }),
+            )
     }
 
     /// One title-bar button for the focused pane's layout: tile, split and

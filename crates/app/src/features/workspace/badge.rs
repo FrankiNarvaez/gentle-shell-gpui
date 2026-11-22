@@ -1,6 +1,7 @@
 //! A workspace's badge: its initials or a chosen icon, on a theme color (one
 //! its name picks, or one chosen), as the sidebar and the title bar's
-//! workspace chip show it. Right-clicking a badge opens a picker for both.
+//! workspace chip show it. The workspace menu's "Badge…" item opens the
+//! picker for both icon and color.
 
 use super::*;
 use crate::features::workspaces::{BadgeColor, BadgeIcon};
@@ -100,26 +101,21 @@ pub(super) fn workspace_avatar(mark: &Mark) -> Div {
 }
 
 impl Workspace {
-    /// Right-click on a workspace's badge, in any style, opens its picker
-    /// where the pointer is.
-    pub(super) fn with_badge_picker<E: InteractiveElement>(
-        &self,
-        element: E,
+    /// Open the badge picker for workspace `index` at `position`.
+    pub(super) fn open_badge_picker(
+        &mut self,
         index: usize,
+        position: Point<Pixels>,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> E {
-        element.on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                this.badge_picker = Some((index, event.position));
-                crate::features::browser::popover_open("workspace-badge", true, window, cx);
-                cx.notify();
-            }),
-        )
+    ) {
+        self.close_menu(window, cx);
+        self.badge_picker = Some((index, position));
+        crate::features::browser::popover_open("workspace-badge", true, window, cx);
+        cx.notify();
     }
 
-    fn close_badge_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_badge_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.badge_picker.take().is_some() {
             crate::features::browser::popover_open("workspace-badge", false, window, cx);
             cx.notify();

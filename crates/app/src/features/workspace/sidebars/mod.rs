@@ -275,8 +275,8 @@ impl Workspace {
             pinned: tab.pinned,
             can_up: index > 0 && tabs[index - 1].pinned == tab.pinned,
             can_down: index + 1 < tabs.len() && tabs[index + 1].pinned == tab.pinned,
+            compact: false,
         };
-        let weak = cx.entity().downgrade();
         row.on_drag(
             TabDrag {
                 tab: id,
@@ -286,7 +286,13 @@ impl Workspace {
         )
         .drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
         .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| this.move_tab(drag.tab, index, cx)))
-        .context_menu(move |menu, _, _| Self::tab_actions_menu(menu, weak.clone(), actions))
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_tab_menu(actions, event.position, window, cx);
+            }),
+        )
         .into_any_element()
     }
 
