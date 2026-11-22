@@ -97,27 +97,6 @@ impl SessionView {
         }
     }
 
-    /// The folder button: pick a folder and [`Self::change_cwd`] to it.
-    pub(super) fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open folder".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(mut paths))) = paths.await else {
-                return;
-            };
-            let Some(path) = paths.pop() else { return };
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.change_cwd(path.clone(), window, cx);
-                cx.emit(super::SessionEvent::CwdChanged(path));
-            });
-        })
-        .detach();
-    }
-
     /// Gentle Shell was updated on disk: run this tab on the new version,
     /// keeping its conversation (the session file is resumed on the new
     /// backend). A tab in the middle of a turn switches when the turn ends.

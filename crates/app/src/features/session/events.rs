@@ -164,9 +164,6 @@ impl SessionView {
         if effects.settled {
             // Always once at turn end, whatever the tool calls scheduled.
             self.refresh_git(cx);
-            // The agent's own change set too (Gentle Shell `main`; nothing on
-            // a Shell without `get_changes`).
-            self.refresh_session_changes(cx);
         } else if effects.files_touched {
             self.refresh_git_soon(cx);
         }
@@ -311,12 +308,6 @@ impl SessionView {
     /// channel (probe, sequencing, resync, and every benign foreign record).
     fn handle_desktop_ui(&mut self, request: &UiRequest, cx: &mut Context<Self>) {
         let decoded = decode_widget(request);
-        // A `session_snapshot` whose `changes` section moved: the change set
-        // is read again. Only a peek; the record itself is accepted once,
-        // below, by whichever slice owns it.
-        if desktop::changes::changes_moved(&decoded) {
-            self.desktop.changes_mark_stale();
-        }
         let pending = self.desktop.session().pending().map(|(_, method)| method);
         match route_desktop_widget(&decoded, pending) {
             DesktopRoute::Permission => {
@@ -460,14 +451,6 @@ impl SessionView {
                 self.sync_config(cx);
                 self.sync_output(cx);
             }
-            DesktopRoute::Changes => {
-                let applied = self.desktop.changes_apply(request);
-                self.apply_changes(applied, cx);
-                self.sync_supervision(cx);
-                self.sync_design(cx);
-                self.sync_config(cx);
-                self.sync_output(cx);
-            }
             DesktopRoute::Reads => {
                 let applied = self.desktop.reads_apply(request);
                 self.apply_reads(applied, cx);
@@ -488,7 +471,6 @@ impl SessionView {
             }
         }
         self.sync_review(cx);
-        self.sync_changes(cx);
     }
 
     /// Seed the design canvas once the probe and any in-flight request
@@ -804,8 +786,8 @@ impl SessionView {
 /// owns its responses and `rate_limit`; design owns `get_design_canvas` and
 /// `design_canvas`; config owns `get_config`/`set_config` and
 /// `config_changed`; review owns `get_review_mode`/`set_review_mode` and
-/// `review_mode_changed`; changes owns `get_changes`/`get_change_diff`;
-/// output owns `get_job_output`/`get_subagent_thread`; reads owns
+/// `review_mode_changed`; output owns `get_job_output`/`get_subagent_thread`;
+/// reads owns
 /// `list_sessions`, `switch_session`, `get_usage_stats` and
 /// `get_update_status`; everything else belongs to the channel (probe,
 /// resync, `session_snapshot`, and every benign foreign/late record). The
@@ -818,7 +800,6 @@ pub(in crate::features::session) enum DesktopRoute {
     Design,
     Config,
     Review,
-    Changes,
     Output,
     Reads,
     Channel,
@@ -883,11 +864,6 @@ pub(in crate::features::session) fn route_desktop_widget(
                 Some(DesktopMethod::GetReviewMode) | Some(DesktopMethod::SetReviewMode)
             ) {
                 DesktopRoute::Review
-            } else if matches!(
-                pending,
-                Some(DesktopMethod::GetChanges) | Some(DesktopMethod::GetChangeDiff)
-            ) {
-                DesktopRoute::Changes
             } else if matches!(
                 pending,
                 Some(DesktopMethod::GetJobOutput) | Some(DesktopMethod::GetSubagentThread)
@@ -1054,7 +1030,6 @@ mod tests {
     };
     use crate::features::browser::CanvasNotice;
     use crate::features::session::state::TurnActivity;
-    use crate::features::session::state::desktop;
     use gentle_core::transcript::NoticeLevel;
 
     #[test]
@@ -1446,7 +1421,7 @@ mod tests {
     }
 
     #[test]
-    fn review_and_changes_records_route_to_their_slices() {
+    fn review_records_route_to_their_slice() {
         let answer = decode_widget(&widget(Some(record(json!({
             "schema": SCHEMA,
             "kind": "response",
@@ -1460,10 +1435,12 @@ mod tests {
                 DesktopRoute::Review
             ));
         }
+        // The app no longer asks for the session change set: a late answer
+        // is the channel's, like any other record no slice owns.
         for method in [DesktopMethod::GetChanges, DesktopMethod::GetChangeDiff] {
             assert!(matches!(
                 route_desktop_widget(&answer, Some(method)),
-                DesktopRoute::Changes
+                DesktopRoute::Channel
             ));
         }
         let event = |name: &str, data: Value| {
@@ -1485,28 +1462,5 @@ mod tests {
             route_desktop_widget(&changed, None),
             DesktopRoute::Review
         ));
-
-        // A `session_snapshot` carrying `changes` marks the change set stale
-        // (a peek); without that section, or under another name, it does not.
-        let changes = json!({
-            "files": [], "summary": {"files": 0, "added": 0, "deleted": 0},
-            "worktrees": [], "truncated": false,
-        });
-        assert!(desktop::changes::changes_moved(&event(
-            "session_snapshot",
-            json!({"sections": {"changes": changes}}),
-        )));
-        assert!(desktop::changes::changes_moved(&event(
-            "session_snapshot",
-            json!({"sections": {"changes": null}}),
-        )));
-        assert!(!desktop::changes::changes_moved(&event(
-            "session_snapshot",
-            json!({"sections": {"usage": null}}),
-        )));
-        assert!(!desktop::changes::changes_moved(&event(
-            "session_snapshot_v2",
-            json!({"sections": {"changes": changes}}),
-        )));
     }
 }

@@ -87,6 +87,24 @@ pub struct WorkTree {
     pub entries: Vec<StatusEntry>,
 }
 
+impl WorkTree {
+    /// Fill each entry's line counts from `git diff --cached --numstat -z`
+    /// (`staged`) and `git diff --numstat -z` (`unstaged`). Binary files
+    /// and untracked files keep `None`.
+    pub fn apply_numstat(&mut self, staged: &str, unstaged: &str) {
+        let (staged, unstaged) = (parse_numstat(staged), parse_numstat(unstaged));
+        let counts =
+            |map: &BTreeMap<String, (Option<u64>, Option<u64>)>, path: &str| match map.get(path) {
+                Some(&(Some(added), Some(removed))) => Some((added, removed)),
+                _ => None,
+            };
+        for entry in &mut self.entries {
+            entry.staged_lines = counts(&staged, &entry.path);
+            entry.unstaged_lines = counts(&unstaged, &entry.path);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BranchStatus {
     /// `None` before the first commit.
@@ -116,6 +134,10 @@ pub struct StatusEntry {
     pub index: char,
     pub worktree: char,
     pub kind: EntryKind,
+    /// Lines `(added, removed)` on each side; `None` for binary or untracked
+    /// files and for a side without changes.
+    pub staged_lines: Option<(u64, u64)>,
+    pub unstaged_lines: Option<(u64, u64)>,
 }
 
 impl StatusEntry {
@@ -188,6 +210,8 @@ pub fn parse_status_v2(raw: &str) -> WorkTree {
                     index: '?',
                     worktree: '?',
                     kind: EntryKind::Untracked,
+                    staged_lines: None,
+                    unstaged_lines: None,
                 });
                 continue;
             }
@@ -208,6 +232,8 @@ pub fn parse_status_v2(raw: &str) -> WorkTree {
             index,
             worktree,
             kind,
+            staged_lines: None,
+            unstaged_lines: None,
         });
     }
     tree
@@ -251,6 +277,42 @@ mod tests {
         assert_eq!(map["logo.png"], (None, None));
         assert_eq!(map["new.rs"], (Some(2), Some(0)));
         assert!(!map.contains_key("old.rs"));
+    }
+
+    #[test]
+    fn work_tree_line_counts_per_side() {
+        let mut tree = parse_status_v2(concat!(
+            "1 MM N... 100644 100644 100644 aaaa bbbb src/a.rs\0",
+            "1 .M N... 100644 100644 100644 aaaa bbbb logo.png\0",
+            "2 R. N... 100644 100644 100644 aaaa aaaa R90 new.rs\0old.rs\0",
+            "? notes.md\0",
+        ));
+        tree.apply_numstat(
+            "3\t1\tsrc/a.rs\0\x32\t0\t\0old.rs\0new.rs\0",
+            "0\t21\tsrc/a.rs\0-\t-\tlogo.png\0",
+        );
+        let lines: Vec<_> = tree
+            .entries
+            .iter()
+            .map(|e| (e.path.as_str(), e.staged_lines, e.unstaged_lines))
+            .collect();
+        assert_eq!(
+            lines,
+            vec![
+                ("src/a.rs", Some((3, 1)), Some((0, 21))),
+                ("logo.png", None, None),
+                ("new.rs", Some((2, 0)), None),
+                ("notes.md", None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn numstat_empty() {
+        assert!(parse_numstat("").is_empty());
+        let mut tree = parse_status_v2("1 .M N... 100644 100644 100644 aaaa bbbb a.rs\0");
+        tree.apply_numstat("", "");
+        assert_eq!(tree.entries[0].unstaged_lines, None);
     }
 
     #[test]

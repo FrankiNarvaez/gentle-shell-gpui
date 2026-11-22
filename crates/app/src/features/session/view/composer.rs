@@ -31,29 +31,24 @@ impl SessionView {
     /// The context line, after Tern's: a thin line just over the
     /// composer's top edge that fills as the conversation uses its window,
     /// the percent riding the fill's end and the window's size at the
-    /// line's; amber past the alert threshold, red near the end. While the
-    /// agent works a rose comet runs along it. It stays clear of the
-    /// composer: drawn over its edge, the composer (painted after) would
-    /// cover it.
+    /// line's. It only shows once it matters: amber past the alert
+    /// threshold, red near the end; below that the percent stays in the
+    /// model picker's tooltip (work in progress is the composer's
+    /// [`ui::orbit`]). It stays clear of the composer: drawn over its edge,
+    /// the composer (painted after) would cover it.
     fn render_context_bar(&self, cx: &App) -> Option<Div> {
         let percent = self
             .usage
             .context_percent
-            .map(|p| p.clamp(0.0, 100.0) as f32);
-        let busy = self.busy();
-        if percent.is_none() && !busy {
+            .map(|p| p.clamp(0.0, 100.0) as f32)?;
+        let tone = if percent >= 90. {
+            ui::danger()
+        } else if f64::from(percent) >= crate::features::alerts::context_threshold(cx) {
+            ui::warning()
+        } else {
             return None;
-        }
-        let used = percent.unwrap_or(0.) / 100.;
-        let tone = match percent {
-            Some(p) if p >= 90. => Some(ui::danger()),
-            Some(p) if f64::from(p) >= crate::features::alerts::context_threshold(cx) => {
-                Some(ui::warning())
-            }
-            _ => None,
         };
-        let fill = tone.unwrap_or(ui::fg().opacity(0.6));
-        let label = tone.unwrap_or(ui::muted());
+        let used = percent / 100.;
         let window = self
             .models
             .current
@@ -67,7 +62,7 @@ impl SessionView {
                 .font_family(ui::mono())
                 .text_size(ui::code_rems(10.))
                 .line_height(rems(12. / 16.))
-                .text_color(label)
+                .text_color(tone)
         };
         Some(
             div()
@@ -93,19 +88,16 @@ impl SessionView {
                                 .rounded_full()
                                 .overflow_hidden()
                                 .bg(ui::fg().opacity(0.16))
-                                .child(div().h_full().w(relative(used)).bg(fill))
-                                .when(busy, |d| d.child(ui::comet(ui::petal()))),
+                                .child(div().h_full().w(relative(used)).bg(tone)),
                         )
-                        .when_some(percent.filter(|p| *p > 0.), |d, p| {
-                            d.child(
-                                caption(div())
-                                    .left(relative(used))
-                                    .ml(rems(-16. / 16.))
-                                    .w(rems(32. / 16.))
-                                    .text_center()
-                                    .child(format!("{p:.0}%")),
-                            )
-                        })
+                        .child(
+                            caption(div())
+                                .left(relative(used))
+                                .ml(rems(-16. / 16.))
+                                .w(rems(32. / 16.))
+                                .text_center()
+                                .child(format!("{percent:.0}%")),
+                        )
                         .when_some(window, |d, window| {
                             d.child(caption(div()).right_0().child(window))
                         }),
@@ -406,6 +398,8 @@ impl SessionView {
             })
             .bg(ui::surface())
             .shadow_lg()
+            // While the agent works a light runs round the box.
+            .when(self.busy(), |d| d.child(ui::orbit(ui::petal(), rems(1.))))
     }
 
     /// The composer in the chosen input style, and for Prompt the status
@@ -415,7 +409,6 @@ impl SessionView {
         rem_size: Pixels,
         cx: &mut Context<Self>,
     ) -> (AnyElement, Option<AnyElement>) {
-        let (_, leaf) = ui::split_path(&self.cwd);
         let empty = self.composer.read(cx).value().trim().is_empty() && self.attachments.is_empty();
         let busy = self.busy();
         let ready = self.backend.is_ready();
@@ -449,48 +442,6 @@ impl SessionView {
                 .on_click(cx.listener(|this, _, window, cx| this.submit(window, cx)))
                 .into_any_element(),
         };
-
-        let repository = self.git.repository.clone();
-        // In the row below the box the branch shrinks and truncates —
-        // only its leaf text gives way — before anything else there would.
-        let git = self.git.snapshot.as_ref().map(|git| {
-            h_flex()
-                .id("git-chip")
-                .min_w_0()
-                .flex_shrink(1.)
-                .gap_1()
-                .text_size(rems(12. / 16.))
-                .child(
-                    Icon::new(IconName::GitBranch)
-                        .xsmall()
-                        .text_color(ui::champagne()),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .whitespace_nowrap()
-                        .font_family(ui::mono())
-                        .text_size(ui::code_rems(12.))
-                        .text_color(ui::champagne())
-                        .child(git.branch.clone().unwrap_or_else(|| "detached".into())),
-                )
-                .when(!git.files.is_empty(), |this| {
-                    this.child(
-                        div()
-                            .flex_shrink_0()
-                            .font_family(ui::mono())
-                            .text_size(ui::code_rems(12.))
-                            .text_color(ui::muted())
-                            .child(format!("±{}", git.files.len())),
-                    )
-                })
-                .when_some(repository, |this, path| {
-                    let line = format!("Repository: {path}");
-                    this.tooltip(move |window, cx| Tooltip::new(line.clone()).build(window, cx))
-                })
-        });
 
         let width = self.pane_width.get();
         let narrow = width < f32::from(rems(NARROW / 16.).to_pixels(rem_size));
@@ -537,50 +488,12 @@ impl SessionView {
                 |this, chip| this.child(div().flex_shrink_0().child(chip)),
             );
 
-        // The folder (its name; the whole path in the tooltip), branch and
-        // spend. The group shrinks and truncates before anything else; the
-        // name truncates from its start so its end, the part that tells
-        // folders apart, stays readable. A narrow pane leaves it out.
-        let path_tip = SharedString::from(format!("Open another folder\n{}", self.cwd.display()));
-        let place = (!narrow).then(|| {
-            h_flex()
-                .min_w_0()
-                .flex_shrink(1.)
-                .overflow_hidden()
-                .gap_2()
-                .items_center()
-                .child(
-                    h_flex()
-                        .id("cwd")
-                        .min_w_0()
-                        .flex_shrink(1.)
-                        .gap_1()
-                        .px_1p5()
-                        .py_0p5()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .hover(|s| s.bg(ui::surface_hover()))
-                        .text_size(rems(12. / 16.))
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .tooltip(move |window, cx| Tooltip::new(path_tip.clone()).build(window, cx))
-                        .on_click(cx.listener(|this, _, window, cx| this.choose_folder(window, cx)))
-                        .child(Icon::new(IconName::Folder).xsmall().text_color(ui::faint()))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis_start()
-                                .font_family(ui::mono())
-                                .text_size(ui::code_rems(12.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(ui::muted())
-                                .child(leaf),
-                        ),
-                )
-                .children(git)
-                .children(self.render_usage_chip())
-        });
+        // What the session spent, quiet beside the send; a narrow pane
+        // leaves it out.
+        let usage = (!narrow)
+            .then(|| self.render_usage_chip())
+            .flatten()
+            .map(|chip| div().flex_shrink_0().child(chip));
         let action = div().flex_shrink_0().child(action_button);
         let spacer = || div().flex_1().min_w_0();
         let row = || h_flex().w_full().min_w_0().gap_1p5().items_center();
@@ -598,41 +511,37 @@ impl SessionView {
 
         let mut strip = None;
         let composer = match style {
-            // A floating card, its controls inside; the place below.
-            InputStyle::Card => v_flex()
-                .w_full()
-                .min_w_0()
-                .gap_1p5()
-                .child(
-                    div()
-                        .relative()
-                        .w_full()
-                        .min_w_0()
-                        .child(self.composer_shell())
-                        .child(
-                            pad(v_flex())
-                                .relative()
-                                .w_full()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .gap_2()
-                                .pt_4()
-                                .pb_2p5()
-                                .children(attachments)
-                                .child(text)
-                                .child(
-                                    row()
-                                        .child(attach)
-                                        .child(controls)
-                                        .child(spacer())
-                                        .child(action),
-                                ),
-                        ),
-                )
-                .child(row().gap_2().children(place).child(spacer())),
+            // A floating card, its controls inside.
+            InputStyle::Card => v_flex().w_full().min_w_0().gap_1p5().child(
+                div()
+                    .relative()
+                    .w_full()
+                    .min_w_0()
+                    .child(self.composer_shell())
+                    .child(
+                        pad(v_flex())
+                            .relative()
+                            .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .gap_2()
+                            .pt_4()
+                            .pb_2p5()
+                            .children(attachments)
+                            .child(text)
+                            .child(
+                                row()
+                                    .child(attach)
+                                    .child(controls)
+                                    .child(spacer())
+                                    .children(usage)
+                                    .child(action),
+                            ),
+                    ),
+            ),
             // Spine: the pane's dock draws the strip and its hairline (see
             // `Render for SessionView`); here the plain text, then one row:
-            // flat model and effort chips, a divider, the place, and a
+            // flat model and effort chips, a divider, attach, and a
             // keycap send or a Stop · esc button at the end.
             InputStyle::Bar => v_flex()
                 .w_full()
@@ -653,12 +562,12 @@ impl SessionView {
                                 .bg(ui::border()),
                         )
                         .child(attach)
-                        .children(place)
                         .child(spacer())
+                        .children(usage)
                         .child(action),
                 ),
             // Console: a framed `❯` line in the code font; the model,
-            // place and keys move to a status strip along the pane's
+            // spend and keys move to a status strip along the pane's
             // bottom edge, as a terminal's status line.
             InputStyle::Prompt => {
                 let segment = |d: Div| {
@@ -695,13 +604,8 @@ impl SessionView {
                         .child(segment(div()).min_w_0().flex_shrink(1.).child(controls))
                         .child(segment(div()).px_1().child(attach))
                         .child(spacer())
-                        .children(place.map(|place| {
-                            segment(div())
-                                .min_w_0()
-                                .flex_shrink(1.)
-                                .border_r_0()
-                                .border_l_1()
-                                .child(place)
+                        .children(usage.map(|usage| {
+                            segment(div()).px_1().border_r_0().border_l_1().child(usage)
                         }))
                         .child(segment(div()).border_r_0().border_l_1().child(action))
                         .into_any_element(),
@@ -713,10 +617,12 @@ impl SessionView {
                     .pl_3()
                     .pr_1()
                     .py(rems(2. / 16.))
+                    .relative()
                     .rounded_md()
                     .border_1()
                     .border_color(edge(ui::border_strong()))
                     .bg(ui::well())
+                    .when(busy, |d| d.child(ui::orbit(ui::petal(), rems(6. / 16.))))
                     .font_family(ui::mono())
                     // On the text's first line: the text area's own top
                     // padding, then a line as tall as its lines.
@@ -738,8 +644,8 @@ impl SessionView {
                             .child(text),
                     )
             }
-            // One rounded pill: attach, text and send on a line; the rest
-            // in a quiet row below.
+            // One rounded pill: attach, text and send on a line; the
+            // model and spend in a quiet row below.
             InputStyle::Pill => v_flex()
                 .w_full()
                 .min_w_0()
@@ -751,10 +657,12 @@ impl SessionView {
                         .items_end()
                         .gap_1()
                         .px_1p5()
+                        .relative()
                         .rounded(rems(22. / 16.))
                         .border_1()
                         .border_color(edge(ui::border()))
                         .bg(ui::surface())
+                        .when(busy, |d| d.child(ui::orbit(ui::petal(), rems(22. / 16.))))
                         // Attach and send sit centered on the last line of
                         // text: each in a box as tall as one line with the
                         // text area's padding.
@@ -769,38 +677,36 @@ impl SessionView {
                         )
                         .child(on_text_line(action)),
                 )
-                .child(row().px_2().child(controls).children(place).child(spacer())),
+                .child(row().px_2().child(controls).child(spacer()).children(usage)),
             // Soft (after Devin's): a rounded box, the text on top and a
-            // row of quiet round controls under it, the model and a filled
-            // send at its end; the place below the box.
-            InputStyle::Soft => v_flex()
-                .w_full()
-                .min_w_0()
-                .gap_1p5()
-                .child(
-                    v_flex()
-                        .w_full()
-                        .min_w_0()
-                        .px_2()
-                        .pt_1p5()
-                        .pb_2()
-                        .gap_1()
-                        .rounded(rems(20. / 16.))
-                        .border_1()
-                        .border_color(edge(ui::border()))
-                        .bg(ui::surface())
-                        .children(attachments.map(|a| div().px_2p5().pt_2().child(a)))
-                        .child(div().min_h(rems(56. / 16.)).child(text))
-                        .child(
-                            row()
-                                .px_0p5()
-                                .child(attach)
-                                .child(spacer())
-                                .child(controls)
-                                .child(action),
-                        ),
-                )
-                .child(row().px_2().gap_2().children(place).child(spacer())),
+            // row of quiet round controls under it, the spend, the model
+            // and a filled send at its end.
+            InputStyle::Soft => v_flex().w_full().min_w_0().gap_1p5().child(
+                v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .px_2()
+                    .pt_1p5()
+                    .pb_2()
+                    .gap_1()
+                    .relative()
+                    .rounded(rems(20. / 16.))
+                    .border_1()
+                    .border_color(edge(ui::border()))
+                    .bg(ui::surface())
+                    .when(busy, |d| d.child(ui::orbit(ui::petal(), rems(20. / 16.))))
+                    .children(attachments.map(|a| div().px_2p5().pt_2().child(a)))
+                    .child(div().min_h(rems(56. / 16.)).child(text))
+                    .child(
+                        row()
+                            .px_0p5()
+                            .child(attach)
+                            .child(spacer())
+                            .children(usage)
+                            .child(controls)
+                            .child(action),
+                    ),
+            ),
         };
 
         let main = v_flex()
@@ -814,39 +720,7 @@ impl SessionView {
             .child(self.render_activity(rem_size, cx))
             .children(self.render_context_bar(cx))
             .child(composer)
-            .children(self.render_kisses())
-            // The keys, while they're new: until the first message. Bar and
-            // Prompt show them on their buttons.
-            .when(
-                matches!(style, InputStyle::Card | InputStyle::Pill | InputStyle::Soft)
-                    && !self
-                        .transcript
-                        .items
-                        .iter()
-                        .any(|item| matches!(item, gentle_core::transcript::Item::User { .. }))
-                    && width >= f32::from(rems(TINY / 16.).to_pixels(rem_size)),
-                |this| {
-                    this.child(
-                        h_flex()
-                            .h(rems(1.))
-                            .min_w_0()
-                            .justify_center()
-                            .overflow_hidden()
-                            .text_size(rems(10. / 16.))
-                            .text_color(ui::faint())
-                            .child(div().min_w_0().truncate().child(if busy {
-                                format!("↵ steers · {} stops", ui::shortcut("."))
-                            } else if narrow {
-                                "↵ sends · ⇧↵ newline · / commands".to_string()
-                            } else {
-                                format!(
-                                    "↵ sends · ⇧↵ newline · !cmd runs a shell command · / for commands · {} new session",
-                                    ui::shortcut("N")
-                                )
-                            })),
-                    )
-                },
-            );
+            .children(self.render_kisses());
         (main.into_any_element(), strip)
     }
 

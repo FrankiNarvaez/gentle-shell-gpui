@@ -64,6 +64,7 @@ flowchart TD
 | `genui`: the `gentle_ui` diagram spec (parsing, limits, normalization), its layered auto-layout and hit testing, the change list between two versions (diff, apply, human-readable sentences), the `/gentle-ui:event` command line and the Agent UI mode (`mode`: saved value, launch variable, mode command) | `genui/`: the Pi extension it ships (`gentle-ui.ts`, written by `extension.rs`), surfaces rebuilt from the transcript (`GenUi`), the diagram view (`DiagramView`: viewport, pointer and keyboard edits, undo, send) and its painting; `mode.rs`: the Agent UI choice every tab follows. |
 | `canvas`: canvas tabs' whiteboard model after Tern's canvas blocks (shapes, Tern's 16-color palette, fill, pen types and sizes, the file format), perfect-freehand ink outlines (`freehand`), geometry, hit testing, lasso and box selection, the camera, copy and paste, the undo history, and what its agent reads, edits and sees of it (`agent`: the flat shape form, ops applied all or nothing, the SVG of an area) | `canvas/`: the view (`CanvasView`: tools, gestures, keys, saving the file), painting (shapes tessellated once in page units, only moved onto the screen each frame), the tool bar, zoom pill, style panel and minimap, and the agent floating over it (`agent.rs`: a `SessionView` in a card, started with the `gentle-canvas.ts` extension it installs; answering its requests, rasterizing shots). The workspace handles that agent's events as an agent pane's (`on_session_event`) and saves its conversation with the canvas pane. |
 | `commands`: `/gentle:tower` routes to the Tower tab (`Screen::Tower`) | `tower/`: Gentle Tower in a tab (`TowerView`): runs `gentle-shell tower --no-open`, shows its page in a `WebSurface`, shown or hidden by the workspace's `sync_web_views` like agents' web views. |
+| `commands`: `/gentle:changes` routes to the review screen (`Screen::Changes`) | `review/`: the review screen (`ReviewView`), a modal over the window (`Overlay::Review`, Esc closes it like the other screens): a `files::FileView` diff (Split · Unified) beside its own `files::ChangesView`, which polls while the review is open; the composer's `±` and `/gentle:changes` open it (`workspace/overlays.rs` `open_review`). |
 
 ## Layout
 
@@ -77,7 +78,7 @@ crates/
 │       ├── features/            # one folder per feature; its entry point is mod.rs
 │       │   ├── session/  workspace/  workspaces/  sessions/  palette/  profiles/  settings/  usage/  setup/
 │       │   ├── browser/  devices/  music/  files/  terminal/  git/  history/  providers/  memory/  onboarding/  notices/  alerts/  hydration/  docs/
-│       │   └── app_update/  updates/  welcome/  genui/  diagnostics/  canvas/
+│       │   └── app_update/  updates/  welcome/  genui/  diagnostics/  canvas/  tower/  review/
 │       ├── platform/            # OS integration: single instance, agent command shims, Dock and window icons, installed editors, power state
 │       └── shared/              # pieces used by several features, with no logic of their own:
 │                                # ui, floating, themes, backdrop (theme scenes), assets, banner, surge, pane, gentle_state

@@ -22,13 +22,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use pi_rpc::desktop_rpc::{
-    ChangeStatus, ConfigStore, DesktopMethod, DesktopRecord, ReviewEffective, ReviewScope,
-    ReviewSetting, ReviewSource, decode_widget,
+    ConfigStore, DesktopMethod, DesktopRecord, ReviewEffective, ReviewScope, ReviewSetting,
+    ReviewSource, decode_widget,
 };
 use pi_rpc::{Incoming, LaunchSpec, PiProcess, UiRequest};
 use serde_json::json;
 
-use super::changes::{FileDiff, FileKey};
 use super::{Desktop, Send, Step, is_desktop_widget};
 
 const STEP: Duration = Duration::from_secs(60);
@@ -71,17 +70,11 @@ impl Live {
     /// method for answers, by name for the events these slices own.
     fn route(&mut self, request: &UiRequest) {
         let decoded = decode_widget(request);
-        if super::changes::changes_moved(&decoded) {
-            self.desktop.changes_mark_stale();
-        }
         let pending = self.desktop.session().pending().map(|(_, method)| method);
         let sends = match (&decoded, pending) {
             (Ok(Some(DesktopRecord::Response(_))), Some(method)) => match method {
                 DesktopMethod::GetReviewMode | DesktopMethod::SetReviewMode => {
                     self.desktop.review_apply(request).sends
-                }
-                DesktopMethod::GetChanges | DesktopMethod::GetChangeDiff => {
-                    self.desktop.changes_apply(request).sends
                 }
                 DesktopMethod::GetConfig | DesktopMethod::SetConfig => {
                     self.desktop.config_apply(request).sends
@@ -126,8 +119,6 @@ impl Live {
     fn pump(&mut self) {
         let review = self.desktop.review_pump().sends;
         self.send(review);
-        let changes = self.desktop.changes_pump().sends;
-        self.send(changes);
     }
 }
 
@@ -280,61 +271,14 @@ fn live_review_changes_and_external_config() {
     let capabilities = live.desktop.capabilities().unwrap().clone();
     live.pump();
 
-    if !capabilities.supports(DesktopMethod::GetChanges) {
+    if !capabilities.supports(DesktopMethod::GetReviewMode) {
         // 4.8.0: nothing new is sent, nothing new shows.
         live.desktop.review_refresh();
-        live.desktop.changes_mark_stale();
         assert!(live.desktop.review_pump().sends.is_empty());
-        assert!(live.desktop.changes_pump().sends.is_empty());
         assert!(live.desktop.review().mode().is_none());
-        assert!(live.desktop.changes().list().is_none());
-        eprintln!("live: an older Shell; review and changes stay hidden");
+        eprintln!("live: an older Shell; review stays hidden");
         return;
     }
-
-    // ── Session changes ──
-    assert!(live.until("the change set", STEP, |d| d.changes().list().is_some()));
-    let list = live.desktop.changes().list().unwrap().clone();
-    eprintln!("live: get_changes -> {list:?}");
-    let notes = list
-        .files
-        .iter()
-        .find(|file| file.path == "notes.txt")
-        .expect("notes.txt listed");
-    assert_eq!(notes.status, ChangeStatus::Modified);
-    assert!(list.files.iter().any(|file| file.path == "fresh.txt"));
-    assert!(list.roots.iter().all(|root| !root.label.contains('/')));
-    let key = FileKey {
-        root: notes.root.clone(),
-        path: notes.path.clone(),
-    };
-    live.desktop.changes_select(Some(key));
-    live.pump();
-    assert!(live.until("the diff", STEP, |d| matches!(
-        d.changes().diff(),
-        Some(FileDiff::Ready(_) | FileDiff::Failed(_))
-    )));
-    let Some(FileDiff::Ready(diff)) = live.desktop.changes().diff() else {
-        panic!("diff failed: {:?}", live.desktop.changes().diff());
-    };
-    assert!(diff.diff.contains("+two"), "{diff:?}");
-    eprintln!(
-        "live: get_change_diff notes.txt ok ({} bytes)",
-        diff.diff.len()
-    );
-
-    // The agent edits again; the turn ends: the list and the open diff follow.
-    std::fs::write(workspace.join("notes.txt"), "one\ntwo\nthree\n").unwrap();
-    std::fs::write(workspace.join("later.txt"), "x\n").unwrap();
-    live.desktop.changes_mark_stale();
-    live.pump();
-    assert!(live.until("the refreshed change set", STEP, |d| {
-        d.changes()
-            .list()
-            .is_some_and(|list| list.files.iter().any(|file| file.path == "later.txt"))
-            && matches!(d.changes().diff(), Some(FileDiff::Ready(diff)) if diff.diff.contains("+three"))
-    }));
-    eprintln!("live: the change set and the open diff refreshed");
 
     // ── Review mode ──
     // Hidden for good when the read found no review owner.

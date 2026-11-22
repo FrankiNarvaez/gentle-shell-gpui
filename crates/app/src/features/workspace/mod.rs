@@ -20,7 +20,6 @@ use gpui_kit::*;
 
 use crate::features::canvas::{CanvasEvent, CanvasView};
 use crate::features::docs::{DocsEvent, DocsView};
-use crate::features::files::FileTreeView;
 use crate::features::memory::{MemoryEvent, MemoryView};
 use crate::features::notices::{self, Notices};
 use crate::features::onboarding::{OnboardingEvent, OnboardingView, Probe};
@@ -29,6 +28,7 @@ use crate::features::palette::{
 };
 use crate::features::profiles::{ModelChoice, ProfilesEvent, ProfilesView};
 use crate::features::providers::{ProvidersEvent, ProvidersView};
+use crate::features::review::{ReviewEvent, ReviewView};
 use crate::features::session::{AgentsTab, SessionEvent, SessionView};
 use crate::features::sessions::{SessionsEvent, SessionsView};
 use crate::features::settings::{SettingsEvent, SettingsView};
@@ -114,6 +114,7 @@ enum Overlay {
     Docs(Entity<DocsView>),
     Settings(Entity<SettingsView>),
     Profiles(Entity<ProfilesView>),
+    Review(Entity<ReviewView>),
     Onboarding(Entity<OnboardingView>),
     Welcome(Entity<WelcomeView>),
 }

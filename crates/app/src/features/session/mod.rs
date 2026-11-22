@@ -55,9 +55,6 @@ pub enum SessionEvent {
     /// [`SessionView::cwd`] or [`SessionView::model_choices`]. Streaming
     /// output does not emit it, so the window need not redraw per token.
     ChromeChanged,
-    /// The folder button moved this tab to another folder (its backend
-    /// restarts there): the window's file sidebar follows it.
-    CwdChanged(PathBuf),
     /// A Gentle Shell command whose UI is terminal-only was run (typed or
     /// from the palette): open the app's own screen for it instead.
     OpenScreen(gentle_core::commands::Screen),

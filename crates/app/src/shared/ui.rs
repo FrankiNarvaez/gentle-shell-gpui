@@ -1004,25 +1004,112 @@ pub fn shimmer(text: impl Into<SharedString>, base: Hsla, highlight: Hsla) -> Di
         .child(slow_frames())
 }
 
-/// A short bright streak running along a thin track, for a line that shows
-/// work in progress: place it in a `relative`, clipped track. It enters
-/// past the left edge and leaves past the right one.
+/// A short bright streak orbiting a rounded box's border clockwise, its
+/// tail fading out, for a box whose work is in progress (the composer while
+/// the agent works). Place it inside a `relative` box with a 1px border;
+/// `radius` is the box's corner radius.
 #[track_caller]
-pub fn comet(color: Hsla) -> Div {
-    const LENGTH: f32 = 0.24;
-    let left = -LENGTH + live_phase(1.6) * (1. + LENGTH);
+pub fn orbit(color: Hsla, radius: Rems) -> Div {
+    let phase = live_phase(2.4);
+    // Over the border: `absolute` insets start inside it.
+    let edge = px(-1.);
     div()
         .absolute()
-        .top_0()
-        .bottom_0()
-        .left(gpui_kit::relative(left))
-        .w(gpui_kit::relative(LENGTH))
-        .bg(gpui_kit::linear_gradient(
-            90.,
-            gpui_kit::linear_color_stop(color.opacity(0.), 0.),
-            gpui_kit::linear_color_stop(color, 0.7),
-        ))
+        .top(edge)
+        .left(edge)
+        .right(edge)
+        .bottom(edge)
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let radius = radius.to_pixels(window.rem_size());
+                    paint_orbit(bounds, radius, phase, color, window);
+                },
+            )
+            .size_full(),
+        )
         .child(slow_frames())
+}
+
+/// [`orbit`]'s streak: its head `phase` of the way round the border, the
+/// tail drawn as pieces of rising opacity.
+fn paint_orbit(
+    bounds: gpui_kit::Bounds<Pixels>,
+    radius: Pixels,
+    phase: f32,
+    color: Hsla,
+    window: &mut Window,
+) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    const STROKE: f32 = 1.5;
+    const PIECES: usize = 16;
+    // On the border's own line.
+    let inset = STROKE / 2.;
+    let w = f32::from(bounds.size.width) - 2. * inset;
+    let h = f32::from(bounds.size.height) - 2. * inset;
+    if w <= 0. || h <= 0. {
+        return;
+    }
+    let r = (f32::from(radius) - inset).clamp(0., w.min(h) / 2.);
+    let (ox, oy) = (
+        f32::from(bounds.origin.x) + inset,
+        f32::from(bounds.origin.y) + inset,
+    );
+    // The perimeter, clockwise from the top edge's start: edge, corner, ...
+    let (a, b, q) = (w - 2. * r, h - 2. * r, FRAC_PI_2 * r);
+    let total = 2. * a + 2. * b + 4. * q;
+    let arc = |cx: f32, cy: f32, start: f32, s: f32| {
+        let t = start + if q > 0. { s / q * FRAC_PI_2 } else { 0. };
+        point(px(ox + cx + r * t.cos()), px(oy + cy + r * t.sin()))
+    };
+    let at = |s: f32| {
+        let mut s = s.rem_euclid(total);
+        if s < a {
+            return point(px(ox + r + s), px(oy));
+        }
+        s -= a;
+        if s < q {
+            return arc(w - r, r, -FRAC_PI_2, s);
+        }
+        s -= q;
+        if s < b {
+            return point(px(ox + w), px(oy + r + s));
+        }
+        s -= b;
+        if s < q {
+            return arc(w - r, h - r, 0., s);
+        }
+        s -= q;
+        if s < a {
+            return point(px(ox + w - r - s), px(oy + h));
+        }
+        s -= a;
+        if s < q {
+            return arc(r, h - r, FRAC_PI_2, s);
+        }
+        s -= q;
+        if s < b {
+            return point(px(ox), px(oy + h - r - s));
+        }
+        s -= b;
+        arc(r, r, PI, s.min(q))
+    };
+    let length = (total * 0.2).min(180.);
+    let head = phase * total;
+    let piece = length / PIECES as f32;
+    for i in 0..PIECES {
+        let from = head - length + i as f32 * piece;
+        let mut path = gpui_kit::PathBuilder::stroke(px(STROKE));
+        path.move_to(at(from));
+        for k in 1..=4 {
+            path.line_to(at(from + piece * k as f32 / 4.));
+        }
+        if let Ok(path) = path.build() {
+            let fade = (i + 1) as f32 / PIECES as f32;
+            window.paint_path(path, color.opacity(fade * fade));
+        }
+    }
 }
 
 /// `~/a/b/leaf` split into a muted prefix and the leaf, for path labels.
