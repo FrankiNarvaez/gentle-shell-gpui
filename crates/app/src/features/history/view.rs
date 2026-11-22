@@ -40,6 +40,14 @@ const DETAIL_SHARE: f32 = 0.45;
 const WIDE: f32 = 640.;
 const MEDIUM: f32 = 460.;
 
+/// The activity strip's day cells (px): the gap between them, their size
+/// range (they grow with the pane up to the max, and a narrower pane shows
+/// fewer weeks below the min), and the weekday labels' column.
+const ACTIVITY_GAP: f32 = 3.;
+const ACTIVITY_MIN: f32 = 7.;
+const ACTIVITY_MAX: f32 = 13.;
+const ACTIVITY_LABELS: f32 = 26.;
+
 /// What a context menu row does to the view.
 type MenuAction = Rc<dyn Fn(&mut HistoryView, &mut Window, &mut Context<HistoryView>)>;
 
@@ -1202,6 +1210,7 @@ impl HistoryView {
                 .min_h_0()
                 .child(self.render_list(cx))
                 .children(self.render_detail(window, cx))
+                .children(self.render_activity(cx))
                 .into_any_element(),
         }
     }
@@ -1420,6 +1429,192 @@ impl HistoryView {
                     }),
             )
             .into_any_element()
+    }
+
+    /// A year of activity as a grid of days under the list, like GitHub's
+    /// contribution graph: this repository's commits, or the user's GitHub
+    /// contributions. A narrow pane shows the most recent weeks that fit.
+    fn render_activity(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use super::Source;
+        use gentle_core::git::activity::{self, Unit, WEEKS};
+        let source = self.activity_source;
+        // Nothing until this repository's commits are read.
+        self.repo_days.as_ref()?;
+        let unit = match source {
+            Source::Repository => Unit::Commits,
+            Source::GitHub => Unit::Contributions,
+        };
+        // The card's margins and padding, and the weekday labels beside it.
+        let available = (self.width.get() - 16. - 24. - ACTIVITY_LABELS - 6.).max(0.);
+        let weeks =
+            (((available + ACTIVITY_GAP) / (ACTIVITY_MIN + ACTIVITY_GAP)) as usize).clamp(1, WEEKS);
+        let cell = ((available - (weeks - 1) as f32 * ACTIVITY_GAP) / weeks as f32)
+            .clamp(ACTIVITY_MIN, ACTIVITY_MAX);
+        let step = cell + ACTIVITY_GAP;
+        let shown = self.activity.as_ref().map(|grid| grid.last(weeks));
+        let shade = |level: u8| match level {
+            0 => ui::well(),
+            1 => ui::accent().opacity(0.3),
+            2 => ui::accent().opacity(0.5),
+            3 => ui::accent().opacity(0.75),
+            _ => ui::accent(),
+        };
+        let swatch = |level: u8| {
+            div()
+                .flex_none()
+                .size(px(cell))
+                .rounded(px(2.))
+                .bg(shade(level))
+        };
+        // While the GitHub calendar loads, or when it can't, the grid's room
+        // holds a line saying so: the card keeps its height.
+        let grid: AnyElement = match shown {
+            Some(shown) => {
+                let months = div().relative().h(px(14.)).children(
+                    activity::month_labels(shown)
+                        .into_iter()
+                        .map(|(column, name)| {
+                            div()
+                                .absolute()
+                                .left(px(column as f32 * step))
+                                .text_size(px(10.))
+                                .text_color(ui::faint())
+                                .child(name)
+                        }),
+                );
+                let columns = h_flex().items_start().gap(px(ACTIVITY_GAP)).children(
+                    shown.iter().enumerate().map(|(w, week)| {
+                        v_flex()
+                            .gap(px(ACTIVITY_GAP))
+                            .children(week.iter().enumerate().map(|(d, day)| {
+                                if day.future {
+                                    return div().size(px(cell)).into_any_element();
+                                }
+                                let summary = activity::day_summary(day, unit);
+                                swatch(day.level)
+                                    .id(("git-activity-day", w * 7 + d))
+                                    .hover(|s| s.border_1().border_color(ui::fg().opacity(0.6)))
+                                    .tooltip(move |window, cx| {
+                                        ui::tooltip(summary.clone()).build(window, cx)
+                                    })
+                                    .into_any_element()
+                            }))
+                    }),
+                );
+                v_flex().child(months).child(columns).into_any_element()
+            }
+            None => {
+                let (busy, text) = match &self.github {
+                    Some(Err(why)) if !self.github_loading => (false, why.clone()),
+                    _ => (true, "Reading your GitHub contributions…".to_string()),
+                };
+                h_flex()
+                    .h(px(14. + 7. * cell + 6. * ACTIVITY_GAP))
+                    .gap_2()
+                    .text_xs()
+                    .text_color(ui::muted())
+                    .when(busy, |d| {
+                        d.child(Spinner::new().xsmall().color(ui::muted()))
+                    })
+                    .when(!busy, |d| {
+                        d.child(
+                            Icon::new(IconName::CircleAlert)
+                                .xsmall()
+                                .text_color(ui::warning()),
+                        )
+                    })
+                    .child(div().min_w_0().whitespace_normal().child(text))
+                    .into_any_element()
+            }
+        };
+        // Mon, Wed and Fri beside their rows, as GitHub labels them.
+        let weekdays = v_flex()
+            .flex_none()
+            .w(px(ACTIVITY_LABELS))
+            .pt(px(14.))
+            .gap(px(ACTIVITY_GAP))
+            .children(
+                ["", "Mon", "", "Wed", "", "Fri", ""]
+                    .into_iter()
+                    .map(|label| {
+                        div()
+                            .h(px(cell))
+                            .flex()
+                            .items_center()
+                            .text_size(px(10.))
+                            .text_color(ui::faint())
+                            .child(label)
+                    }),
+            );
+        let view = cx.entity().downgrade();
+        let login = match (&self.github, source) {
+            (Some(Ok(calendar)), Source::GitHub) => Some(format!("@{} on GitHub", calendar.login)),
+            _ => None,
+        };
+        let heading = match shown {
+            Some(shown) => activity::heading(activity::total(shown), shown.len(), unit),
+            None => "Your GitHub contributions".to_string(),
+        };
+        let header = h_flex()
+            .gap_2()
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(ui::fg())
+                    .child(heading),
+            )
+            .child(ui::segmented(
+                "git-activity-source",
+                &["This repo", "GitHub"],
+                Some(usize::from(source == Source::GitHub)),
+                move |choice, _, cx| {
+                    let source = if *choice == 1 {
+                        Source::GitHub
+                    } else {
+                        Source::Repository
+                    };
+                    let _ = view.update(cx, |this, cx| this.set_activity_source(source, cx));
+                },
+            ));
+        let legend = h_flex()
+            .gap(px(ACTIVITY_GAP))
+            .text_size(px(10.))
+            .text_color(ui::faint())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .when_some(login, |d, login| d.child(login)),
+            )
+            .child(div().mr_1().child("Less"))
+            .children((0..=4).map(swatch))
+            .child(div().ml_1().child("More"));
+        Some(
+            v_flex()
+                .flex_none()
+                .mx_2()
+                .mb_1()
+                .px_3()
+                .py_2()
+                .gap_2()
+                .rounded_lg()
+                .bg(ui::surface())
+                .child(header)
+                .child(
+                    h_flex()
+                        .items_start()
+                        .gap(px(6.))
+                        .child(weekdays)
+                        .child(grid),
+                )
+                .child(legend)
+                .into_any_element(),
+        )
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> Div {

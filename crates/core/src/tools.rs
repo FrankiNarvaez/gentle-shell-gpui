@@ -38,6 +38,40 @@ pub fn summarize(name: &str, args: &Value, details: &Value) -> ToolSummary {
             };
             ("Browser", crate::text::first_line(&subject, 120))
         }
+        // `launch · npm run app`, `click 885 · 36,212`, `type 885 · hello`.
+        "screen" => {
+            let number = |key: &str| args[key].as_f64().map(|n| n.to_string());
+            let head = [Some(arg("op")), number("window")]
+                .into_iter()
+                .flatten()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let command = args["command"].as_array().map(|c| {
+                c.iter()
+                    .filter_map(|w| w.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            });
+            let point = number("x")
+                .zip(number("y"))
+                .map(|(x, y)| format!("{x},{y}"));
+            let detail = [
+                command,
+                point,
+                Some(arg("text")),
+                Some(arg("keys")),
+                Some(arg("app")),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|s| !s.is_empty());
+            let subject = match detail {
+                Some(detail) => format!("{head} · {detail}"),
+                None => head,
+            };
+            ("Screen", crate::text::first_line(&subject, 120))
+        }
         _ => {
             let mut title: String = name.replace('_', " ");
             if let Some(first) = title.get_mut(0..1) {
@@ -152,6 +186,22 @@ mod tests {
         assert_eq!(s.subject, "click app · text/Save");
         let s = summarize("browser", &json!({"op": "tabs"}), &Value::Null);
         assert_eq!(s.subject, "tabs");
+    }
+
+    #[test]
+    fn screen_cards_name_the_op_window_and_what() {
+        let s = summarize(
+            "screen",
+            &json!({"op": "click", "window": 885, "x": 36, "y": 212}),
+            &Value::Null,
+        );
+        assert_eq!(s.subject, "click 885 · 36,212");
+        let s = summarize(
+            "screen",
+            &json!({"op": "launch", "command": ["npm", "run", "app"]}),
+            &Value::Null,
+        );
+        assert_eq!(s.subject, "launch · npm run app");
     }
 
     #[test]

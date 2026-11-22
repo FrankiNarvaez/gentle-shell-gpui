@@ -49,6 +49,26 @@ pub fn toplevel(cwd: &Path) -> Option<PathBuf> {
     (!top.is_empty()).then(|| crate::features::backend::host_path(cwd, top))
 }
 
+/// The last year's commit times (Unix seconds) on every ref, merges aside,
+/// for the Git pane's activity strip.
+pub fn activity(toplevel: &Path) -> Vec<i64> {
+    use gentle_core::git::activity::{LOG_ARGS, WEEKS, parse_times};
+    // A week of slack: the grid starts on a Sunday up to a week before.
+    let since = format!("--since={} days ago", WEEKS * 7 + 7);
+    let mut args = LOG_ARGS.to_vec();
+    args.push(&since);
+    git(toplevel, &args)
+        .map(|raw| parse_times(&raw))
+        .unwrap_or_default()
+}
+
+/// A git setting as the repository sees it (`user.email`, `github.user`).
+pub fn config(toplevel: &Path, key: &str) -> Option<String> {
+    git(toplevel, &["config", key])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// The shortened path of the repository when `root` is a folder inside a
 /// larger one (its top level is above it); `None` when `root` is the top level.
 pub fn repository_path(root: &Path, toplevel: &Path) -> Option<String> {

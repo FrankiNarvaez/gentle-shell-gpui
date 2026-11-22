@@ -28,6 +28,11 @@ click in a single-page app, `wait` for what you expect before reading the page. 
 `gentle-browser` alone for every command. To look at or use a page yourself, don't start Playwright, \
 Puppeteer or a browser of your own; the project's own test suites (`npx playwright test`, Cypress) run \
 as usual.
+- To check a desktop app you build (a GUI, an Electron or native app), use the `screen` tool or \
+`gentle-screen`: `gentle-screen launch -- <command>` starts it and prints its window, `screenshot \
+--window <id>` shows it to you, `click <id> <x> <y>` (pixels of that screenshot), `type <id> \"text\"`, \
+`key <id> cmd+s`, `scroll <id> 300`, then a screenshot again to check; `quit <pid>` when done. Input \
+only reaches apps you launched that way, never the user's. Run `gentle-screen` alone for every command.
 ";
 
 const DEVICES: &str = "\

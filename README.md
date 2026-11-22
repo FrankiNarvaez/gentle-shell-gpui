@@ -160,6 +160,8 @@ A pane beside your work (like a file preview: it splits the largest pane or take
 
 Rows show the refs, the subject (merged-in commits dimmed), the author's picture (from GitHub or Gravatar, kept on disk; their initials until it arrives or when there is none) and name (a dot marks a co-author such as Claude), how long ago and the short SHA. Hover a row for its card: author and co-authors, full subject, hash, files changed with +/−, when and on which branch. The branch picker shows HEAD, every branch at once (All branches) or any local branch without checking it out; the first 200 commits load, and "Earlier history" loads 200 more. The filter keeps commits whose subject, author or refs contain the text, or whose hash starts with it. Pull and Push show how far HEAD is behind and ahead of its upstream; a branch without one is published on push.
 
+Under the list, an activity strip shows a year as a grid of days, a column per week, shaded like GitHub's contribution graph; hover a day for its count. **This repo** counts the repository's commits on every branch (merges aside); **GitHub** shows your contribution calendar as your GitHub profile does (every repository, pull requests, issues and reviews). A narrow pane shows the most recent weeks that fit.
+
 Click a commit for its details under the list: the whole message and the files it changed with +/−; click a file to open what that commit did to it, in a diff pane. Right-click a commit to copy its SHA or message, switch to a branch on it, check it out, start a branch or a tag there, cherry-pick it, revert it, reset the current branch to it (keeping the changes, or discarding them after a confirmation), edit HEAD's message, push or delete its tags, or open an agent tab that explains it. Names and messages are asked for in a bar under the toolbar (↵ confirms, Esc cancels). When a merge, rebase, cherry-pick or revert stops on a conflict, a banner says so with Continue and Abort. ⋯ also adds a remote, runs Git LFS checkout, pull, push and prune (when Git LFS is installed), opens a terminal in the repository or the repository in a code editor. Every action runs git where the folder's agents run, and the footer says what it's doing, then how it went (git's own message when it fails).
 
 </details>
@@ -558,6 +560,8 @@ A loopback dev-server URL printed by a shell tool (`http://localhost:5173`, `127
 </details>
 
 **Agents drive pages too**, like Tern's browser: `gentle-browser` (and the `browser` tool every agent gets) opens a named page in a card, reads it as an outline with refs, clicks, fills, types, presses keys, waits for text, runs JavaScript and takes screenshots that show in the conversation. The card says when an agent is driving it; **Take over** hands it back. Its profile button picks where the page keeps cookies and sign-ins: Shared (yours), the repository, Agent (the default for pages agents open), Private, or a profile you name; **Clear website data…** signs a profile out.
+
+**And desktop apps**: `gentle-screen` (and the `screen` tool) launches an app an agent built, lists its windows, takes screenshots that show in the conversation, and clicks, types, presses keys and scrolls in it, so the agent checks its own work. Input only reaches apps `gentle-screen launch` started (and their child processes), never one you're using. macOS asks once to let Gentle Shell record the screen and control the computer (Accessibility); Linux needs X11 (or XWayland).
 
 ---
 

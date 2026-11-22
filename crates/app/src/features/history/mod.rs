@@ -8,6 +8,7 @@
 //! `ops` runs the actions and the prompts and confirmations they need.
 
 mod avatars;
+mod contributions;
 mod graph;
 mod ops;
 mod view;
@@ -16,6 +17,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gentle_core::git::activity::{Activity, activity, count_days, local_day};
 use gentle_core::git::ops::{CommitFile, PullMode};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
@@ -51,6 +53,15 @@ enum Outcome {
     Failed(String),
 }
 
+/// What the activity strip shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// This repository's commits.
+    Repository,
+    /// The user's GitHub contribution calendar.
+    GitHub,
+}
+
 pub struct HistoryView {
     toplevel: PathBuf,
     scope: Scope,
@@ -83,8 +94,22 @@ pub struct HistoryView {
     lfs: bool,
     /// Code editors installed, for "Open in …".
     ides: Rc<Vec<ides::Installed>>,
+    /// What the activity strip shows.
+    activity_source: Source,
+    /// This repository's commits per local day; `None` until read.
+    repo_days: Option<Rc<Vec<(i64, u32)>>>,
+    /// The user's GitHub calendar: `None` until asked for, else what came
+    /// back (or why it didn't).
+    github: Option<Result<Rc<contributions::Contributions>, String>>,
+    github_loading: bool,
+    /// The strip, laid out from the shown source.
+    activity: Option<Rc<Activity>>,
+    /// The local UTC offset (seconds), for the strip's days.
+    offset: i64,
     _load: Task<()>,
     _detail: Task<()>,
+    _activity: Task<()>,
+    _github: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -133,8 +158,16 @@ impl HistoryView {
             prompt: None,
             lfs: false,
             ides: Rc::default(),
+            activity_source: Source::Repository,
+            repo_days: None,
+            github: None,
+            github_loading: false,
+            activity: None,
+            offset: 0,
             _load: Task::ready(()),
             _detail: Task::ready(()),
+            _activity: Task::ready(()),
+            _github: Task::ready(()),
             _subscriptions: subscriptions,
         };
         this.reload(cx);
@@ -173,6 +206,7 @@ impl HistoryView {
         let scope = self.scope.clone();
         let limit = self.limit;
         self.loading = true;
+        self.read_activity(cx);
         self._load = cx.spawn(async move |this, cx| {
             let history = cx
                 .background_executor()
@@ -187,6 +221,80 @@ impl HistoryView {
                 cx.notify();
             });
         });
+        cx.notify();
+    }
+
+    /// Read the last year's commits for the activity strip (and the GitHub
+    /// calendar again, when it is shown: the reload button refreshes it).
+    fn read_activity(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.toplevel.clone();
+        self._activity = cx.spawn(async move |this, cx| {
+            let (times, offset) = cx
+                .background_executor()
+                .spawn(async move {
+                    let times = git::toplevel(&cwd).map(|top| git::activity(&top));
+                    (times, crate::features::usage::local_offset_secs())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.offset = offset;
+                this.repo_days = times.map(|times| Rc::new(count_days(&times, offset)));
+                this.layout_activity();
+                cx.notify();
+            });
+        });
+        if self.activity_source == Source::GitHub && self.github.is_some() {
+            self.read_github(cx);
+        }
+    }
+
+    /// Read the user's GitHub contribution calendar.
+    fn read_github(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.toplevel.clone();
+        let github = self.read().and_then(|h| h.github.clone());
+        self.github_loading = true;
+        self._github = cx.spawn(async move |this, cx| {
+            let read = cx
+                .background_executor()
+                .spawn(async move {
+                    let top = git::toplevel(&cwd).unwrap_or(cwd);
+                    contributions::read(&top, github)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.github_loading = false;
+                this.github = Some(read.map(Rc::new));
+                this.layout_activity();
+                cx.notify();
+            });
+        });
+    }
+
+    /// Lay the strip out from the shown source.
+    fn layout_activity(&mut self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let today = local_day(now, self.offset);
+        let days = match self.activity_source {
+            Source::Repository => self.repo_days.as_ref().map(|d| d.as_slice()),
+            Source::GitHub => match &self.github {
+                Some(Ok(calendar)) => Some(calendar.days.as_slice()),
+                _ => None,
+            },
+        };
+        self.activity = days.map(|days| Rc::new(activity(days, today)));
+    }
+
+    fn set_activity_source(&mut self, source: Source, cx: &mut Context<Self>) {
+        if self.activity_source == source {
+            return;
+        }
+        self.activity_source = source;
+        if source == Source::GitHub && self.github.is_none() && !self.github_loading {
+            self.read_github(cx);
+        }
+        self.layout_activity();
         cx.notify();
     }
 

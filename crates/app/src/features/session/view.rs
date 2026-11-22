@@ -2159,6 +2159,7 @@ fn tool_icon(name: &str) -> IconName {
         "grep" | "find" => IconName::Search,
         "ls" => IconName::Folder,
         "todo" => IconName::ListTodo,
+        "screen" => IconName::Monitor,
         n if n.starts_with("subagent") => IconName::Users,
         n if n.starts_with("web")
             || n.contains("fetch")
