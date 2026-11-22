@@ -16,6 +16,7 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gentle_core::git::activity::{Activity, Stamp};
 use gentle_core::git::ops::{CommitFile, PullMode};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
@@ -83,8 +84,18 @@ pub struct HistoryView {
     lfs: bool,
     /// Code editors installed, for "Open in …".
     ides: Rc<Vec<ides::Installed>>,
+    /// The activity strip's commits (the last year's) and `user.email`;
+    /// `None` until read.
+    stamps: Option<Rc<(Vec<Stamp>, Option<String>)>>,
+    /// The strip, laid out from `stamps`.
+    activity: Option<Rc<Activity>>,
+    /// The strip counts only the user's own commits.
+    activity_mine: bool,
+    /// The local UTC offset (seconds), for the strip's days.
+    offset: i64,
     _load: Task<()>,
     _detail: Task<()>,
+    _activity: Task<()>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -133,8 +144,13 @@ impl HistoryView {
             prompt: None,
             lfs: false,
             ides: Rc::default(),
+            stamps: None,
+            activity: None,
+            activity_mine: false,
+            offset: 0,
             _load: Task::ready(()),
             _detail: Task::ready(()),
+            _activity: Task::ready(()),
             _subscriptions: subscriptions,
         };
         this.reload(cx);
@@ -173,6 +189,7 @@ impl HistoryView {
         let scope = self.scope.clone();
         let limit = self.limit;
         self.loading = true;
+        self.read_activity(cx);
         self._load = cx.spawn(async move |this, cx| {
             let history = cx
                 .background_executor()
@@ -188,6 +205,51 @@ impl HistoryView {
             });
         });
         cx.notify();
+    }
+
+    /// Read the last year's commits for the activity strip.
+    fn read_activity(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.toplevel.clone();
+        self._activity = cx.spawn(async move |this, cx| {
+            let (stamps, offset) = cx
+                .background_executor()
+                .spawn(async move {
+                    let read = git::toplevel(&cwd).map(|top| git::activity(&top));
+                    (read, crate::features::usage::local_offset_secs())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.offset = offset;
+                this.stamps = stamps.map(Rc::new);
+                this.layout_activity();
+                cx.notify();
+            });
+        });
+    }
+
+    /// Lay the strip out from the read commits, everyone's or the user's.
+    fn layout_activity(&mut self) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        self.activity = self.stamps.as_ref().map(|read| {
+            let (stamps, email) = &**read;
+            let only = email.as_deref().filter(|_| self.activity_mine);
+            Rc::new(gentle_core::git::activity::activity(
+                stamps,
+                only,
+                self.offset,
+                now,
+            ))
+        });
+    }
+
+    fn set_activity_mine(&mut self, mine: bool, cx: &mut Context<Self>) {
+        if self.activity_mine != mine {
+            self.activity_mine = mine;
+            self.layout_activity();
+            cx.notify();
+        }
     }
 
     fn apply(&mut self, read: Option<(PathBuf, History)>, cx: &mut Context<Self>) {

@@ -6,6 +6,7 @@
 //! `ops` the Git pane's operations and a commit's changed files, `avatar`
 //! where an author's picture comes from.
 
+pub mod activity;
 pub mod avatar;
 pub mod log;
 pub mod ops;
