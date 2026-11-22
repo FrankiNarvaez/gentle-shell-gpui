@@ -138,6 +138,11 @@ impl Workspace {
         cx.notify();
     }
 
+    /// The Files sidebar's search field: the palette's file finder.
+    pub fn search_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette(Category::Files, window, cx);
+    }
+
     /// The sidebar header: pick a folder, [`Self::set_root`] to it and move
     /// the focused agent there too, so the files shown are the ones it works
     /// on. An agent with a conversation asks first (it restarts fresh).
