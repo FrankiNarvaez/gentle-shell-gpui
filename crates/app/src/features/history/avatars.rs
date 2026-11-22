@@ -221,7 +221,9 @@ fn resolve(dir: &Path, email: &str, github: Option<&(String, String)>) -> Lookup
     }
 }
 
-enum Answer {
+/// What a GET to GitHub or Gravatar came back with (also used for GitHub's
+/// contribution calendar, `contributions.rs`).
+pub(super) enum Answer {
     Body(Vec<u8>),
     /// 404 and other "no".
     NotFound,
@@ -230,7 +232,7 @@ enum Answer {
     Offline,
 }
 
-fn get(agent: &ureq::Agent, url: &str, github_api: bool) -> Answer {
+pub(super) fn get(agent: &ureq::Agent, url: &str, github_api: bool) -> Answer {
     let mut request = agent.get(url).header("User-Agent", USER_AGENT);
     if github_api {
         request = request
