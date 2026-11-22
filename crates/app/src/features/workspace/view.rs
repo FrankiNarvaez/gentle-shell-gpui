@@ -12,17 +12,16 @@ impl Workspace {
     // The chrome reads each pane's `title`/`running` snapshot, never the
     // views themselves: see `Pane::title`.
     pub(super) fn tab_running(&self, tab: &Tab) -> bool {
-        tab.tree
-            .leaves()
+        tab.leaves()
             .iter()
             .any(|id| self.panes.get(id).is_some_and(|p| p.running))
     }
 
-    /// What the agents of `space` do. A workspace not shown yet since launch
-    /// has no panes, so it counts as idle.
+    /// What the agents of `space` do. A tab not built yet has no
+    /// panes, so it counts as idle.
     pub(super) fn space_activity(&self, space: &Space) -> Activity {
         let mut activity = Activity::default();
-        for id in space.tabs.iter().flat_map(|tab| tab.tree.leaves()) {
+        for id in space.tabs.iter().flat_map(|tab| tab.leaves()) {
             match self.panes.get(&id) {
                 Some(pane) if pane.needs_you => activity.needs_you += 1,
                 Some(pane) if pane.running => activity.working += 1,
@@ -158,20 +157,24 @@ impl Workspace {
             .children(space.tabs.iter().enumerate().map(|(i, tab)| {
                 let active = i == space.active;
                 let running = self.tab_running(tab);
-                let kind = self
-                    .panes
-                    .get(&tab.focused)
-                    .map(|p| p.item.kind)
-                    .unwrap_or(PaneKind::Agent);
-                let count = tab.tree.len();
+                let focused = tab.focused();
+                let saved = tab.state.saved_focused();
+                let kind = match (&focused, &saved) {
+                    (Some(id), _) => self.panes.get(id).map(|p| p.item.kind),
+                    (None, Some(saved)) => Some(saved.kind),
+                    _ => None,
+                }
+                .unwrap_or(PaneKind::Agent);
+                let count = tab.state.len();
+                let title = match (&focused, &saved) {
+                    (Some(id), _) => self.pane_title(*id),
+                    (None, Some(saved)) => sidebars::saved_title(saved),
+                    _ => SharedString::default(),
+                };
                 let icon_color = if active { ui::petal() } else { ui::faint() };
                 let drag = TabDrag {
                     tab: tab.id,
-                    title: self
-                        .panes
-                        .get(&tab.focused)
-                        .map(|p| p.title.clone())
-                        .unwrap_or_default(),
+                    title: title.clone(),
                 };
                 let tab_menu = TabMenu {
                     id: tab.id,
@@ -265,7 +268,7 @@ impl Workspace {
                             }),
                     )
                     .child(
-                        match self.renaming.as_ref().filter(|r| r.pane == tab.focused) {
+                        match self.renaming.as_ref().filter(|r| Some(r.pane) == focused) {
                             Some(rename) => div()
                                 .w(rems(160. / 16.))
                                 .h(rems(20. / 16.))
@@ -280,7 +283,7 @@ impl Workspace {
                                 .child(Input::new(&rename.input).appearance(false).xsmall())
                                 .into_any_element(),
                             None => {
-                                let title = self.pane_title(tab.focused);
+                                let title = title.clone();
                                 div()
                                     .id(("tab-title", tab.id))
                                     .min_w_0()
@@ -615,7 +618,9 @@ impl Workspace {
                             let path = here.clone();
                             if let Some(tab) = this.tab_mut()
                                 && tab.id == tab_id
-                                && tab.tree.set_ratio(&path, share)
+                                && tab
+                                    .built_tree_mut()
+                                    .is_some_and(|tree| tree.set_ratio(&path, share))
                             {
                                 this.schedule_save(cx);
                                 cx.notify();
@@ -660,8 +665,8 @@ impl Workspace {
         let Some(pane) = self.panes.get(&id) else {
             return div().into_any_element();
         };
-        let tiled = tab.tree.len() > 1;
-        let focused = tiled && tab.focused == id;
+        let tiled = tab.state.len() > 1;
+        let focused = tiled && tab.focused() == Some(id);
         let title = pane.title.clone();
         let body = div()
             .id(("pane", id))
@@ -684,10 +689,10 @@ impl Workspace {
             .overflow_hidden()
             .capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
                 if let Some(tab) = this.tab_mut()
-                    && tab.focused != id
-                    && tab.tree.contains(&id)
+                    && tab.focused() != Some(id)
+                    && tab.state.contains(&id)
                 {
-                    tab.focused = id;
+                    tab.state.set_focused(id);
                     cx.notify();
                 }
             }))
@@ -800,10 +805,14 @@ impl Workspace {
 
     pub(super) fn render_body(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         match self.tab() {
-            Some(tab) => {
-                let mut path = Vec::new();
-                self.render_tree(tab, &tab.tree, &mut path, window, cx)
-            }
+            Some(tab) => match tab.built_tree() {
+                Some(tree) => {
+                    let mut path = Vec::new();
+                    self.render_tree(tab, tree, &mut path, window, cx)
+                }
+                // `activate` builds the shown tab before it is drawn.
+                None => div().into_any_element(),
+            },
             None => v_flex()
                 .size_full()
                 .items_center()

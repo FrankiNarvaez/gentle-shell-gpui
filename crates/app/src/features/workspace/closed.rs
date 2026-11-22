@@ -6,7 +6,7 @@
 use super::*;
 
 /// How many closes can be undone.
-const KEEP: usize = 20;
+pub(super) const KEEP: usize = 20;
 
 /// A pane in a closed tab's layout: one still open, or one that closed.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,14 +30,48 @@ pub(super) struct Closed {
     title: SharedString,
 }
 
+impl Closed {
+    /// A tab closed without ever being built: all its panes come back from
+    /// what was saved.
+    pub(super) fn unbuilt(
+        space: usize,
+        tab: usize,
+        index: usize,
+        pinned: bool,
+        saved: SavedTab,
+        title: SharedString,
+    ) -> Option<Self> {
+        let layout = saved
+            .layout
+            .filter_map(&mut |pane: &SavedPane| Some(Slot::Closed(pane.clone())))?;
+        Some(Self {
+            space,
+            tab,
+            index,
+            pinned,
+            layout,
+            title,
+        })
+    }
+}
+
 impl Workspace {
     /// Remember that `closing` (all of tab `index`'s panes, or some) are
     /// about to close. Panes that can't be described again aren't kept.
-    pub(super) fn remember_close(&mut self, index: usize, closing: &[PaneId], cx: &App) {
-        let Some(tab) = self.space().tabs.get(index) else {
+    pub(super) fn remember_close(
+        &mut self,
+        space: usize,
+        index: usize,
+        closing: &[PaneId],
+        cx: &App,
+    ) {
+        let Some(tab) = self.spaces.get(space).and_then(|s| s.tabs.get(index)) else {
             return;
         };
-        let layout = tab.tree.filter_map(&mut |id: &PaneId| {
+        let Some(tree) = tab.built_tree() else {
+            return;
+        };
+        let layout = tree.filter_map(&mut |id: &PaneId| {
             if closing.contains(id) {
                 self.saved_pane(*id, cx).map(Slot::Closed)
             } else {
@@ -53,7 +87,7 @@ impl Workspace {
             _ => SharedString::from(format!("{} panes", closing.len())),
         };
         let closed = Closed {
-            space: self.current,
+            space,
             tab: tab.id,
             index,
             pinned: tab.pinned,
@@ -121,12 +155,17 @@ impl Workspace {
         let index = self.space().tabs.iter().position(|t| t.id == closed.tab);
         match index {
             // The tab is as the close left it: rebuild its layout exactly.
-            Some(index) if still_open.as_ref() == Some(&self.space().tabs[index].tree) => {
+            Some(index)
+                if still_open.is_some()
+                    && still_open.as_ref() == self.space().tabs[index].built_tree() =>
+            {
                 let tree = closed
                     .layout
                     .filter_map(&mut |slot| build(self, slot, window, cx));
-                if let Some(tree) = tree {
-                    self.space_mut().tabs[index].tree = tree;
+                if let Some(tree) = tree
+                    && let Some(slot) = self.space_mut().tabs[index].built_tree_mut()
+                {
+                    *slot = tree;
                 }
                 self.show_reopened(index, &reopened, window, cx);
             }
@@ -137,8 +176,11 @@ impl Workspace {
                         && let Some(id) = build(self, &slot, window, cx)
                     {
                         let tab = &mut self.space_mut().tabs[index];
-                        let focused = tab.focused;
-                        tab.tree.split(&focused, id, SplitAxis::Horizontal);
+                        if let Some(focused) = tab.focused()
+                            && let Some(tree) = tab.built_tree_mut()
+                        {
+                            tree.split(&focused, id, SplitAxis::Horizontal);
+                        }
                     }
                 }
                 self.show_reopened(index, &reopened, window, cx);
@@ -164,9 +206,8 @@ impl Workspace {
                     index,
                     Tab {
                         id,
-                        tree,
-                        focused,
                         pinned: closed.pinned,
+                        state: TabState::Built { tree, focused },
                     },
                 );
                 self.show_reopened(index, &reopened, window, cx);
@@ -183,7 +224,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if let (Some(first), Some(tab)) = (reopened.first(), self.space_mut().tabs.get_mut(index)) {
-            tab.focused = *first;
+            tab.state.set_focused(*first);
         }
         self.activate(index, window, cx);
     }

@@ -776,7 +776,7 @@ Known gaps and things not tested yet, so you know what to expect:
 - **Commit message generation** has no timeout or cancel; if `gentle-shell` hangs, the spinner stays.
 - **Symlinked folders:** a workspace opened through a symlink shows no change markers in the file tree (git reports the real path).
 - **Submodules** in the Branches tab are shown but have no actions.
-- **Hidden tabs** restored at launch start their backend only when shown, so their title shows the folder name until then.
+- **Hidden tabs** restored at launch are not built at all until they are first shown (no terminal, file read, canvas or agent view exists for them), and an agent's backend starts only then. Until shown they appear in the tab strip and sidebar with a title from what was saved (the file name, or the kind and folder); a tab whose file has since been deleted disappears the first time it is shown.
 - **Markdown preview:** `#anchor` links do nothing, and a link to another `.md` file replaces the pane with no way back (open the previous one from the file tree).
 - **Visual checks:** several screens were only checked from code, not on screen: the chips' cards, the App section of Configuration, the update pill, the Background subagents switch, and the Changes / Branches tabs with real repositories.
 

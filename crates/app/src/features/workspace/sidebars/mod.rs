@@ -17,9 +17,9 @@ pub(super) struct TabEntry {
     pub space: usize,
     /// Its index among its workspace's tabs.
     pub index: usize,
-    /// The live tab; `None` while its workspace hasn't been opened since launch.
+    /// The tab's id.
     pub id: Option<usize>,
-    /// The focused pane of a live tab.
+    /// The focused pane of a built tab; `None` while it is unbuilt.
     pub pane: Option<PaneId>,
     pub title: SharedString,
     pub kind: PaneKind,
@@ -110,7 +110,7 @@ impl SpaceEntry {
 }
 
 /// What a tab not built yet shows: its file, or its kind and folder.
-fn saved_title(pane: &SavedPane) -> SharedString {
+pub(super) fn saved_title(pane: &SavedPane) -> SharedString {
     let name = |path: &Path| {
         path.file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -151,60 +151,57 @@ impl Workspace {
             .collect()
     }
 
-    /// The tabs of workspace `index`: live ones with their panes' titles and
-    /// state, restored ones not built yet from what was saved.
+    /// The tabs of workspace `index`: built ones with their panes' titles and
+    /// state, unbuilt ones from what was saved (idle, no live pane).
     pub(super) fn sidebar_tabs(&self, index: usize) -> Vec<TabEntry> {
         let Some(space) = self.spaces.get(index) else {
             return Vec::new();
         };
         let current = index == self.current;
-        if let Some((saved, _)) = &space.saved {
-            return saved
-                .iter()
-                .enumerate()
-                .map(|(i, tab)| {
-                    let leaves = tab.layout.leaves();
-                    let focused = leaves.get(tab.focused.min(leaves.len().saturating_sub(1)));
-                    TabEntry {
-                        space: index,
-                        index: i,
-                        id: None,
-                        pane: None,
-                        title: focused.map(saved_title).unwrap_or_default(),
-                        kind: focused.map_or(PaneKind::Agent, |p| p.kind),
-                        shown: false,
-                        pinned: tab.pinned,
-                        running: false,
-                        needs_you: false,
-                        panes: leaves.len(),
-                    }
-                })
-                .collect();
-        }
         space
             .tabs
             .iter()
             .enumerate()
             .map(|(i, tab)| {
-                let leaves = tab.tree.leaves();
                 let shown = current && i == space.active;
-                TabEntry {
-                    space: index,
-                    index: i,
-                    id: Some(tab.id),
-                    pane: Some(tab.focused),
-                    title: self.pane_title(tab.focused),
-                    kind: self
-                        .panes
-                        .get(&tab.focused)
-                        .map_or(PaneKind::Agent, |p| p.item.kind),
-                    shown,
-                    pinned: tab.pinned,
-                    running: self.tab_running(tab),
-                    needs_you: leaves
-                        .iter()
-                        .any(|pane| self.panes.get(pane).is_some_and(|p| p.needs_you)),
-                    panes: leaves.len(),
+                match &tab.state {
+                    TabState::Unbuilt(saved) => {
+                        let focused = tab.state.saved_focused();
+                        TabEntry {
+                            space: index,
+                            index: i,
+                            id: Some(tab.id),
+                            pane: None,
+                            title: focused.as_ref().map(saved_title).unwrap_or_default(),
+                            kind: focused.map_or(PaneKind::Agent, |p| p.kind),
+                            shown,
+                            pinned: tab.pinned,
+                            running: false,
+                            needs_you: false,
+                            panes: saved.layout.len(),
+                        }
+                    }
+                    TabState::Built { tree, focused } => {
+                        let leaves = tree.leaves();
+                        TabEntry {
+                            space: index,
+                            index: i,
+                            id: Some(tab.id),
+                            pane: Some(*focused),
+                            title: self.pane_title(*focused),
+                            kind: self
+                                .panes
+                                .get(focused)
+                                .map_or(PaneKind::Agent, |p| p.item.kind),
+                            shown,
+                            pinned: tab.pinned,
+                            running: self.tab_running(tab),
+                            needs_you: leaves
+                                .iter()
+                                .any(|pane| self.panes.get(pane).is_some_and(|p| p.needs_you)),
+                            panes: leaves.len(),
+                        }
+                    }
                 }
             })
             .collect()
@@ -221,10 +218,14 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if space != self.current {
-            self.switch_workspace(space, window, cx);
-            if self.current == space {
-                self.activate(index, window, cx);
+            // Make the clicked tab the target's active one first, so only it
+            // is built when the workspace opens.
+            if let Some(target) = self.spaces.get_mut(space)
+                && index < target.tabs.len()
+            {
+                target.active = index;
             }
+            self.switch_workspace(space, window, cx);
         } else if clicks >= 2 {
             self.start_tab_rename(index, window, cx);
         } else {

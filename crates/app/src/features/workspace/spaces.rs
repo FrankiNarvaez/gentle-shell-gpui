@@ -18,8 +18,8 @@ impl Workspace {
         self.spaces.len() - 1
     }
 
-    /// Build a restored workspace's panes; with `fill`, give an empty one an
-    /// agent tab.
+    /// Restore a workspace's tabs as unbuilt placeholders; with `fill`, give
+    /// an empty one an agent tab. Panes are built only when a tab is shown.
     pub(super) fn ensure_open(
         &mut self,
         index: usize,
@@ -27,40 +27,27 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let previous = self.current;
-        self.current = index;
         if let Some((tabs, active)) = self.spaces[index].saved.take() {
+            let mut restored = Vec::new();
             for saved in tabs {
-                let leaves = saved.layout.leaves();
-                let mut built = Vec::new();
-                let tree = saved.layout.filter_map(&mut |pane: &SavedPane| {
-                    let id = self.restore_pane(pane, window, cx);
-                    built.push(id);
-                    id
-                });
-                let Some(tree) = tree else { continue };
-                let focused = built
-                    .get(saved.focused.min(leaves.len().saturating_sub(1)))
-                    .copied()
-                    .flatten()
-                    .or_else(|| tree.leaves().first().copied())
-                    .unwrap_or_default();
                 let id = self.alloc_id();
-                self.spaces[index].tabs.push(Tab {
+                restored.push(Tab {
                     id,
-                    tree,
-                    focused,
                     pinned: saved.pinned,
+                    state: TabState::Unbuilt(saved),
                 });
             }
             let space = &mut self.spaces[index];
+            space.tabs = restored;
             space.active = active.min(space.tabs.len().saturating_sub(1));
         }
         if fill && self.spaces[index].tabs.is_empty() {
+            let previous = self.current;
+            self.current = index;
             let root = self.spaces[index].root.clone();
             self.open_tab(PaneKind::Agent, root, None, None, window, cx);
+            self.current = previous;
         }
-        self.current = previous;
     }
 
     pub(super) fn switch_workspace(
@@ -75,17 +62,19 @@ impl Workspace {
         self.close_popups(window, cx);
         // A rename left by switching keeps its name, like a blur.
         self.finish_workspace_rename(true, window, cx);
-        self.ensure_open(index, true, window, cx);
         let changed = index != self.current;
         self.current = index;
+        self.ensure_open(index, true, window, cx);
+        if !self.space().tabs.is_empty() {
+            let active = self.space().active;
+            self.activate(active, window, cx);
+        }
         if changed {
             // A search in the previous project must not hide this one's tabs.
             self.tab_search
                 .update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.space_mut().last_active = workspaces::now();
-        self.focus_active(window, cx);
-        self.start_shown(window, cx);
         if changed {
             cx.emit(WorkspaceEvent::RootChanged(self.space().root.clone()));
         }
@@ -305,7 +294,7 @@ impl Workspace {
         let space = self.spaces.remove(index);
         self.forget_closed_in(index);
         for tab in space.tabs {
-            for pane in tab.tree.leaves() {
+            for pane in tab.leaves() {
                 // Dropping a session drops its PiProcess, which shuts the backend down.
                 self.panes.remove(&pane);
             }

@@ -159,11 +159,114 @@ impl Pane {
     }
 }
 
+/// A tab is either restored but not yet built (it holds its saved layout
+/// until first shown), or has live panes.
+#[derive(Clone)]
+pub(super) enum TabState {
+    Unbuilt(SavedTab),
+    Built {
+        tree: PaneTree<PaneId>,
+        focused: PaneId,
+    },
+}
+
+impl TabState {
+    pub(super) fn is_built(&self) -> bool {
+        matches!(self, TabState::Built { .. })
+    }
+
+    /// Live panes; none while unbuilt.
+    pub(super) fn leaves(&self) -> Vec<PaneId> {
+        self.built_tree().map(PaneTree::leaves).unwrap_or_default()
+    }
+
+    /// Number of panes the tab tiles, built or not.
+    pub(super) fn len(&self) -> usize {
+        match self {
+            TabState::Built { tree, .. } => tree.len(),
+            TabState::Unbuilt(saved) => saved.layout.len(),
+        }
+    }
+
+    pub(super) fn contains(&self, pane: &PaneId) -> bool {
+        self.built_tree().is_some_and(|t| t.contains(pane))
+    }
+
+    pub(super) fn focused(&self) -> Option<PaneId> {
+        match self {
+            TabState::Built { focused, .. } => Some(*focused),
+            TabState::Unbuilt(_) => None,
+        }
+    }
+
+    /// The focused pane of an unbuilt tab, as saved.
+    pub(super) fn saved_focused(&self) -> Option<SavedPane> {
+        let TabState::Unbuilt(saved) = self else {
+            return None;
+        };
+        let leaves = saved.layout.leaves();
+        let last = leaves.len().saturating_sub(1);
+        leaves.get(saved.focused.min(last)).cloned()
+    }
+
+    pub(super) fn built_tree(&self) -> Option<&PaneTree<PaneId>> {
+        match self {
+            TabState::Built { tree, .. } => Some(tree),
+            TabState::Unbuilt(_) => None,
+        }
+    }
+
+    pub(super) fn built_tree_mut(&mut self) -> Option<&mut PaneTree<PaneId>> {
+        match self {
+            TabState::Built { tree, .. } => Some(tree),
+            TabState::Unbuilt(_) => None,
+        }
+    }
+
+    pub(super) fn unbuilt(&self) -> Option<&SavedTab> {
+        match self {
+            TabState::Unbuilt(saved) => Some(saved),
+            TabState::Built { .. } => None,
+        }
+    }
+
+    pub(super) fn set_built(&mut self, tree: PaneTree<PaneId>, focused: PaneId) {
+        *self = TabState::Built { tree, focused };
+    }
+
+    pub(super) fn set_focused(&mut self, pane: PaneId) {
+        if let TabState::Built { focused, .. } = self {
+            *focused = pane;
+        }
+    }
+}
+
 struct Tab {
     id: usize,
-    tree: PaneTree<PaneId>,
-    focused: PaneId,
     pinned: bool,
+    state: TabState,
+}
+
+impl Tab {
+    fn is_built(&self) -> bool {
+        self.state.is_built()
+    }
+
+    fn leaves(&self) -> Vec<PaneId> {
+        self.state.leaves()
+    }
+
+    fn focused(&self) -> Option<PaneId> {
+        self.state.focused()
+    }
+
+    fn built_tree(&self) -> Option<&PaneTree<PaneId>> {
+        self.state.built_tree()
+    }
+
+    fn built_tree_mut(&mut self) -> Option<&mut PaneTree<PaneId>> {
+        self.state.built_tree_mut()
+    }
 }
 
 /// One named workspace.
@@ -173,8 +276,8 @@ struct Space {
     last_active: u64,
     tabs: Vec<Tab>,
     active: usize,
-    /// Restored layout not built yet: workspaces start their panes the first
-    /// time they are shown.
+    /// Restored layout not built yet; kept only until [`Workspace::ensure_open`]
+    /// turns it into unbuilt tabs. After that the live model is in `tabs`.
     saved: Option<(Vec<SavedTab>, usize)>,
     /// The badge's chosen icon and color.
     badge: Badge,
@@ -434,6 +537,11 @@ impl Workspace {
             }),
             _lifecycle: lifecycle,
         };
+        // Restore every workspace's tab list as cheap unbuilt placeholders now,
+        // so the sidebar, counts, search and menus see one model everywhere.
+        for i in 0..this.spaces.len() {
+            this.ensure_open(i, false, window, cx);
+        }
         let target = match folder {
             Some(folder) => match this.spaces.iter().position(|s| s.root == folder) {
                 Some(index) => index,
@@ -444,6 +552,10 @@ impl Workspace {
         };
         this.current = target;
         this.ensure_open(target, prompt.is_none(), window, cx);
+        if !this.space().tabs.is_empty() {
+            let active = this.space().active;
+            this.activate(active, window, cx);
+        }
         if let Some(prompt) = prompt {
             let root = this.space().root.clone();
             this.open_tab(PaneKind::Agent, root, Some(prompt), None, window, cx);
@@ -452,8 +564,6 @@ impl Workspace {
             this.open_web(url, None, false, window, cx);
         }
         this.space_mut().last_active = workspaces::now();
-        this.focus_active(window, cx);
-        this.start_shown(window, cx);
         this.schedule_save(cx);
         // First run: the welcome screen, from the very first frame (it looks
         // at the machine itself while its banner writes in), so the chat

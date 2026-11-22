@@ -250,6 +250,8 @@ updates/            # mod.rs: check and skip; cache.rs (launcher config), regist
 workspaces/         # mod.rs: saved model; store.rs (workspaces.json), tests.rs
 ```
 
+Tabs are `Tab { id, pinned, state }`: `TabState::Unbuilt(SavedTab)` until first shown (`ensure_tab_built`, called by `activate`, the one path that makes a tab the shown one), then `TabState::Built { tree, focused }`. Opening a workspace builds only its active tab; every workspace's tabs exist as unbuilt tabs from launch, so the sidebar, counts, search and menus see one model, and `persistence.rs` `saved_tab` writes an unbuilt tab back unchanged.
+
 ## Data flow
 
 ```mermaid

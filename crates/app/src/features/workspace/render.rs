@@ -10,15 +10,15 @@ impl Render for Workspace {
         crate::shared::diagnostics::render("Workspace");
         // Follow keyboard focus into panes (a terminal focused by its own click).
         if let Some(tab) = self.tab()
-            && let Some(inside) = tab.tree.leaves().into_iter().find(|id| {
+            && let Some(inside) = tab.leaves().into_iter().find(|id| {
                 self.panes
                     .get(id)
                     .is_some_and(|p| p.item.focus.contains_focused(window, cx))
             })
-            && inside != tab.focused
+            && Some(inside) != tab.focused()
             && let Some(tab) = self.tab_mut()
         {
-            tab.focused = inside;
+            tab.state.set_focused(inside);
         }
         let files_sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
         let has_files_sidebar = self.sidebar.is_some();
