@@ -19,6 +19,7 @@ pub mod genui;
 pub mod git;
 pub mod hydration;
 pub mod ides;
+pub mod input_style;
 pub mod interface_size;
 pub mod markdown;
 pub mod music;

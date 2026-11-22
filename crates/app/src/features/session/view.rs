@@ -18,6 +18,7 @@ use super::attachments;
 use super::state::BackendStatus;
 use super::{CONTEXT, SessionView};
 use crate::shared::ui;
+use gentle_core::input_style::InputStyle;
 use gentle_core::tools;
 use gentle_core::transcript::{Block, Item, NoticeLevel, ToolStatus, assistant_visible};
 
@@ -1834,14 +1835,29 @@ impl Render for SessionView {
                         .children(self.render_jump_down(cx)),
                 ),
             })
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_center()
-                    .map(|d| if narrow { d.px_3() } else { d.px_6() })
-                    .pb_2()
-                    .child(self.render_composer(rem_size, cx)),
-            )
+            .map(|main| {
+                let (composer, strip) = self.render_composer(rem_size, cx);
+                // Bar docks the composer in a strip across the pane, on a
+                // hairline; Prompt adds its status strip along the bottom.
+                let dock = super::input_style::style(cx) == InputStyle::Bar;
+                main.child(
+                    h_flex()
+                        .w_full()
+                        .justify_center()
+                        .map(|d| if narrow { d.px_3() } else { d.px_6() })
+                        .when(dock, |d| {
+                            d.pt_3()
+                                .border_t_1()
+                                .border_color(ui::border())
+                                .bg(ui::surface().opacity(0.35))
+                                // Its bottom corners follow the pane's.
+                                .rounded_b_xl()
+                        })
+                        .pb_2()
+                        .child(composer),
+                )
+                .children(strip)
+            })
             // The Todos island floats over the top of the conversation, where
             // an expanded surface keeps its header controls (collapse among
             // them): it steps aside while one is expanded.

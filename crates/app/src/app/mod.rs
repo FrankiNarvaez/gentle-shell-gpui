@@ -42,6 +42,7 @@ pub fn run(
             crate::features::hydration::init(cx);
             crate::shared::kisses::init(cx);
             crate::features::genui::mode::init(cx);
+            crate::features::session::input_style::init(cx);
             crate::features::backend::init(cx);
             crate::features::diagnostics::start(cx);
 

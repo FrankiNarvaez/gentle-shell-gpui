@@ -137,6 +137,8 @@ pub enum FileTreeEvent {
     /// The header's folder name: the owner should let the user pick another
     /// root folder.
     ChooseFolder,
+    /// The search field: the owner should open its file finder.
+    SearchFiles,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1457,6 +1459,16 @@ impl FileTreeView {
                     .small()
                     .text_color(if active { ui::fg() } else { ui::faint() }),
             )
+            // The open tab says what it is; the others keep to their icons.
+            .when(active, |d| {
+                d.child(
+                    div()
+                        .text_size(rems(12.5 / 16.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(ui::fg())
+                        .child(label),
+                )
+            })
             .when(count > 0, |d| {
                 d.child(
                     div()
@@ -1552,6 +1564,98 @@ impl Render for FileTreeView {
             .child(self.tab_button(Tab::Files, IconName::Files, "Files", 0, cx))
             .child(self.tab_button(Tab::Changes, IconName::Diff, "Changes", change_count, cx))
             .child(self.tab_button(Tab::Branches, IconName::GitBranch, "Branches", 0, cx));
+        // Finding a file, under the tabs while the tree shows.
+        let search = (self.tab == Tab::Files).then(|| {
+            h_flex().flex_none().px_2().pb_1p5().child(
+                ui::field()
+                    .id("file-tree-search")
+                    .flex_1()
+                    .min_w_0()
+                    .h(rems(30. / 16.))
+                    .cursor_pointer()
+                    .hover(|s| s.border_color(ui::petal().opacity(0.45)))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(FileTreeEvent::SearchFiles)))
+                    .child(Icon::new(IconName::Search).small().text_color(ui::faint()))
+                    .child(
+                        div()
+                            .text_size(rems(12.5 / 16.))
+                            .text_color(ui::faint())
+                            .child("Search files"),
+                    ),
+            )
+        });
+        // The repository at a glance, where the eye ends: the branch (a
+        // click shows the branches) and what's changed (a click, the
+        // changes).
+        let footer =
+            self.git.as_ref().and_then(|git| git.as_ref()).map(|state| {
+                let branch = state
+                    .snapshot
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| "detached".into());
+                let changed = state.snapshot.files.len();
+                h_flex()
+                    .flex_none()
+                    .h(rems(34. / 16.))
+                    .mx_2()
+                    .mb_2()
+                    .px_2()
+                    .gap_2()
+                    .rounded_lg()
+                    .bg(ui::surface())
+                    .child(
+                        h_flex()
+                            .id("file-tree-branch")
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1p5()
+                            .cursor_pointer()
+                            .text_color(ui::muted())
+                            .hover(|s| s.text_color(ui::fg()))
+                            .tooltip(|window, cx| Tooltip::new("Branches").build(window, cx))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_tab(Tab::Branches, window, cx)
+                            }))
+                            .child(
+                                Icon::new(IconName::GitBranch)
+                                    .xsmall()
+                                    .text_color(ui::champagne()),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(ui::mono())
+                                    .text_size(ui::code_rems(12.))
+                                    .child(branch),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .id("file-tree-changed")
+                            .flex_none()
+                            .gap_1()
+                            .cursor_pointer()
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(11.5))
+                            .text_color(if changed > 0 {
+                                ui::warning()
+                            } else {
+                                ui::faint()
+                            })
+                            .hover(|s| s.text_color(ui::fg()))
+                            .tooltip(|window, cx| Tooltip::new("Changes").build(window, cx))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_tab(Tab::Changes, window, cx)
+                            }))
+                            .child(if changed > 0 {
+                                format!("±{changed}")
+                            } else {
+                                "clean".to_string()
+                            }),
+                    )
+            });
         // The workspace's right sidebar slot paints the rounded glass; a fill here
         // would show square corners past it (GPUI clips to rectangles).
         v_flex()
@@ -1559,6 +1663,7 @@ impl Render for FileTreeView {
             .min_h_0()
             .child(header)
             .child(tabs)
+            .children(search)
             .child(match self.tab {
                 Tab::Files => self.render_files(cx),
                 Tab::Changes => div()
@@ -1572,6 +1677,7 @@ impl Render for FileTreeView {
                     .child(self.refs.clone())
                     .into_any_element(),
             })
+            .children(footer)
     }
 }
 

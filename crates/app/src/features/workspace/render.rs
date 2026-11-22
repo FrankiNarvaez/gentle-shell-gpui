@@ -259,7 +259,7 @@ impl Render for Workspace {
                                 .border_1()
                                 .border_color(gpui_kit::transparent_black())
                                 .overflow_hidden()
-                                .child(self.render_vertical_sidebar(cx)),
+                                .child(self.render_tab_sidebar(cx)),
                         ))
                     })
                     .child(
@@ -293,6 +293,7 @@ impl Render for Workspace {
                     }),
             )
             .children(self.stages.iter().filter_map(Stage::element))
+            .children(self.render_badge_picker(cx))
             .when(devices_floating, |root| root.child(self.devices.clone()))
             .children(self.overlay.as_ref().map(|(overlay, _)| {
                 let (view, full_window) = match overlay {
