@@ -88,29 +88,13 @@ impl SessionView {
     /// Restart the backend in another folder; the conversation starts fresh.
     pub fn change_cwd(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.cwd = cwd;
+        // A conversation still waiting to be resumed belongs to the old folder.
+        self.backend.pending_session = None;
         if self.backend.started {
             self.start(window, cx);
         } else {
             self.sync_chrome(cx);
         }
-    }
-
-    /// The folder button: pick a folder and [`Self::change_cwd`] to it.
-    pub(super) fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Open folder".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(mut paths))) = paths.await else {
-                return;
-            };
-            let Some(path) = paths.pop() else { return };
-            let _ = this.update_in(cx, |this, window, cx| this.change_cwd(path, window, cx));
-        })
-        .detach();
     }
 
     /// Gentle Shell was updated on disk: run this tab on the new version,
@@ -311,32 +295,46 @@ impl SessionView {
         // while it starts is sent once it is ready).
         let genui_mode = crate::features::genui::mode::mode(cx);
         let canvas = self.canvas.clone();
+        // The backend chosen when the tab first started: a restart resumes
+        // its conversation there, wherever new tabs go now.
+        let runs_on = self.runs_on.clone();
         self._io = cx.spawn_in(window, async move |this, cx| {
             let spawned = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut spec = pi_rpc::resolve_backend(&cwd)?;
-                    if let Some(path) = &resume {
-                        spec.args.push("--session".into());
-                        spec.args.push(path.display().to_string());
-                    }
-                    spec.env
-                        .push(crate::features::genui::mode::launch_env(genui_mode));
+                    let runs_on =
+                        runs_on.unwrap_or_else(|| crate::features::backend::for_tab(&cwd));
                     // The canvas this agent works on: its extension's tools.
-                    if let Some(canvas) = canvas {
-                        spec.env
-                            .push((crate::features::canvas::AGENT_ENV.into(), canvas.into()));
+                    let files: Vec<(String, &std::path::Path)> = canvas
+                        .as_deref()
+                        .map(|file| (crate::features::canvas::AGENT_ENV.to_string(), file))
+                        .into_iter()
+                        .collect();
+                    let mut spec = crate::features::backend::launch_spec(
+                        &runs_on,
+                        &cwd,
+                        &[crate::features::genui::mode::launch_env(genui_mode)],
+                        &files,
+                    )?;
+                    if let Some(path) = &resume {
+                        // A conversation listed from this computer's view of the
+                        // backend's home reads there as the backend's path.
+                        let path = path.to_string_lossy();
+                        spec.args.push("--session".into());
+                        spec.args
+                            .push(runs_on.path(&path).unwrap_or_else(|| path.into_owned()));
                     }
-                    let version = pi_rpc::backend_version(&spec);
+                    let version = crate::features::backend::shell_version(&runs_on, &spec);
                     let (process, rx) = PiProcess::spawn(&spec)?;
-                    anyhow::Ok((process, rx, version))
+                    anyhow::Ok((process, rx, version, runs_on))
                 })
                 .await;
             let rx = match spawned {
-                Ok((process, rx, version)) => {
+                Ok((process, rx, version, runs_on)) => {
                     let ok = this.update(cx, |this, cx| {
                         this.backend.status = BackendStatus::Ready(process);
                         this.backend.version = version;
+                        this.runs_on = Some(runs_on);
                         this.genui_mode = genui_mode;
                         this.sync_genui_mode(cx);
                         if let Some(path) = launched {

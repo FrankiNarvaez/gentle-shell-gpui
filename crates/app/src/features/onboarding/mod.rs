@@ -40,8 +40,13 @@ pub struct Probe {
 impl Probe {
     /// BLOCKING: runs every check; call it on the background executor.
     pub fn run() -> Self {
+        // The checks run where agents do: the badge says so.
+        let platform = match crate::features::backend::saved() {
+            gentle_core::backend::Backend::Local => setup::platform_label(),
+            choice => format!("Agents on {}", choice.label()),
+        };
         Self {
-            platform: setup::platform_label(),
+            platform,
             first_run: setup::first_run(),
             checks: setup::run_checks(),
         }

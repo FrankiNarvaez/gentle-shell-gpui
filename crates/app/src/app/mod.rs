@@ -27,7 +27,7 @@ pub fn run(
     folder: Option<PathBuf>,
     prompt: Option<String>,
     url: Option<String>,
-    requests: async_channel::Receiver<instance::OpenRequest>,
+    requests: async_channel::Receiver<instance::Incoming>,
 ) {
     gpui_kit::application()
         .with_assets(assets::AppAssets)
@@ -35,11 +35,15 @@ pub fn run(
             gpui_kit::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
             themes::init(cx);
+            crate::features::browser::init(cx);
             #[cfg(target_os = "macos")]
             crate::platform::icons::set_dock_icon();
             app_update::init(cx);
             crate::features::hydration::init(cx);
+            crate::shared::kisses::init(cx);
             crate::features::genui::mode::init(cx);
+            crate::features::session::input_style::init(cx);
+            crate::features::backend::init(cx);
             crate::features::diagnostics::start(cx);
 
             bind_keys(cx);
@@ -85,7 +89,25 @@ pub fn run(
             // Weak, so quitting releases the workspace (and stops its tabs' backends).
             let workspace = workspace.downgrade();
             cx.spawn(async move |cx| {
-                while let Ok(request) = requests.recv().await {
+                while let Ok(incoming) = requests.recv().await {
+                    let request = match incoming {
+                        instance::Incoming::Open(request) => request,
+                        // An agent driving a page doesn't pull the window forward.
+                        instance::Incoming::Browser { op, reply } => {
+                            let answered = handle.update(cx, |_, window, cx| {
+                                workspace.update(cx, |w, cx| {
+                                    w.browser_request(op, reply.clone(), window, cx)
+                                })
+                            });
+                            if !matches!(answered, Ok(Ok(()))) {
+                                let _ = reply.send(gentle_core::browser::error(
+                                    "closed",
+                                    "the window is closed",
+                                ));
+                            }
+                            continue;
+                        }
+                    };
                     // An agent's `gentle-device` doesn't pull the window forward.
                     let activate = request.device.is_none();
                     let _ = handle.update(cx, |_, window, cx| {

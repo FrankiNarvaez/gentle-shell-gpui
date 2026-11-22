@@ -4,6 +4,8 @@
 
 use std::ptr::NonNull;
 
+use gentle_core::browser::Profile;
+
 use gpui_kit::{Bounds, Pixels, Window};
 use raw_window_handle::{
     AppKitWindowHandle, HandleError, HasWindowHandle, RawWindowHandle, WindowHandle,
@@ -48,13 +50,26 @@ impl NativeView {
         background: (u8, u8, u8, u8),
         script: Option<&str>,
         sandbox: Option<&super::Sandbox>,
+        profile: &Profile,
+        popups: Option<super::Popups>,
     ) -> Result<Self, String> {
+        use wry::WebViewBuilderExtDarwin as _;
         let builder = wry::WebViewBuilder::new()
             .with_url(url)
             // Runs before the page's own scripts (a device panel names its device).
             .with_initialization_script(script.unwrap_or_default())
             .with_background_color(background)
             .with_visible(false);
+        // Each profile is a WebKit data store of its own (macOS 14 and later;
+        // earlier, WebKit only has the default one).
+        let builder = if profile.is_private() {
+            builder.with_incognito(true)
+        } else if profile.is_shared() {
+            builder
+        } else {
+            builder.with_data_store_identifier(profile.store_id())
+        };
+        let builder = super::follow_popups(builder, popups);
         let webview = match sandbox {
             Some(sandbox) => super::isolate(builder, sandbox),
             None => builder,
@@ -91,6 +106,48 @@ impl NativeView {
 
     pub(super) fn evaluate(&self, script: &str) {
         let _ = self.webview.evaluate_script(script);
+    }
+
+    /// Run `script`; `done` gets its value as JSON (nothing if it never ran).
+    pub(super) fn evaluate_with(&self, script: &str, done: impl Fn(String) + Send + 'static) {
+        let _ = self.webview.evaluate_script_with_callback(script, done);
+    }
+
+    /// The page as WebKit draws it, as PNG bytes.
+    pub(super) fn screenshot(&self, done: super::Shot) {
+        use objc2::msg_send;
+        use objc2::runtime::AnyObject;
+        use objc2_app_kit::NSImage;
+        use objc2_foundation::NSError;
+        use wry::WebViewExtMacOS as _;
+
+        let done = std::cell::RefCell::new(Some(done));
+        let block = block2::RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+            let Some(done) = done.borrow_mut().take() else {
+                return;
+            };
+            // SAFETY: WebKit hands a live NSImage (or null) for the call.
+            let tiff = unsafe { image.as_ref() }.and_then(|image| image.TIFFRepresentation());
+            done(match tiff {
+                Some(data) => super::png_from(&data.to_vec()),
+                None => Err("WebKit gave no picture of the page".into()),
+            });
+        });
+        let webview = self.webview.webview();
+        // SAFETY: a nil configuration snapshots what the view shows; the
+        // block is copied by WebKit and called once on the main thread.
+        unsafe {
+            let _: () = msg_send![
+                &*webview,
+                takeSnapshotWithConfiguration: std::ptr::null::<AnyObject>(),
+                completionHandler: &*block
+            ];
+        }
+    }
+
+    /// Forget the profile's cookies, storage and caches.
+    pub(super) fn clear_data(&self) {
+        let _ = self.webview.clear_all_browsing_data();
     }
 
     /// Hide the view now; the next `place` shows it again.

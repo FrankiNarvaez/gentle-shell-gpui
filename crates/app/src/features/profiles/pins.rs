@@ -36,10 +36,13 @@ pub(super) fn clear_pin(path: &Path) -> io::Result<()> {
 /// `resolveSessionWorktreeWithGit`: worktree root and Git common directory.
 fn worktree_identity(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
     let git = |arg: &str| -> Option<PathBuf> {
-        let output = pi_rpc::command("git")
-            .args(["--no-optional-locks", "-C"])
-            .arg(cwd)
-            .args(["rev-parse", "--path-format=absolute", arg])
+        let output = crate::features::backend::git(cwd, &[])
+            .args([
+                "--no-optional-locks",
+                "rev-parse",
+                "--path-format=absolute",
+                arg,
+            ])
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_COMMON_DIR")
@@ -52,7 +55,8 @@ fn worktree_identity(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
             return None;
         }
         let text = String::from_utf8(output.stdout).ok()?;
-        dunce::canonicalize(text.trim_end_matches(['\n', '\r'])).ok()
+        let path = crate::features::backend::host_path(cwd, text.trim_end_matches(['\n', '\r']));
+        dunce::canonicalize(path).ok()
     };
     Some((git("--show-toplevel")?, git("--git-common-dir")?))
 }

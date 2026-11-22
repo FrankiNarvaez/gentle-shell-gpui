@@ -78,8 +78,13 @@ gpui_kit::assets::icon_assets!(
         Cloud,
         FolderGit,
         GitCommitHorizontal,
-        // Commit History.
+        // The Git pane: graph, pull, push, new branch, jump to HEAD, cherry-pick.
         GitGraph,
+        ArrowDownToLine,
+        ArrowUpFromLine,
+        GitBranchPlus,
+        LocateFixed,
+        Cherry,
         // Profiles: routing models to agents.
         Route,
         // Effort levels (off, minimal, low, high; Brain, Zap and Flame above).
@@ -137,6 +142,10 @@ gpui_kit::assets::icon_assets!(
         CircleDot,
         ChartGantt,
         Flag,
+        // The session's spend beside the send.
+        DollarSign,
+        // A diff pane's wrap toggle.
+        TextWrap,
         // Pinned tabs and pinned generative UI surfaces.
         Pin,
         PinOff,
@@ -154,7 +163,18 @@ gpui_kit::assets::icon_assets!(
         PenTool,
         Signature,
         Spline,
-        Hash
+        Hash,
+        // Workspace badges (`workspaces::BadgeIcon`).
+        Rocket,
+        Gem,
+        Crown,
+        Coffee,
+        Gamepad2,
+        FlaskConical,
+        Atom,
+        Bug,
+        Puzzle,
+        Cat
     ]
 );
 

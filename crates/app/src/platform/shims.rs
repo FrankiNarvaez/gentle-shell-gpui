@@ -1,11 +1,13 @@
 //! The small commands agents (and the user's terminal) get on PATH to reach
 //! the running app: `gentle-open <url>` shows a page in the in-app browser,
-//! `gentle-device …` opens and lists simulators and emulators in the device
-//! panel.
+//! `gentle-browser …` drives pages there, `gentle-device …` opens and lists
+//! simulators and emulators in the device panel, `gentle-screen …` launches
+//! desktop apps and looks at and uses their windows.
 //!
 //! They are generated shims next to the app, not more binaries: each runs
-//! `gentle-shell-gpui` with a flag (`--open-url`, `--device`), which hands
-//! the request to the running app through the single-instance server.
+//! `gentle-shell-gpui` with a flag (`--open-url`, `--browser`, `--device`,
+//! `--screen`); all but `gentle-screen` hand the request to the running app
+//! through the single-instance server.
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +21,12 @@ pub fn install() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    for (name, flag) in [("gentle-open", "--open-url"), ("gentle-device", "--device")] {
+    for (name, flag) in [
+        ("gentle-open", "--open-url"),
+        ("gentle-browser", "--browser"),
+        ("gentle-device", "--device"),
+        ("gentle-screen", "--screen"),
+    ] {
         let (file, body) = shim(&exe, name, flag);
         let path = dir.join(file);
         if std::fs::read_to_string(&path).ok().as_deref() == Some(body.as_str()) {

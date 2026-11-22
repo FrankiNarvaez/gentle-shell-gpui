@@ -63,6 +63,31 @@ impl LaunchSpec {
         command
     }
 
+    /// [`Self::launcher_command`] for a one-shot run no host answers
+    /// (`--print`): without `GENTLE_SHELL_INTERACTIVE_HOST`, whether it is
+    /// set here or passed to a backend as an `env` argument.
+    pub fn print_command<S: AsRef<OsStr>>(
+        &self,
+        sub: impl IntoIterator<Item = S>,
+    ) -> std::process::Command {
+        const HOST: &str = "GENTLE_SHELL_INTERACTIVE_HOST";
+        let mut command = command(&self.program);
+        command
+            .args(
+                self.args
+                    .iter()
+                    .take_while(|a| *a != "--mode")
+                    .filter(|a| a.split_once('=').is_none_or(|(key, _)| key != HOST)),
+            )
+            .args(sub)
+            .current_dir(&self.cwd)
+            .env_remove(HOST);
+        for (key, value) in self.env.iter().filter(|(key, _)| key != HOST) {
+            command.env(key, value);
+        }
+        command
+    }
+
     /// gentle-ai installed this Gentle Shell and is what repairs and updates
     /// it (its TUI): `gentle-shell upgrade` and `setup` must not, and its
     /// launcher config is gentle-ai's to write.
@@ -144,6 +169,65 @@ pub fn resolve_backend(cwd: &Path) -> Result<LaunchSpec> {
         prompt.as_deref(),
         &extensions,
     ))
+}
+
+/// The RPC launch of `gentle-shell` in another environment (a WSL distro, a
+/// Linux VM, a container). `launch` runs a program there in the project's
+/// folder (`gentle_core::backend::Backend::launch`), `path` is that
+/// environment's login PATH when known (its launcher's `#!/usr/bin/env node`
+/// needs the user's Node), `env` is what the tab adds (already as the
+/// backend reads it), and `map` gives each host file Pi reads (the app's
+/// instructions, its extensions) a path in the backend (a copy there).
+/// The host's
+/// launcher, `GENTLE_SHELL_ARGS` and PATH belong to this computer and stay
+/// out; the environment travels as `env` arguments, which `wsl.exe` and
+/// other commands pass on where they don't forward their own environment.
+pub fn remote_backend(
+    launch: &[String],
+    path: Option<&str>,
+    env: &[(String, String)],
+    map: impl Fn(&Path) -> Option<String>,
+) -> Result<LaunchSpec> {
+    let (program, prefix) = launch
+        .split_first()
+        .ok_or_else(|| anyhow!("the backend has no command to run"))?;
+    let mut args = prefix.to_vec();
+    args.extend([
+        "env".to_string(),
+        "GENTLE_SHELL_INTERACTIVE_HOST=1".to_string(),
+    ]);
+    args.extend(path.map(|path| format!("PATH={path}")));
+    args.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
+    args.extend(["gentle-shell", "--mode", "rpc"].map(str::to_string));
+    let host_file = |file: &Path| {
+        map(file).ok_or_else(|| {
+            anyhow!(
+                "Couldn't copy {} into the backend, a file the app gives every agent.",
+                file.display()
+            )
+        })
+    };
+    let prompt = SYSTEM_PROMPT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    if let Some(file) = prompt {
+        args.push("--append-system-prompt".to_string());
+        args.push(host_file(&file)?);
+    }
+    let extensions = EXTENSIONS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for file in extensions {
+        args.push("--extension".to_string());
+        args.push(host_file(&file)?);
+    }
+    Ok(LaunchSpec {
+        program: PathBuf::from(program),
+        args,
+        cwd: crate::home::home_dir(),
+        env: Vec::new(),
+        launcher: PathBuf::from("gentle-shell"),
+        bundled: None,
+    })
 }
 
 /// The RPC launch through `launcher`, with `path` as the child's PATH,
@@ -569,7 +653,7 @@ pub(crate) fn extra_args() -> Vec<String> {
 /// `"…"` or `'…'` keeps spaces inside one argument (`--home "C:\Users\Ana
 /// Li\gs"`) and the quotes go. A backslash stays literal: on Windows it is
 /// the path separator, not an escape.
-fn split_args(text: &str) -> Vec<String> {
+pub fn split_args(text: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     // An argument started, even if empty (`""`).
@@ -1014,6 +1098,42 @@ mod tests {
         assert_eq!(split_args("--home='/a b'"), ["--home=/a b"]);
         assert_eq!(split_args(r#"--x """#), ["--x", ""]);
         assert!(split_args("   ").is_empty());
+    }
+
+    /// A backend's one-shot run keeps its PATH and the tab's variables but
+    /// never the interactive host, which only an RPC host answers.
+    #[test]
+    fn print_runs_in_a_backend_without_the_interactive_host() {
+        let launch = ["wsl.exe", "-d", "Ubuntu", "--cd", "/w", "--exec"].map(str::to_string);
+        let spec = remote_backend(
+            &launch,
+            Some("/usr/bin"),
+            &[("K".to_string(), "V".to_string())],
+            |file| Some(file.display().to_string()),
+        )
+        .unwrap();
+        let command = spec.print_command(["--print"]);
+        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy()).collect();
+        assert_eq!(
+            args,
+            [
+                "-d",
+                "Ubuntu",
+                "--cd",
+                "/w",
+                "--exec",
+                "env",
+                "PATH=/usr/bin",
+                "K=V",
+                "gentle-shell",
+                "--print"
+            ]
+        );
+        assert!(
+            spec.launcher_command(["--version"])
+                .get_args()
+                .any(|a| a == "GENTLE_SHELL_INTERACTIVE_HOST=1")
+        );
     }
 
     /// A shell rc file that starts a daemon (ssh-agent, keychain) leaves it

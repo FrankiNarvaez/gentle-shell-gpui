@@ -9,9 +9,10 @@ use gentle_core::git::truncate_diff;
 
 use super::{git, run};
 
-/// The work tree of the repository at `toplevel`; `None` outside one.
+/// The work tree of the repository at `toplevel`, with each entry's staged
+/// and unstaged line counts; `None` outside one.
 pub fn work_tree(toplevel: &Path) -> Option<WorkTree> {
-    git(
+    let mut tree = git(
         toplevel,
         &[
             "--no-optional-locks",
@@ -22,7 +23,16 @@ pub fn work_tree(toplevel: &Path) -> Option<WorkTree> {
             "--untracked-files=all",
         ],
     )
-    .map(|raw| parse_status_v2(&raw))
+    .map(|raw| parse_status_v2(&raw))?;
+    let numstat = |cached: bool| {
+        let mut args = vec!["--no-optional-locks", "diff", "--numstat", "-z"];
+        if cached {
+            args.push("--cached");
+        }
+        git(toplevel, &args).unwrap_or_default()
+    };
+    tree.apply_numstat(&numstat(true), &numstat(false));
+    Some(tree)
 }
 
 fn run_with(cwd: &Path, args: &[&str], paths: &[String]) -> Result<(), String> {

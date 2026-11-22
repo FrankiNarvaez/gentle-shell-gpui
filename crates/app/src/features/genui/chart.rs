@@ -444,7 +444,8 @@ impl PanelView {
                         .top(r(y - 7. * rem))
                         .flex()
                         .justify_end()
-                        .font_family(ui::MONO)
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(10.5))
                         .child(short_number(*tick))
                         .into_any_element(),
                 );
@@ -460,7 +461,8 @@ impl PanelView {
                                 .top(r(plot.y + plot.h + 5. * rem))
                                 .flex()
                                 .justify_center()
-                                .font_family(ui::MONO)
+                                .font_family(ui::mono())
+                                .text_size(ui::code_rems(10.5))
                                 .child(short_number(*tick))
                                 .into_any_element(),
                         );
@@ -526,8 +528,8 @@ impl PanelView {
                         )
                         .child(
                             div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(12.5 / 16.))
+                                .font_family(ui::mono())
+                                .text_size(ui::code_rems(12.5))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(ui::fg())
                                 .child(value),
@@ -557,8 +559,8 @@ impl PanelView {
                     )
                     .child(
                         div()
-                            .font_family(ui::MONO)
-                            .text_sm()
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(14.))
                             .text_color(ui::fg())
                             .child(value),
                     )

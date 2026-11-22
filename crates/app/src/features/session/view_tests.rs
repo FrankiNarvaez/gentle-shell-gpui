@@ -915,3 +915,42 @@ fn escape_closes_first_then_stops_the_turn(cx: &mut TestAppContext) {
     let turn = view.read_with(cx, |view, _| view.turn_since());
     assert_eq!(stopping(cx), turn, "with nothing open, Esc stops the turn");
 }
+
+/// Moving an agent to another folder asks first only when that would lose
+/// something: what was said, a running turn or a conversation about to resume.
+#[gpui::test]
+fn has_conversation_counts_turns_and_pending_resumes(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let has = |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.has_conversation());
+    assert!(!has(cx), "a fresh tab has nothing to lose");
+
+    view.update(cx, |view, _| view.transcript.running = true);
+    assert!(has(cx), "a running turn counts");
+
+    view.update(cx, |view, _| {
+        view.transcript.running = false;
+        view.backend.pending_session = Some("saved.jsonl".into());
+    });
+    assert!(has(cx), "a conversation waiting to be resumed counts");
+}
+
+/// Changing folder starts fresh: a conversation waiting to be resumed is
+/// dropped instead of resuming in the new folder.
+#[gpui::test]
+fn change_cwd_drops_a_pending_resume(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    // Not started yet: the next start would resume it (`--session`).
+    view.update(cx, |view, _| {
+        view.backend.started = false;
+        view.backend.pending_session = Some("saved.jsonl".into());
+    });
+    let folder = std::env::temp_dir().join("elsewhere");
+    view.update_in(cx, |view, window, cx| {
+        view.change_cwd(folder.clone(), window, cx)
+    });
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.cwd(), &folder);
+        assert!(view.backend.pending_session.is_none());
+        assert!(!view.has_conversation());
+    });
+}

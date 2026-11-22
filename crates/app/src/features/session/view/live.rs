@@ -62,9 +62,6 @@ pub(in crate::features::session) struct Live {
     /// When each answer finished streaming: its petal line and dot draw
     /// back and fade out over `ANSWER_FADE` from then (dropped once faded).
     pub(in crate::features::session) answer_done: HashMap<usize, Instant>,
-    /// The "Changed in this session" card's diff area, built when the
-    /// selected file's diff arrives.
-    pub(super) changes_viewer: Option<super::session_changes::Viewer>,
     /// When the turn (or prompt in flight) a stop was asked for began: the
     /// activity line reads "stopping…" while that turn lasts.
     pub(in crate::features::session) stopping: Option<Instant>,

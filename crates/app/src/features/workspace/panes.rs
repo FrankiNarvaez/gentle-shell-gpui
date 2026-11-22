@@ -264,7 +264,7 @@ impl Workspace {
                     "{} panes are not available in this build.",
                     match kind {
                         PaneKind::File => "File",
-                        PaneKind::History => "History",
+                        PaneKind::History => "Git",
                         PaneKind::Canvas => "Canvas",
                         PaneKind::Tower => "Tower",
                         _ => "Terminal",

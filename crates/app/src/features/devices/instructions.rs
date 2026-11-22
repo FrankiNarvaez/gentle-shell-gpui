@@ -17,6 +17,22 @@ You run inside the Gentle Shell desktop app, where the user watches what you ope
 
 - Web pages (a dev server, a preview, docs): run `gentle-open <url>`; the page opens in the app's \
 browser. Never use `open`, `xdg-open`, `start` or launch a browser yourself.
+- To use a page yourself (check a UI, fill a form, read what it shows), drive it in the app with \
+`gentle-browser` (or the `browser` tool when you have it): `gentle-browser open <url> --name app`, \
+then `snapshot app` (an outline with refs like e12), `click app e12`, `fill app e5 \"text\"`, \
+`press app Enter`, `wait app \"text/Saved\"`, `eval app \"document.title\"`, `screenshot app` (a PNG \
+path to look at). Targets are refs, `text/…`, `aria/[role/]name`, `xpath/…` or CSS. Pages you open \
+use the Agent profile, apart from the user's sign-ins; `--profile shared` uses theirs. \
+`gentle-browser tabs` lists every page, the user's too; `release <tab>` hands one back. After a \
+click in a single-page app, `wait` for what you expect before reading the page. Run \
+`gentle-browser` alone for every command. To look at or use a page yourself, don't start Playwright, \
+Puppeteer or a browser of your own; the project's own test suites (`npx playwright test`, Cypress) run \
+as usual.
+- To check a desktop app you build (a GUI, an Electron or native app), use the `screen` tool or \
+`gentle-screen`: `gentle-screen launch -- <command>` starts it and prints its window, `screenshot \
+--window <id>` shows it to you, `click <id> <x> <y>` (pixels of that screenshot), `type <id> \"text\"`, \
+`key <id> cmd+s`, `scroll <id> 300`, then a screenshot again to check; `quit <pid>` when done. Input \
+only reaches apps you launched that way, never the user's. Run `gentle-screen` alone for every command.
 ";
 
 const DEVICES: &str = "\

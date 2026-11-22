@@ -14,20 +14,52 @@
 //! AppKit keeps sending the drag to the view the mouse went down in.
 
 use std::rc::Rc;
+
+use gentle_core::browser::Profile;
 use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::{Icon, Sizable as _, h_flex};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::shared::floating::{self, CardState, DragKind};
 use crate::shared::ui;
 
+pub mod automation;
+pub mod cli;
 mod surface;
 pub use surface::WebSurface;
+
+/// The `browser` tool every agent loads (`gentle-browser.ts`), written into
+/// the app's extensions folder with this executable's path in it.
+pub fn install_extension() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let source = include_str!("gentle-browser.ts").replace(
+        "__GENTLE_APP__",
+        &serde_json::Value::from(exe.to_string_lossy()).to_string(),
+    );
+    let path = crate::shared::data_dir::app()?
+        .join("extensions")
+        .join("gentle-browser.ts");
+    crate::features::genui::write_if_changed(&path, &source)?;
+    Some(path)
+}
+
+/// What the profile chooser shows (in place of the page).
+enum Choosing {
+    List,
+    /// New profile…: its name field.
+    Naming {
+        input: Entity<InputState>,
+        _enter: Subscription,
+    },
+    /// Clear website data…: the confirmation.
+    Clearing,
+}
 
 /// The scheme the app serves its own isolated pages from (generative UI's
 /// HTML), so they get an origin of their own and nothing from the web.
@@ -67,6 +99,27 @@ pub fn sandbox_url(path: &str) -> String {
     } else {
         format!("{SANDBOX_SCHEME}://localhost/{path}")
     }
+}
+
+/// Where a page's requests for a new window (`target="_blank"`,
+/// `window.open`) go: the card loads them itself.
+type Popups = async_channel::Sender<String>;
+
+/// `builder` handing new-window requests to `popups`, when given, instead
+/// of opening a window (a sandbox's own rule, set after, still denies them).
+fn follow_popups<'a>(
+    builder: wry::WebViewBuilder<'a>,
+    popups: Option<Popups>,
+) -> wry::WebViewBuilder<'a> {
+    let Some(popups) = popups else {
+        return builder;
+    };
+    builder.with_new_window_req_handler(move |url, _| {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            let _ = popups.try_send(url);
+        }
+        wry::NewWindowResponse::Deny
+    })
 }
 
 /// `builder` locked down for `sandbox` (see [`Sandbox`]).
@@ -182,6 +235,44 @@ fn page_background() -> (u8, u8, u8, u8) {
     (byte(well.r), byte(well.g), byte(well.b), 255)
 }
 
+/// Called once with a page's picture as PNG bytes (on the main thread).
+type Shot = Box<dyn FnOnce(Result<Vec<u8>, String>) + Send>;
+
+/// Any picture a web view hands over (TIFF on macOS), as PNG bytes.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn png_from(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    png_from_image(image::load_from_memory(bytes).map_err(|error| error.to_string())?)
+}
+
+/// Straight RGBA pixels as PNG bytes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn png_from_rgba(width: u32, height: u32, rgba: Vec<u8>) -> Result<Vec<u8>, String> {
+    let image = image::RgbaImage::from_raw(width, height, rgba)
+        .ok_or_else(|| "the picture's size doesn't match its pixels".to_string())?;
+    png_from_image(image::DynamicImage::ImageRgba8(image))
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn png_from_image(image: image::DynamicImage) -> Result<Vec<u8>, String> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut out, image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+    Ok(out.into_inner())
+}
+
+/// Where a profile keeps its website data on Windows and Linux
+/// (`<data dir>/browser-profiles/<folder>`); macOS names WebKit data stores
+/// by [`Profile::store_id`] instead.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn profile_dir(profile: &Profile) -> Option<std::path::PathBuf> {
+    Some(
+        crate::shared::data_dir::app()?
+            .join("browser-profiles")
+            .join(profile.folder()),
+    )
+}
+
 /// What Gentle Shell reported about its design canvas.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CanvasNotice {
@@ -259,11 +350,62 @@ pub enum BrowserEvent {
     Hide,
 }
 
+// ── Profiles the user named ──────────────────────────────────────────────────
+
+/// The `settings.json` key listing the profiles made with New profile.
+const PROFILES_KEY: &str = "browserProfiles";
+
+struct NamedProfiles(Vec<String>);
+
+impl Global for NamedProfiles {}
+
+/// Read the profiles the user made.
+pub fn init(cx: &mut App) {
+    let names = crate::shared::themes::store_path()
+        .and_then(|path| crate::shared::themes::read_key(&path, PROFILES_KEY))
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    cx.set_global(NamedProfiles(names));
+}
+
+fn named_profiles(cx: &App) -> Vec<String> {
+    cx.try_global::<NamedProfiles>()
+        .map(|p| p.0.clone())
+        .unwrap_or_default()
+}
+
+/// Remember a profile the user named, for every card's menu.
+fn add_named_profile(name: &str, cx: &mut App) {
+    let mut names = named_profiles(cx);
+    if names.iter().any(|n| n == name) {
+        return;
+    }
+    names.push(name.to_string());
+    if let Some(path) = crate::shared::themes::store_path()
+        && let Err(err) =
+            crate::shared::themes::write_key(&path, PROFILES_KEY, serde_json::json!(names))
+    {
+        eprintln!("gentle-shell-gpui: could not save the browser profiles: {err}");
+    }
+    cx.set_global(NamedProfiles(names));
+}
+
 pub struct BrowserPanel {
     url: String,
     /// What the header calls this page. `None` derives it from the URL (the
     /// host), so any web app can use the card, not only Gentle Design.
     label: Option<String>,
+    /// The name an agent opened it with (`gentle-browser open --name`).
+    name: Option<String>,
+    /// An agent drives it: the header says so, and the page keeps running
+    /// out of sight until the user takes it back.
+    driven: bool,
+    /// The workspace's folder, offered as the Repository profile.
+    repository: Option<String>,
+    /// The profile chooser over the page, while it is open.
+    choosing: Option<Choosing>,
+    /// A screen covers the window (see [`Self::set_covered`]).
+    screen_covered: bool,
     card: CardState,
     /// The page itself.
     surface: Entity<WebSurface>,
@@ -273,10 +415,19 @@ impl EventEmitter<BrowserEvent> for BrowserPanel {}
 
 impl BrowserPanel {
     pub fn new(url: String, label: Option<String>, cx: &mut Context<Self>) -> Self {
-        let surface = cx.new(|_| WebSurface::new(url.clone(), None));
+        let surface = cx.new(|cx| {
+            let mut surface = WebSurface::new(url.clone(), None);
+            surface.follow_popups(cx);
+            surface
+        });
         Self {
             url,
             label,
+            name: None,
+            driven: false,
+            repository: None,
+            choosing: None,
+            screen_covered: false,
             card: CardState::new(DEFAULT_FRAME),
             surface,
         }
@@ -284,6 +435,55 @@ impl BrowserPanel {
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    pub fn surface(&self) -> &Entity<WebSurface> {
+        &self.surface
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn set_name(&mut self, name: Option<String>, cx: &mut Context<Self>) {
+        self.name = name;
+        cx.notify();
+    }
+
+    pub fn set_repository(&mut self, repository: Option<String>) {
+        self.repository = repository;
+    }
+
+    pub fn is_driven(&self) -> bool {
+        self.driven
+    }
+
+    /// An agent starts or stops driving the page.
+    pub fn set_driven(&mut self, driven: bool, cx: &mut Context<Self>) {
+        if self.driven != driven {
+            self.driven = driven;
+            self.surface
+                .update(cx, |surface, cx| surface.set_live(driven, cx));
+            cx.notify();
+        }
+    }
+
+    pub fn profile(&self, cx: &App) -> Profile {
+        self.surface.read(cx).profile().clone()
+    }
+
+    pub fn set_profile(&mut self, profile: Profile, cx: &mut Context<Self>) {
+        self.surface
+            .update(cx, |surface, cx| surface.set_profile(profile, cx));
+        cx.notify();
+    }
+
+    /// Follow the page's own navigation (an agent's link), for the header.
+    pub fn set_url(&mut self, url: String, cx: &mut Context<Self>) {
+        if self.url != url {
+            self.url = url;
+            cx.notify();
+        }
     }
 
     /// Put the card in a stage slot; see [`crate::shared::floating::CardState`].
@@ -310,8 +510,70 @@ impl BrowserPanel {
 
     /// A screen opened or closed over the window.
     pub fn set_covered(&mut self, covered: bool, cx: &mut Context<Self>) {
+        self.screen_covered = covered;
+        self.cover(cx);
+    }
+
+    /// The page's native view hides under a screen and under the profile
+    /// chooser (it would draw over both).
+    fn cover(&mut self, cx: &mut Context<Self>) {
+        let covered = self.screen_covered || self.choosing.is_some();
         self.surface
             .update(cx, |surface, cx| surface.set_covered(covered, cx));
+    }
+
+    fn choose(&mut self, choosing: Option<Choosing>, cx: &mut Context<Self>) {
+        self.choosing = choosing;
+        self.cover(cx);
+        cx.notify();
+    }
+
+    /// The profiles the chooser offers, current one included.
+    fn profiles(&self, cx: &App) -> Vec<Profile> {
+        let mut profiles = vec![Profile::Shared];
+        if let Some(root) = &self.repository {
+            profiles.push(Profile::Repository(root.clone()));
+        }
+        profiles.push(Profile::Agent);
+        profiles.push(Profile::Private);
+        profiles.extend(named_profiles(cx).into_iter().map(Profile::Named));
+        let current = self.profile(cx);
+        if !profiles.contains(&current) {
+            profiles.push(current);
+        }
+        profiles
+    }
+
+    fn pick_profile(&mut self, profile: Profile, cx: &mut Context<Self>) {
+        self.set_profile(profile, cx);
+        self.choose(None, cx);
+    }
+
+    fn start_naming(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("Profile name"));
+        input.update(cx, |state, cx| state.focus(window, cx));
+        let subscription = cx.subscribe_in(&input, window, |this, input, event, _, cx| {
+            if let InputEvent::PressEnter { .. } = event {
+                let name = input.read(cx).value().trim().to_string();
+                if !name.is_empty() {
+                    add_named_profile(&name, cx);
+                    this.pick_profile(Profile::Named(name), cx);
+                }
+            }
+        });
+        self.choose(
+            Some(Choosing::Naming {
+                input,
+                _enter: subscription,
+            }),
+            cx,
+        );
+    }
+
+    fn clear_data(&mut self, cx: &mut Context<Self>) {
+        self.surface
+            .update(cx, |surface, cx| surface.clear_data(cx));
+        self.choose(None, cx);
     }
 
     /// The card went to the instance tray: drop the native view, and the web
@@ -374,6 +636,7 @@ impl BrowserPanel {
             .to_string();
         let url = self.url.clone();
         let maximized = self.card.maximized();
+        let profile_label = self.profile(cx).label();
         h_flex()
             .id("browser-header")
             .h(rems(floating::HEADER / 16.))
@@ -406,8 +669,8 @@ impl BrowserPanel {
                     .min_w_0()
                     .flex_1()
                     .truncate()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(address),
             )
@@ -416,6 +679,33 @@ impl BrowserPanel {
                 h_flex()
                     .gap_0p5()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .when(self.driven, |row| {
+                        row.child(
+                            Button::new("browser-take-over")
+                                .ghost()
+                                .xsmall()
+                                .icon(Icon::new(IconName::Bot).text_color(ui::accent()))
+                                .label("Take over")
+                                .tooltip("An agent is driving this page · take it back")
+                                .on_click(cx.listener(|this, _, _, cx| this.set_driven(false, cx))),
+                        )
+                    })
+                    .child(
+                        Button::new("browser-profile")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::User))
+                            .label(profile_label.0)
+                            .tooltip("Where this page keeps its cookies and sign-ins")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let next = if this.choosing.is_some() {
+                                    None
+                                } else {
+                                    Some(Choosing::List)
+                                };
+                                this.choose(next, cx);
+                            })),
+                    )
                     .child(
                         Button::new("browser-reload")
                             .ghost()
@@ -455,7 +745,7 @@ impl BrowserPanel {
             )
     }
 
-    fn body(&self) -> impl IntoElement {
+    fn body(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_1()
             .min_h_0()
@@ -464,7 +754,123 @@ impl BrowserPanel {
             .rounded(px(floating::BODY_RADIUS))
             .bg(ui::well())
             .overflow_hidden()
-            .child(self.surface.clone())
+            .map(|body| match &self.choosing {
+                Some(choosing) => body.child(self.chooser(choosing, cx)),
+                None => body.child(self.surface.clone()),
+            })
+    }
+
+    /// The profile chooser, drawn in place of the page (its native view
+    /// would cover a menu).
+    fn chooser(&self, choosing: &Choosing, cx: &mut Context<Self>) -> AnyElement {
+        let note = |text: &'static str| {
+            div()
+                .text_size(ui::code_rems(11.))
+                .text_color(ui::faint())
+                .child(text)
+        };
+        let pane = v_flex().size_full().p_3().gap_1().items_start();
+        match choosing {
+            Choosing::List => {
+                let current = self.profile(cx);
+                let rows = self
+                    .profiles(cx)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(ix, profile)| {
+                        let (name, kind) = profile.label();
+                        let selected = profile == current;
+                        Button::new(("browser-profile-pick", ix))
+                            .ghost()
+                            .small()
+                            .icon(Icon::new(if selected {
+                                IconName::Check
+                            } else {
+                                IconName::User
+                            }))
+                            .label(if kind.is_empty() {
+                                name
+                            } else {
+                                format!("{name} · {kind}")
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.pick_profile(profile.clone(), cx)
+                            }))
+                    });
+                pane.child(note(
+                    "Pages with the same profile share cookies and sign-ins. Agents open theirs in Agent.",
+                ))
+                .children(rows)
+                .child(
+                    Button::new("browser-profile-new")
+                        .ghost()
+                        .small()
+                        .icon(Icon::new(IconName::Plus))
+                        .label("New profile…")
+                        .on_click(cx.listener(|this, _, window, cx| this.start_naming(window, cx))),
+                )
+                .child(
+                    Button::new("browser-profile-clear")
+                        .ghost()
+                        .small()
+                        .icon(Icon::new(IconName::Trash))
+                        .label("Clear website data…")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.choose(Some(Choosing::Clearing), cx)
+                        })),
+                )
+                .into_any_element()
+            }
+            Choosing::Naming { input, .. } => pane
+                .child(note("Name the new profile; press Return to use it."))
+                .child(Input::new(input).small())
+                .child(
+                    h_flex().pt_1().child(
+                        Button::new("browser-profile-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel")
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.choose(Some(Choosing::List), cx)),
+                            ),
+                    ),
+                )
+                .into_any_element(),
+            Choosing::Clearing => {
+                let (name, _) = self.profile(cx).label();
+                pane.child(
+                    div()
+                        .text_sm()
+                        .text_color(ui::fg())
+                        .child(format!("Clear website data in {name}?")),
+                )
+                .child(note(
+                    "Sites using it sign you out and forget their settings. Pages using it reload.",
+                ))
+                .child(
+                    h_flex()
+                        .pt_1()
+                        .gap_1()
+                        .child(
+                            Button::new("browser-clear-ok")
+                                .danger()
+                                .small()
+                                .label("Clear")
+                                .on_click(cx.listener(|this, _, _, cx| this.clear_data(cx))),
+                        )
+                        .child(
+                            Button::new("browser-clear-cancel")
+                                .ghost()
+                                .small()
+                                .label("Cancel")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.choose(Some(Choosing::List), cx)
+                                })),
+                        ),
+                )
+                .into_any_element()
+            }
+        }
     }
 
     /// The bands along the card's edges and corners that resize it.
@@ -486,7 +892,7 @@ impl Render for BrowserPanel {
             .shadow(floating::shadow(self.card.dragging()))
             .map(|card| floating::position(&self.card, card))
             .child(self.header(cx))
-            .child(self.body())
+            .child(self.body(cx))
             .children(self.grips(cx));
         let drag_layer = floating::drag_layer(
             &self.card,

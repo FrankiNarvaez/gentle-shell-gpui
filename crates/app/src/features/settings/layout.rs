@@ -27,8 +27,8 @@ pub(super) fn row(label: &'static str, value: impl Into<SharedString>) -> impl I
             div()
                 .flex_1()
                 .min_w_0()
-                .text_xs()
-                .font_family(ui::MONO)
+                .text_size(ui::code_rems(12.))
+                .font_family(ui::mono())
                 .text_color(ui::fg())
                 .child(value.into()),
         )
@@ -46,4 +46,20 @@ pub(super) fn section(icon: IconName, title: &'static str) -> Div {
 
 pub(super) fn or_dash(value: &Option<String>, fallback: &str) -> String {
     value.clone().unwrap_or_else(|| fallback.to_string())
+}
+
+/// A labelled control row, like the Notifications switches.
+pub(super) fn control(label: &'static str, dim: bool, control: impl IntoElement) -> Div {
+    h_flex()
+        .pt_2()
+        .gap_2()
+        .child(
+            div()
+                .w(rems(120. / 16.))
+                .flex_shrink_0()
+                .text_xs()
+                .text_color(if dim { ui::faint() } else { ui::muted() })
+                .child(label),
+        )
+        .child(control)
 }

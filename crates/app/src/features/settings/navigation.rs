@@ -99,10 +99,10 @@ impl SettingsPage {
     fn keywords(self) -> &'static str {
         match self {
             Self::General => {
-                "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report"
+                "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report backend wsl linux distro remote vm orbstack lima docker container where agents run"
             }
             Self::Appearance => {
-                "theme color dark light import share transparency window opacity interface zoom size fonts scene motion background animated library terminal banner rose text tabs vertical horizontal placement sidebar"
+                "theme color dark light import share transparency window opacity interface zoom size font fonts family typeface nerd monospace code scene motion background animated library terminal banner rose text tabs vertical horizontal placement sidebar typing kisses hearts particles composer input style card bar prompt pill soft"
             }
             Self::Agents => {
                 "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked"

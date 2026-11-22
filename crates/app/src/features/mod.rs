@@ -2,6 +2,7 @@
 
 pub mod alerts;
 pub mod app_update;
+pub mod backend;
 pub mod browser;
 pub mod canvas;
 pub mod devices;
@@ -19,6 +20,8 @@ pub mod onboarding;
 pub mod palette;
 pub mod profiles;
 pub mod providers;
+pub mod review;
+pub mod screen;
 pub mod session;
 pub mod sessions;
 pub mod settings;

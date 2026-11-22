@@ -5,9 +5,8 @@
 use gentle_core::profiles::normalize_model_id;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::Button;
-use gpui_kit::component::input::Input;
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -272,72 +271,45 @@ impl ProfilesView {
                     let weak = weak.clone();
                     let key = key.clone();
                     list = list.child(
-                        h_flex()
-                            .id(("model-menu-row", index))
-                            .w_full()
-                            .gap_2()
-                            .px_3()
-                            .py_1p5()
-                            .when(pick == Pick::Custom, |d| d.mt_1())
-                            .rounded(rems(ui::ISLAND_ROW / 16.))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(ui::surface_hover()))
-                            .when(highlighted, |d| d.bg(ui::surface_hover()))
-                            .children(
-                                icon.map(|icon| Icon::new(icon).xsmall().text_color(ui::muted())),
-                            )
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(rems(13. / 16.))
-                                            .text_color(match pick {
-                                                _ if chosen => ui::accent(),
-                                                Pick::Model(_) => ui::fg(),
-                                                _ => ui::muted(),
-                                            })
-                                            .child(title),
-                                    )
-                                    .children(detail.map(|id| {
-                                        div()
-                                            .truncate()
-                                            .font_family(ui::MONO)
-                                            .text_size(rems(11. / 16.))
-                                            .text_color(ui::faint())
-                                            .child(id)
-                                    })),
-                            )
-                            .when(chosen, |d| {
-                                d.child(
-                                    Icon::new(IconName::Check).xsmall().text_color(ui::accent()),
+                        ui::picker_row(
+                            ("model-menu-row", index),
+                            highlighted,
+                            chosen,
+                            icon,
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(rems(13. / 16.))
+                                        .text_color(match pick {
+                                            _ if chosen => ui::accent(),
+                                            Pick::Model(_) => ui::fg(),
+                                            _ => ui::muted(),
+                                        })
+                                        .child(title),
                                 )
-                            })
-                            .on_click(move |_, window, cx| {
-                                let _ =
-                                    weak.update(cx, |this, cx| this.choose(&key, pick, window, cx));
-                            }),
+                                .children(detail.map(|id| {
+                                    div()
+                                        .truncate()
+                                        .font_family(ui::mono())
+                                        .text_size(ui::code_rems(11.))
+                                        .text_color(ui::faint())
+                                        .child(id)
+                                })),
+                        )
+                        .when(pick == Pick::Custom, |d| d.mt_1())
+                        .on_click(move |_, window, cx| {
+                            let _ = weak.update(cx, |this, cx| this.choose(&key, pick, window, cx));
+                        }),
                     );
                 }
                 let content = v_flex()
                     .w_full()
                     .font_family(cx.theme().font_family.clone())
                     .text_color(ui::fg())
-                    .child(
-                        div().p(rems(6. / 16.)).child(
-                            h_flex()
-                                .items_center()
-                                .gap_2()
-                                .h(rems(36. / 16.))
-                                .px_3()
-                                .rounded(rems(ui::ISLAND_ROW / 16.))
-                                .bg(ui::well())
-                                .child(Icon::new(IconName::Search).xsmall().text_color(ui::faint()))
-                                .child(div().flex_1().child(Input::new(&search).appearance(false))),
-                        ),
-                    )
+                    .child(ui::search_well(&search))
                     .child(list);
                 ui::island(cx)
                     .w_full()

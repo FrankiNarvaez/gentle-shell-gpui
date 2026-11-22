@@ -68,7 +68,7 @@ impl SessionView {
                                 .text_color(ui::muted())
                                 .whitespace_normal()
                                 .when(look.body == CustomBody::Tail, |d| {
-                                    d.font_family(ui::MONO).text_size(rems(12. / 16.))
+                                    d.font_family(ui::mono()).text_size(ui::code_rems(12.))
                                 })
                                 .child(shown),
                         )
@@ -130,6 +130,8 @@ impl SessionView {
             .gap_2()
             .min_w_0()
             .cursor_pointer()
+            // The same rounded hover as a tool step's quiet line.
+            .rounded_lg()
             .hover(|s| s.bg(ui::surface_hover()))
             .on_click(cx.listener(move |this, _, _, cx| this.toggle(key, cx)))
             .child(Icon::new(look.icon).small().text_color(color))

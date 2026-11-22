@@ -2152,9 +2152,9 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -2391,7 +2391,7 @@ dependencies = [
 
 [[package]]
 name = "gentle-core"
-version = "0.1.24"
+version = "0.1.27"
 dependencies = [
  "regex",
  "serde",
@@ -2400,12 +2400,16 @@ dependencies = [
 
 [[package]]
 name = "gentle-shell-gpui"
-version = "0.1.24"
+version = "0.1.27"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
  "async-channel",
  "base64 0.23.1",
+ "block2 0.6.2",
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
+ "core-text",
  "dirs 7.0.0",
  "dunce",
  "embed-resource",
@@ -2437,8 +2441,11 @@ dependencies = [
  "tar",
  "trash",
  "ureq",
+ "webkit2gtk",
+ "webview2-com",
  "windows 0.62.2",
  "wry",
+ "x11rb",
  "zip",
 ]
 
@@ -5661,7 +5668,7 @@ dependencies = [
 
 [[package]]
 name = "pi-rpc"
-version = "0.1.24"
+version = "0.1.27"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -8250,9 +8257,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",

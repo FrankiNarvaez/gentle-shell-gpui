@@ -18,11 +18,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::diff::{Diff, DiffFile, DiffFileStatus, DiffHoverHighlight, DiffState};
+use gpui_kit::component::diff::{
+    Diff, DiffFile, DiffFileStatus, DiffHoverHighlight, DiffMode, DiffState,
+};
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, Rope, RopeExt as _};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{FrontmatterPlugin, MarkdownExtensions, TextView, TextViewState};
-use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -77,6 +79,8 @@ pub struct FileView {
     /// Breadcrumb: muted prefix, bold leaf.
     crumbs: (String, String),
     diff: bool,
+    /// A commit's diff shows its short hash here; `None` is the work tree's.
+    commit: Option<String>,
     body: Body,
     meta: Meta,
     /// File mode with an editable buffer; `None` for diffs and notices.
@@ -86,7 +90,17 @@ pub struct FileView {
     focus: FocusHandle,
     /// The header's width in the last frame, for fitting its facts.
     header_width: Rc<Cell<f32>>,
+    /// How a diff shows its two sides (Unified until the header's toggle or
+    /// [`Self::set_diff_mode`] picks another).
+    diff_mode: DiffMode,
+    /// Long diff lines wrap; `None` follows the mode (Split wraps, so the
+    /// new side stays in view) until the header's wrap button picks.
+    diff_wrap: Option<bool>,
 }
+
+/// A diff pane's Split · Unified toggle, in header order.
+const DIFF_MODES: [DiffMode; 2] = [DiffMode::Split, DiffMode::Unified];
+const DIFF_LABELS: [&str; 2] = ["Split", "Unified"];
 
 /// How a Markdown pane shows its buffer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,12 +279,15 @@ impl FileView {
             path,
             crumbs,
             diff: false,
+            commit: None,
             body,
             meta,
             edit,
             markdown,
             focus,
             header_width: Rc::default(),
+            diff_mode: DiffMode::Unified,
+            diff_wrap: None,
         };
         this.draw_diagrams(drawing, cx);
         this
@@ -290,6 +307,29 @@ impl FileView {
     /// (`path` may be absolute or relative to `root`). Untracked files show
     /// whole as added.
     pub fn diff(root: PathBuf, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::patch_view(root, path, None, window, cx)
+    }
+
+    /// Show what `commit` changed in a file, against `parent` (its first
+    /// parent; `None` for a root commit).
+    pub fn commit_diff(
+        root: PathBuf,
+        path: PathBuf,
+        commit: String,
+        parent: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::patch_view(root, path, Some((commit, parent)), window, cx)
+    }
+
+    fn patch_view(
+        root: PathBuf,
+        path: PathBuf,
+        commit: Option<(String, Option<String>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let abs = if path.is_absolute() {
             path
         } else {
@@ -301,12 +341,22 @@ impl FileView {
             Some((dir, leaf)) => (format!("{dir}/"), leaf.to_string()),
             None => (String::new(), rel_text.clone()),
         };
+        let short = commit
+            .as_ref()
+            .map(|(hash, _)| hash.get(..7).unwrap_or(hash).to_string());
         let job_root = root.clone();
         let job_abs = abs.clone();
         cx.spawn_in(window, async move |this, cx| {
             let patch = cx
                 .background_executor()
-                .spawn(async move { load_patch(&job_root, &job_abs, &rel_text) })
+                .spawn(async move {
+                    match commit {
+                        Some((hash, parent)) => {
+                            load_commit_patch(&job_root, &job_abs, &hash, parent.as_deref())
+                        }
+                        None => load_patch(&job_root, &job_abs, &rel_text),
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| this.install_patch(patch, cx));
         })
@@ -320,11 +370,14 @@ impl FileView {
             path: abs,
             crumbs,
             diff: true,
+            commit: short,
             body: Body::Loading,
             edit: None,
             markdown: None,
             focus: cx.focus_handle(),
             header_width: Rc::default(),
+            diff_mode: DiffMode::Unified,
+            diff_wrap: None,
         }
     }
 
@@ -335,7 +388,9 @@ impl FileView {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.path.display().to_string());
-        if self.diff {
+        if let Some(short) = &self.commit {
+            format!("{name} · {short}").into()
+        } else if self.diff {
             format!("{name} · diff").into()
         } else if self.edit.as_ref().is_some_and(|e| e.dirty) {
             format!("{name} •").into()
@@ -363,6 +418,25 @@ impl FileView {
         self.edit.as_ref().is_some_and(|e| e.dirty)
     }
 
+    /// How a diff shows its sides (see [`Self::set_diff_mode`]).
+    pub fn diff_mode(&self) -> DiffMode {
+        self.diff_mode
+    }
+
+    /// Show a diff's sides apart (Split) or in one column (Unified).
+    pub fn set_diff_mode(&mut self, mode: DiffMode, cx: &mut Context<Self>) {
+        self.diff_mode = mode;
+        if let Body::Diff(state) = &self.body {
+            state.update(cx, |state, cx| state.set_mode(mode, cx));
+        }
+        cx.notify();
+    }
+
+    /// Whether long diff lines wrap (see `diff_wrap`).
+    fn diff_wraps(&self) -> bool {
+        self.diff_wrap.unwrap_or(self.diff_mode == DiffMode::Split)
+    }
+
     fn install_patch(&mut self, patch: Result<String, Notice>, cx: &mut Context<Self>) {
         self.body = match patch.and_then(|p| parse_patch(&p)) {
             Ok(file) => {
@@ -371,7 +445,8 @@ impl FileView {
                     file.additions(),
                     file.deletions(),
                 ));
-                Body::Diff(cx.new(|cx| DiffState::new([file], cx)))
+                let mode = self.diff_mode;
+                Body::Diff(cx.new(|cx| DiffState::new([file], cx).with_mode(mode)))
             }
             Err(notice) => notice.into_body(),
         };
@@ -779,17 +854,23 @@ impl FileView {
             Some(_) if dirty => 28. + chars(SAVE_HINT) * 7. + 8.,
             Some(_) => 28.,
         };
-        // A Markdown pane's Edit · Split · Preview toggle.
+        // A Markdown pane's Edit · Split · Preview toggle, or a diff's
+        // Split · Unified one.
         let mode = self.markdown.as_ref().map(|m| m.mode);
-        let toggle_width = match mode {
-            None => 0.,
-            Some(_) => {
-                MdMode::LABELS
-                    .iter()
-                    .map(|l| chars(l) * 6.5 + 22.)
-                    .sum::<f32>()
-                    + 14.
-            }
+        let diff_mode = matches!(self.body, Body::Diff(_)).then_some(self.diff_mode);
+        let toggle_labels: &[&str] = match (mode, diff_mode) {
+            (Some(_), _) => &MdMode::LABELS,
+            (None, Some(_)) => &DIFF_LABELS,
+            (None, None) => &[],
+        };
+        let toggle_width = if toggle_labels.is_empty() {
+            0.
+        } else {
+            toggle_labels
+                .iter()
+                .map(|l| chars(l) * 6.5 + 22.)
+                .sum::<f32>()
+                + 14.
         };
         let path_width = chars(&self.crumbs.1) * 7.6
             + (chars(&self.crumbs.0) * 6.8).min(90.)
@@ -880,8 +961,8 @@ impl FileView {
                         h_flex()
                             .flex_none()
                             .gap_1()
-                            .font_family(ui::MONO)
-                            .text_size(rems(11.5 / 16.))
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(11.5))
                             .when(added > 0, |d| {
                                 d.child(div().text_color(ui::success()).child(format!("+{added}")))
                             })
@@ -917,6 +998,38 @@ impl FileView {
                     },
                 ))
             })
+            .when_some(diff_mode, |d, current| {
+                let view = cx.entity().downgrade();
+                d.child(ui::segmented(
+                    "file-view-diff-mode",
+                    &DIFF_LABELS,
+                    DIFF_MODES.iter().position(|m| *m == current),
+                    move |ix, _, cx| {
+                        if let Some(&mode) = DIFF_MODES.get(*ix) {
+                            let _ = view.update(cx, |this, cx| this.set_diff_mode(mode, cx));
+                        }
+                    },
+                ))
+            })
+            .when(diff_mode.is_some(), |d| {
+                let wraps = self.diff_wraps();
+                d.child(
+                    Button::new("file-view-diff-wrap")
+                        .ghost()
+                        .xsmall()
+                        .icon(Icon::new(IconName::TextWrap))
+                        .selected(wraps)
+                        .tooltip(if wraps {
+                            "Don't wrap long lines (scroll sideways)"
+                        } else {
+                            "Wrap long lines"
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.diff_wrap = Some(!wraps);
+                            cx.notify();
+                        })),
+                )
+            })
             .when(just_saved, |d| {
                 d.child(ui::appear(
                     "file-view-saved",
@@ -933,8 +1046,8 @@ impl FileView {
                 d.child(
                     div()
                         .flex_none()
-                        .font_family(ui::MONO)
-                        .text_size(rems(11.5 / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(11.5))
                         .text_color(ui::faint())
                         .child(SAVE_HINT),
                 )
@@ -1093,8 +1206,8 @@ impl Render for FileView {
                 let code = || {
                     Editor::new(editor)
                         .appearance(false)
-                        .font_family(ui::MONO)
-                        .text_size(rems(12.5 / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.5))
                         .size_full()
                 };
                 match self.markdown.as_ref() {
@@ -1122,6 +1235,10 @@ impl Render for FileView {
             Body::Diff(state) => Diff::new(state)
                 .header_visible(false)
                 .hover_highlight(DiffHoverHighlight::Line)
+                // Side by side, each side wraps to its half of the pane:
+                // unwrapped, the widest line sets both columns and pushes
+                // the new side out of view.
+                .soft_wrap(self.diff_wraps())
                 .size_full()
                 .into_any_element(),
             Body::Notice {
@@ -1535,10 +1652,42 @@ fn atomic_write(
     result
 }
 
+/// What `commit` changed in one file, against `parent` (the empty tree for a
+/// root commit).
+fn load_commit_patch(
+    root: &Path,
+    abs: &Path,
+    commit: &str,
+    parent: Option<&str>,
+) -> Result<String, Notice> {
+    let target = crate::features::backend::there(root, abs);
+    let mut args = match parent {
+        Some(parent) => vec!["diff", "--no-color", "--no-ext-diff", parent, commit],
+        None => vec!["show", "--format=", "--no-color", "--no-ext-diff", commit],
+    };
+    args.extend(["--", target.as_ref()]);
+    let Some(patch) = git(root, &args) else {
+        return Err(Notice::new(
+            IconName::GitBranch,
+            "Commit not found",
+            commit.get(..7).unwrap_or(commit).to_string(),
+        ));
+    };
+    if patch.len() > MAX_PATCH {
+        return Err(Notice::new(
+            IconName::TriangleAlert,
+            "Diff too large",
+            human_size(patch.len() as u64),
+        ));
+    }
+    Ok(patch)
+}
+
 /// The unified diff for one file: staged and unstaged changes against HEAD,
 /// or the whole file as added when it is untracked.
 fn load_patch(root: &Path, abs: &Path, rel: &str) -> Result<String, Notice> {
-    let target = abs.to_string_lossy();
+    // The path as git reads it where the repository's agents run.
+    let target = crate::features::backend::there(root, abs);
     let diff = |extra: &[&str]| {
         let mut args = vec!["diff", "--no-color", "--no-ext-diff"];
         args.extend_from_slice(extra);
@@ -1674,9 +1823,8 @@ fn status_tint(label: &str) -> Hsla {
 }
 
 fn git(cwd: &Path, args: &[&str]) -> Option<String> {
-    let out = pi_rpc::command("git")
+    let out = crate::features::backend::git(cwd, &[])
         .args(args)
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()

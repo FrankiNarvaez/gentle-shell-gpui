@@ -16,7 +16,8 @@ pub enum Screen {
     Jobs,
     Profiles,
     Palette,
-    /// Files sidebar › Changes tab.
+    /// The review screen, a modal over the window: the selected change's
+    /// diff beside the repository's changes.
     Changes,
     /// Gentle Tower, in a tab of its own instead of the system browser.
     Tower,

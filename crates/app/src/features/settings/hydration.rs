@@ -7,24 +7,8 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
 use super::SettingsView;
-use super::layout::section;
+use super::layout::{control, section};
 use crate::{features::hydration, shared::ui};
-
-/// A labelled control row, like the Notifications switches.
-fn control(label: &'static str, dim: bool, control: impl IntoElement) -> Div {
-    h_flex()
-        .pt_2()
-        .gap_2()
-        .child(
-            div()
-                .w(rems(120. / 16.))
-                .flex_shrink_0()
-                .text_xs()
-                .text_color(if dim { ui::faint() } else { ui::muted() })
-                .child(label),
-        )
-        .child(control)
-}
 
 impl SettingsView {
     pub(super) fn hydration_section(&self, cx: &mut Context<Self>) -> Div {

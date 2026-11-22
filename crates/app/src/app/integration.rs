@@ -1,4 +1,4 @@
-//! Registers the terminal, file-viewer and history panes with the tiling
+//! Registers the terminal, file-viewer and Git panes with the tiling
 //! layer, and wires the right-side file explorer to the workspace.
 
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ use crate::features::files::FileView;
 use crate::features::history::HistoryView;
 use crate::features::terminal::TerminalView;
 use crate::features::tower::TowerView;
-use crate::shared::pane::{PaneFactories, PaneItem, PaneKind};
+use crate::shared::pane::{OpenCommitDiff, PaneFactories, PaneItem, PaneKind};
 
 /// The git work tree containing `path` (FileView::diff runs git there).
 pub fn repo_root(path: &std::path::Path) -> PathBuf {
@@ -22,14 +22,7 @@ pub fn repo_root(path: &std::path::Path) -> PathBuf {
     } else {
         path.parent().unwrap_or(path)
     };
-    pi_rpc::command("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(dir)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
-        .unwrap_or_else(|| dir.to_path_buf())
+    crate::features::git::toplevel(dir).unwrap_or_else(|| dir.to_path_buf())
 }
 
 pub fn register(cx: &mut App) {
@@ -77,9 +70,31 @@ pub fn register(cx: &mut App) {
                 unsaved: None,
             }
         });
+    let commit_diff: crate::shared::pane::CommitDiffFactory =
+        Rc::new(|open: &OpenCommitDiff, window: &mut Window, cx: &mut App| {
+            let view = cx.new(|cx| {
+                FileView::commit_diff(
+                    open.root.clone(),
+                    open.path.clone(),
+                    open.commit.clone(),
+                    open.parent.clone(),
+                    window,
+                    cx,
+                )
+            });
+            let focus = view.focus_handle(cx);
+            let title_view = view.clone();
+            PaneItem {
+                kind: PaneKind::File,
+                view: view.into(),
+                focus,
+                title: Rc::new(move |cx: &App| title_view.read(cx).title()),
+                unsaved: None,
+            }
+        });
     let history: crate::shared::pane::PaneFactory =
-        Rc::new(|cwd: PathBuf, _: &mut Window, cx: &mut App| {
-            let view = cx.new(|cx| HistoryView::new(cwd, cx));
+        Rc::new(|cwd: PathBuf, window: &mut Window, cx: &mut App| {
+            let view = cx.new(|cx| HistoryView::new(cwd, window, cx));
             let focus = view.focus_handle(cx);
             let title_view = view.clone();
             PaneItem {
@@ -120,6 +135,7 @@ pub fn register(cx: &mut App) {
         terminal: Some(terminal),
         file: Some(file),
         diff: Some(diff),
+        commit_diff: Some(commit_diff),
         history: Some(history),
         canvas: Some(canvas),
         tower: Some(tower),
@@ -176,6 +192,8 @@ pub fn attach_sidebar(
                         }
                     }
                     FileTreeEvent::Collapse => workspace.toggle_sidebar(cx),
+                    FileTreeEvent::ChooseFolder => workspace.choose_root(window, cx),
+                    FileTreeEvent::SearchFiles => workspace.search_files(window, cx),
                 });
             })
             .detach();

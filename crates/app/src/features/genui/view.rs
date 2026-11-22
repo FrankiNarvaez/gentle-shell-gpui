@@ -250,8 +250,8 @@ impl DiagramView {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .font_family(ui::MONO)
-                    .text_size(rems(12. / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::muted())
                     .child(format!(
                         "{nodes} node{} · {edges} edge{}",
@@ -515,7 +515,7 @@ impl DiagramView {
 
         // Edge labels: the phrase on its run, up to two lines, in a pill on
         // the canvas color so the line doesn't run through the text; the
-        // style (async, data flow, dependency) under it in MONO. The layout
+        // style (async, data flow, dependency) under it in `ui::mono()`. The layout
         // placed each in a box of its estimated size, clear of the others.
         if s >= DETAIL_ZOOM {
             for (ix, ((edge, (_, alpha)), spot)) in self
@@ -566,9 +566,9 @@ impl DiagramView {
                                 .when_some(style, |d, style| {
                                     d.child(
                                         div()
-                                            .font_family(ui::MONO)
-                                            .text_size(px(9. * s))
-                                            .line_height(px(12. * s))
+                                            .font_family(ui::mono())
+                                            .text_size(px(9. * s * ui::code_scale()))
+                                            .line_height(px(12. * s * ui::code_scale()))
                                             .text_color(ui::faint())
                                             .child(style),
                                     )
@@ -694,8 +694,8 @@ impl DiagramView {
                         )
                         .child(
                             div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(11. / 16.))
+                                .font_family(ui::mono())
+                                .text_size(ui::code_rems(11.))
                                 .text_color(ui::muted())
                                 .whitespace_normal()
                                 .child(error.clone()),
@@ -1073,7 +1073,7 @@ impl DiagramView {
 
 /// A node's card, read top to bottom: its icon badge and title, what the
 /// node does (its description, at most two lines) and `KIND · tech` in
-/// `MONO`. The card wears the node's tone (`node_tone`): tinted fill, a
+/// `ui::mono()`. The card wears the node's tone (`node_tone`): tinted fill, a
 /// hairline and the solid badge. Notes and external systems sit flat (no
 /// shadow), a note's description in italics. Status changes the hairline
 /// (risk), dashes it (planned) or dims the card (deprecated), and puts a dot
@@ -1161,9 +1161,9 @@ fn node_card(node: &Node, rect: Rect, s: f32, alpha: f32) -> Div {
                     .flex_shrink_0()
                     .w_full()
                     .truncate()
-                    .font_family(ui::MONO)
-                    .text_size(px(9.5 * s))
-                    .line_height(px(12. * s))
+                    .font_family(ui::mono())
+                    .text_size(px(9.5 * s * ui::code_scale()))
+                    .line_height(px(12. * s * ui::code_scale()))
                     .text_color(ui::faint())
                     .child(meta),
             )
@@ -1228,8 +1228,8 @@ pub(super) fn failed_card(title: &str, error: &str) -> AnyElement {
             div()
                 .px_3()
                 .pb_2()
-                .font_family(ui::MONO)
-                .text_size(rems(12. / 16.))
+                .font_family(ui::mono())
+                .text_size(ui::code_rems(12.))
                 .text_color(ui::muted())
                 .whitespace_normal()
                 .child(error.to_string()),

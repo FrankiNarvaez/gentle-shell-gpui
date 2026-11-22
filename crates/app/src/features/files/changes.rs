@@ -111,6 +111,8 @@ pub struct ChangesView {
     busy: Option<&'static str>,
     error: Option<String>,
     visible: bool,
+    /// [`Self::open_diff`] came before the first read: run it once it lands.
+    open_pending: bool,
     _poll: Task<()>,
     _commit: Task<()>,
     _generate: Task<()>,
@@ -151,6 +153,7 @@ impl ChangesView {
             busy: None,
             error: None,
             visible: true,
+            open_pending: false,
             _poll: Task::ready(()),
             _commit: Task::ready(()),
             _generate: Task::ready(()),
@@ -234,7 +237,36 @@ impl ChangesView {
         if self.change_count() != before {
             cx.emit(ChangesEvent::Changed);
         }
+        if std::mem::take(&mut self.open_pending) {
+            self.open_diff(cx);
+        }
         cx.notify();
+    }
+
+    /// Show a diff (the composer's review button): the selected file's, else
+    /// the first listed. Before the first read, once it lands.
+    pub fn open_diff(&mut self, cx: &mut Context<Self>) {
+        if self.repo.is_none() {
+            self.open_pending = true;
+            return;
+        }
+        let Some(tree) = self.tree() else { return };
+        // The selected file while it's still changed, else the first listed.
+        let target = self
+            .selected
+            .clone()
+            .filter(|(_, path)| tree.entries.iter().any(|e| e.path == *path))
+            .or_else(|| {
+                self.lines.iter().find_map(|line| match line {
+                    Line::Entry { side, entry, .. } => {
+                        Some((*side, tree.entries.get(*entry)?.path.clone()))
+                    }
+                    _ => None,
+                })
+            });
+        if let Some((side, path)) = target {
+            self.click_entry(&path, side, cx);
+        }
     }
 
     /// Rebuild the flat row model: per side a header, the untracked count,
@@ -679,8 +711,8 @@ impl ChangesView {
                     .px_1p5()
                     .rounded_md()
                     .bg(ui::well())
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::muted())
                     .child(count.to_string()),
             )
@@ -702,7 +734,8 @@ impl ChangesView {
             .text_size(rems(12. / 16.))
             .child(
                 div()
-                    .font_family(ui::MONO)
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::success())
                     .child(count.to_string()),
             )
@@ -785,8 +818,8 @@ impl ChangesView {
             )
             .child(
                 div()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(count.to_string()),
             )
@@ -811,12 +844,19 @@ impl ChangesView {
             .selected
             .as_ref()
             .is_some_and(|(s, path)| *s == side && *path == entry.path);
+        // The name first, always whole; its folder after it, quieter, giving
+        // way from its start so the part nearest the file stays readable.
         let (dir, name) = match entry.path.rsplit_once('/') {
-            Some((dir, name)) if indent == 0. => (format!("{dir}/"), name.to_string()),
+            Some((dir, name)) if indent == 0. => (dir.to_string(), name.to_string()),
             Some((_, name)) => (String::new(), name.to_string()),
             None => (String::new(), entry.path.clone()),
         };
         let deleted = badge == 'D';
+        let lines = match side {
+            Side::Unstaged => entry.unstaged_lines,
+            Side::Staged => entry.staged_lines,
+        }
+        .filter(|&(added, removed)| added + removed > 0);
         let id = format!("change-{side:?}-{}", entry.path);
         let weak = cx.entity().downgrade();
         let check = {
@@ -837,10 +877,13 @@ impl ChangesView {
         };
         let path = entry.path.clone();
         let menu_entry = entry.clone();
-        h_flex()
+        // A list item is laid out as its own root, so the row only gets the
+        // list's width (and its folder only gives way) when it asks for it:
+        // the wrapper takes the full width, the row fills it inside the inset.
+        let row = h_flex()
             .id(SharedString::from(id))
+            .w_full()
             .h(rems(ROW_HEIGHT / 16.))
-            .mx_1p5()
             .pl(rems((6. + indent) / 16.))
             .pr_1p5()
             .gap_2()
@@ -854,16 +897,9 @@ impl ChangesView {
                 h_flex()
                     .flex_1()
                     .min_w_0()
+                    .gap_1p5()
+                    .items_baseline()
                     .text_size(rems(13. / 16.))
-                    .when(!dir.is_empty(), |d| {
-                        d.child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(ui::faint())
-                                .child(dir),
-                        )
-                    })
                     .child(
                         div()
                             .flex_none()
@@ -872,8 +908,40 @@ impl ChangesView {
                             .text_color(if deleted { ui::muted() } else { ui::fg() })
                             .when(deleted, |d| d.line_through())
                             .child(name),
-                    ),
+                    )
+                    .when(!dir.is_empty(), |d| {
+                        d.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis_start()
+                                .text_size(rems(11.5 / 16.))
+                                .text_color(ui::faint())
+                                .child(dir),
+                        )
+                    }),
             )
+            .when_some(lines, |d, (added, removed)| {
+                d.child(
+                    h_flex()
+                        .flex_none()
+                        .gap_1()
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(11.))
+                        .when(added > 0, |d| {
+                            d.child(div().text_color(ui::success()).child(format!("+{added}")))
+                        })
+                        .when(removed > 0, |d| {
+                            d.child(
+                                div()
+                                    .text_color(ui::danger())
+                                    .child(format!("\u{2212}{removed}")),
+                            )
+                        }),
+                )
+            })
             .on_click(cx.listener(move |this, _, _, cx| this.click_entry(&path, side, cx)))
             .context_menu(move |menu, _, _| {
                 let entry = menu_entry.clone();
@@ -927,8 +995,8 @@ impl ChangesView {
                         .disabled(entry.kind == EntryKind::Conflict)
                         .on_click(discard),
                 )
-            })
-            .into_any_element()
+            });
+        div().w_full().px_1p5().child(row).into_any_element()
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1041,7 +1109,50 @@ impl ChangesView {
                                 .text_color(ui::muted())
                                 .child("Writing…"),
                         )
-                    }),
+                    })
+                    // Secondary actions on the left, the primary last on the
+                    // right (the design system's footer), its key in the
+                    // tooltip rather than a cap on the button.
+                    .child(
+                        DropdownButton::new("changes-commit")
+                            .primary()
+                            .small()
+                            .disabled(!ready || working)
+                            .button(
+                                Button::new("changes-commit-main")
+                                    .label(primary_label)
+                                    .tooltip(format!("{primary_label} ({})", ui::shortcut("↵")))
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| this.primary(window, cx)),
+                                    ),
+                            )
+                            .dropdown_menu(move |menu, _, _| {
+                                let item =
+                                    |label: &'static str, icon: IconName, push: Option<bool>| {
+                                        let weak = weak.clone();
+                                        PopupMenuItem::new(label).icon(Icon::new(icon)).on_click(
+                                            move |_, window, cx| {
+                                                let _ = weak.update(cx, |this, cx| match push {
+                                                    Some(push) => this.commit(push, window, cx),
+                                                    None => this.generate(window, cx),
+                                                });
+                                            },
+                                        )
+                                    };
+                                menu.item(item(
+                                    "Commit",
+                                    IconName::GitCommitHorizontal,
+                                    Some(false),
+                                ))
+                                .item(item("Commit & Push", IconName::Upload, Some(true)))
+                                .separator()
+                                .item(item(
+                                    "Generate message",
+                                    IconName::Sparkles,
+                                    None,
+                                ))
+                            }),
+                    ),
             )
             .when_some(self.error.clone(), |d, error| {
                 d.child(
@@ -1054,37 +1165,6 @@ impl ChangesView {
                         .child(error),
                 )
             })
-            .child(
-                DropdownButton::new("changes-commit")
-                    .primary()
-                    .small()
-                    .w_full()
-                    .disabled(!ready || working)
-                    .button(
-                        Button::new("changes-commit-main")
-                            .flex_1()
-                            .label(primary_label)
-                            .child(ui::kbd(ui::shortcut("↵")))
-                            .on_click(cx.listener(|this, _, window, cx| this.primary(window, cx))),
-                    )
-                    .dropdown_menu(move |menu, _, _| {
-                        let item = |label: &'static str, icon: IconName, push: Option<bool>| {
-                            let weak = weak.clone();
-                            PopupMenuItem::new(label).icon(Icon::new(icon)).on_click(
-                                move |_, window, cx| {
-                                    let _ = weak.update(cx, |this, cx| match push {
-                                        Some(push) => this.commit(push, window, cx),
-                                        None => this.generate(window, cx),
-                                    });
-                                },
-                            )
-                        };
-                        menu.item(item("Commit", IconName::GitCommitHorizontal, Some(false)))
-                            .item(item("Commit & Push", IconName::Upload, Some(true)))
-                            .separator()
-                            .item(item("Generate message", IconName::Sparkles, None))
-                    }),
-            )
     }
 }
 
@@ -1140,8 +1220,8 @@ fn status_badge(badge: char) -> Div {
         .border_1()
         .border_color(color.opacity(0.5))
         .bg(color.opacity(0.1))
-        .font_family(ui::MONO)
-        .text_size(rems(10. / 16.))
+        .font_family(ui::mono())
+        .text_size(ui::code_rems(10.))
         .font_weight(FontWeight::BOLD)
         .text_color(color)
         .child(badge.to_string())
@@ -1184,15 +1264,11 @@ fn generate_message(toplevel: &Path) -> Result<(String, String), String> {
     if diff.trim().is_empty() {
         return Err("Stage some changes first; the message is written from the staged diff".into());
     }
-    let spec = pi_rpc::resolve_backend(toplevel).map_err(|e| format!("{e:#}"))?;
-    // Launcher options (home selectors) come before Pi's own arguments.
-    let mut command = spec.launcher_command(["--print", "--no-session", "--no-tools"]);
-    command
-        .arg(commit_prompt(&diff))
-        .current_dir(toplevel)
-        .stdin(Stdio::null())
-        // Interactive-host dialogs make no sense for a one-shot print run.
-        .env_remove("GENTLE_SHELL_INTERACTIVE_HOST");
+    let spec = crate::features::backend::shell_spec(toplevel).map_err(|e| format!("{e:#}"))?;
+    // Launcher options (home selectors) come before Pi's own arguments;
+    // interactive-host dialogs make no sense for a one-shot print run.
+    let mut command = spec.print_command(["--print", "--no-session", "--no-tools"]);
+    command.arg(commit_prompt(&diff)).stdin(Stdio::null());
     let out = command
         .output()
         .map_err(|e| format!("Could not start gentle-shell: {e}"))?;

@@ -2,6 +2,7 @@
 //! upgrade`, and how it ended as the app sees it afterwards.
 
 use std::path::Path;
+use std::time::Duration;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -18,6 +19,12 @@ use crate::features::updates::UpdateOffer;
 use crate::features::updates::status::offer_from_status;
 use crate::shared::ui;
 
+/// How long "Waiting for the agent tab to start…" shows. A tab whose probe
+/// never answers stays undecided, so the section then shows what the npm
+/// path found, as before the wait (the Versions row and any update it
+/// offers); the read is still asked if the tab gets ready later.
+const TAB_START_WAIT: Duration = Duration::from_secs(60);
+
 /// Gentle Shell's update status, when the active agent tab's Shell reports
 /// it.
 #[derive(Default)]
@@ -28,6 +35,14 @@ pub(super) struct ShellUpdates {
     /// The tab's Shell did not answer: the npm path, until Configuration
     /// opens again.
     failed: bool,
+    /// A read asked while the tab was still starting (its probe had not
+    /// answered), and whether it refreshes: asked if the probe answers. A
+    /// refresh asked meanwhile is kept by later plain reads.
+    awaiting: Option<bool>,
+    /// Hides the waiting notice after `TAB_START_WAIT`.
+    wait_notice: Option<Task<()>>,
+    /// The waiting notice timed out; the read stays awaited.
+    wait_expired: bool,
 }
 
 impl SettingsView {
@@ -42,12 +57,26 @@ impl SettingsView {
         let Some(session) = self.session.clone() else {
             return false;
         };
-        if session
+        match session
             .read(cx)
             .read_support(DesktopMethod::GetUpdateStatus)
-            != ReadSupport::Rpc
         {
-            return false;
+            ReadSupport::Rpc => {}
+            ReadSupport::NotReady => {
+                let refresh = refresh || self.shell_updates.awaiting == Some(true);
+                self.shell_updates.awaiting = Some(refresh);
+                if self.shell_updates.wait_notice.is_none() {
+                    self.shell_updates.wait_notice = Some(cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(TAB_START_WAIT).await;
+                        let _ = this.update(cx, |this, cx| {
+                            this.shell_updates.wait_expired = true;
+                            cx.notify();
+                        });
+                    }));
+                }
+                return false;
+            }
+            ReadSupport::Legacy => return false,
         }
         match session.update(cx, |session, cx| {
             session.read(ReadRequest::UpdateStatus { refresh }, cx)
@@ -63,17 +92,42 @@ impl SettingsView {
     /// Configuration reads Gentle Shell's own update status (not the npm
     /// path), and whether a refresh is in flight.
     pub(super) fn shell_reports_updates(&self) -> Option<bool> {
-        let checking = matches!(self.shell_updates.pending, Some((_, true)));
-        (self.shell_updates.status.is_some() || self.shell_updates.pending.is_some())
-            .then_some(checking)
+        let checking =
+            matches!(self.shell_updates.pending, Some((_, true))) || self.waiting_for_tab();
+        (self.shell_updates.status.is_some()
+            || self.shell_updates.pending.is_some()
+            || self.waiting_for_tab())
+        .then_some(checking)
+    }
+
+    /// The "Waiting for the agent tab to start…" notice shows: a read waits
+    /// for the tab and `TAB_START_WAIT` has not passed.
+    pub(super) fn waiting_for_tab(&self) -> bool {
+        self.shell_updates.awaiting.is_some() && !self.shell_updates.wait_expired
     }
 
     /// The tab changed: take Gentle Shell's answer once it arrived. A plain
     /// read that knows nothing yet (no launcher record, no earlier refresh)
     /// is looked up once, as the npm path would on a stale cache. A Shell
     /// that fails falls back to the npm path; one replaced meanwhile (an
-    /// upgrade restarts the tabs) keeps the last answer.
+    /// upgrade restarts the tabs) keeps the last answer, and a refresh it
+    /// dropped is asked again of the new one once its tab is ready.
     pub(super) fn update_status_changed(&mut self, cx: &mut Context<Self>) {
+        if self.shell_updates.pending.is_none()
+            && let Some(refresh) = self.shell_updates.awaiting.take()
+        {
+            // Asked again: it waits once more while the probe is still out.
+            let asked = self.ask_update_status(refresh, cx);
+            if self.shell_updates.awaiting.is_none() {
+                // Decided (asked, or the npm path): the notice goes.
+                self.shell_updates.wait_notice = None;
+                self.shell_updates.wait_expired = false;
+            }
+            if asked || self.shell_updates.awaiting.is_none() {
+                cx.notify();
+            }
+            return;
+        }
         let (Some((ticket, refreshed)), Some(session)) =
             (self.shell_updates.pending, self.session.clone())
         else {
@@ -92,7 +146,11 @@ impl SettingsView {
                     self.ask_update_status(true, cx);
                 }
             }
-            ReadOutcome::Failed(ReadFailure::Dropped) => {}
+            ReadOutcome::Failed(ReadFailure::Dropped) => {
+                if refreshed {
+                    self.ask_update_status(true, cx);
+                }
+            }
             _ => {
                 self.shell_updates.failed = true;
                 self.shell_updates.status = None;
@@ -127,6 +185,10 @@ enum UpgradeOutcome {
         running: String,
         launcher: String,
     },
+    /// The upgrade exited with an error, but the launcher the app resolves
+    /// now runs this newer main build: Gentle Shell moved, something after
+    /// it did not finish.
+    Incomplete(String),
     Failed,
 }
 
@@ -161,21 +223,39 @@ impl UpgradeChannel {
     }
 }
 
+/// `<version>-main.<commit>`, the version a main build reports.
+fn is_main_build(version: &str) -> bool {
+    version.split_once("-main.").is_some_and(|(_, commit)| {
+        !commit.is_empty() && commit.bytes().all(|b| b.is_ascii_hexdigit())
+    })
+}
+
 /// Decide the outcome from the upgrade's exit and what the launcher the app
-/// now resolves (`launcher`) reports as its version (`running`).
+/// now resolves (`launcher`) reports as its version (`running`). On main the
+/// upgrade installs main's tip, which can be newer than the commit offered
+/// (`target`): any main build other than the one running before (`before`)
+/// counts.
 fn upgrade_outcome(
     succeeded: bool,
     target: &str,
     channel: UpgradeChannel,
+    before: Option<&str>,
     running: Option<&str>,
     launcher: Option<&Path>,
 ) -> UpgradeOutcome {
-    match (succeeded, running) {
-        (false, _) | (true, None) => UpgradeOutcome::Failed,
-        (true, Some(running)) if channel.matches_version(target, running) => {
+    let Some(running) = running else {
+        return UpgradeOutcome::Failed;
+    };
+    let moved_on_main = matches!(channel, UpgradeChannel::Main)
+        && is_main_build(running)
+        && before != Some(running);
+    match succeeded {
+        true if channel.matches_version(target, running) || moved_on_main => {
             UpgradeOutcome::Installed(running.to_string())
         }
-        (true, Some(running)) => UpgradeOutcome::Stale {
+        false if moved_on_main => UpgradeOutcome::Incomplete(running.to_string()),
+        false => UpgradeOutcome::Failed,
+        true => UpgradeOutcome::Stale {
             running: running.to_string(),
             launcher: launcher.map_or_else(
                 || "gentle-shell".to_string(),
@@ -230,7 +310,7 @@ impl SettingsView {
         self.shell_update.result = None;
         let cwd = self.cwd.clone();
         self._job = cx.spawn(async move |this, cx| {
-            let (succeeded, text, running, launcher) = cx
+            let upgrade = cx
                 .background_executor()
                 .spawn(async move { super::services::updates::upgrade_shell(&cwd, channel.args()) })
                 .await;
@@ -238,21 +318,28 @@ impl SettingsView {
                 this.shell_update.upgrading = None;
                 forget_claude_auth();
                 let outcome = upgrade_outcome(
-                    succeeded,
+                    upgrade.succeeded,
                     &target,
                     channel,
-                    running.as_deref(),
-                    launcher.as_deref(),
+                    upgrade.before.as_deref(),
+                    upgrade.running.as_deref(),
+                    upgrade.launcher.as_deref(),
                 );
-                if matches!(outcome, UpgradeOutcome::Installed(_)) {
+                // A new build runs, even if the upgrade did not finish after it.
+                if matches!(
+                    outcome,
+                    UpgradeOutcome::Installed(_) | UpgradeOutcome::Incomplete(_)
+                ) {
                     cx.emit(SettingsEvent::BackendUpdated);
                 }
                 this.shell_update.result = Some(UpgradeResult {
                     target,
                     outcome,
-                    lines: last_output_lines(&text),
+                    lines: last_output_lines(&upgrade.text),
                 });
-                this.reload(cx);
+                // Look the update status up again: the one cached names the
+                // commit offered before the upgrade.
+                this.reload_with(true, cx);
                 cx.notify();
             });
         });
@@ -566,6 +653,13 @@ pub(super) fn upgrade_result(result: &UpgradeResult) -> Div {
                 "{launcher} comes first. Remove the old package with `npm uninstall -g gentle-pi`, then open Configuration again."
             ),
         ),
+        UpgradeOutcome::Incomplete(version) => (
+            IconName::TriangleAlert,
+            ui::warning(),
+            format!("Gentle Shell {version} is installed, but the update didn't finish"),
+            "Open agent tabs restarted on it. Gentle Shell's output below says what is left to do."
+                .to_string(),
+        ),
         UpgradeOutcome::Failed => (
             IconName::CircleX,
             ui::danger(),
@@ -573,7 +667,10 @@ pub(super) fn upgrade_result(result: &UpgradeResult) -> Div {
             "Gentle Shell's output is below; the version you had keeps running.".to_string(),
         ),
     };
-    let failed = result.outcome == UpgradeOutcome::Failed;
+    let failed = matches!(
+        result.outcome,
+        UpgradeOutcome::Failed | UpgradeOutcome::Incomplete(_)
+    );
     v_flex()
         .mt_2()
         .p_3()
@@ -617,8 +714,8 @@ fn upgrade_output(lines: Vec<String>, failed: bool) -> Div {
         .p_2()
         .rounded_md()
         .bg(ui::well())
-        .font_family(ui::MONO)
-        .text_xs()
+        .font_family(ui::mono())
+        .text_size(ui::code_rems(12.))
         .text_color(if failed { ui::danger() } else { ui::muted() })
         .children(lines.into_iter().map(|line| div().child(line)))
 }
@@ -628,12 +725,81 @@ mod tests {
     use super::{UpgradeChannel, UpgradeOutcome, upgrade_outcome};
 
     #[test]
+    fn update_action_main_upgrade_result_follows_the_main_build_that_runs_afterwards() {
+        // Offered 05f20b064770 from the last check; main moved on before the
+        // upgrade ran, so it installed a later commit.
+        let before = "4.9.0-main.25ed7a9f4927";
+        let target = "05f20b064770";
+        assert_eq!(UpgradeChannel::Main.args(), &["--channel", "main"]);
+        let outcome = |ok, running| {
+            upgrade_outcome(
+                ok,
+                target,
+                UpgradeChannel::Main,
+                Some(before),
+                running,
+                None,
+            )
+        };
+        for running in [target, "4.9.0-main.05f20b064770", "4.9.0-main.2792ce0f011c"] {
+            assert_eq!(
+                outcome(true, Some(running)),
+                UpgradeOutcome::Installed(running.into())
+            );
+        }
+        // Nothing changed, or what runs is not a main build.
+        for running in [
+            before,
+            "4.9.0",
+            "4.9.0-beta.2792ce0f011c",
+            "4.9.0-main.2792ce0f011c.1",
+        ] {
+            assert_eq!(
+                outcome(true, Some(running)),
+                UpgradeOutcome::Stale {
+                    running: running.into(),
+                    launcher: "gentle-shell".into(),
+                }
+            );
+        }
+        // Gentle Shell moved, but the upgrade exited with an error after it.
+        assert_eq!(
+            outcome(false, Some("4.9.0-main.6d47decde29c")),
+            UpgradeOutcome::Incomplete("4.9.0-main.6d47decde29c".into())
+        );
+        assert_eq!(outcome(false, Some(before)), UpgradeOutcome::Failed);
+        assert_eq!(outcome(false, Some("4.9.0")), UpgradeOutcome::Failed);
+        assert_eq!(outcome(true, None), UpgradeOutcome::Failed);
+        assert_eq!(outcome(false, None), UpgradeOutcome::Failed);
+        // The version before the upgrade could not be read: any main build counts.
+        assert_eq!(
+            upgrade_outcome(
+                true,
+                target,
+                UpgradeChannel::Main,
+                None,
+                Some("4.9.0-main.2792ce0f011c"),
+                None
+            ),
+            UpgradeOutcome::Installed("4.9.0-main.2792ce0f011c".into())
+        );
+    }
+
+    #[test]
     fn update_action_release_upgrade_result_follows_what_the_app_runs_afterwards() {
         use std::path::Path;
         let old = Path::new("/fnm/bin/gentle-shell");
         assert_eq!(UpgradeChannel::Default.args(), &[] as &[&str]);
-        let outcome =
-            |ok, running| upgrade_outcome(ok, "4.7.0", UpgradeChannel::Default, running, Some(old));
+        let outcome = |ok, running| {
+            upgrade_outcome(
+                ok,
+                "4.7.0",
+                UpgradeChannel::Default,
+                Some("4.6.0"),
+                running,
+                Some(old),
+            )
+        };
         assert_eq!(
             outcome(true, Some("4.7.0")),
             UpgradeOutcome::Installed("4.7.0".into())
@@ -647,38 +813,10 @@ mod tests {
                 }
             );
         }
-        assert_eq!(outcome(false, Some("4.7.0")), UpgradeOutcome::Failed);
-        assert_eq!(outcome(true, None), UpgradeOutcome::Failed);
-    }
-
-    #[test]
-    fn update_action_main_upgrade_accepts_the_commit_or_its_main_build_only() {
-        let commit = "ce64a9a708e5";
-        let build = "4.9.0-main.ce64a9a708e5";
-        assert_eq!(UpgradeChannel::Main.args(), &["--channel", "main"]);
-        let outcome =
-            |ok, running| upgrade_outcome(ok, commit, UpgradeChannel::Main, running, None);
-        for running in [commit, build] {
-            assert_eq!(
-                outcome(true, Some(running)),
-                UpgradeOutcome::Installed(running.into())
-            );
+        // A release upgrade that exits with an error stays failed, whatever runs.
+        for running in ["4.7.0", "4.9.0-main.2792ce0f011c"] {
+            assert_eq!(outcome(false, Some(running)), UpgradeOutcome::Failed);
         }
-        for running in [
-            "4.9.0-main.d00000000000",
-            "4.9.0-beta.ce64a9a708e5",
-            "4.9.0-main.0ce64a9a708e5",
-            "4.9.0-main.ce64a9a708e5.1",
-        ] {
-            assert_eq!(
-                outcome(true, Some(running)),
-                UpgradeOutcome::Stale {
-                    running: running.into(),
-                    launcher: "gentle-shell".into(),
-                }
-            );
-        }
-        assert_eq!(outcome(false, Some(build)), UpgradeOutcome::Failed);
         assert_eq!(outcome(true, None), UpgradeOutcome::Failed);
     }
 }

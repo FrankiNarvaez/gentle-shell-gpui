@@ -1090,8 +1090,8 @@ impl PanelView {
                 }))
                 .child(
                     div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(10.5 / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(10.5))
                         .text_color(ui::faint())
                         .child(card.id.clone()),
                 )

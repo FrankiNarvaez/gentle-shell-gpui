@@ -10,6 +10,7 @@ mod refs;
 mod tree;
 mod viewer;
 
+pub use changes::{ChangesEvent, ChangesView};
 pub use mermaid::{
     Diagrams as MermaidDiagrams, Job as MermaidJob, Renderer as DiagramRenderer,
     RendererState as DiagramRendererState, banner as mermaid_banner, dark as mermaid_dark,

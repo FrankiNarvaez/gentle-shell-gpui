@@ -29,7 +29,7 @@ pub enum RefsEvent {
     Changed,
     /// Open an agent tab in this worktree's folder.
     OpenAgent(PathBuf),
-    /// Show this repository's Commit History.
+    /// Show this repository's Git pane.
     OpenHistory(PathBuf),
 }
 
@@ -457,8 +457,8 @@ impl RefsView {
             )
             .child(
                 div()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(count.to_string()),
             )
@@ -566,8 +566,8 @@ impl RefsView {
             Some(
                 div()
                     .flex_none()
-                    .font_family(ui::MONO)
-                    .text_size(rems(10.5 / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(stash.trim_start_matches("stash").to_string())
                     .into_any_element(),
@@ -870,7 +870,7 @@ impl RefsView {
                                 .ghost()
                                 .xsmall()
                                 .icon(Icon::new(IconName::GitGraph))
-                                .tooltip("Commit history")
+                                .tooltip("Open in the Git pane")
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.emit(RefsEvent::OpenHistory(toplevel.clone()))
                                 })),
@@ -976,8 +976,8 @@ fn ahead_behind(ahead: u32, behind: u32) -> Div {
     h_flex()
         .flex_none()
         .gap_1p5()
-        .font_family(ui::MONO)
-        .text_size(rems(11. / 16.))
+        .font_family(ui::mono())
+        .text_size(ui::code_rems(11.))
         .child(
             div()
                 .text_color(if ahead > 0 { ui::fg() } else { ui::muted() })

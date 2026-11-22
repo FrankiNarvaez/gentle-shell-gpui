@@ -3,6 +3,8 @@
 
 use serde_json::Value;
 
+pub mod steps;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Text(String),
@@ -25,7 +27,8 @@ pub enum NoticeLevel {
     Error,
 }
 
-/// An image in a user message, still base64-encoded as Pi stores it.
+/// An image in a user message or a tool's result (a page screenshot),
+/// still base64-encoded as Pi stores it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserImage {
     pub mime_type: String,
@@ -83,6 +86,8 @@ pub enum Item {
         args: Value,
         status: ToolStatus,
         output: String,
+        /// Pictures in the result (`browser` screenshots), shown in the card.
+        images: Vec<UserImage>,
         details: Value,
         duration_ms: Option<u64>,
     },
@@ -122,7 +127,9 @@ pub enum Item {
 pub fn step_open_by_default(item: &Item) -> Option<bool> {
     match item {
         Item::Tool { name, .. } if name == crate::genui::TOOL => None,
-        Item::Tool { status, .. } => Some(*status == ToolStatus::Failed),
+        Item::Tool { status, images, .. } => {
+            Some(*status == ToolStatus::Failed || !images.is_empty())
+        }
         Item::Custom { kind, .. } if kind == crate::genui::EVENT_MESSAGE => None,
         Item::Custom { .. } => Some(false),
         _ => None,
@@ -291,6 +298,7 @@ impl Transcript {
                     args: event["args"].clone(),
                     status: ToolStatus::Running,
                     output: String::new(),
+                    images: Vec::new(),
                     details: Value::Null,
                     duration_ms: None,
                 })
@@ -331,6 +339,7 @@ impl Transcript {
                         name,
                         status,
                         output,
+                        images,
                         details,
                         duration_ms,
                         ..
@@ -344,6 +353,7 @@ impl Transcript {
                         ToolStatus::Done
                     };
                     *output = content_text(&event["result"]["content"]);
+                    *images = content_images(&event["result"]["content"]);
                     *details = event["result"]["details"].clone();
                     *duration_ms = event["durationMs"].as_u64();
                     effects.files_touched = matches!(name.as_str(), "edit" | "write" | "bash");
@@ -525,6 +535,9 @@ impl Transcript {
                             },
                             output: result
                                 .map(|r| content_text(&r["content"]))
+                                .unwrap_or_default(),
+                            images: result
+                                .map(|r| content_images(&r["content"]))
                                 .unwrap_or_default(),
                             details: result.map(|r| r["details"].clone()).unwrap_or_default(),
                             duration_ms: None,
@@ -726,6 +739,16 @@ pub fn content_text(content: &Value) -> String {
     }
 }
 
+/// The image blocks of a tool result's `content`.
+pub fn content_images(content: &Value) -> Vec<UserImage> {
+    content
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(UserImage::parse)
+        .collect()
+}
+
 pub fn str_field(value: &Value, key: &str) -> String {
     value[key].as_str().unwrap_or_default().to_string()
 }
@@ -791,6 +814,7 @@ mod tests {
             args: json!({}),
             status,
             output: "out".into(),
+            images: Vec::new(),
             details: json!({}),
             duration_ms: Some(10),
         };
@@ -826,6 +850,7 @@ mod tests {
             args: json!({}),
             status,
             output: String::new(),
+            images: Vec::new(),
             details: json!({}),
             duration_ms: None,
         };
@@ -854,6 +879,7 @@ mod tests {
                 args: json!({}),
                 status: ToolStatus::Done,
                 output: String::new(),
+                images: Vec::new(),
                 details: json!({}),
                 duration_ms: None,
             }),

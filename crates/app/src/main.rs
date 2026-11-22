@@ -10,11 +10,13 @@ use features::setup;
 use platform::instance;
 
 fn main() {
-    // `gentle-device …` (the agents' command) and `--diagnostics-report`
-    // run here and exit.
+    // `gentle-device …`, `gentle-browser …` and `gentle-screen …` (the
+    // agents' commands) and `--diagnostics-report` run here and exit.
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("--device") => std::process::exit(features::devices::cli::run(args.collect())),
+        Some("--browser") => std::process::exit(features::browser::cli::run(args.collect())),
+        Some("--screen") => std::process::exit(features::screen::cli::run(args.collect())),
         Some(features::diagnostics::REPORT_FLAG) => std::process::exit(
             features::diagnostics::print_report(args.next().map(Into::into)),
         ),
@@ -61,11 +63,14 @@ fn main() {
     pi_rpc::set_system_prompt(features::devices::agent_instructions(
         setup::devices::prefs(),
     ));
-    // The generative UI extension (`gentle_ui` tool) every agent loads, and
-    // the canvas tools (active only in an agent opened beside a canvas).
+    // The generative UI extension (`gentle_ui` tool) every agent loads, the
+    // `browser` and `screen` tools, and the canvas tools (active only in an
+    // agent opened beside a canvas).
     pi_rpc::set_extensions(
         features::genui::install()
             .into_iter()
+            .chain(features::browser::install_extension())
+            .chain(features::screen::install_extension())
             .chain(features::canvas::install_extension())
             .collect(),
     );

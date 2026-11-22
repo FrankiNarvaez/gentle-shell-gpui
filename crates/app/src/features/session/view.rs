@@ -4,6 +4,7 @@
 
 use std::cell::OnceCell;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,9 @@ use super::attachments;
 use super::state::BackendStatus;
 use super::{CONTEXT, SessionView};
 use crate::shared::ui;
+use gentle_core::input_style::InputStyle;
 use gentle_core::tools;
+use gentle_core::transcript::steps::{self, StepKind};
 use gentle_core::transcript::{Block, Item, NoticeLevel, ToolStatus, assistant_visible};
 
 mod activity;
@@ -32,7 +35,6 @@ mod permissions;
 mod plan_limits;
 mod rail;
 mod review;
-mod session_changes;
 mod slash_menu;
 mod todo_island;
 mod transcript_list;
@@ -42,7 +44,7 @@ pub(super) use cards::markdown_custom;
 pub(super) use live::{Live, RateLimit};
 use live::{Span, TICK, label_stamp, ticker_needed, track};
 pub(super) use transcript_list::TranscriptList;
-use transcript_list::{HeaderKey, Prepared, Row, Tail};
+use transcript_list::{GroupRow, HeaderKey, Prepared, Row, Tail};
 
 /// How long a finished answer's petal line takes to draw back and fade.
 const ANSWER_FADE: Duration = Duration::from_millis(500);
@@ -56,6 +58,12 @@ const STEP: usize = 3;
 
 fn fold_key(ix: usize, sub: usize, slot: usize) -> usize {
     (ix << 16) | (sub << 2) | slot
+}
+
+/// The fold key of the run of finished steps that starts at item `start`
+/// (sub 1 keeps it apart from the step's own fold).
+fn group_key(start: usize) -> usize {
+    fold_key(start, 1, STEP)
 }
 
 /// Lines of a collapsed tool input and output.
@@ -205,6 +213,20 @@ impl SessionView {
                 let collapsed = self.step_collapsed(ix, item);
                 self.list.set_step_collapsed(ix, collapsed);
             }
+            // A step that finishes next to others joins their run, and the
+            // run's rows change height: restate every run from the one
+            // around `from` (earlier items can sit in it) on.
+            let items = &self.transcript.items;
+            let (lo, len) = (
+                items[..from]
+                    .iter()
+                    .rposition(|item| !steps::groupable(item) && assistant_visible(item))
+                    .map_or(0, |ix| ix + 1),
+                items.len(),
+            );
+            if let Some(changed) = self.sync_groups(lo..len) {
+                self.list.remeasure_items(changed);
+            }
             self.request_images(from, dirty.reset, cx);
             self.genui.set_root(&self.cwd, cx);
             self.genui
@@ -344,6 +366,7 @@ impl SessionView {
             .child(
                 TextView::new(state)
                     .selectable(true)
+                    .style(ui::prose_style())
                     .image_source(move |uri| {
                         diagrams.image(uri).unwrap_or_else(|| uri.clone().into())
                     }),
@@ -470,8 +493,8 @@ impl SessionView {
         live
     }
 
-    /// Decode images of user items `from..` off the UI thread (all shown
-    /// images when the transcript was replaced, forgetting the rest).
+    /// Decode images of user and tool items `from..` off the UI thread (all
+    /// shown images when the transcript was replaced, forgetting the rest).
     fn request_images(&mut self, from: usize, prune: bool, cx: &mut Context<Self>) {
         let start = if prune { 0 } else { from };
         let shown = self
@@ -481,7 +504,7 @@ impl SessionView {
             .unwrap_or_default()
             .iter()
             .filter_map(|item| match item {
-                Item::User { images, .. } => Some(images),
+                Item::User { images, .. } | Item::Tool { images, .. } => Some(images),
                 _ => None,
             })
             .flatten();
@@ -559,8 +582,62 @@ impl SessionView {
             let collapsed = self.step_collapsed(ix, item);
             self.list.set_step_collapsed(ix, collapsed);
         }
-        self.list.remeasure_item(ix);
+        self.list.remeasure_items(ix..ix + 1);
         cx.notify();
+    }
+
+    /// Fold or unfold the run of finished steps that starts at `start`.
+    fn toggle_group(&mut self, start: usize, cx: &mut Context<Self>) {
+        let key = group_key(start);
+        if !self.expanded.remove(&key) {
+            self.expanded.insert(key);
+        }
+        if let Some(changed) = self.sync_groups(start..start + 1) {
+            self.list.remeasure_items(changed);
+        }
+        cx.notify();
+    }
+
+    /// Tell the list how the items of every run of finished steps that
+    /// touches `range` render: a folded run shows only its summary line
+    /// (at its first step), an unfolded one the line above its steps; items
+    /// outside runs render as themselves. Returns the items whose rows
+    /// changed, each touched run whole.
+    fn sync_groups(&mut self, range: Range<usize>) -> Option<Range<usize>> {
+        let items = &self.transcript.items;
+        let mut changed: Option<Range<usize>> = None;
+        let mut mark = |span: Range<usize>| {
+            changed = Some(match changed.take() {
+                Some(c) => c.start.min(span.start)..c.end.max(span.end),
+                None => span,
+            });
+        };
+        let mut ix = range.start;
+        while ix < range.end {
+            let Some(run) = steps::step_run(items, ix) else {
+                if self.list.set_group(ix, None) {
+                    mark(ix..ix + 1);
+                }
+                ix += 1;
+                continue;
+            };
+            let open = self.expanded.contains(&group_key(run.start));
+            let mut touched = false;
+            for member in run.clone() {
+                let group = match (member == run.start, open) {
+                    (true, false) => Some(GroupRow::Summary),
+                    (true, true) => Some(GroupRow::Open),
+                    (false, false) => Some(GroupRow::Hidden),
+                    (false, true) => None,
+                };
+                touched |= self.list.set_group(member, group);
+            }
+            if touched {
+                mark(run.clone());
+            }
+            ix = run.end;
+        }
+        changed
     }
 
     /// Whether step `ix` shows its quiet one-line row (`Item::Shell` never
@@ -588,8 +665,8 @@ impl SessionView {
             .child(crate::shared::banner::banner(self.banner, scale, self.banner_reveal))
             .child(
                 div()
-                    .font_family(ui::MONO)
-                    .text_xs()
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::faint())
                     .child(if version.is_empty() { String::new() } else { format!("v{version}") }),
             )
@@ -750,25 +827,33 @@ impl SessionView {
                     .iter()
                     .any(|b| matches!(b, Block::Text(t) if !t.is_empty()));
                 let mut thinking_live = false;
+                // The answer starts a step away from the thought before it,
+                // so the eye finds where to begin reading.
+                let mut after_thought = false;
                 for (block_ix, block) in blocks.iter().enumerate() {
                     match block {
                         Block::Text(text) => {
                             if let Some((state, ..)) = self.markdown.get(&(ix, block_ix)) {
                                 column = column.child(
-                                    div().text_size(rems(14. / 16.)).text_color(ui::fg()).child(
-                                        self.markdown_view(
+                                    div()
+                                        .when(std::mem::take(&mut after_thought), |d| {
+                                            d.pt(rems(8. / 16.))
+                                        })
+                                        .text_size(rems(14. / 16.))
+                                        .text_color(ui::fg())
+                                        .child(self.markdown_view(
                                             state,
                                             text,
                                             ("mermaid-install", ix * 64 + block_ix),
                                             cx,
-                                        ),
-                                    ),
+                                        )),
                                 );
                             }
                         }
                         Block::Thinking(text) if !text.trim().is_empty() => {
                             let live = *streaming && block_ix + 1 == blocks.len();
                             thinking_live |= live;
+                            after_thought = true;
                             column =
                                 column.child(self.render_thinking(ix, block_ix, text, live, cx));
                         }
@@ -957,8 +1042,8 @@ impl SessionView {
                     .when_some(elapsed, |this, d| {
                         this.child(
                             div()
-                                .font_family(ui::MONO)
-                                .text_size(rems(11. / 16.))
+                                .font_family(ui::mono())
+                                .text_size(ui::code_rems(11.))
                                 .text_color(ui::faint())
                                 .child(ui::format_duration(d.as_millis() as u64)),
                         )
@@ -1042,8 +1127,8 @@ impl SessionView {
                     div()
                         .flex_1()
                         .min_w_0()
-                        .font_family(ui::MONO)
-                        .text_size(rems(12. / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .text_color(color)
                         .whitespace_normal()
                         .child(text.trim_end().to_string()),
@@ -1068,8 +1153,8 @@ impl SessionView {
                         div()
                             .min_w_0()
                             .truncate()
-                            .font_family(ui::MONO)
-                            .text_size(rems(13. / 16.))
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(13.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::champagne())
                             .child(command.to_string()),
@@ -1239,12 +1324,41 @@ impl SessionView {
                     cx,
                 ))
             })
+            .when_some(
+                match item {
+                    Item::Tool { images, .. } if !images.is_empty() => Some(images),
+                    _ => None,
+                },
+                |this, images| {
+                    // A page screenshot, whole: its width, at most 360 px high.
+                    this.child(v_flex().px_3().pb_2().gap_2().children(images.iter().map(
+                        |image| {
+                            match self.image_cache.get(image) {
+                                Some(image) => div()
+                                    .w_full()
+                                    .rounded_lg()
+                                    .overflow_hidden()
+                                    .border_1()
+                                    .border_color(ui::border_strong())
+                                    .child(
+                                        img(image)
+                                            .w_full()
+                                            .max_h(rems(360. / 16.))
+                                            .object_fit(ObjectFit::Contain),
+                                    ),
+                                None => image_tile(None, rems(160. / 16.), rems(100. / 16.)),
+                            }
+                        },
+                    )))
+                },
+            )
             .child(status_footer(spec.status, duration))
             .into_any_element()
     }
 
-    /// A collapsed step: one quiet line, no card around it. The icon is
-    /// faint (danger's cross when the step failed, pulsing while it runs),
+    /// A collapsed step: one quiet line, no card around it. The icon takes
+    /// its kind's tint ([`step_tone`]; danger's cross when the step failed,
+    /// pulsing while it runs),
     /// the rest is today's header restyled: title, subject, +n/−n, duration
     /// and a chevron. Clicking it unfolds the whole step when `fold` (its
     /// key and whether the chevron points up) is given.
@@ -1259,7 +1373,11 @@ impl SessionView {
         let failed = spec.status == ToolStatus::Failed;
         let running = spec.status == ToolStatus::Running;
         let icon = if failed { IconName::CircleX } else { spec.icon };
-        let icon_color = if failed { ui::danger() } else { ui::faint() };
+        let icon_color = if failed {
+            ui::danger()
+        } else {
+            step_tone(spec.icon)
+        };
         let icon = if running {
             ui::pulse(div().child(Icon::new(icon).small().text_color(icon_color)))
                 .into_any_element()
@@ -1297,7 +1415,7 @@ impl SessionView {
             spec,
             Icon::new(spec.icon)
                 .small()
-                .text_color(ui::muted())
+                .text_color(step_tone(spec.icon))
                 .into_any_element(),
             StepRowStyle::Card,
             None,
@@ -1363,16 +1481,16 @@ impl SessionView {
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .font_family(ui::MONO)
-                    .text_size(rems(12. / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(12.))
                     .text_color(subject_color)
                     .child(spec.subject.clone()),
             )
             .when_some(spec.added, |this, n| {
                 this.child(
                     div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(12. / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .text_color(ui::success())
                         .child(format!("+{n}")),
                 )
@@ -1380,8 +1498,8 @@ impl SessionView {
             .when_some(spec.removed, |this, n| {
                 this.child(
                     div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(12. / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(12.))
                         .text_color(ui::danger())
                         .child(format!("−{n}")),
                 )
@@ -1389,8 +1507,8 @@ impl SessionView {
             .when_some(duration, |this, d| {
                 this.child(
                     div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(11. / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(11.))
                         .text_color(ui::faint())
                         .child(ui::format_duration(d.as_millis() as u64)),
                 )
@@ -1446,8 +1564,10 @@ impl SessionView {
                     diff_row(line)
                 } else {
                     div()
+                        .w_full()
+                        .min_w_0()
                         .px_3()
-                        .whitespace_nowrap()
+                        .whitespace_normal()
                         .text_color(ui::fg())
                         .child(line.text.clone())
                 }
@@ -1532,8 +1652,8 @@ impl SessionView {
                     .px_3()
                     .py_1()
                     .overflow_hidden()
-                    .font_family(ui::MONO)
-                    .text_xs()
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(12.))
                     .text_color(ui::muted())
                     .when(open && hidden > 0, |this| {
                         this.child(
@@ -1542,11 +1662,14 @@ impl SessionView {
                                 .child(format!("… {hidden} earlier lines not shown")),
                         )
                     })
-                    .children(
-                        shown
-                            .iter()
-                            .map(|line| div().whitespace_nowrap().child(line.text.clone())),
-                    ),
+                    .children(shown.iter().map(|line| {
+                        div()
+                            .debug_selector(|| "output-wrap-padding-row".into())
+                            .w_full()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .child(line.text.clone())
+                    })),
             )
     }
 
@@ -1604,6 +1727,78 @@ impl Focusable for SessionView {
 }
 
 impl SessionView {
+    /// The summary line of the run of finished steps that starts at item
+    /// `start`, a quiet step line itself: per kind of step its icon (toned
+    /// like the steps') and a count in words, then the run's total time
+    /// and a chevron (up when `open`). A click folds or unfolds the run.
+    fn run_line(&self, start: usize, open: bool, cx: &mut Context<Self>) -> Stateful<Div> {
+        let items = &self.transcript.items;
+        let run = steps::step_run(items, start).unwrap_or(start..start + 1);
+        let took: Duration = (run.clone())
+            .filter_map(|ix| match &items[ix] {
+                Item::Tool {
+                    status,
+                    duration_ms,
+                    ..
+                } => self.tool_duration(ix, *status, *duration_ms),
+                _ => None,
+            })
+            .sum();
+        let parts = steps::run_summary(items, run)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(n, (kind, count))| {
+                let icon = kind_icon(kind);
+                let separator =
+                    (n > 0).then(|| div().text_color(ui::faint()).child("·").into_any_element());
+                separator.into_iter().chain([h_flex()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .child(Icon::new(icon).small().text_color(step_tone(icon)))
+                    .child(div().text_color(ui::muted()).child(kind.label(count)))
+                    .into_any_element()])
+            });
+        h_flex()
+            .id(("run", start))
+            .w_full()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .min_w_0()
+            .cursor_pointer()
+            .rounded_lg()
+            .hover(|s| s.bg(ui::surface_hover()))
+            .on_click(cx.listener(move |this, _, _, cx| this.toggle_group(start, cx)))
+            .child(
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .gap_2()
+                    .whitespace_nowrap()
+                    .text_size(rems(13. / 16.))
+                    .children(parts),
+            )
+            .when(!took.is_zero(), |this| {
+                this.child(
+                    div()
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(11.))
+                        .text_color(ui::faint())
+                        .child(ui::format_duration(took.as_millis() as u64)),
+                )
+            })
+            .child(
+                Icon::new(if open {
+                    IconName::ChevronUp
+                } else {
+                    IconName::ChevronDown
+                })
+                .xsmall()
+                .text_color(ui::faint()),
+            )
+    }
+
     /// One row of the transcript list; `cx.processor` calls it for the
     /// rows on screen (and in the overdraw) only.
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1629,6 +1824,12 @@ impl SessionView {
                     .into_any_element()
             }
             Row::Item(i) => {
+                // A folded run of finished steps shows only its summary
+                // line, at its first step: the others render no row.
+                let group = self.list.group(i);
+                if group == Some(GroupRow::Hidden) {
+                    return div().into_any_element();
+                }
                 self.ensure_markdown(i, cx);
                 let Some(item) = self.transcript.items.get(i) else {
                     return div().into_any_element();
@@ -1639,7 +1840,17 @@ impl SessionView {
                 if !assistant_visible(item) {
                     return div().into_any_element();
                 }
-                let element = self.render_item(i, item, narrow, cx);
+                let element = match group {
+                    Some(GroupRow::Summary) => self.run_line(i, false, cx).into_any_element(),
+                    // Unfolded: the summary line above the first step.
+                    Some(GroupRow::Open) => v_flex()
+                        .w_full()
+                        .when(!self.step_collapsed(i, item), |d| d.gap(rems(8. / 16.)))
+                        .child(self.run_line(i, true, cx))
+                        .child(self.render_item(i, item, narrow, cx))
+                        .into_any_element(),
+                    _ => self.render_item(i, item, narrow, cx),
+                };
                 // Keyed by index: items animate in once, never again.
                 self.list
                     .appear(("item", i), now, div().w_full().child(element))
@@ -1689,8 +1900,15 @@ impl SessionView {
             Row::Item(i) if tight => {
                 let items = &self.transcript.items;
                 let open = |ix: usize| !self.step_collapsed(ix, &items[ix]);
+                // A run's summary line is a quiet line: the row starts with
+                // it, and a folded run ends with it.
+                let group = |ix: usize| self.list.group(ix);
+                let card_top = group(i).is_none() && open(i);
+                let card_bottom = |ix: usize| {
+                    !matches!(group(ix), Some(GroupRow::Summary | GroupRow::Hidden)) && open(ix)
+                };
                 let previous = items[..i].iter().rposition(assistant_visible);
-                open(i) || previous.is_some_and(open)
+                card_top || previous.is_some_and(card_bottom)
             }
             _ => false,
         };
@@ -1788,6 +2006,9 @@ impl Render for SessionView {
                         // A wheel or trackpad scroll takes over from a glide and
                         // shows the rail's thumb.
                         .on_scroll(cx.listener(|this, _, _, cx| this.on_user_scroll(cx)))
+                        // Text over a busy theme backdrop: dim it behind
+                        // the reading column (as wide as a row's column).
+                        .child(ui::reading_veil(rems(760. / 16.)))
                         .child(
                             list(
                                 self.list.state(),
@@ -1801,14 +2022,32 @@ impl Render for SessionView {
                         .children(self.render_jump_down(cx)),
                 ),
             })
-            .child(
-                h_flex()
-                    .w_full()
-                    .justify_center()
-                    .map(|d| if narrow { d.px_3() } else { d.px_6() })
-                    .pb_2()
-                    .child(self.render_composer(rem_size, cx)),
-            )
+            .map(|main| {
+                let (composer, strip) = self.render_composer(rem_size, cx);
+                // Bar docks the composer in a strip across the pane, on a
+                // hairline; Prompt adds its status strip along the bottom.
+                let dock = super::input_style::style(cx) == InputStyle::Bar;
+                main.child(
+                    h_flex()
+                        .relative()
+                        .w_full()
+                        .justify_center()
+                        .map(|d| if narrow { d.px_3() } else { d.px_6() })
+                        // The activity line's icons sit on glass too.
+                        .when(!dock, |d| d.child(ui::reading_veil(rems(760. / 16.))))
+                        .when(dock, |d| {
+                            d.pt_3()
+                                .border_t_1()
+                                .border_color(ui::border())
+                                .bg(ui::surface().opacity(0.35))
+                                // Its bottom corners follow the pane's.
+                                .rounded_b_xl()
+                        })
+                        .pb_2()
+                        .child(composer),
+                )
+                .children(strip)
+            })
             // The Todos island floats over the top of the conversation, where
             // an expanded surface keeps its header controls (collapse among
             // them): it steps aside while one is expanded.
@@ -2102,6 +2341,21 @@ fn card_texts(item: &Item) -> (Option<(&str, bool)>, &str) {
     }
 }
 
+/// A step's icon tint by kind, so a glance tells commands, reads, edits,
+/// helpers and the web apart without reading: commands in champagne,
+/// reading and searching in info, edits in teal, helpers in purple, the
+/// web in the accent, anything else muted.
+fn step_tone(icon: IconName) -> Hsla {
+    match icon {
+        IconName::CodeXml => ui::champagne(),
+        IconName::FileText | IconName::Search | IconName::Folder => ui::info(),
+        IconName::FilePen => ui::teal(),
+        IconName::Users => ui::purple(),
+        IconName::Globe => ui::accent(),
+        _ => ui::muted(),
+    }
+}
+
 fn tool_icon(name: &str) -> IconName {
     match name {
         "bash" | "bash_background" | "monitor" | "codemode" => IconName::CodeXml,
@@ -2110,6 +2364,7 @@ fn tool_icon(name: &str) -> IconName {
         "grep" | "find" => IconName::Search,
         "ls" => IconName::Folder,
         "todo" => IconName::ListTodo,
+        "screen" => IconName::Monitor,
         n if n.starts_with("subagent") => IconName::Users,
         n if n.starts_with("web")
             || n.contains("fetch")
@@ -2119,6 +2374,20 @@ fn tool_icon(name: &str) -> IconName {
             IconName::Globe
         }
         _ => IconName::Wrench,
+    }
+}
+
+/// The icon a run's summary line shows for a kind of step: the one its
+/// steps' own lines show ([`tool_icon`]).
+fn kind_icon(kind: StepKind) -> IconName {
+    match kind {
+        StepKind::Read => IconName::FileText,
+        StepKind::Search => IconName::Search,
+        StepKind::Edit => IconName::FilePen,
+        StepKind::Command => IconName::CodeXml,
+        StepKind::Delegate => IconName::Users,
+        StepKind::Web => IconName::Globe,
+        StepKind::Other => IconName::Wrench,
     }
 }
 
@@ -2198,7 +2467,7 @@ fn diff_row(line: &CodeLine) -> Div {
         .w_full()
         .px_3()
         .gap_2()
-        .whitespace_nowrap()
+        .items_start()
         .when_some(bg, |this, bg| this.bg(bg))
         .child(
             div()
@@ -2217,6 +2486,9 @@ fn diff_row(line: &CodeLine) -> Div {
         )
         .child(
             div()
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal()
                 .text_color(if sign == ' ' { ui::muted() } else { ui::fg() })
                 .child(line.text.clone()),
         )
@@ -2298,8 +2570,8 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         .when_some(duration, |this, d| {
             this.child(
                 div()
-                    .font_family(ui::MONO)
-                    .text_size(rems(11. / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(11.))
                     .text_color(ui::faint())
                     .child(ui::format_duration(d.as_millis() as u64)),
             )
@@ -2631,8 +2903,8 @@ fn number_badge(n: usize) -> Div {
         .px_1()
         .rounded_sm()
         .bg(ui::well())
-        .font_family(ui::MONO)
-        .text_size(rems(10. / 16.))
+        .font_family(ui::mono())
+        .text_size(ui::code_rems(10.))
         .text_color(ui::info())
         .child(format!("#{n}"))
 }
@@ -2692,8 +2964,8 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
         .when_some(elapsed, |this, d| {
             this.child(
                 div()
-                    .font_family(ui::MONO)
-                    .text_size(rems(11. / 16.))
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(11.))
                     .text_color(ui::faint())
                     .child(clock(d)),
             )
@@ -2769,6 +3041,138 @@ mod tests {
         language_for_path, line_count, parse_diff_line, tail_slice,
     };
     use gentle_core::transcript::{Block, Item, ToolStatus};
+    use gpui_kit::AppContext as _;
+
+    struct CardWrapFixture(gpui_kit::Entity<super::SessionView>);
+
+    impl gpui_kit::Render for CardWrapFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            let long = "unbroken".repeat(20);
+            self.0.update(cx, |view, cx| {
+                let well =
+                    |name: &'static str,
+                     body: &str,
+                     diff: bool,
+                     cx: &mut gpui_kit::Context<super::SessionView>| {
+                        gpui_kit::div()
+                            .w(gpui_kit::px(200.))
+                            .debug_selector(move || name.into())
+                            .child(view.code_well(
+                                0,
+                                body,
+                                1,
+                                diff,
+                                &super::BodyLines::default(),
+                                cx,
+                            ))
+                    };
+                let output =
+                    |name: &'static str,
+                     body: &str,
+                     cx: &mut gpui_kit::Context<super::SessionView>| {
+                        gpui_kit::div()
+                            .w(gpui_kit::px(200.))
+                            .debug_selector(move || name.into())
+                            .child(view.output_block(0, body, 1, &super::BodyLines::default(), cx))
+                    };
+                gpui_kit::component::v_flex()
+                    .child(well("short-input", "short", false, cx))
+                    .child(well("long-input", &long, false, cx))
+                    .child(output("short-output", "short", cx))
+                    .child(output("long-output", &long, cx))
+                    .child(well("short-diff", "+1 short", true, cx))
+                    .child(well("long-diff", &format!("+1 {long}"), true, cx))
+            })
+        }
+    }
+
+    #[gpui::test]
+    fn tool_card_wrap_unbroken_input_output_and_diff(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view =
+                    super::SessionView::new(std::env::temp_dir(), None, window, cx, false);
+                view.backend.started = true;
+                view
+            });
+            CardWrapFixture(view)
+        });
+        cx.run_until_parked();
+        for (short, long) in [
+            ("short-input", "long-input"),
+            ("short-output", "long-output"),
+            ("short-diff", "long-diff"),
+        ] {
+            let short_height = cx.debug_bounds(short).expect(short).size.height;
+            let long_height = cx.debug_bounds(long).expect(long).size.height;
+            assert!(
+                long_height > short_height,
+                "{long} must wrap: {long_height:?} vs {short_height:?}"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn output_wrap_padding(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view =
+                    super::SessionView::new(std::env::temp_dir(), None, window, cx, false);
+                view.backend.started = true;
+                view
+            });
+            OutputPaddingFixture(view)
+        });
+        cx.run_until_parked();
+        let outer = cx.debug_bounds("output-wrap-padding-outer").unwrap();
+        let row = cx.debug_bounds("output-wrap-padding-row").unwrap();
+        assert!(row.size.height > gpui_kit::px(20.), "output must wrap");
+        assert_eq!(row.origin.x - outer.origin.x, gpui_kit::px(12.));
+        assert_eq!(
+            outer.origin.x + outer.size.width - (row.origin.x + row.size.width),
+            gpui_kit::px(12.),
+            "output row must leave the right padding clear"
+        );
+    }
+
+    struct OutputPaddingFixture(gpui_kit::Entity<super::SessionView>);
+
+    impl gpui_kit::Render for OutputPaddingFixture {
+        fn render(
+            &mut self,
+            _: &mut gpui_kit::Window,
+            cx: &mut gpui_kit::Context<Self>,
+        ) -> impl gpui_kit::IntoElement {
+            use gpui_kit::{InteractiveElement as _, ParentElement as _, Styled as _};
+
+            self.0.update(cx, |view, cx| {
+                gpui_kit::div()
+                    .w(gpui_kit::px(200.))
+                    .debug_selector(|| "output-wrap-padding-outer".into())
+                    .child(view.output_block(
+                        0,
+                        &"0".repeat(160),
+                        1,
+                        &super::BodyLines::default(),
+                        cx,
+                    ))
+            })
+        }
+    }
 
     #[gpui::test]
     fn user_bubble_selection_changes_and_text_updates(cx: &mut gpui_kit::TestAppContext) {
@@ -3054,6 +3458,7 @@ mod tests {
             args: serde_json::json!({}),
             status,
             output: String::new(),
+            images: Vec::new(),
             details: serde_json::json!({}),
             duration_ms: None,
         }

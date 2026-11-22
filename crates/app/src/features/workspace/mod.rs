@@ -20,7 +20,6 @@ use gpui_kit::*;
 
 use crate::features::canvas::{CanvasEvent, CanvasView};
 use crate::features::docs::{DocsEvent, DocsView};
-use crate::features::files::FileTreeView;
 use crate::features::memory::{MemoryEvent, MemoryView};
 use crate::features::notices::{self, Notices};
 use crate::features::onboarding::{OnboardingEvent, OnboardingView, Probe};
@@ -29,6 +28,7 @@ use crate::features::palette::{
 };
 use crate::features::profiles::{ModelChoice, ProfilesEvent, ProfilesView};
 use crate::features::providers::{ProvidersEvent, ProvidersView};
+use crate::features::review::{ReviewEvent, ReviewView};
 use crate::features::session::{AgentsTab, SessionEvent, SessionView};
 use crate::features::sessions::{SessionsEvent, SessionsView};
 use crate::features::settings::{SettingsEvent, SettingsView};
@@ -36,21 +36,24 @@ use crate::features::tower::TowerView;
 use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
 use crate::features::workspaces::{
-    self, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
+    self, Badge, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
 };
 use crate::shared::pane::{
-    CloseViewer, PaneFactories, PaneId, PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
+    AskAgent, CloseViewer, OpenCommitDiff, OpenTerminalAt, PaneFactories, PaneId, PaneItem,
+    PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
 use crate::shared::ui;
 use gentle_core::commands::Screen;
 
 mod actions;
+mod badge;
 mod closed;
 mod layout;
 mod overlays;
 mod panes;
 mod persistence;
 mod render;
+mod sidebars;
 mod spaces;
 mod stages;
 mod tab_panel;
@@ -111,6 +114,7 @@ enum Overlay {
     Docs(Entity<DocsView>),
     Settings(Entity<SettingsView>),
     Profiles(Entity<ProfilesView>),
+    Review(Entity<ReviewView>),
     Onboarding(Entity<OnboardingView>),
     Welcome(Entity<WelcomeView>),
 }
@@ -169,6 +173,8 @@ struct Space {
     /// Restored layout not built yet: workspaces start their panes the first
     /// time they are shown.
     saved: Option<(Vec<SavedTab>, usize)>,
+    /// The badge's chosen icon and color.
+    badge: Badge,
 }
 
 impl Space {
@@ -180,6 +186,7 @@ impl Space {
             tabs: Vec::new(),
             active: 0,
             saved: None,
+            badge: Badge::default(),
         }
     }
 
@@ -264,6 +271,11 @@ pub struct Workspace {
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     tab_layout: TabLayout,
+    /// Workspaces opened or closed by hand in the sidebar, by name; one not
+    /// listed is open while it is the shown one.
+    sidebar_open_spaces: HashMap<String, bool>,
+    /// The workspace whose badge picker is open, and where it opened.
+    badge_picker: Option<(usize, Point<Pixels>)>,
     tab_search: Entity<InputState>,
     save_task: Option<Task<()>>,
     /// Re-reads every pane's title and busy state once a second (non-agent
@@ -320,6 +332,7 @@ impl Workspace {
                 tabs: Vec::new(),
                 active: 0,
                 saved: Some((w.tabs, w.active_tab)),
+                badge: w.badge,
             })
             .collect();
         let tab_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tabs"));
@@ -383,6 +396,8 @@ impl Workspace {
             sidebar: None,
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
+            sidebar_open_spaces: HashMap::new(),
+            badge_picker: None,
             tab_search,
             save_task: None,
             notices: cx.new(|_| Notices::default()),
@@ -562,8 +577,8 @@ impl Workspace {
         self.place_preview(id, window, cx);
     }
 
-    /// The Commit History of the repository `cwd` is in, as a pane placed
-    /// like a preview: it takes the place of the tab's history pane, if any.
+    /// The Git pane of the repository `cwd` is in, placed like a preview: it
+    /// takes the place of the tab's preview pane, if any.
     pub fn open_history(&mut self, cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.new_factory_pane(PaneKind::History, cwd, window, cx) {
             self.place_preview(id, window, cx);

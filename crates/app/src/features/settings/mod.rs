@@ -17,7 +17,9 @@ mod claude;
 mod devices;
 mod diagnostics;
 mod events;
+mod fonts;
 mod hydration;
+mod input_style;
 mod interface;
 mod layout;
 mod maestro;
@@ -27,6 +29,8 @@ mod navigation;
 mod notifications;
 mod packages;
 mod pages;
+mod reading_desk;
+mod runs_on;
 mod services;
 mod snapshot;
 mod theme;
@@ -82,11 +86,15 @@ pub struct SettingsView {
     engram: upgrade::EngramUpdate,
     /// Theme: importing and sharing themes.
     theme_share: theme::ThemeShare,
+    /// Fonts: the open picker, its search and cursor.
+    fonts: fonts::FontsUi,
     /// Active agent tab, if available, for the new Desktop RPC update status.
     session: Option<Entity<crate::features::session::SessionView>>,
     _session_sub: Option<Subscription>,
     /// RPC status and its in-flight ticket; separate from upgrade UI state.
     shell_updates: upgrade::ShellUpdates,
+    /// Where agents run: this computer, a WSL distro or a command.
+    runs_on: runs_on::RunsOn,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsView {}
@@ -165,23 +173,31 @@ impl SettingsView {
             devices: devices::Devices::default(),
             engram: upgrade::EngramUpdate::default(),
             theme_share: theme::ThemeShare::new(window, cx),
+            fonts: fonts::FontsUi::new(window, cx),
             _session_sub: session
                 .as_ref()
                 .map(|session| cx.observe(session, |this, _, cx| this.update_status_changed(cx))),
             session,
             shell_updates: upgrade::ShellUpdates::default(),
+            runs_on: runs_on::RunsOn::new(window, cx),
         };
         this.reload(cx);
         this.refresh_maestro(cx);
         this.refresh_music(cx);
         this.refresh_tower(cx);
         this.refresh_devices(cx);
+        this.refresh_runs_on(cx);
         this
     }
 
     /// gentle-shell can start, as of the Setup & requirements checklist.
     pub fn setup_usable(&self, cx: &App) -> bool {
         self.setup.read(cx).usable()
+    }
+
+    /// Open on the Updates page, where this app's update is installed.
+    pub fn show_updates(&mut self, cx: &mut Context<Self>) {
+        self.navigate_to(SettingsPage::Updates, cx);
     }
 
     /// Reuse a single navigation path for the sidebar, compact picker and search.

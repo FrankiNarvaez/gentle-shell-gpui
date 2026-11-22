@@ -4,7 +4,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -26,12 +25,19 @@ use super::refs::{RefsEvent, RefsView};
 use super::{file_icon, status_color};
 use crate::features::git::GitSnapshot;
 use crate::platform::ides;
-use crate::shared::ui;
+use crate::shared::{themes, ui};
 
 const CONTEXT: &str = "FileTree";
 const ROW_HEIGHT: f32 = 26.;
 const INDENT: f32 = 14.;
 const POLL: Duration = Duration::from_secs(3);
+
+struct ShowIgnored {
+    value: bool,
+    path: Option<PathBuf>,
+}
+
+impl Global for ShowIgnored {}
 
 const REVEAL: &str = if cfg!(target_os = "macos") {
     "Reveal in Finder"
@@ -69,6 +75,10 @@ actions!(
 
 /// The tree's shortcuts, live while it has focus (the context menu shows them).
 pub fn init(cx: &mut App) {
+    let path = themes::store_path();
+    let value = path.as_deref().is_some_and(read_show_ignored);
+    cx.set_global(ShowIgnored { value, path });
+
     // Cmd on macOS, Ctrl elsewhere, as main.rs binds the app shortcuts
     // (this gpui has no `secondary-` modifier: it panics at startup).
     macro_rules! key {
@@ -120,10 +130,15 @@ pub enum FileTreeEvent {
     InsertPath(String),
     /// Open an agent tab in this folder (a worktree).
     OpenAgent(PathBuf),
-    /// Show the Commit History of this repository.
+    /// Show the Git pane of this repository.
     OpenHistory(PathBuf),
     /// The header's collapse button: the owner should hide the sidebar.
     Collapse,
+    /// The header's folder name: the owner should let the user pick another
+    /// root folder.
+    ChooseFolder,
+    /// The search field: the owner should open its file finder.
+    SearchFiles,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -217,6 +232,10 @@ impl FileTreeView {
         let changes = cx.new(|cx| ChangesView::new(root.clone(), window, cx));
         let refs = cx.new(|cx| RefsView::new(root.clone(), window, cx));
         let subscriptions = vec![
+            cx.observe_global::<ShowIgnored>(|this, cx| {
+                let value = cx.global::<ShowIgnored>().value;
+                this.apply_show_ignored(value, cx);
+            }),
             cx.subscribe(&changes, |_, _, event: &ChangesEvent, cx| match event {
                 ChangesEvent::OpenDiff(path) => cx.emit(FileTreeEvent::OpenDiff(path.clone())),
                 ChangesEvent::OpenFile(path) => cx.emit(FileTreeEvent::Open(path.clone())),
@@ -236,7 +255,7 @@ impl FileTreeView {
             expanded: HashSet::new(),
             selected: None,
             rows: Rc::default(),
-            show_ignored: false,
+            show_ignored: cx.global::<ShowIgnored>().value,
             clipboard: None,
             editing: None,
             git: None,
@@ -310,11 +329,6 @@ impl FileTreeView {
         self.changes
             .update(cx, |view, cx| view.set_visible(changes, cx));
         self.refs.update(cx, |view, cx| view.set_visible(refs, cx));
-    }
-
-    /// Switch to the Changes tab (the `/gentle:changes` command).
-    pub fn show_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_tab(Tab::Changes, window, cx);
     }
 
     fn set_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
@@ -564,7 +578,28 @@ impl FileTreeView {
     }
 
     fn toggle_ignored(&mut self, cx: &mut Context<Self>) {
-        self.show_ignored = !self.show_ignored;
+        let value = !cx.global::<ShowIgnored>().value;
+        let path = cx.global::<ShowIgnored>().path.clone();
+        cx.set_global(ShowIgnored {
+            value,
+            path: path.clone(),
+        });
+        if let Some(path) = path
+            && let Err(err) = write_show_ignored(&path, value)
+        {
+            eprintln!("gentle-shell-gpui: could not save Show Ignored Files: {err}");
+        }
+        self.apply_show_ignored(value, cx);
+    }
+
+    fn apply_show_ignored(&mut self, value: bool, cx: &mut Context<Self>) {
+        if self.show_ignored == value {
+            return;
+        }
+        self.show_ignored = value;
+        // Closed folders must not reuse listings from the previous setting.
+        self.children
+            .retain(|dir, _| dir == &self.root || self.expanded.contains(dir));
         self.reload_listings(cx);
         cx.notify();
     }
@@ -1129,8 +1164,8 @@ impl FileTreeView {
             .when_some(status, |d, s| {
                 d.child(
                     div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(10.5 / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(10.5))
                         .text_color(status_color(s))
                         .child(status_letter(s).to_string()),
                 )
@@ -1419,11 +1454,21 @@ impl FileTreeView {
                     .small()
                     .text_color(if active { ui::fg() } else { ui::faint() }),
             )
+            // The open tab says what it is; the others keep to their icons.
+            .when(active, |d| {
+                d.child(
+                    div()
+                        .text_size(rems(12.5 / 16.))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(ui::fg())
+                        .child(label),
+                )
+            })
             .when(count > 0, |d| {
                 d.child(
                     div()
-                        .font_family(ui::MONO)
-                        .text_size(rems(10.5 / 16.))
+                        .font_family(ui::mono())
+                        .text_size(ui::code_rems(10.5))
                         .text_color(ui::warning())
                         .child(count.to_string()),
                 )
@@ -1443,17 +1488,30 @@ impl Render for FileTreeView {
             .pr_1p5()
             .gap_0p5()
             .flex_none()
-            .child(Icon::new(IconName::Folder).small().text_color(ui::muted()))
             .child(
-                div()
+                h_flex()
+                    .id("file-tree-change-folder")
                     .flex_1()
                     .min_w_0()
-                    .ml_1()
-                    .truncate()
-                    .text_size(rems(13.5 / 16.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(ui::fg())
-                    .child(self.name.clone()),
+                    .h(rems(26. / 16.))
+                    .ml_neg_1()
+                    .px_1()
+                    .gap_1()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(ui::surface_hover().opacity(0.6)))
+                    .child(Icon::new(IconName::Folder).small().text_color(ui::muted()))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(rems(13.5 / 16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(ui::fg())
+                            .child(self.name.clone()),
+                    )
+                    .tooltip(|window, cx| Tooltip::new("Change folder").build(window, cx))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(FileTreeEvent::ChooseFolder))),
             )
             .when(files, |d| {
                 d.child(
@@ -1501,6 +1559,98 @@ impl Render for FileTreeView {
             .child(self.tab_button(Tab::Files, IconName::Files, "Files", 0, cx))
             .child(self.tab_button(Tab::Changes, IconName::Diff, "Changes", change_count, cx))
             .child(self.tab_button(Tab::Branches, IconName::GitBranch, "Branches", 0, cx));
+        // Finding a file, under the tabs while the tree shows.
+        let search = (self.tab == Tab::Files).then(|| {
+            h_flex().flex_none().px_2().pb_1p5().child(
+                ui::field()
+                    .id("file-tree-search")
+                    .flex_1()
+                    .min_w_0()
+                    .h(rems(30. / 16.))
+                    .cursor_pointer()
+                    .hover(|s| s.border_color(ui::petal().opacity(0.45)))
+                    .on_click(cx.listener(|_, _, _, cx| cx.emit(FileTreeEvent::SearchFiles)))
+                    .child(Icon::new(IconName::Search).small().text_color(ui::faint()))
+                    .child(
+                        div()
+                            .text_size(rems(12.5 / 16.))
+                            .text_color(ui::faint())
+                            .child("Search files"),
+                    ),
+            )
+        });
+        // The repository at a glance, where the eye ends: the branch (a
+        // click shows the branches) and what's changed (a click, the
+        // changes).
+        let footer =
+            self.git.as_ref().and_then(|git| git.as_ref()).map(|state| {
+                let branch = state
+                    .snapshot
+                    .branch
+                    .clone()
+                    .unwrap_or_else(|| "detached".into());
+                let changed = state.snapshot.files.len();
+                h_flex()
+                    .flex_none()
+                    .h(rems(34. / 16.))
+                    .mx_2()
+                    .mb_2()
+                    .px_2()
+                    .gap_2()
+                    .rounded_lg()
+                    .bg(ui::surface())
+                    .child(
+                        h_flex()
+                            .id("file-tree-branch")
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1p5()
+                            .cursor_pointer()
+                            .text_color(ui::muted())
+                            .hover(|s| s.text_color(ui::fg()))
+                            .tooltip(|window, cx| Tooltip::new("Branches").build(window, cx))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_tab(Tab::Branches, window, cx)
+                            }))
+                            .child(
+                                Icon::new(IconName::GitBranch)
+                                    .xsmall()
+                                    .text_color(ui::champagne()),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_family(ui::mono())
+                                    .text_size(ui::code_rems(12.))
+                                    .child(branch),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .id("file-tree-changed")
+                            .flex_none()
+                            .gap_1()
+                            .cursor_pointer()
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(11.5))
+                            .text_color(if changed > 0 {
+                                ui::warning()
+                            } else {
+                                ui::faint()
+                            })
+                            .hover(|s| s.text_color(ui::fg()))
+                            .tooltip(|window, cx| Tooltip::new("Changes").build(window, cx))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_tab(Tab::Changes, window, cx)
+                            }))
+                            .child(if changed > 0 {
+                                format!("±{changed}")
+                            } else {
+                                "clean".to_string()
+                            }),
+                    )
+            });
         // The workspace's right sidebar slot paints the rounded glass; a fill here
         // would show square corners past it (GPUI clips to rectangles).
         v_flex()
@@ -1508,6 +1658,7 @@ impl Render for FileTreeView {
             .min_h_0()
             .child(header)
             .child(tabs)
+            .children(search)
             .child(match self.tab {
                 Tab::Files => self.render_files(cx),
                 Tab::Changes => div()
@@ -1521,6 +1672,7 @@ impl Render for FileTreeView {
                     .child(self.refs.clone())
                     .into_any_element(),
             })
+            .children(footer)
     }
 }
 
@@ -1579,15 +1731,7 @@ fn paths(state: &GitState) -> Vec<&str> {
 }
 
 fn show_toplevel(root: &Path) -> Option<PathBuf> {
-    let out = pi_rpc::command("git")
-        .args(["rev-parse", "--show-toplevel"])
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    let top = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (out.status.success() && !top.is_empty()).then(|| PathBuf::from(top))
+    crate::features::git::toplevel(root)
 }
 
 /// What a click on a tree row does, by click count.
@@ -1607,6 +1751,112 @@ fn click_outcome(is_dir: bool, clicks: usize) -> ClickOutcome {
         ClickOutcome::Open
     } else {
         ClickOutcome::Nothing
+    }
+}
+
+fn read_show_ignored(path: &Path) -> bool {
+    themes::read_key(path, "showIgnoredFiles")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+}
+
+fn write_show_ignored(path: &Path, show: bool) -> std::io::Result<()> {
+    themes::write_key(path, "showIgnoredFiles", show.into())
+}
+
+#[cfg(test)]
+mod show_ignored_tests {
+    use super::{read_show_ignored, write_show_ignored};
+    use std::path::PathBuf;
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "gentle-show-ignored-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[gpui::test]
+    fn open_trees_follow_ignored_choice(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+
+        let dir = Scratch::new();
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(super::ShowIgnored {
+                value: false,
+                path: Some(dir.0.join("settings.json")),
+            });
+        });
+        let root = dir.0.clone();
+        let (first, cx) =
+            cx.add_window_view(|window, cx| super::FileTreeView::new(root.clone(), window, cx));
+        let second =
+            cx.update(|window, cx| cx.new(|cx| super::FileTreeView::new(root.clone(), window, cx)));
+        cx.update(|_, cx| first.update(cx, |tree, cx| tree.toggle_ignored(cx)));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert!(first.read(cx).show_ignored);
+            assert!(second.read(cx).show_ignored, "other open tree follows");
+        });
+        let settings = dir.0.join("settings.json");
+        assert!(read_show_ignored(&settings));
+        let late =
+            cx.update(|window, cx| cx.new(|cx| super::FileTreeView::new(root.clone(), window, cx)));
+        cx.update(|_, cx| assert!(late.read(cx).show_ignored));
+        cx.update(|_, cx| second.update(cx, |tree, cx| tree.toggle_ignored(cx)));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert!(!first.read(cx).show_ignored);
+            assert!(!second.read(cx).show_ignored);
+            assert!(!late.read(cx).show_ignored);
+        });
+        assert!(!read_show_ignored(&settings));
+    }
+
+    #[test]
+    fn show_ignored_defaults_to_false_for_missing_or_invalid_settings() {
+        let dir = Scratch::new();
+        let path = dir.0.join("settings.json");
+        assert!(!read_show_ignored(&path));
+        std::fs::write(&path, r#"{"showIgnoredFiles":"true"}"#).unwrap();
+        assert!(!read_show_ignored(&path));
+    }
+
+    #[test]
+    fn show_ignored_persists_both_values_and_preserves_other_settings() {
+        let dir = Scratch::new();
+        let path = dir.0.join("settings.json");
+        std::fs::write(&path, r#"{"theme":"Studio","other":{"value":3}}"#).unwrap();
+        write_show_ignored(&path, true).unwrap();
+        assert!(read_show_ignored(&path));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["theme"], "Studio");
+        assert_eq!(settings["other"]["value"], 3);
+        write_show_ignored(&path, false).unwrap();
+        assert!(!read_show_ignored(&path));
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["showIgnoredFiles"], false);
+        assert_eq!(settings["theme"], "Studio");
+        assert_eq!(settings["other"]["value"], 3);
     }
 }
 

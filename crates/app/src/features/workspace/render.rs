@@ -59,6 +59,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_new_tab))
             .on_action(cx.listener(Self::on_show_in_pane))
             .on_action(cx.listener(Self::on_close_viewer))
+            .on_action(cx.listener(Self::on_open_commit_diff))
+            .on_action(cx.listener(Self::on_ask_agent))
+            .on_action(cx.listener(Self::on_open_terminal_at))
             .on_action(cx.listener(Self::on_new_terminal_tab))
             .on_action(cx.listener(Self::on_new_canvas_tab))
             .on_action(cx.listener(Self::on_close_tab))
@@ -153,7 +156,7 @@ impl Render for Workspace {
                                                         cx.stop_propagation()
                                                     })
                                                     .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.open_settings(window, cx)
+                                                        this.open_app_updates(window, cx)
                                                     }))
                                                     .child(ui::chip(label, ui::accent())),
                                             )
@@ -256,7 +259,7 @@ impl Render for Workspace {
                                 .border_1()
                                 .border_color(gpui_kit::transparent_black())
                                 .overflow_hidden()
-                                .child(self.render_vertical_sidebar(cx)),
+                                .child(self.render_tab_sidebar(cx)),
                         ))
                     })
                     .child(
@@ -290,6 +293,7 @@ impl Render for Workspace {
                     }),
             )
             .children(self.stages.iter().filter_map(Stage::element))
+            .children(self.render_badge_picker(cx))
             .when(devices_floating, |root| root.child(self.devices.clone()))
             .children(self.overlay.as_ref().map(|(overlay, _)| {
                 let (view, full_window) = match overlay {
@@ -301,6 +305,7 @@ impl Render for Workspace {
                     Overlay::Docs(view) => (view.clone().into_any_element(), false),
                     Overlay::Settings(view) => (view.clone().into_any_element(), false),
                     Overlay::Profiles(view) => (view.clone().into_any_element(), false),
+                    Overlay::Review(view) => (view.clone().into_any_element(), false),
                     // First-run screens still cover the whole window.
                     Overlay::Onboarding(view) => (view.clone().into_any_element(), true),
                     Overlay::Welcome(view) => (view.clone().into_any_element(), true),

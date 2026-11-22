@@ -161,6 +161,15 @@ impl Motion {
         }
     }
 
+    /// One line for Configuration, next to the choice: what it does.
+    pub fn summary(self) -> &'static str {
+        match self {
+            Motion::Smooth => "Full motion, up to 24 fps.",
+            Motion::Calm => "Half the rate. Easier on battery.",
+            Motion::Still => "No motion. Costs nothing.",
+        }
+    }
+
     fn floor(self) -> Duration {
         match self {
             Motion::Calm => Duration::from_millis(83),
@@ -614,18 +623,28 @@ struct Glyph {
     descent: f32,
 }
 
-fn glyph(ch: char, size: f32, bold: bool, window: &mut Window) -> Option<Glyph> {
-    thread_local! {
-        static CACHE: std::cell::RefCell<HashMap<(char, u32, bool), Option<Glyph>>> =
-            Default::default();
-    }
+thread_local! {
+    static GLYPH_CACHE: std::cell::RefCell<HashMap<(char, u32, bool), Option<Glyph>>> =
+        Default::default();
+    /// The family the cached glyphs were shaped with; a new code font
+    /// empties the cache.
+    static GLYPH_FAMILY: std::cell::RefCell<SharedString> = Default::default();
+}
+
+fn glyph(
+    ch: char,
+    size: f32,
+    bold: bool,
+    family: &SharedString,
+    window: &mut Window,
+) -> Option<Glyph> {
     let key = (ch, (size * 4.).round() as u32, bold);
-    if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).copied()) {
+    if let Some(hit) = GLYPH_CACHE.with(|c| c.borrow().get(&key).copied()) {
         return hit;
     }
     let mut text = [0u8; 4];
     let text = ch.encode_utf8(&mut text);
-    let mut font = font(ui::MONO);
+    let mut font = font(family.clone());
     if bold {
         font.weight = FontWeight::BOLD;
     }
@@ -651,7 +670,7 @@ fn glyph(ch: char, size: f32, bold: bool, window: &mut Window) -> Option<Glyph> 
             descent: f32::from(layout.descent),
         })
     });
-    CACHE.with(|c| {
+    GLYPH_CACHE.with(|c| {
         let mut cache = c.borrow_mut();
         // Scenes draw a handful of characters; this only guards a runaway one.
         if cache.len() > 4096 {
@@ -684,6 +703,13 @@ fn paint_frame(
     window: &mut Window,
     _: &mut App,
 ) {
+    let family = ui::mono();
+    GLYPH_FAMILY.with(|current| {
+        if *current.borrow() != family {
+            GLYPH_CACHE.with(|c| c.borrow_mut().clear());
+            *current.borrow_mut() = family.clone();
+        }
+    });
     let (ox, oy) = (f32::from(origin.x), f32::from(origin.y));
     let at = |x: f64, y: f64| point(px(ox + x as f32), px(oy + y as f32));
     for c in commands.as_chunks::<STRIDE>().0 {
@@ -715,7 +741,7 @@ fn paint_frame(
                     continue;
                 };
                 let size = (c[3] as f32).clamp(4., 200.);
-                let Some(g) = glyph(ch, size, c[7] != 0., window) else {
+                let Some(g) = glyph(ch, size, c[7] != 0., &family, window) else {
                     continue;
                 };
                 let baseline = at(

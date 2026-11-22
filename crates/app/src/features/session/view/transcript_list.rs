@@ -136,6 +136,10 @@ pub(in crate::features::session) struct TranscriptList {
     /// Items that render a step row right after another step row (see
     /// `follows_step`): their row drops the top padding.
     step_tight: HashSet<usize>,
+    /// Items inside a run of finished steps
+    /// (`gentle_core::transcript::steps::step_run`), by transcript index:
+    /// how each renders and estimates.
+    groups: HashMap<usize, GroupRow>,
     /// Every row's weight, in row order: the estimate's input.
     row_weights: Vec<f32>,
     /// Where the pane is along the whole conversation; its row tops are
@@ -165,14 +169,40 @@ const STEP_LINE_WEIGHT: f32 = 2.;
 /// steps only).
 const ROW_PAD_WEIGHT: f32 = 24. / 17.;
 
+/// How an item inside a run of finished steps renders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GroupRow {
+    /// The run's first step, folded: its row is the run's summary line.
+    Summary,
+    /// The run's first step, unfolded: the summary line above its own row.
+    Open,
+    /// Any other item of a folded run: no row at all.
+    Hidden,
+}
+
 /// An item's estimate weight: its content weight, folded to the step-line
 /// weight when its quiet line shows, minus the top padding a step row
-/// that follows another step row drops.
-fn item_row_weight(weight: Option<f32>, step_collapsed: bool, tight: bool) -> f32 {
-    let base = if step_collapsed {
-        STEP_LINE_WEIGHT
-    } else {
-        weight.unwrap_or(TAIL_WEIGHT)
+/// that follows another step row drops. Inside a run of finished steps
+/// (`group`), a hidden item weighs nothing and the first step's row is,
+/// or adds, the summary line.
+fn item_row_weight(
+    weight: Option<f32>,
+    step_collapsed: bool,
+    tight: bool,
+    group: Option<GroupRow>,
+) -> f32 {
+    let own = || {
+        if step_collapsed {
+            STEP_LINE_WEIGHT
+        } else {
+            weight.unwrap_or(TAIL_WEIGHT)
+        }
+    };
+    let base = match group {
+        Some(GroupRow::Hidden) => return 0.,
+        Some(GroupRow::Summary) => STEP_LINE_WEIGHT,
+        Some(GroupRow::Open) => STEP_LINE_WEIGHT + own(),
+        None => own(),
     };
     if tight { base - ROW_PAD_WEIGHT } else { base }
 }
@@ -190,6 +220,7 @@ impl TranscriptList {
             weights: Vec::new(),
             step_collapsed: HashSet::new(),
             step_tight: HashSet::new(),
+            groups: HashMap::new(),
             row_weights: Vec::new(),
             estimate: Estimate::default(),
             stale: true,
@@ -208,6 +239,7 @@ impl TranscriptList {
         self.weights.clear();
         self.step_collapsed.clear();
         self.step_tight.clear();
+        self.groups.clear();
         self.marks.clear();
         self.stale = true;
     }
@@ -262,6 +294,7 @@ impl TranscriptList {
                     self.weights.get(ix).copied(),
                     self.step_collapsed.contains(&ix),
                     self.step_tight.contains(&ix),
+                    self.groups.get(&ix).copied(),
                 )
             }));
             self.row_weights
@@ -315,6 +348,7 @@ impl TranscriptList {
         // Items from `from` on are re-derived; the view re-states their fold.
         self.step_collapsed.retain(|&ix| ix < from);
         self.step_tight.retain(|&ix| ix < from);
+        self.groups.retain(|&ix, _| ix < from);
         let kept = self.marks.partition_point(|(ix, _)| *ix < from);
         self.marks.truncate(kept);
         let changed = items.get(from..).unwrap_or_default();
@@ -393,13 +427,16 @@ impl TranscriptList {
         self.shape = shape;
     }
 
-    /// Item `ix` changed height (a fold toggled).
-    pub(super) fn remeasure_item(&mut self, ix: usize) {
-        let row = ix + 1;
-        if row < self.shape.len() {
-            self.stale |= self.heights.remove(&row).is_some();
-            self.state.remeasure_items(row..row + 1);
+    /// Items `items` changed height (a fold toggled, a run of steps grew).
+    pub(super) fn remeasure_items(&mut self, items: Range<usize>) {
+        let rows = (items.start + 1)..(items.end + 1).min(self.shape.len());
+        if rows.is_empty() {
+            return;
         }
+        let before = self.heights.len();
+        self.heights.retain(|row, _| !rows.contains(row));
+        self.stale |= self.heights.len() != before;
+        self.state.remeasure_items(rows);
     }
 
     /// Whether item `ix` sits folded to its quiet one-line step row; a
@@ -411,6 +448,22 @@ impl TranscriptList {
             self.step_collapsed.remove(&ix)
         };
         self.stale |= changed;
+    }
+
+    /// How item `ix` renders inside a run of finished steps, if it is in
+    /// one; a change re-lays the estimate. Whether it changed.
+    pub(super) fn set_group(&mut self, ix: usize, group: Option<GroupRow>) -> bool {
+        let was = match group {
+            Some(group) => self.groups.insert(ix, group),
+            None => self.groups.remove(&ix),
+        };
+        let changed = was != group;
+        self.stale |= changed;
+        changed
+    }
+
+    pub(super) fn group(&self, ix: usize) -> Option<GroupRow> {
+        self.groups.get(&ix).copied()
     }
 
     pub(super) fn prepared(&self, ix: usize) -> Option<&Prepared> {
@@ -456,29 +509,51 @@ impl TranscriptList {
 #[cfg(test)]
 mod tests {
     use super::{
-        ListUpdate, ROW_PAD_WEIGHT, Row, STEP_LINE_WEIGHT, Shape, TAIL_WEIGHT, Tail,
+        GroupRow, ListUpdate, ROW_PAD_WEIGHT, Row, STEP_LINE_WEIGHT, Shape, TAIL_WEIGHT, Tail,
         item_row_weight, list_update,
     };
 
     #[test]
     fn a_step_row_that_follows_another_drops_its_padding_from_the_estimate() {
         // The run's first row keeps its top padding.
-        assert_eq!(item_row_weight(Some(13.), true, false), STEP_LINE_WEIGHT);
-        assert_eq!(item_row_weight(Some(13.), false, false), 13.);
+        assert_eq!(
+            item_row_weight(Some(13.), true, false, None),
+            STEP_LINE_WEIGHT
+        );
+        assert_eq!(item_row_weight(Some(13.), false, false, None), 13.);
         // A step row that follows another step row weighs its content
         // without the top padding it drops.
         assert_eq!(
-            item_row_weight(Some(13.), true, true),
+            item_row_weight(Some(13.), true, true, None),
             STEP_LINE_WEIGHT - ROW_PAD_WEIGHT
         );
         assert_eq!(
-            item_row_weight(Some(13.), false, true),
+            item_row_weight(Some(13.), false, true, None),
             13. - ROW_PAD_WEIGHT
         );
         // Unmeasured rows estimate from the default tail weight.
         assert_eq!(
-            item_row_weight(None, false, true),
+            item_row_weight(None, false, true, None),
             TAIL_WEIGHT - ROW_PAD_WEIGHT
+        );
+    }
+
+    #[test]
+    fn a_folded_run_of_steps_estimates_as_its_summary_line() {
+        // The other items of a folded run take no room at all.
+        assert_eq!(
+            item_row_weight(Some(13.), true, true, Some(GroupRow::Hidden)),
+            0.
+        );
+        // The first step's row is the summary line, whatever its own fold.
+        assert_eq!(
+            item_row_weight(Some(13.), false, false, Some(GroupRow::Summary)),
+            STEP_LINE_WEIGHT
+        );
+        // Unfolded, the summary line sits above the step's own row.
+        assert_eq!(
+            item_row_weight(Some(13.), true, true, Some(GroupRow::Open)),
+            2. * STEP_LINE_WEIGHT - ROW_PAD_WEIGHT
         );
     }
 

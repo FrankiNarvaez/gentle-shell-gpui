@@ -388,15 +388,35 @@ pub fn engram_latest() -> Result<String, String> {
 /// the release publishes checksums.
 pub fn install_engram_release(log: &Log) -> Result<(), String> {
     let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
+    let (_staging, found, version) =
+        download_engram(std::env::consts::OS, std::env::consts::ARCH, log)?;
+    let exe = if cfg!(windows) {
+        "engram.exe"
+    } else {
+        "engram"
+    };
+    let bin = place_binary(&toolchain, &found, exe)?;
+    log(format!(
+        "Engram {version} is installed in {}.",
+        bin.display()
+    ));
+    Ok(())
+}
+
+/// The latest Engram release built for `os` and `arch`, downloaded,
+/// verified when the release publishes checksums, and unpacked: its binary
+/// (inside the returned staging folder) and version.
+pub fn download_engram(
+    os: &str,
+    arch: &str,
+    log: &Log,
+) -> Result<(Staging, PathBuf, String), String> {
+    let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
     log("Looking up the latest Engram release on GitHub…".into());
     let release = parse_release(&get_text(ENGRAM_LATEST, true)?)
         .ok_or("GitHub's answer about Engram's latest release is unreadable.")?;
-    let name = engram_asset(
-        &release.version,
-        std::env::consts::OS,
-        std::env::consts::ARCH,
-    )
-    .ok_or("Engram publishes no build for this system.")?;
+    let name = engram_asset(&release.version, os, arch)
+        .ok_or("Engram publishes no build for this system.")?;
     let url = release
         .assets
         .iter()
@@ -421,19 +441,13 @@ pub fn install_engram_release(log: &Log) -> Result<(), String> {
     }
     let unpacked = staging.0.join("unpacked");
     extract(&archive, &unpacked)?;
-    let exe = if cfg!(windows) {
+    let exe = if os == "windows" {
         "engram.exe"
     } else {
         "engram"
     };
     let found = find_file(&unpacked, exe).ok_or_else(|| format!("{name} has no {exe}."))?;
-    let bin = place_binary(&toolchain, &found, exe)?;
-    log(format!(
-        "Engram {} is installed in {}.",
-        release.version,
-        bin.display()
-    ));
-    Ok(())
+    Ok((staging, found, release.version))
 }
 
 /// Copy `found` into `<toolchain>/bin/<exe>` (executable), replacing any
@@ -551,7 +565,24 @@ fn install_root(unpacked: &Path, target: &Path, what: &str) -> Result<(), String
 /// checksum Adoptium publishes. Never touches a system Java.
 pub fn install_java_runtime(log: &Log) -> Result<(), String> {
     let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
-    let query = java_runtime_query(std::env::consts::OS, std::env::consts::ARCH)
+    install_java_runtime_into(
+        &toolchain.join("java"),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        log,
+    )
+}
+
+/// The latest Temurin JRE built for `os` and `arch` into the folder
+/// `target` here (a backend's is copied there from it).
+pub fn install_java_runtime_into(
+    target: &Path,
+    os: &str,
+    arch: &str,
+    log: &Log,
+) -> Result<(), String> {
+    let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
+    let query = java_runtime_query(os, arch)
         .ok_or("Adoptium publishes no Java runtime for this system.")?;
     log(format!(
         "Looking up the latest Java {JAVA_FEATURE} runtime on Adoptium…"
@@ -571,7 +602,7 @@ pub fn install_java_runtime(log: &Log) -> Result<(), String> {
     log("Checksum verified. Unpacking…".into());
     let unpacked = staging.0.join("unpacked");
     extract(&archive, &unpacked)?;
-    let target = toolchain.join("java");
+    let target = target.to_path_buf();
     install_root(&unpacked, &target, "Java runtime")?;
     log(format!("Java is installed in {}.", target.display()));
     Ok(())
@@ -580,6 +611,13 @@ pub fn install_java_runtime(log: &Log) -> Result<(), String> {
 /// The latest Maestro CLI release into `<toolchain>/maestro`, verified
 /// against the release's `checksums_sha256.txt`.
 pub fn install_maestro_release(log: &Log) -> Result<(), String> {
+    let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
+    install_maestro_into(&toolchain.join("maestro"), log)
+}
+
+/// The latest Maestro CLI release (one for every system) into the folder
+/// `target` here.
+pub fn install_maestro_into(target: &Path, log: &Log) -> Result<(), String> {
     const NAME: &str = "maestro.zip";
     let toolchain = toolchain_dir().ok_or("This system has no app data folder.")?;
     log("Looking up the latest Maestro release on GitHub…".into());
@@ -610,7 +648,7 @@ pub fn install_maestro_release(log: &Log) -> Result<(), String> {
     log("Checksum verified. Unpacking…".into());
     let unpacked = staging.0.join("unpacked");
     extract(&archive, &unpacked)?;
-    let target = toolchain.join("maestro");
+    let target = target.to_path_buf();
     install_root(&unpacked, &target, "Maestro")?;
     log(format!(
         "Maestro {} is installed in {}.",
@@ -658,8 +696,13 @@ pub fn install_uv(target: &Path, log: &Log) -> Result<(), String> {
     {
         return Ok(());
     }
-    let (name, sha256) = uv_asset(std::env::consts::OS, std::env::consts::ARCH)
-        .ok_or("uv has no build for this system.")?;
+    download_uv(target, std::env::consts::OS, std::env::consts::ARCH, log)
+}
+
+/// The pinned uv built for `os` and `arch` into `target` here (a backend's
+/// is copied there from it), verified against the pinned checksum.
+pub fn download_uv(target: &Path, os: &str, arch: &str, log: &Log) -> Result<(), String> {
+    let (name, sha256) = uv_asset(os, arch).ok_or("uv has no build for this system.")?;
     let dir = target.parent().ok_or("uv has nowhere to go.")?;
     fs::create_dir_all(dir).map_err(|e| format!("Couldn't create {}: {e}", dir.display()))?;
     let staging = Staging::new(dir, "uv-download")?;

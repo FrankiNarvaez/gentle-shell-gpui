@@ -12,7 +12,6 @@ use pi_rpc::PiProcess;
 use pi_rpc::desktop_rpc::{ConfigStore, ConfigWrite, DesktopMethod, ReviewScope};
 use serde_json::{Value, json};
 
-use super::state::desktop::changes::{Applied as ChangesApplied, FileKey};
 use super::state::desktop::config::Applied as ConfigApplied;
 use super::state::desktop::design::Applied as DesignApplied;
 use super::state::desktop::output::Applied as OutputApplied;
@@ -337,42 +336,6 @@ impl SessionView {
         self.desktop.review_refresh();
         self.sync_review(cx);
     }
-
-    /// Act on a changes decision: say what failed, send what the slice asked
-    /// for, and bring the card's diff viewer up to the answer.
-    pub(super) fn apply_changes(&mut self, applied: ChangesApplied, cx: &mut Context<Self>) {
-        if let Some(report) = applied.report {
-            self.transcript
-                .notice(NoticeLevel::Warning, report.message());
-        }
-        self.send_desktop(applied.sends, cx);
-        let resync = self.desktop.flush_resync();
-        self.send_desktop(resync, cx);
-        self.sync_changes_viewer(cx);
-        cx.notify();
-    }
-
-    /// Send what the changes slice owes once the channel is free.
-    pub(super) fn sync_changes(&mut self, cx: &mut Context<Self>) {
-        let applied = self.desktop.changes_pump();
-        if !applied.sends.is_empty() || applied.report.is_some() {
-            self.apply_changes(applied, cx);
-        }
-    }
-
-    /// Read this session's change set again (turn end, the card opened).
-    pub(super) fn refresh_session_changes(&mut self, cx: &mut Context<Self>) {
-        self.desktop.changes_mark_stale();
-        self.sync_changes(cx);
-    }
-
-    /// Show one changed file's diff in the card, or close it.
-    pub(super) fn select_session_change(&mut self, file: Option<FileKey>, cx: &mut Context<Self>) {
-        self.desktop.changes_select(file);
-        self.sync_changes_viewer(cx);
-        self.sync_changes(cx);
-        cx.notify();
-    }
     /// Whether the Profiles screen edits this tab's config over Desktop RPC,
     /// waits for the probe, or keeps its direct-file path. No backend to ask
     /// (it failed or exited) is the direct-file path too: there is no writer
@@ -579,7 +542,12 @@ impl SessionView {
     /// so a probe timer never abandons a permission request and vice versa.
     fn expire_desktop(&mut self, generation: u64, method: DesktopMethod, cx: &mut Context<Self>) {
         match method {
-            DesktopMethod::Capabilities | DesktopMethod::GetSnapshot => {
+            // The core channel, and `get_changes`/`get_change_diff`, which
+            // the app no longer sends: a timer for either is the channel's.
+            DesktopMethod::Capabilities
+            | DesktopMethod::GetSnapshot
+            | DesktopMethod::GetChanges
+            | DesktopMethod::GetChangeDiff => {
                 let sends = self.desktop.expire(generation);
                 self.send_desktop(sends, cx);
             }
@@ -610,10 +578,6 @@ impl SessionView {
                 let applied = self.desktop.review_expire(generation);
                 self.apply_review(applied, cx);
             }
-            DesktopMethod::GetChanges | DesktopMethod::GetChangeDiff => {
-                let applied = self.desktop.changes_expire(generation);
-                self.apply_changes(applied, cx);
-            }
             DesktopMethod::GetJobOutput | DesktopMethod::GetSubagentThread => {
                 let applied = self.desktop.output_expire(generation);
                 self.apply_output(applied, cx);
@@ -627,11 +591,10 @@ impl SessionView {
             }
         }
         // Whichever request was dropped, the shared slot may be free for the
-        // next queued config request or screen read, review change, changes
-        // read or owed output read.
+        // next queued config request or screen read, review change or owed
+        // output read.
         self.sync_config(cx);
         self.sync_review(cx);
-        self.sync_changes(cx);
         self.sync_output(cx);
     }
 
@@ -645,7 +608,11 @@ impl SessionView {
         cx: &mut Context<Self>,
     ) {
         match method {
-            DesktopMethod::Capabilities | DesktopMethod::GetSnapshot => {
+            // As in `expire_desktop`: never sent, so the channel's.
+            DesktopMethod::Capabilities
+            | DesktopMethod::GetSnapshot
+            | DesktopMethod::GetChanges
+            | DesktopMethod::GetChangeDiff => {
                 let applied = self.desktop.outer(generation, handled);
                 self.apply_desktop(applied, cx);
             }
@@ -678,10 +645,6 @@ impl SessionView {
                 let applied = self.desktop.review_outer(generation, handled);
                 self.apply_review(applied, cx);
             }
-            DesktopMethod::GetChanges | DesktopMethod::GetChangeDiff => {
-                let applied = self.desktop.changes_outer(generation, handled);
-                self.apply_changes(applied, cx);
-            }
             DesktopMethod::GetJobOutput | DesktopMethod::GetSubagentThread => {
                 let applied = self.desktop.output_outer(generation, handled);
                 self.apply_output(applied, cx);
@@ -696,7 +659,6 @@ impl SessionView {
         }
         self.sync_config(cx);
         self.sync_review(cx);
-        self.sync_changes(cx);
         self.sync_output(cx);
     }
 

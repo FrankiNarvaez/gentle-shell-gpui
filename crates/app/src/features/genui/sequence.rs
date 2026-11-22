@@ -376,7 +376,7 @@ impl PanelView {
         }
 
         // Fragment tags, inside the top-left like a group's: the kind in
-        // MONO `accent`, then the condition, on the container's tone.
+        // `ui::mono()` `accent`, then the condition, on the container's tone.
         for (f, g) in shown.fragments.iter().zip(&l.fragments) {
             if !g.rect.intersects(&visible) {
                 continue;
@@ -402,7 +402,9 @@ impl PanelView {
                     .whitespace_nowrap()
                     .child(
                         div()
-                            .font_family(ui::MONO)
+                            .font_family(ui::mono())
+                            .text_size(px(10. * scale * ui::code_scale()))
+                            .line_height(px(12. * scale * ui::code_scale()))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(ui::accent())
                             .child(fragment_name(f.kind)),
@@ -554,8 +556,8 @@ impl PanelView {
                             .when(scale >= 0.5, |d| {
                                 d.child(
                                     div()
-                                        .font_family(ui::MONO)
-                                        .text_size(px(10.5 * scale))
+                                        .font_family(ui::mono())
+                                        .text_size(px(10.5 * scale * ui::code_scale()))
                                         .text_color(ui::faint())
                                         .child(p.kind.name()),
                                 )

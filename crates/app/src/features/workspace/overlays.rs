@@ -204,17 +204,12 @@ impl Workspace {
                 self.open_palette(Category::Commands, window, cx);
             }
             Screen::Changes => {
-                let Some(tree) = self
-                    .sidebar
-                    .clone()
-                    .and_then(|view| view.downcast::<FileTreeView>().ok())
-                else {
-                    return;
+                let cwd = match &session {
+                    Some(session) => session.read(cx).cwd().clone(),
+                    None => self.active_cwd(cx),
                 };
-                if !self.sidebar_visible {
-                    self.toggle_sidebar(cx);
-                }
-                tree.update(cx, |tree, cx| tree.show_changes(window, cx));
+                self.close_overlay(window, cx);
+                self.open_review(cwd, window, cx);
             }
             Screen::Tower => {
                 self.close_overlay(window, cx);
@@ -238,6 +233,34 @@ impl Workspace {
                 self.open_tab(PaneKind::Tower, cwd, None, None, window, cx);
             }
         }
+    }
+
+    /// The review screen of the repository `cwd` is in, as a modal over the
+    /// window (Esc closes it).
+    pub(super) fn open_review(
+        &mut self,
+        cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| ReviewView::new(cwd, window, cx));
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &ReviewEvent, window, cx| match event {
+                ReviewEvent::Close => this.close_overlay(window, cx),
+                // Opened like the Files sidebar opens it, once the review
+                // is out of the way.
+                ReviewEvent::OpenFile(path) => {
+                    this.close_overlay(window, cx);
+                    this.open_file(path.clone(), window, cx);
+                }
+            },
+        );
+        // Focused, so Esc reaches the workspace's CloseOverlay through it.
+        view.focus_handle(cx).focus(window, cx);
+        self.overlay = Some((Overlay::Review(view), subscription));
+        cx.notify();
     }
 
     /// The window's active agent tab (`active_session`) is the one the
@@ -336,6 +359,14 @@ impl Workspace {
         });
         self.overlay = Some((Overlay::Profiles(view), subscription));
         cx.notify();
+    }
+
+    /// Configuration on its Updates page, for the title-bar update pill.
+    pub(super) fn open_app_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings(window, cx);
+        if let Some((Overlay::Settings(view), _)) = &self.overlay {
+            view.update(cx, |view, cx| view.show_updates(cx));
+        }
     }
 
     /// Configuration's update status is asked of the window's active agent
@@ -492,6 +523,10 @@ impl Workspace {
                         tab.update(cx, |session, cx| session.reload_models(window, cx));
                     }
                 }
+                ProvidersEvent::Terminal(cwd, command) => {
+                    this.close_overlay(window, cx);
+                    this.open_setup_terminal(cwd.clone(), command.clone(), window, cx);
+                }
             },
         );
         self.overlay = Some((Overlay::Providers(view), subscription));
@@ -583,22 +618,23 @@ impl Workspace {
             }
             OnboardingEvent::Terminal(command) => {
                 self.close_overlay(window, cx);
-                self.open_setup_terminal(command.clone(), window, cx);
+                let home = dirs::home_dir().unwrap_or_else(|| self.active_cwd(cx));
+                self.open_setup_terminal(home, command.clone(), window, cx);
             }
         }
     }
 
-    /// A terminal tab with `command` typed at the prompt for the user to run
-    /// (it may ask for a password); the clipboard holds it when the terminal
-    /// can't take it.
+    /// A terminal tab in `cwd` (where its agents run) with `command` typed at
+    /// the prompt for the user to run (it may ask for a password); the
+    /// clipboard holds it when the terminal can't take it.
     pub(super) fn open_setup_terminal(
         &mut self,
+        cwd: PathBuf,
         command: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let home = dirs::home_dir().unwrap_or_else(|| self.active_cwd(cx));
-        let Some(pane) = self.new_pane(PaneKind::Terminal, home, None, None, window, cx) else {
+        let Some(pane) = self.new_pane(PaneKind::Terminal, cwd, None, None, window, cx) else {
             cx.write_to_clipboard(ClipboardItem::new_string(command));
             window.push_notification(
                 Notification::info("The setup command is on your clipboard: run it in a terminal."),

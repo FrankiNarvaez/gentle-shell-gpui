@@ -1,17 +1,18 @@
 //! Git for the right rail, the sidebar's Changes and Branches tabs and the
-//! History screen. Runs `git`; call everything here off the UI thread.
+//! Git pane. Runs `git`; call everything here off the UI thread.
 //!
 //! The output parsers and their models are `gentle_core::git`. Here, the
 //! parent runs `git` and finds the top level; `snapshot` builds the right
 //! rail's change list, `changes` reads and acts on the work tree for the
-//! Changes tab, `refs` lists and acts on the Branches tab's refs, and `log`
-//! reads a branch's commits for the History screen.
+//! Changes tab, `refs` lists and acts on the Branches tab's refs, `log`
+//! reads the commits for the Git pane, and `ops` runs the Git pane's actions.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 mod changes;
 mod log;
+pub mod ops;
 mod refs;
 mod snapshot;
 
@@ -22,7 +23,7 @@ pub use changes::{
 pub use gentle_core::git::log::{Commit, Graph};
 pub use gentle_core::git::refs::{RefEntry, RefsSnapshot, Worktree};
 pub use gentle_core::git::status::{EntryKind, GitSnapshot, StatusEntry, WorkTree};
-pub use log::{History, history};
+pub use log::{History, Scope, history};
 pub use refs::{
     StashAction, add_worktree, checkout_remote, prune_worktrees, refs_snapshot, remove_worktree,
     stash,
@@ -30,10 +31,9 @@ pub use refs::{
 pub use snapshot::snapshot;
 
 fn git(cwd: &Path, args: &[&str]) -> Option<String> {
-    let mut command = pi_rpc::command("git");
+    let mut command = crate::features::backend::git(cwd, &[]);
     command
         .args(args)
-        .current_dir(cwd)
         .stdin(Stdio::null())
         .stderr(Stdio::null());
     let out = command.output().ok()?;
@@ -46,7 +46,27 @@ fn git(cwd: &Path, args: &[&str]) -> Option<String> {
 pub fn toplevel(cwd: &Path) -> Option<PathBuf> {
     let top = git(cwd, &["rev-parse", "--show-toplevel"])?;
     let top = top.trim();
-    (!top.is_empty()).then(|| PathBuf::from(top))
+    (!top.is_empty()).then(|| crate::features::backend::host_path(cwd, top))
+}
+
+/// The last year's commit times (Unix seconds) on every ref, merges aside,
+/// for the Git pane's activity strip.
+pub fn activity(toplevel: &Path) -> Vec<i64> {
+    use gentle_core::git::activity::{LOG_ARGS, WEEKS, parse_times};
+    // A week of slack: the grid starts on a Sunday up to a week before.
+    let since = format!("--since={} days ago", WEEKS * 7 + 7);
+    let mut args = LOG_ARGS.to_vec();
+    args.push(&since);
+    git(toplevel, &args)
+        .map(|raw| parse_times(&raw))
+        .unwrap_or_default()
+}
+
+/// A git setting as the repository sees it (`user.email`, `github.user`).
+pub fn config(toplevel: &Path, key: &str) -> Option<String> {
+    git(toplevel, &["config", key])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 /// The shortened path of the repository when `root` is a folder inside a
@@ -65,12 +85,8 @@ pub fn repository_path(root: &Path, toplevel: &Path) -> Option<String> {
 /// Run `git` for its effect. The error is git's own message; credentials
 /// are never prompted for (there is no terminal to answer).
 pub fn run(cwd: &Path, args: &[&str]) -> Result<String, String> {
-    let mut command = pi_rpc::command("git");
-    command
-        .args(args)
-        .current_dir(cwd)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null());
+    let mut command = crate::features::backend::git(cwd, &[("GIT_TERMINAL_PROMPT", "0")]);
+    command.args(args).stdin(Stdio::null());
     let out = command.output().map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())

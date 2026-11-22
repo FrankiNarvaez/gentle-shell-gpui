@@ -196,7 +196,7 @@ fn read(source: Source, live: &Live, workspace: &Path) -> Result<Value, String> 
         }
         Source::GitLog => {
             let top = git::toplevel(workspace).ok_or("not a git repository")?;
-            let history = git::history(&top, None, 50).ok_or("git log failed")?;
+            let history = git::history(&top, &git::Scope::Head, 50).ok_or("git log failed")?;
             Ok(Value::Array(
                 history
                     .commits
@@ -648,7 +648,13 @@ impl PanelView {
         let state = self.live.as_ref()?;
         let gate = state.gate.as_ref()?;
         let command = state.spec.command.as_ref()?;
-        let code = |text: String| div().font_family(ui::MONO).text_color(ui::fg()).child(text);
+        let code = |text: String| {
+            div()
+                .font_family(ui::mono())
+                .text_size(ui::code_rems(12.))
+                .text_color(ui::fg())
+                .child(text)
+        };
         let panel = div().absolute().left_2().right_2().top_2();
         match gate.consent() {
             Consent::Ask => Some(

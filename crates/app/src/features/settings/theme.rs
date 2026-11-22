@@ -220,20 +220,23 @@ impl SettingsView {
                         div()
                             .w(rems(44. / 16.))
                             .text_right()
-                            .text_sm()
-                            .font_family(ui::MONO)
+                            .text_size(ui::code_rems(14.))
+                            .font_family(ui::mono())
                             .text_color(ui::fg())
                             .child(format!("{percent:.0}%")),
                     ),
             )
             .child(interface_size_row(size))
+            .child(div().pt_1().pb_1().child(ui::section_label("Fonts")))
+            // Above the rows, so a picker opening below never covers it.
+            .child(self.reading_desk(cx))
+            .children(self.fonts_rows(cx))
             .when(active.background.as_ref().is_some_and(backdrop::Backdrop::moves), |d| {
                 let motion = backdrop::motion(cx);
                 let labels = backdrop::Motion::ALL.map(backdrop::Motion::label);
-                let note = backdrop::power_note(cx).map_or_else(
-                    || "Calm moves at half the rate; Still costs nothing. Scenes only move while this window is in front, at most Calm on battery, and hold still while saving power.".to_string(),
-                    |why| format!("{why} Scenes only move while this window is in front."),
-                );
+                // One line, like the other rows: what the choice does, or why
+                // the power state overrides it; the rules sit in the tooltip.
+                let note = backdrop::power_note(cx).unwrap_or(motion.summary());
                 d.child(
                     h_flex()
                         .pb_2()
@@ -255,13 +258,73 @@ impl SettingsView {
                             }),
                         ))
                         .child(
-                            div()
+                            h_flex()
                                 .flex_1()
-                                .text_xs()
-                                .text_color(ui::faint())
-                                .child(note),
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_xs()
+                                        .text_color(ui::faint())
+                                        .child(note),
+                                )
+                                .child(
+                                    // Informational only: no click, just the tooltip.
+                                    div()
+                                        .id("backdrop-motion-info")
+                                        .flex_none()
+                                        .child(
+                                            Icon::new(IconName::Info)
+                                                .xsmall()
+                                                .text_color(ui::faint()),
+                                        )
+                                        // Three short lines: the tooltip has no width of its own.
+                                        .tooltip(|window, cx| {
+                                            ui::tooltip(
+                                                "Scenes only move while this window is in front.\n\
+                                                 On battery, they move at Calm at most.\n\
+                                                 While saving power, they hold still.",
+                                            )
+                                            .build(window, cx)
+                                        }),
+                                ),
                         ),
                 )
+            })
+            .child({
+                use gentle_core::typing_kisses::TypingKisses;
+                let choice = crate::shared::kisses::typing(cx);
+                let labels = TypingKisses::ALL.map(TypingKisses::label);
+                h_flex()
+                    .pb_2()
+                    .gap_3()
+                    .child(
+                        div()
+                            .w(rems(120. / 16.))
+                            .text_sm()
+                            .text_color(ui::muted())
+                            .child("Typing kisses"),
+                    )
+                    .child(ui::segmented(
+                        "typing-kisses",
+                        &labels,
+                        TypingKisses::ALL.iter().position(|c| *c == choice),
+                        cx.listener(|_, index: &usize, _, cx| {
+                            crate::shared::kisses::set_typing(TypingKisses::ALL[*index], cx);
+                            cx.notify();
+                        }),
+                    ))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(ui::faint())
+                            .child(choice.summary()),
+                    )
             })
             .when(active.oled, |d| {
                 d.child(
@@ -453,8 +516,8 @@ fn interface_size_row(size: u16) -> Div {
             div()
                 .w(rems(44. / 16.))
                 .text_right()
-                .text_sm()
-                .font_family(ui::MONO)
+                .text_size(ui::code_rems(14.))
+                .font_family(ui::mono())
                 .text_color(ui::fg())
                 .child(format!("{size}%")),
         )
@@ -508,8 +571,8 @@ fn theme_card(
                 })
                 .border_1()
                 .border_color(solid(theme.border).opacity(0.7))
-                .font_family(ui::MONO)
-                .text_xs()
+                .font_family(ui::mono())
+                .text_size(ui::code_rems(12.))
                 .child(
                     h_flex()
                         .gap_1()

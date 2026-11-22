@@ -799,6 +799,7 @@ fn a_waiting_review_shows_while_its_call_runs(cx: &mut TestAppContext) {
         args: json!({"action": "show", "kind": "review", "wait": true}),
         status: ToolStatus::Running,
         output: String::new(),
+        images: Vec::new(),
         details,
         duration_ms: None,
     };
