@@ -2378,7 +2378,14 @@ fn user_bubble_markdown(text: &str) -> String {
             && !fence_line
             && !content.trim().is_empty()
             && (relative_indent < 4 || paragraph);
-        paragraph = paragraph_line;
+        let heading_marks = trimmed.bytes().take_while(|b| *b == b'#').count();
+        let heading = relative_indent <= 3
+            && (1..=6).contains(&heading_marks)
+            && trimmed
+                .as_bytes()
+                .get(heading_marks)
+                .is_none_or(|b| matches!(b, b' ' | b'\t'));
+        paragraph = paragraph_line && !heading;
         result.push_str(content);
         if line.ends_with('\n') {
             let backslashes = content.bytes().rev().take_while(|b| *b == b'\\').count();
@@ -2600,6 +2607,13 @@ mod tests {
     fn user_bubble_preprocessing_indented_code() {
         let source = "    one\n    two\n";
         assert_eq!(super::user_bubble_markdown(source), source);
+    }
+
+    #[test]
+    fn user_bubble_preprocessing_indented_code_after_heading() {
+        let source = "# Heading\n    one\n    two\n";
+        let expected = "# Heading  \n    one\n    two\n";
+        assert_eq!(super::user_bubble_markdown(source), expected);
     }
 
     use super::{
