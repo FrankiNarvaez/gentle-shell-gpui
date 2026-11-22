@@ -63,6 +63,13 @@ pub fn parse_commits_avatar(json: &str) -> Option<String> {
     })
 }
 
+/// The GitHub account of the first commit in a commits-API answer.
+pub fn parse_commits_login(json: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let login = value.get(0)?.get("author")?.get("login")?.as_str()?;
+    crate::git::activity::valid_login(login).then(|| login.to_string())
+}
+
 /// Gravatar's picture for the address's SHA-256 (hex); 404 when it has none.
 pub fn gravatar_url(email_sha256_hex: &str) -> String {
     format!("https://www.gravatar.com/avatar/{email_sha256_hex}?d=404&s={SIZE}")
@@ -124,6 +131,8 @@ mod tests {
         assert_eq!(parse_commits_avatar(r#"[{"sha":"a","author":null}]"#), None);
         assert_eq!(parse_commits_avatar("[]"), None);
         assert_eq!(parse_commits_avatar("not json"), None);
+        assert_eq!(parse_commits_login(json).as_deref(), Some("maya"));
+        assert_eq!(parse_commits_login(r#"[{"sha":"a","author":null}]"#), None);
     }
 
     #[test]
