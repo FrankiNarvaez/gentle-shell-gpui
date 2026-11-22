@@ -161,6 +161,7 @@ workspace/
 ├── panes.rs        # create, split, focus and close panes
 ├── closed.rs       # reopening closed panes and tabs where they were
 ├── spaces.rs       # named workspaces
+├── menu.rs         # right-click menus (workspace, tab, empty area) and inline workspace rename
 ├── tabs.rs         # tabs and renaming
 ├── persistence.rs  # snapshot and saving
 ├── actions.rs      # shortcut handlers
