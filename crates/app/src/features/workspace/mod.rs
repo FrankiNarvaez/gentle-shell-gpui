@@ -551,14 +551,13 @@ impl Workspace {
             None => this.current,
         };
         this.current = target;
-        this.ensure_open(target, prompt.is_none(), window, cx);
-        if !this.space().tabs.is_empty() {
-            let active = this.space().active;
-            this.activate(active, window, cx);
-        }
         if let Some(prompt) = prompt {
             let root = this.space().root.clone();
             this.open_tab(PaneKind::Agent, root, Some(prompt), None, window, cx);
+        } else {
+            this.ensure_open(target, true, window, cx);
+            let active = this.space().active;
+            this.activate(active, window, cx);
         }
         if let Some(url) = url {
             this.open_web(url, None, false, window, cx);

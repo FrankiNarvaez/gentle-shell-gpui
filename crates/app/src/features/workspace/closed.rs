@@ -132,7 +132,8 @@ impl Workspace {
         // Its notice (if still up) would now point at the close before it.
         window.remove_notification::<Closed>(cx);
         if closed.space < self.spaces.len() && closed.space != self.current {
-            self.switch_workspace(closed.space, window, cx);
+            // The reopened tab itself fills an empty workspace.
+            self.switch_workspace_with_fill(closed.space, false, window, cx);
         }
         let mut reopened = Vec::new();
         let mut build = |this: &mut Self,

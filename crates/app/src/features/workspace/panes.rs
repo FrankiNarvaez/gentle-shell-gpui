@@ -608,9 +608,12 @@ impl Workspace {
             return;
         };
         if space != self.current {
+            // Switch directly to the tab holding the pane, not the old selection.
+            self.spaces[space].active = tab;
             self.switch_workspace(space, window, cx);
+        } else {
+            self.activate(tab, window, cx);
         }
-        self.activate(tab, window, cx);
         self.focus_pane(pane, window, cx);
     }
 
@@ -944,26 +947,7 @@ impl Workspace {
             self.closed.push(closed);
         }
         self.spaces[space].tabs.remove(index);
-        self.announce_close(window, cx);
-        if self.spaces[space].tabs.is_empty() {
-            if space != self.current {
-                // Not shown: opening it (`switch_workspace`) gives it a fresh agent tab.
-                self.schedule_save(cx);
-                cx.notify();
-                return;
-            }
-            let root = self.spaces[space].root.clone();
-            self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-            self.save_now(cx);
-            return;
-        }
-        if space == self.current {
-            let active = self.space().active;
-            let next = if active > index { active - 1 } else { active };
-            self.activate(next, window, cx);
-        }
-        self.schedule_save(cx);
-        cx.notify();
+        self.finish_tab_close(space, index, window, cx);
     }
 
     pub(super) fn close_tab_now(
@@ -991,28 +975,31 @@ impl Workspace {
         for pane in tab.leaves() {
             self.panes.remove(&pane);
         }
+        self.finish_tab_close(space, index, window, cx);
+    }
+
+    fn finish_tab_close(
+        &mut self,
+        space: usize,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        tab_panel::after_removal(&mut self.spaces[space], index);
         self.announce_close(window, cx);
-        if self.spaces[space].tabs.is_empty() {
-            // Closing the last pane never closes the window (⌘Q quits):
-            // the workspace starts over with a fresh agent tab (a workspace
-            // not shown gets it when opened).
-            if space != self.current {
-                self.schedule_save(cx);
-                cx.notify();
-                return;
-            }
-            let root = self.spaces[space].root.clone();
-            self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-            self.save_now(cx);
-            return;
-        }
         if space == self.current {
-            let active = self.space().active;
-            let next = if active > index { active - 1 } else { active };
-            self.activate(next, window, cx);
+            if self.space().tabs.is_empty() {
+                // Only the shown workspace needs a replacement tab right now.
+                let root = self.space().root.clone();
+                self.open_tab(PaneKind::Agent, root, None, None, window, cx);
+                self.save_now(cx);
+            } else {
+                self.activate(self.space().active, window, cx);
+            }
+        } else {
+            self.schedule_save(cx);
+            cx.notify();
         }
-        self.schedule_save(cx);
-        cx.notify();
     }
 
     pub(super) fn swap_panes(&mut self, a: PaneId, b: PaneId, cx: &mut Context<Self>) {

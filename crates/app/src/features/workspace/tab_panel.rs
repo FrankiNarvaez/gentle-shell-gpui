@@ -271,11 +271,17 @@ fn move_by(tabs: &mut [Tab], id: usize, direction: isize) {
     }
 }
 
+/// Keep the selected tab after removal, or select its neighbour if it closed.
+pub(super) fn after_removal(space: &mut Space, index: usize) {
+    let active = space.active - usize::from(index < space.active);
+    space.active = active.min(space.tabs.len().saturating_sub(1));
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 
-    use super::{Space, Tab, TabState, move_by, reorder_keeping_active, toggle_pin};
+    use super::{Space, Tab, TabState, after_removal, move_by, reorder_keeping_active, toggle_pin};
     use crate::features::workspaces::{SavedPane, SavedTab};
     use crate::shared::pane::{PaneKind, PaneTree};
 
@@ -298,6 +304,28 @@ mod tests {
 
     fn ids(tabs: &[Tab]) -> Vec<usize> {
         tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn closing_above_the_active_tab_keeps_it_selected() {
+        let mut space = Space::new("w".into(), PathBuf::from("/w"));
+        space.tabs = vec![unbuilt(1, false), unbuilt(2, false), unbuilt(3, false)];
+        space.active = 1;
+        space.tabs.remove(0);
+        after_removal(&mut space, 0);
+        assert_eq!(ids(&space.tabs), [2, 3]);
+        assert_eq!(space.tabs[space.active].id, 2);
+    }
+
+    #[test]
+    fn closing_the_last_active_tab_clamps_active() {
+        let mut space = Space::new("w".into(), PathBuf::from("/w"));
+        space.tabs = vec![unbuilt(1, false), unbuilt(2, false)];
+        space.active = 1;
+        space.tabs.remove(1);
+        after_removal(&mut space, 1);
+        assert_eq!(ids(&space.tabs), [1]);
+        assert_eq!(space.active, 0);
     }
 
     /// Pinning and unpinning work on tabs that were never built, keeping
