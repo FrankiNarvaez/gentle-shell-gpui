@@ -136,6 +136,8 @@ impl Workspace {
         let badge = weak.clone();
         let agent = weak.clone();
         let terminal = weak.clone();
+        let canvas = weak.clone();
+        let tower = weak.clone();
         let new_space = weak.clone();
         let delete = weak;
         menu.min_w(rems(220. / 16.).to_pixels(window.rem_size()))
@@ -184,6 +186,29 @@ impl Workspace {
                             this.switch_workspace(index, window, cx);
                             let root = this.space().root.clone();
                             this.open_tab(PaneKind::Terminal, root, None, None, window, cx);
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("New canvas tab")
+                    .icon(Icon::new(IconName::PenTool))
+                    .on_click(move |_, window, cx| {
+                        let _ = canvas.update(cx, |this, cx| {
+                            this.switch_workspace(index, window, cx);
+                            let root = this.space().root.clone();
+                            this.open_tab(PaneKind::Canvas, root, None, None, window, cx);
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("New tower tab")
+                    .icon(Icon::new(IconName::Building2))
+                    .on_click(move |_, window, cx| {
+                        let _ = tower.update(cx, |this, cx| {
+                            // Gentle Tower is one tab per window: an open one
+                            // is revealed wherever it is, as `open_tower` does.
+                            this.switch_workspace(index, window, cx);
+                            this.open_tower(window, cx);
                         });
                     }),
             )
