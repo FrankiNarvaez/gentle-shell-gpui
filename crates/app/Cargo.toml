@@ -68,6 +68,9 @@ raw-window-handle = "0.6"
 # Pictures of a page an agent drives (`gentle-browser screenshot`): WebKitGTK's
 # snapshot. The version wry already locks.
 webkit2gtk = "2.0"
+# Desktop apps an agent drives (`gentle-screen`): X11 window lists, captures
+# and XTEST input. The version GPUI already locks.
+x11rb = { version = "0.13", features = ["xtest"] }
 
 # The in-app browser on Windows: WebView2 in a popup owned by the window (GPUI
 # composites above child windows), rounded by DWM on Windows 11.
@@ -81,9 +84,14 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_Xps",
     "Win32_System_Com",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",
     "Win32_System_Power",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
@@ -95,7 +103,8 @@ core-text = "21"
 objc2 = "0.6"
 # NSProcessInfo: Low Power Mode, so animated themes can rest (platform::power).
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError", "NSProcessInfo"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage", "NSResponder", "NSView", "NSWindow", "objc2-quartz-core"] }
+# NSRunningApplication (and libc's pid_t): `gentle-screen` brings an app forward.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "NSApplication", "NSImage", "NSResponder", "NSRunningApplication", "NSView", "NSWindow", "objc2-quartz-core"] }
 # The in-app browser for the Gentle Design canvas (WKWebView as a child view),
 # and its layer, rounded to the card's corners.
 wry = { version = "0.57", default-features = false }
@@ -104,6 +113,9 @@ objc2-quartz-core = { version = "0.3", default-features = false, features = ["st
 # Pictures of a page an agent drives: WKWebView's snapshot takes a block. The
 # version wry already locks.
 block2 = "0.6"
+# `gentle-screen`: the window list and input events (Quartz). The version
+# GPUI already locks; `highsierra` adds pixel scroll events.
+core-graphics = { version = "0.24", features = ["highsierra"] }
 
 # Embeds the exe icon and version info (see build.rs).
 [target.'cfg(windows)'.build-dependencies]
