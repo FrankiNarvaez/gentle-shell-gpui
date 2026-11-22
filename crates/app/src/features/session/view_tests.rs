@@ -605,6 +605,83 @@ fn assert_user_bubble_copy(
 }
 
 #[gpui::test]
+fn user_bubble_complete_html_fragments_are_literal(cx: &mut TestAppContext) {
+    for (source, expected) in [
+        (
+            "<div><span>hola</span></div>",
+            "<div><span>hola</span></div>",
+        ),
+        (
+            "**outside** <span title=\"**attr**\">**inside**</span> **after**",
+            "outside <span title=\"**attr**\">**inside**</span> after",
+        ),
+        (
+            "<div><br><span title=\"a > b\">**hola**</span></div>",
+            "<div><br><span title=\"a > b\">**hola**</span></div>",
+        ),
+    ] {
+        assert_user_bubble_copy(cx, source, expected, Some(1.), 1.);
+    }
+}
+
+#[gpui::test]
+fn user_bubble_html_comment_does_not_close_fragment(cx: &mut TestAppContext) {
+    let source = "<div><!-- </div> -->**inside**</div>";
+    assert_user_bubble_copy(cx, source, source, Some(1.), 1.);
+}
+
+#[gpui::test]
+fn user_bubble_folded_html_keeps_content_literal(cx: &mut TestAppContext) {
+    let source = "<div>\n**one**\n**two**\n**three**\n**four**\n**five**\n**six**\n**seven**\n**eight**\n**nine**\n</div>";
+    let expected = "<div>\n**one**\n**two**\n**three**\n**four**\n**five**\n**six**\n**seven**";
+    assert_user_bubble_copy(cx, source, expected, Some(1.), 1.);
+}
+
+#[gpui::test]
+fn user_bubble_html_indented_content_has_no_escape_backslashes(cx: &mut TestAppContext) {
+    let source = "<div>\n\n    **literal**\n</div>";
+    assert_user_bubble_copy(cx, source, source, Some(1.), 1.);
+}
+
+#[gpui::test]
+fn user_bubble_html_tab_indentation_is_literal(cx: &mut TestAppContext) {
+    let source = "<div>\n\n\t**literal**\n</div>";
+    assert_user_bubble_copy(cx, source, source, Some(1.), 1.);
+}
+
+#[gpui::test]
+fn user_bubble_raw_html_is_visible(cx: &mut TestAppContext) {
+    assert_user_bubble_copy(
+        cx,
+        "<span title=\"**important**\">text</span>",
+        "<span title=\"**important**\">text</span>",
+        Some(1.),
+        1.,
+    );
+    assert_user_bubble_copy(
+        cx,
+        "hello <div>world</div>",
+        "hello <div>world</div>",
+        Some(1.),
+        1.,
+    );
+    assert_user_bubble_copy(
+        cx,
+        "<div>\nhello\n</div>",
+        "<div>\nhello\n</div>",
+        Some(1.),
+        1.,
+    );
+    assert_user_bubble_copy(
+        cx,
+        "**bold** `<div>` [link](https://example.com) &amp;",
+        "bold <div> link &",
+        Some(1.),
+        1.,
+    );
+}
+
+#[gpui::test]
 fn user_bubble_container_fenced_code_copy(cx: &mut TestAppContext) {
     assert_user_bubble_copy(
         cx,

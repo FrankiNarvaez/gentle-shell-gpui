@@ -2306,8 +2306,135 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         })
 }
 
+/// Protect complete HTML fragments recognized at their start by the Markdown
+/// parser. Reparse after each pass to uncover constructs hidden by HTML blocks.
+fn user_bubble_literal_html(text: &str) -> String {
+    fn html_starts(node: &markdown::mdast::Node, starts: &mut Vec<usize>) {
+        if let markdown::mdast::Node::Html(html) = node {
+            if let Some(position) = &html.position {
+                starts.push(position.start.offset);
+            }
+        } else if let Some(children) = node.children() {
+            for child in children {
+                html_starts(child, starts);
+            }
+        }
+    }
+
+    // This intentionally handles ordinary tags, not the full HTML grammar.
+    fn tag(text: &str, start: usize) -> Option<(usize, &str, bool, bool)> {
+        let bytes = text.as_bytes();
+        let mut i = start + 1;
+        let closing = bytes.get(i) == Some(&b'/');
+        i += usize::from(closing);
+        let name_start = i;
+        if !bytes.get(i)?.is_ascii_alphabetic() {
+            return None;
+        }
+        while bytes
+            .get(i)
+            .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'-')
+        {
+            i += 1;
+        }
+        let name = &text[name_start..i];
+        let mut quote = None;
+        while let Some(&b) = bytes.get(i) {
+            match (quote, b) {
+                (Some(q), c) if q == c => quote = None,
+                (None, b'\'' | b'"') => quote = Some(b),
+                (None, b'>') => {
+                    let self_closing = text[start..i].trim_end().ends_with('/')
+                        || [
+                            "area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+                            "meta", "param", "source", "track", "wbr",
+                        ]
+                        .iter()
+                        .any(|v| name.eq_ignore_ascii_case(v));
+                    return Some((i + 1, name, closing, self_closing));
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn fragment_end(text: &str, start: usize) -> Option<usize> {
+        let (end, name, closing, void) = tag(text, start)?;
+        if closing || void {
+            return Some(end);
+        }
+        let mut stack = vec![name];
+        let mut cursor = end;
+        while let Some(relative) = text[cursor..].find('<') {
+            let at = cursor + relative;
+            if text[at..].starts_with("<!--") {
+                cursor = text[at + 4..]
+                    .find("-->")
+                    .map_or(text.len(), |end| at + 4 + end + 3);
+                continue;
+            }
+            if let Some((next, name, closing, void)) = tag(text, at) {
+                if closing {
+                    if let Some(index) = stack
+                        .iter()
+                        .rposition(|open| open.eq_ignore_ascii_case(name))
+                    {
+                        stack.truncate(index);
+                        if stack.is_empty() {
+                            return Some(next);
+                        }
+                    }
+                } else if !void {
+                    stack.push(name);
+                }
+                cursor = next;
+            } else {
+                cursor = at + 1;
+            }
+        }
+        Some(end)
+    }
+
+    let mut text = text.to_string();
+    let mut options = markdown::ParseOptions::gfm();
+    // TextView reparses unclaimed math containing markup as ordinary prose.
+    options.constructs.math_text = false;
+    options.constructs.math_flow = false;
+    while let Ok(root) = markdown::to_mdast(&text, &options) {
+        let mut starts = Vec::new();
+        html_starts(&root, &mut starts);
+        starts.retain(|&start| text.as_bytes().get(start) == Some(&b'<'));
+        if starts.is_empty() {
+            break;
+        }
+        let start = starts[0];
+        let end = fragment_end(&text, start).unwrap_or(start + 1);
+        let mut escaped = String::new();
+        let mut line_start = false;
+        for ch in text[start..end].chars() {
+            if line_start && matches!(ch, ' ' | '\t') {
+                escaped.push_str(if ch == ' ' { "&#32;" } else { "&#9;" });
+                continue;
+            }
+            if line_start && ch == '\n' {
+                escaped.push('\\');
+            }
+            line_start = ch == '\n';
+            if ch.is_ascii_punctuation() {
+                escaped.push('\\');
+            }
+            escaped.push(ch);
+        }
+        text.replace_range(start..end, &escaped);
+    }
+    text
+}
+
 /// Preserve authored line breaks in Markdown paragraphs without changing fenced code.
 fn user_bubble_markdown(text: &str) -> String {
+    let text = user_bubble_literal_html(text);
     let mut result = String::with_capacity(text.len());
     let mut fence: Option<(u8, usize, usize)> = None;
     let mut paragraph = false;
@@ -2414,6 +2541,15 @@ fn user_bubble(
     toggle: Option<Stateful<Div>>,
 ) -> Div {
     let text = shown.visible(open);
+    // Parse the complete message before folding, so a closing tag beyond the
+    // fold still protects its visible content.
+    let markdown = if !open && shown.folded.is_some() {
+        let full = user_bubble_markdown(&shown.text);
+        let lines = line_count(&full);
+        head_slice(&full, lines, USER_LINES).0.to_string()
+    } else {
+        user_bubble_markdown(&text)
+    };
     // min_w_0 on both levels: without it the bubble's minimum width is its
     // unwrapped text, so in a narrow pane it overflows (clipped on the left).
     h_flex().w_full().min_w_0().justify_end().child(
@@ -2440,18 +2576,15 @@ fn user_bubble(
                     div()
                         .debug_selector(move || format!("user-text-{ix}"))
                         .child(
-                            gpui_kit::base::TextView::markdown(
-                                ("user-text", ix),
-                                user_bubble_markdown(&text),
-                            )
-                            .selectable(true)
-                            .inline_code_style(
-                                StyleRefinement::default()
-                                    .px(px(4.))
-                                    .bg(ui::accent().opacity(0.12))
-                                    .border_1()
-                                    .border_color(ui::border_strong()),
-                            ),
+                            gpui_kit::base::TextView::markdown(("user-text", ix), markdown)
+                                .selectable(true)
+                                .inline_code_style(
+                                    StyleRefinement::default()
+                                        .px(px(4.))
+                                        .bg(ui::accent().opacity(0.12))
+                                        .border_1()
+                                        .border_color(ui::border_strong()),
+                                ),
                         ),
                 )
             })
@@ -2569,6 +2702,21 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn user_bubble_html_block_makes_embedded_fence_literal() {
+        let source = "<div>\n```\n<span>\n```\n</div>";
+        assert_eq!(
+            super::user_bubble_literal_html(source),
+            "\\<div\\>\n\\`\\`\\`\n\\<span\\>\n\\`\\`\\`\n\\<\\/div\\>"
+        );
+    }
+
+    #[test]
+    fn user_bubble_html_preprocessing_preserves_code_and_links() {
+        let source = "`<div>` [link](<https://example.com>) &amp;\n\n```html\n<div>\n</div>\n```";
+        assert_eq!(super::user_bubble_literal_html(source), source);
+    }
+
     #[test]
     fn user_bubble_preprocessing_preserves_existing_breaks() {
         let source = "paragraph `code`\nnext\\\nlast\n- item\n  continuation\n";
