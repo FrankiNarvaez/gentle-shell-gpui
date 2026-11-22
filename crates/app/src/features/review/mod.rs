@@ -216,6 +216,9 @@ impl Render for ReviewView {
                     ),
             );
         let (backdrop, panel) = ui::screen(None);
+        // Wider than the other screens: a diff needs the room more than a
+        // form does, side by side above all.
+        let panel = panel.max_w(rems(1800. / 16.));
         backdrop.occlude().child(ui::pop_in(
             "review-screen",
             panel

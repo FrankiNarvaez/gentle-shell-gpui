@@ -24,7 +24,7 @@ use gpui_kit::component::diff::{
 use gpui_kit::component::input::{Editor, EditorState, InputEvent, Rope, RopeExt as _};
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::text::{FrontmatterPlugin, MarkdownExtensions, TextView, TextViewState};
-use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, Selectable as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -93,6 +93,9 @@ pub struct FileView {
     /// How a diff shows its two sides (Unified until the header's toggle or
     /// [`Self::set_diff_mode`] picks another).
     diff_mode: DiffMode,
+    /// Long diff lines wrap; `None` follows the mode (Split wraps, so the
+    /// new side stays in view) until the header's wrap button picks.
+    diff_wrap: Option<bool>,
 }
 
 /// A diff pane's Split · Unified toggle, in header order.
@@ -284,6 +287,7 @@ impl FileView {
             focus,
             header_width: Rc::default(),
             diff_mode: DiffMode::Unified,
+            diff_wrap: None,
         };
         this.draw_diagrams(drawing, cx);
         this
@@ -373,6 +377,7 @@ impl FileView {
             focus: cx.focus_handle(),
             header_width: Rc::default(),
             diff_mode: DiffMode::Unified,
+            diff_wrap: None,
         }
     }
 
@@ -425,6 +430,11 @@ impl FileView {
             state.update(cx, |state, cx| state.set_mode(mode, cx));
         }
         cx.notify();
+    }
+
+    /// Whether long diff lines wrap (see `diff_wrap`).
+    fn diff_wraps(&self) -> bool {
+        self.diff_wrap.unwrap_or(self.diff_mode == DiffMode::Split)
     }
 
     fn install_patch(&mut self, patch: Result<String, Notice>, cx: &mut Context<Self>) {
@@ -1001,6 +1011,25 @@ impl FileView {
                     },
                 ))
             })
+            .when(diff_mode.is_some(), |d| {
+                let wraps = self.diff_wraps();
+                d.child(
+                    Button::new("file-view-diff-wrap")
+                        .ghost()
+                        .xsmall()
+                        .icon(Icon::new(IconName::TextWrap))
+                        .selected(wraps)
+                        .tooltip(if wraps {
+                            "Don't wrap long lines (scroll sideways)"
+                        } else {
+                            "Wrap long lines"
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.diff_wrap = Some(!wraps);
+                            cx.notify();
+                        })),
+                )
+            })
             .when(just_saved, |d| {
                 d.child(ui::appear(
                     "file-view-saved",
@@ -1209,7 +1238,7 @@ impl Render for FileView {
                 // Side by side, each side wraps to its half of the pane:
                 // unwrapped, the widest line sets both columns and pushes
                 // the new side out of view.
-                .soft_wrap(self.diff_mode == DiffMode::Split)
+                .soft_wrap(self.diff_wraps())
                 .size_full()
                 .into_any_element(),
             Body::Notice {

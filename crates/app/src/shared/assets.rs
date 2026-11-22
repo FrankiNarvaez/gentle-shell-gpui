@@ -141,9 +141,11 @@ gpui_kit::assets::icon_assets!(
         ArrowLeftRight,
         CircleDot,
         ChartGantt,
+        Flag,
         // The session's spend beside the send.
         DollarSign,
-        Flag,
+        // A diff pane's wrap toggle.
+        TextWrap,
         // Pinned tabs and pinned generative UI surfaces.
         Pin,
         PinOff,
