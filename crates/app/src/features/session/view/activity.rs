@@ -258,7 +258,9 @@ impl SessionView {
             // The review switch sits with the permission chip: both are this
             // workspace's rules for the agent (Gentle Shell `main`).
             .when(!collapse, |this| this.children(self.render_review_chip(cx)))
-            .child(self.render_mode_picker(cx));
+            .child(self.render_mode_picker(cx))
+            // The window's size closes the row, over the composer's corner.
+            .children(self.render_context_caption());
 
         h_flex()
             .w_full()
