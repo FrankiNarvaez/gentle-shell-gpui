@@ -266,20 +266,33 @@ impl Workspace {
                 this.open_sidebar_tab(space, index, event.click_count(), window, cx)
             },
         ));
-        let Some(id) = tab.id.filter(|_| space == self.current) else {
+        let Some(id) = tab.id else {
             return row
                 .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                 .into_any_element();
         };
-        let tabs = &self.space().tabs;
+        let tabs = &self.spaces[space].tabs;
         let actions = TabMenu {
+            space,
             id,
-            kind: tab.kind,
+            can_rename: tab.kind == PaneKind::Agent && tab.pane.is_some() && space == self.current,
             pinned: tab.pinned,
             can_up: index > 0 && tabs[index - 1].pinned == tab.pinned,
             can_down: index + 1 < tabs.len() && tabs[index + 1].pinned == tab.pinned,
             compact: false,
         };
+        // The menu works on any tab, built or not, in any workspace: it only
+        // reorders, pins or closes. Dragging reorders within the shown one.
+        let row = row.on_mouse_down(
+            MouseButton::Right,
+            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                cx.stop_propagation();
+                this.open_tab_menu(actions, event.position, window, cx);
+            }),
+        );
+        if space != self.current {
+            return row.into_any_element();
+        }
         row.on_drag(
             TabDrag {
                 tab: id,
@@ -289,13 +302,6 @@ impl Workspace {
         )
         .drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
         .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| this.move_tab(drag.tab, index, cx)))
-        .on_mouse_down(
-            MouseButton::Right,
-            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                cx.stop_propagation();
-                this.open_tab_menu(actions, event.position, window, cx);
-            }),
-        )
         .into_any_element()
     }
 

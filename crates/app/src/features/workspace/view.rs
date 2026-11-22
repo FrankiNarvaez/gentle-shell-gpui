@@ -177,8 +177,9 @@ impl Workspace {
                     title: title.clone(),
                 };
                 let tab_menu = TabMenu {
+                    space: self.current,
                     id: tab.id,
-                    kind,
+                    can_rename: kind == PaneKind::Agent && tab.is_built(),
                     pinned: tab.pinned,
                     can_up: false,
                     can_down: false,

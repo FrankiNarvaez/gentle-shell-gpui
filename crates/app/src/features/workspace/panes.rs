@@ -901,8 +901,12 @@ impl Workspace {
             let id = tab.id;
             self.confirm_close(unsaved, busy, window, cx, move |this, window, cx| {
                 // The tab may have moved while the dialog was open.
-                if let Some(index) = this.space().tabs.iter().position(|t| t.id == id) {
-                    this.close_tab_now_in_space(this.current, index, window, cx);
+                let index = this
+                    .spaces
+                    .get(space)
+                    .and_then(|s| s.tabs.iter().position(|t| t.id == id));
+                if let Some(index) = index {
+                    this.close_tab_now_in_space(space, index, window, cx);
                 }
             });
         }
@@ -942,11 +946,14 @@ impl Workspace {
         self.spaces[space].tabs.remove(index);
         self.announce_close(window, cx);
         if self.spaces[space].tabs.is_empty() {
-            let previous = self.current;
-            self.current = space;
+            if space != self.current {
+                // Not shown: opening it (`switch_workspace`) gives it a fresh agent tab.
+                self.schedule_save(cx);
+                cx.notify();
+                return;
+            }
             let root = self.spaces[space].root.clone();
             self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-            self.current = previous;
             self.save_now(cx);
             return;
         }
@@ -987,12 +994,15 @@ impl Workspace {
         self.announce_close(window, cx);
         if self.spaces[space].tabs.is_empty() {
             // Closing the last pane never closes the window (⌘Q quits):
-            // the workspace starts over with a fresh agent tab.
-            let previous = self.current;
-            self.current = space;
+            // the workspace starts over with a fresh agent tab (a workspace
+            // not shown gets it when opened).
+            if space != self.current {
+                self.schedule_save(cx);
+                cx.notify();
+                return;
+            }
             let root = self.spaces[space].root.clone();
             self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-            self.current = previous;
             self.save_now(cx);
             return;
         }
