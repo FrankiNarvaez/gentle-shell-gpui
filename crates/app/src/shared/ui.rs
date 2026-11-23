@@ -864,8 +864,11 @@ pub fn scrim(id: impl Into<ElementId>) -> AnimationElement<Div> {
 // asks for a frame at the display's rate (120 Hz on ProMotion), and every frame
 // re-renders the view it sits in and its ancestors, the whole conversation
 // included. These draw from one app clock instead and ask their view for the
-// next frame after `SLOW_FRAME`: ~30 fps, smooth for slow motion, a quarter of
-// the work.
+// next frame `SLOW_FRAME` after it last drew: ~30 fps, smooth for slow motion,
+// a quarter of the work. A view that draws for another reason meanwhile (a
+// streamed answer, a sidebar pulse) has already moved its indicators along, so
+// the frame waits again rather than drawing on top: indicators and streaming
+// share frames instead of adding up.
 
 /// How often live indicators redraw.
 const SLOW_FRAME: Duration = Duration::from_millis(33);
@@ -906,7 +909,8 @@ pub(crate) fn request_frame_in(delay: Duration, window: &mut Window, cx: &mut Ap
     request_frame_from(std::panic::Location::caller(), delay, window, cx);
 }
 
-/// [`request_frame_in`], counted under `at`.
+/// [`request_frame_in`], counted under `at`. Every draw of the view moves its
+/// pending frame to `delay` after that draw.
 fn request_frame_from(
     at: &'static std::panic::Location<'static>,
     delay: Duration,
@@ -914,7 +918,8 @@ fn request_frame_from(
     cx: &mut App,
 ) {
     thread_local! {
-        static PENDING: std::cell::RefCell<std::collections::HashSet<EntityId>> =
+        /// Views waiting for a frame, with when each last asked (drew).
+        static PENDING: std::cell::RefCell<std::collections::HashMap<EntityId, std::time::Instant>> =
             Default::default();
     }
     if cx.reduce_motion() {
@@ -922,11 +927,20 @@ fn request_frame_from(
     }
     crate::shared::diagnostics::frame_at(at);
     let view = window.current_view();
-    if !PENDING.with(|pending| pending.borrow_mut().insert(view)) {
+    let now = std::time::Instant::now();
+    if PENDING.with(|pending| pending.borrow_mut().insert(view, now).is_some()) {
         return;
     }
     cx.spawn(async move |cx| {
-        cx.background_executor().timer(delay).await;
+        let mut wait = delay;
+        loop {
+            cx.background_executor().timer(wait).await;
+            let since = PENDING.with(|pending| pending.borrow().get(&view).map(|at| at.elapsed()));
+            match since {
+                Some(since) if since < delay => wait = delay - since,
+                _ => break,
+            }
+        }
         PENDING.with(|pending| pending.borrow_mut().remove(&view));
         cx.update(|cx| cx.notify(view));
     })
