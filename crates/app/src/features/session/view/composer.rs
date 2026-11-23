@@ -124,7 +124,7 @@ impl SessionView {
                 )
             }));
             let advice = if percent >= 90. {
-                "Context is nearly full. Consider compacting or starting a new session."
+                "Context nearly full. Compact or start a new session."
             } else if percent >= 70. {
                 "Consider compacting or starting a new session."
             } else {

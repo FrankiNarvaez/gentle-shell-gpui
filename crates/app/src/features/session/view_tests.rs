@@ -599,7 +599,7 @@ fn context_ring_advice_updates_at_boundaries_and_keeps_controls(cx: &mut TestApp
     click(cx, "context-ring");
     let low = "Compacting summarizes the conversation to free context.";
     let medium = "Consider compacting or starting a new session.";
-    let high = "Context is nearly full. Consider compacting or starting a new session.";
+    let high = "Context nearly full. Compact or start a new session.";
     for (percent, expected) in [(69.0, low), (70.0, medium), (89.0, medium), (90.0, high)] {
         view.update(cx, |view, cx| {
             view.usage.context_percent = Some(percent);
