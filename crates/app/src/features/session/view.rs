@@ -367,6 +367,7 @@ impl SessionView {
                 TextView::new(state)
                     .selectable(true)
                     .style(ui::prose_style())
+                    .list_style(ui::prose_list_style())
                     .image_source(move |uri| {
                         diagrams.image(uri).unwrap_or_else(|| uri.clone().into())
                     }),
@@ -2006,9 +2007,6 @@ impl Render for SessionView {
                         // A wheel or trackpad scroll takes over from a glide and
                         // shows the rail's thumb.
                         .on_scroll(cx.listener(|this, _, _, cx| this.on_user_scroll(cx)))
-                        // Text over a busy theme backdrop: dim it behind
-                        // the reading column (as wide as a row's column).
-                        .child(ui::reading_veil(rems(760. / 16.)))
                         .child(
                             list(
                                 self.list.state(),
@@ -2029,12 +2027,9 @@ impl Render for SessionView {
                 let dock = super::input_style::style(cx) == InputStyle::Bar;
                 main.child(
                     h_flex()
-                        .relative()
                         .w_full()
                         .justify_center()
                         .map(|d| if narrow { d.px_3() } else { d.px_6() })
-                        // The activity line's icons sit on glass too.
-                        .when(!dock, |d| d.child(ui::reading_veil(rems(760. / 16.))))
                         .when(dock, |d| {
                             d.pt_3()
                                 .border_t_1()
