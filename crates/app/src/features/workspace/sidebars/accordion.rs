@@ -18,15 +18,14 @@ impl Workspace {
             .pb_2()
             .gap_px()
             .child(self.workspace_section(cx));
+        let query = self.tab_search.read(cx).value().trim().to_lowercase();
         let mut matches = 0;
         for space in self.sidebar_spaces() {
             let tabs = self.visible_tabs(space.index, cx);
-            if searching && tabs.is_empty() && !space.name.to_lowercase().contains(
-                &self.tab_search.read(cx).value().trim().to_lowercase(),
-            ) {
+            if searching && tabs.is_empty() && !space.name.to_lowercase().contains(&query) {
                 continue;
             }
-            matches += tabs.len();
+            matches += 1;
             let open = searching || self.sidebar_space_open(space.index);
             let index = space.index;
             list = list.child(
@@ -62,7 +61,7 @@ impl Workspace {
             list = list.child(guide);
         }
         if searching && matches == 0 {
-            list = list.child(Self::quiet_row("No matching tabs", 0.));
+            list = list.child(Self::quiet_row("No matching workspaces or sessions", 0.));
         }
         let actions = self.header_actions(cx);
         v_flex()

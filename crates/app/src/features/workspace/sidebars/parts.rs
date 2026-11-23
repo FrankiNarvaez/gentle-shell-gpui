@@ -124,12 +124,20 @@ impl Workspace {
             tabs.retain(|tab| {
                 workspace_matches
                     || tab.title.to_lowercase().contains(&query)
-                    || self.spaces[index].tabs[tab.index].leaves().iter().any(|id| {
-                        self.pane_title(*id).to_lowercase().contains(&query)
-                    })
-                    || self.spaces[index].tabs[tab.index].state.unbuilt().is_some_and(|saved| {
-                        saved.layout.leaves().iter().any(|pane| saved_title(pane).to_lowercase().contains(&query))
-                    })
+                    || self.spaces[index].tabs[tab.index]
+                        .leaves()
+                        .iter()
+                        .any(|id| self.pane_title(*id).to_lowercase().contains(&query))
+                    || self.spaces[index].tabs[tab.index]
+                        .state
+                        .unbuilt()
+                        .is_some_and(|saved| {
+                            saved
+                                .layout
+                                .leaves()
+                                .iter()
+                                .any(|pane| saved_title(pane).to_lowercase().contains(&query))
+                        })
             });
         }
         tabs
@@ -171,8 +179,16 @@ impl Workspace {
             .py_1()
             .gap_2()
             .text_xs()
-            .child(div().text_color(ui::accent()).child(format!("{} running", total.working)))
-            .child(div().text_color(ui::warning()).child(format!("{} waiting", total.needs_you)))
+            .child(
+                div()
+                    .text_color(ui::accent())
+                    .child(format!("{} running", total.working)),
+            )
+            .child(
+                div()
+                    .text_color(ui::warning())
+                    .child(format!("{} waiting", total.needs_you)),
+            )
     }
 
     /// The row a search with no match leaves, at `indent`.
@@ -270,43 +286,82 @@ impl Workspace {
         let space = entry.space;
         let tab_id = entry.id;
         let items: Vec<_> = match &tab.state {
-            TabState::Built { tree, .. } => tree.leaves().into_iter().filter_map(|id| {
-                let pane = self.panes.get(&id)?;
-                Some((Some(id), pane.title.clone(), pane.item.kind, pane.running, pane.needs_you))
-            }).collect(),
-            TabState::Unbuilt(saved) => saved.layout.leaves().iter().map(|pane| {
-                (None, saved_title(pane), pane.kind, false, false)
-            }).collect(),
+            TabState::Built { tree, .. } => tree
+                .leaves()
+                .into_iter()
+                .filter_map(|id| {
+                    let pane = self.panes.get(&id)?;
+                    Some((
+                        Some(id),
+                        pane.title.clone(),
+                        pane.item.kind,
+                        pane.running,
+                        pane.needs_you,
+                    ))
+                })
+                .collect(),
+            TabState::Unbuilt(saved) => saved
+                .layout
+                .leaves()
+                .iter()
+                .map(|pane| (None, saved_title(pane), pane.kind, false, false))
+                .collect(),
         };
-        items.into_iter().enumerate().map(|(index, (pane, title, kind, running, needs_you))| {
-            let selected = entry.shown && pane.is_some() && pane == entry.pane;
-            let color = if needs_you { ui::warning() } else if running { ui::accent() } else { ui::muted() };
-            h_flex()
-                .id(SharedString::from(format!("sidebar-split-{tab_id}-{index}")))
-                .h(rems(ROW / 16.))
-                .pl(rems(30. / 16.))
-                .pr_2()
-                .gap_1p5()
-                .rounded_md()
-                .cursor_pointer()
-                .when(selected, |d| d.bg(ui::raised()))
-                .hover(|d| d.bg(ui::surface_hover()))
-                .child(Icon::new(kind.icon()).small().text_color(color))
-                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(ui::fg()).child(title))
-                .when(running || needs_you, |d| d.child(div().size(px(6.)).rounded_full().bg(color)))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if let Some(pane) = pane {
-                        this.reveal_pane(pane, window, cx);
-                    } else if let Some(tab_index) = this.spaces.get(space).and_then(|s| s.tabs.iter().position(|t| t.id == tab_id)) {
-                        if let TabState::Unbuilt(saved) = &mut this.spaces[space].tabs[tab_index].state {
-                            saved.focused = index;
+        items
+            .into_iter()
+            .enumerate()
+            .map(|(index, (pane, title, kind, running, needs_you))| {
+                let selected = entry.shown && pane.is_some() && pane == entry.pane;
+                let color = if needs_you {
+                    ui::warning()
+                } else if running {
+                    ui::accent()
+                } else {
+                    ui::muted()
+                };
+                h_flex()
+                    .id(SharedString::from(format!("sidebar-split-{tab_id}-{index}")))
+                    .h(rems(ROW / 16.))
+                    .pl(rems(30. / 16.))
+                    .pr_2()
+                    .gap_1p5()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(ui::raised()))
+                    .hover(|d| d.bg(ui::surface_hover()))
+                    .child(Icon::new(kind.icon()).small().text_color(color))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_xs()
+                            .text_color(ui::fg())
+                            .child(title),
+                    )
+                    .when(running || needs_you, |d| {
+                        d.child(div().size(px(6.)).rounded_full().bg(color))
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(pane) = pane {
+                            this.reveal_pane(pane, window, cx);
+                        } else if let Some(tab_index) = this
+                            .spaces
+                            .get(space)
+                            .and_then(|s| s.tabs.iter().position(|t| t.id == tab_id))
+                        {
+                            if let TabState::Unbuilt(saved) =
+                                &mut this.spaces[space].tabs[tab_index].state
+                            {
+                                saved.focused = index;
+                            }
+                            this.spaces[space].active = tab_index;
+                            this.switch_workspace(space, window, cx);
                         }
-                        this.spaces[space].active = tab_index;
-                        this.switch_workspace(space, window, cx);
-                    }
-                }))
-                .into_any_element()
-        }).collect()
+                    }))
+                    .into_any_element()
+            })
+            .collect()
     }
 
     /// A workspace as a 26 px row: `chevron` (open or closed) when it

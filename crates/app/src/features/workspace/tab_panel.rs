@@ -68,7 +68,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(from) = self.spaces.iter().position(|s| s.tabs.iter().any(|t| t.id == id)) else {
+        let Some(from) = self
+            .spaces
+            .iter()
+            .position(|s| s.tabs.iter().any(|t| t.id == id))
+        else {
             return;
         };
         if from == to || to >= self.spaces.len() {
