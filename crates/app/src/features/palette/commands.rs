@@ -99,7 +99,10 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         row(
             IconName::Folder,
             "Browse folders",
-            &format!("Open Gentle Shell in any folder, oil-style ({cmd}O)"),
+            &format!(
+                "Open Gentle Shell in any folder, oil-style ({})",
+                ui::shortcut("O")
+            ),
             PaletteAction::OpenExplorer,
         ),
         row(

@@ -127,7 +127,10 @@ mod tests {
         let canon = |p: &Path| dunce::canonicalize(p).unwrap();
 
         // `gsd` in a folder: that folder.
-        assert_eq!(resolve_folder(None, true, Some(here.clone())), Some(canon(&here)));
+        assert_eq!(
+            resolve_folder(None, true, Some(here.clone())),
+            Some(canon(&here))
+        );
         // `gsd <folder>`: the folder wins over the launch folder.
         assert_eq!(
             resolve_folder(Some(there.clone()), true, Some(here.clone())),
@@ -136,7 +139,10 @@ mod tests {
         // A plain launch (Start menu, Finder) keeps restoring the last workspace.
         assert_eq!(resolve_folder(None, false, Some(here.clone())), None);
         // A folder that doesn't exist never falls back to the launch folder.
-        assert_eq!(resolve_folder(Some(base.join("missing")), true, Some(here)), None);
+        assert_eq!(
+            resolve_folder(Some(base.join("missing")), true, Some(here)),
+            None
+        );
         std::fs::remove_dir_all(&base).unwrap();
     }
 

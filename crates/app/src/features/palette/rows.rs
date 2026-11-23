@@ -98,14 +98,7 @@ impl PaletteView {
             icon: IconName::Folder,
             title: "Browse folders…".into(),
             meta: String::new(),
-            detail: format!(
-                "Open Gentle Shell in any folder ({}O)",
-                if cfg!(target_os = "macos") {
-                    "⌘"
-                } else {
-                    "Ctrl+"
-                }
-            ),
+            detail: format!("Open Gentle Shell in any folder ({})", ui::shortcut("O")),
             group: "Workspaces",
             action: PaletteAction::OpenExplorer,
             workspace: None,

@@ -21,7 +21,6 @@ use gpui_kit::*;
 use crate::features::canvas::{CanvasEvent, CanvasView};
 use crate::features::docs::{DocsEvent, DocsView};
 use crate::features::explorer::{ExplorerEvent, ExplorerView};
-use crate::features::files::FileTreeView;
 use crate::features::memory::{MemoryEvent, MemoryView};
 use crate::features::notices::{self, Notices};
 use crate::features::onboarding::{OnboardingEvent, OnboardingView, Probe};

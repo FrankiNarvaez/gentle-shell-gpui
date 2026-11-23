@@ -19,12 +19,7 @@ const MARKER: &str = "gentle-shell-gpui gsd shim";
 fn shim_path() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        Some(
-            dirs::data_dir()?
-                .join("gentle-shell-gpui")
-                .join("bin")
-                .join("gsd.cmd"),
-        )
+        Some(crate::shared::data_dir::app()?.join("bin").join("gsd.cmd"))
     }
     #[cfg(not(windows))]
     {
@@ -68,8 +63,12 @@ fn write_shim(path: &Path, exe: &Path) -> std::io::Result<()> {
 }
 
 /// At startup: point an installed shim at this executable again (an update
-/// or a moved app changes its path). Never creates one.
+/// or a moved app changes its path). Never creates one, and an isolated copy
+/// (`GENTLE_SHELL_GPUI_DATA_DIR`) leaves the user's `gsd` alone.
 pub fn refresh() {
+    if crate::shared::data_dir::overridden() {
+        return;
+    }
     let (Some(path), Ok(exe)) = (shim_path(), std::env::current_exe()) else {
         return;
     };
