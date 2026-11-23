@@ -186,10 +186,13 @@ pub fn staged_diff(toplevel: &Path, max: usize) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    fn repo() -> Option<std::path::PathBuf> {
+    /// A fresh repository under the temp folder, named after `test`: the
+    /// clock alone can repeat across tests running at once (macOS keeps
+    /// microseconds), and two `git init`s in one folder collide.
+    fn repo(test: &str) -> Option<std::path::PathBuf> {
         pi_rpc::command("git").arg("--version").output().ok()?;
         let dir = std::env::temp_dir().join(format!(
-            "gentle-git-changes-{}-{}",
+            "gentle-git-changes-{test}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -205,7 +208,7 @@ mod tests {
     /// leaves `notes1.txt`, which the brackets would match as a glob.
     #[test]
     fn discarding_an_untracked_file_leaves_the_files_its_name_matches_as_a_glob() {
-        let Some(dir) = repo() else { return };
+        let Some(dir) = repo("discard") else { return };
         for name in ["notes[1].txt", "notes1.txt"] {
             std::fs::write(dir.join(name), "text\n").unwrap();
         }
@@ -229,7 +232,7 @@ mod tests {
     /// Staging takes the same literal names.
     #[test]
     fn staging_a_file_leaves_the_files_its_name_matches_as_a_glob() {
-        let Some(dir) = repo() else { return };
+        let Some(dir) = repo("stage") else { return };
         for name in ["notes[1].txt", "notes1.txt"] {
             std::fs::write(dir.join(name), "text\n").unwrap();
         }
