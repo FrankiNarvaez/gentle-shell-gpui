@@ -764,7 +764,13 @@ pub(super) fn chip_popover(
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(Icon::new(icon).small().text_color(color))
+                                .child(Icon::new(icon).small().text_color(
+                                    if id == "context-ring" {
+                                        ui::muted()
+                                    } else {
+                                        color
+                                    },
+                                ))
                                 .child(
                                     div()
                                         .text_sm()
@@ -832,7 +838,7 @@ impl Render for ContextOverview {
                 h_flex()
                     .gap_1p5()
                     .text_color(ui::muted())
-                    .child(Icon::new(IconName::Gauge).xsmall())
+                    .child(Icon::new(IconName::Gauge).small())
                     .child(
                         div()
                             .font_weight(FontWeight::MEDIUM)
