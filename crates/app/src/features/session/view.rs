@@ -18,6 +18,7 @@ use gpui_kit::*;
 use super::attachments;
 use super::state::BackendStatus;
 use super::{CONTEXT, SessionView};
+use crate::shared::overlay::LiveSlots;
 use crate::shared::ui;
 use gentle_core::input_style::InputStyle;
 use gentle_core::tools;
@@ -368,6 +369,7 @@ impl SessionView {
                     .selectable(true)
                     .style(ui::prose_style())
                     .list_style(ui::prose_list_style())
+                    .code_block_actions(|block, _, cx| code_block_header(block, cx))
                     .image_source(move |uri| {
                         diagrams.image(uri).unwrap_or_else(|| uri.clone().into())
                     }),
@@ -720,13 +722,17 @@ impl SessionView {
             BackendStatus::Starting => {
                 return Some(
                     h_flex()
-                        .gap_2()
                         .pt(rems(24. / 16.))
                         .justify_center()
-                        .text_size(rems(13. / 16.))
-                        .text_color(ui::muted())
-                        .child(ui::spinner(Size::Small, ui::accent()))
-                        .child(ui::shimmer("Starting gentle-shell…", ui::muted(), ui::fg()))
+                        .child(self.live_slots.slot("starting", || {
+                            h_flex()
+                                .gap_2()
+                                .text_size(rems(13. / 16.))
+                                .text_color(ui::muted())
+                                .child(ui::spinner(Size::Small, ui::accent()))
+                                .child(ui::shimmer("Starting gentle-shell…", ui::muted(), ui::fg()))
+                                .into_any_element()
+                        }))
                         .into_any_element(),
                 );
             }
@@ -863,32 +869,20 @@ impl SessionView {
                 }
                 if *streaming && !has_text && !thinking_live {
                     let since = self.live.turn.map(|t| t.elapsed());
-                    column = column.child(working_indicator("Working…", since));
+                    column = column.child(working_indicator(
+                        &self.live_slots,
+                        ("working", ix),
+                        "Working…",
+                        since,
+                    ));
                 }
                 if let Some(error) = error {
                     column = column.child(notice_card(NoticeLevel::Error, error));
                 }
-                // While the agent writes, a soft rose dot breathes after the
-                // text; when it's done, the dot fades with the line.
+                // While the agent writes, the petal line beside the answer
+                // marks it live (the composer's orbit is the turn's one
+                // moving indicator); when it's done, the line fades.
                 let settle = self.answer_settle(ix, *streaming);
-                if has_text {
-                    match settle {
-                        Some(_) if *streaming => {
-                            column = column.child(ui::pulse(
-                                div().size(rems(7. / 16.)).rounded_full().bg(ui::petal()),
-                            ))
-                        }
-                        Some(k) if k < 1. => {
-                            column = column.child(
-                                div()
-                                    .size(rems(7. / 16.))
-                                    .rounded_full()
-                                    .bg(ui::petal().opacity(1. - ease_out_quint()(k))),
-                            )
-                        }
-                        _ => {}
-                    }
-                }
                 if !*streaming && has_text {
                     column = column
                         .group("assistant")
@@ -1034,11 +1028,9 @@ impl SessionView {
                     .text_color(ui::muted())
                     .hover(|s| s.text_color(ui::fg()))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(key, cx)))
-                    .child(if live {
-                        ui::pulse(star).into_any_element()
-                    } else {
-                        star.into_any_element()
-                    })
+                    .child(star)
+                    // Live, its time counts up once a second.
+                    .when(live, |this| this.child(ui::each_second()))
                     .child(if live { "Thinking…" } else { "Thought" })
                     .when_some(elapsed, |this, d| {
                         this.child(
@@ -1359,7 +1351,7 @@ impl SessionView {
 
     /// A collapsed step: one quiet line, no card around it. The icon takes
     /// its kind's tint ([`step_tone`]; danger's cross when the step failed,
-    /// pulsing while it runs),
+    /// pulsing on the live overlay while it runs),
     /// the rest is today's header restyled: title, subject, +n/−n, duration
     /// and a chevron. Clicking it unfolds the whole step when `fold` (its
     /// key and whether the chevron points up) is given.
@@ -1372,22 +1364,16 @@ impl SessionView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let failed = spec.status == ToolStatus::Failed;
-        let running = spec.status == ToolStatus::Running;
         let icon = if failed { IconName::CircleX } else { spec.icon };
         let icon_color = if failed {
             ui::danger()
         } else {
             step_tone(spec.icon)
         };
-        let icon = if running {
-            ui::pulse(div().child(Icon::new(icon).small().text_color(icon_color)))
-                .into_any_element()
-        } else {
-            Icon::new(icon)
-                .small()
-                .text_color(icon_color)
-                .into_any_element()
-        };
+        let icon = Icon::new(icon)
+            .small()
+            .text_color(icon_color)
+            .into_any_element();
         self.step_row(
             ("step", ix),
             spec,
@@ -1880,13 +1866,15 @@ impl SessionView {
             }
             Row::Tail(Tail::Pending(base)) => {
                 let since = self.live.pending.as_ref().map(|p| p.since.elapsed());
-                let indicator = working_indicator("Thinking…", since);
+                let indicator =
+                    working_indicator(&self.live_slots, ("pending", base), "Thinking…", since);
                 self.list
                     .appear(("pending", base), now, div().w_full().child(indicator))
             }
             Row::Tail(Tail::Between(count)) => {
                 let since = self.live.turn.map(|t| t.elapsed());
-                let indicator = working_indicator("Working…", since);
+                let indicator =
+                    working_indicator(&self.live_slots, ("between", count), "Working…", since);
                 self.list
                     .appear(("between", count), now, div().w_full().child(indicator))
             }
@@ -1937,6 +1925,8 @@ impl SessionView {
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::shared::diagnostics::render("SessionView");
+        // Its indicators on the live layer are placed again as it draws.
+        self.live_slots.clear(cx.entity_id());
         // A tab starts its backend once shown.
         self.ensure_started(window, cx);
         self.sync_view(cx);
@@ -2020,6 +2010,28 @@ impl Render for SessionView {
                             .size_full(),
                         )
                         .children(self.render_rail(&scroll, cx))
+                        // Text fades out as it reaches the composer, after
+                        // Tern's, instead of cutting off on a hard edge. As
+                        // tall as the column's bottom padding, so the last
+                        // line, scrolled to the end, stays clear. Only on an
+                        // opaque pane: GPUI can't mask, so the fade is the
+                        // pane's color laid over the text, and over glass
+                        // that color doubles up into a dark band.
+                        .when(ui::panel().a > 0.99, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .h(rems(32. / 16.))
+                                    .bg(linear_gradient(
+                                        180.,
+                                        linear_color_stop(ui::panel().opacity(0.), 0.),
+                                        linear_color_stop(ui::panel(), 1.),
+                                    )),
+                            )
+                        })
                         .children(self.render_jump_down(cx)),
                 ),
             })
@@ -2055,7 +2067,7 @@ impl Render for SessionView {
                     .flatten(),
                 |this, island| this.child(island),
             )
-            .children(self.genui.render_templates(cx));
+            .children(self.genui.render_templates(self.live_slots.cover(), cx));
 
         h_flex()
             .key_context(CONTEXT)
@@ -2556,6 +2568,7 @@ fn clock(elapsed: Duration) -> String {
     }
 }
 
+/// A tool card's last line: how it ended, or "Running" while it runs.
 fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
     let (icon, label, color) = match status {
         ToolStatus::Running => (None, "Running", ui::info()),
@@ -2568,10 +2581,7 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         .gap_1p5()
         .text_size(rems(12. / 16.))
         .text_color(color)
-        .map(|this| match icon {
-            Some(icon) => this.child(Icon::new(icon).xsmall()),
-            None => this.child(ui::spinner(Size::XSmall, ui::info())),
-        })
+        .when_some(icon, |this, icon| this.child(Icon::new(icon).xsmall()))
         .child(label)
         .when_some(duration, |this, d| {
             this.child(
@@ -2735,22 +2745,66 @@ fn notice_card(level: NoticeLevel, text: &str) -> Div {
         )
 }
 
-/// The petal-and-shimmer "agent is on it" row.
-fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
+/// Along the top of a fenced block in an answer, after Tern's: its
+/// language, then Copy, which puts the code on the clipboard and says so.
+/// In the interface's font, not the code's.
+fn code_block_header(block: &gpui_kit::base::text::CodeBlock, cx: &App) -> Div {
+    use gpui_kit::component::WindowExt as _;
+    let code = block.code();
+    h_flex()
+        .gap_3()
+        .px_1()
+        .font_family(cx.theme().font_family.clone())
+        .text_size(rems(12. / 16.))
+        .text_color(ui::muted())
+        .children(block.lang().filter(|lang| !lang.is_empty()))
+        .child(
+            div()
+                .id("copy")
+                .cursor_pointer()
+                .hover(|s| s.text_color(ui::fg()))
+                .child("Copy")
+                .on_click(move |_, window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
+                    window.push_notification(
+                        gpui_kit::component::notification::Notification::success(
+                            "Copied to the clipboard.",
+                        ),
+                        cx,
+                    );
+                }),
+        )
+}
+
+/// The petal-and-shimmer "agent is on it" row, its clock counting up once
+/// a second. With the composer's orbit, the turn's only moving indicators:
+/// the petal and the label move on the live overlay, under `key`.
+fn working_indicator(
+    slots: &LiveSlots,
+    key: impl Into<ElementId>,
+    label: &'static str,
+    elapsed: Option<Duration>,
+) -> Div {
     h_flex()
         .gap_2()
         .items_center()
-        .child(ui::pulse(
-            div()
-                .text_size(rems(15. / 16.))
-                .text_color(ui::petal())
-                .child("✿"),
-        ))
-        .child(
-            ui::shimmer(label, ui::muted(), ui::fg())
-                .text_size(rems(13. / 16.))
-                .italic(),
-        )
+        .child(slots.slot(key, move || {
+            h_flex()
+                .gap_2()
+                .items_center()
+                .child(ui::pulse(
+                    div()
+                        .text_size(rems(15. / 16.))
+                        .text_color(ui::petal())
+                        .child("✿"),
+                ))
+                .child(
+                    ui::shimmer(label, ui::muted(), ui::fg())
+                        .text_size(rems(13. / 16.))
+                        .italic(),
+                )
+                .into_any_element()
+        }))
         .when_some(elapsed, |this, d| {
             this.child(
                 div()
@@ -2759,6 +2813,7 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
                     .text_color(ui::faint())
                     .child(clock(d)),
             )
+            .child(ui::each_second())
         })
 }
 

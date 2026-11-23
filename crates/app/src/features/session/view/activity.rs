@@ -105,10 +105,8 @@ impl SessionView {
                 )
             })
             .when(busy, |this| {
-                this.child(ui::pulse(
-                    div().size(rems(6. / 16.)).rounded_full().bg(ui::petal()),
-                ))
-                .when_some(since, |this, since| {
+                // The turn's clock; the composer's orbit shows it's live.
+                this.when_some(since, |this, since| {
                     this.child(
                         div()
                             .font_family(ui::mono())
@@ -116,6 +114,7 @@ impl SessionView {
                             .text_color(ui::muted())
                             .child(clock(since.elapsed())),
                     )
+                    .child(ui::each_second())
                 })
                 .child(div().h(rems(10. / 16.)).w(px(1.)).bg(ui::border_strong()))
                 .map(|this| match (waiting, feed_phase, self.activity.phase) {

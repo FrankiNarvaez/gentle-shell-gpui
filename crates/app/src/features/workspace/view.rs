@@ -748,6 +748,13 @@ impl Workspace {
                         .cached(StyleRefinement::default().size_full()),
                 ),
             )
+            // An agent's live indicators, over it: their frames redraw the
+            // layer and this window, while the agent's view stays cached.
+            .children(
+                pane.session
+                    .as_ref()
+                    .map(|session| session.read(cx).live_layer()),
+            )
             .children(
                 self.drop_hint
                     .filter(|(pane, _)| *pane == id && cx.has_active_drag())
