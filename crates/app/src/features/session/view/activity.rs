@@ -897,6 +897,16 @@ fn context_ring(percent: f32, color: Hsla) -> impl IntoElement {
         move |bounds, _, window, _| {
             let center = bounds.center();
             let radius = bounds.size.width.min(bounds.size.height) / 2. - px(1.5);
+            let outer_radius = radius + px(1.);
+            let track_bounds = Bounds::new(
+                point(center.x - outer_radius, center.y - outer_radius),
+                size(outer_radius * 2., outer_radius * 2.),
+            );
+            window.paint_quad(
+                outline(track_bounds, ui::border_strong(), BorderStyle::Solid)
+                    .border_widths(px(2.))
+                    .corner_radii(outer_radius),
+            );
             let draw = |window: &mut Window, fraction: f32, color: Hsla| {
                 if fraction <= 0. {
                     return;
@@ -920,7 +930,6 @@ fn context_ring(percent: f32, color: Hsla) -> impl IntoElement {
                     window.paint_path(path, color);
                 }
             };
-            draw(window, 1., ui::border_strong());
             draw(window, fraction, color);
         },
     )
