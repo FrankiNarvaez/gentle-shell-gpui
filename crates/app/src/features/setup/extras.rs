@@ -250,16 +250,20 @@ fn engram() -> Option<PathBuf> {
     engram_bin().or_else(|| pi_rpc::find_program("engram"))
 }
 
-/// Why an `ENGRAM_BIN` override can't run: it names a file that isn't there.
-/// Installing doesn't help (the override still wins), and Gentle Shell reads
-/// it too, so it's reported rather than skipped.
+/// Why an `ENGRAM_BIN` override can't run: nothing it names can be executed.
+/// Resolved the way the override is run, not as a path on disk, so a bare name
+/// on the PATH and a Windows path without `.exe` still pass. Installing doesn't
+/// help (the override still wins), and Gentle Shell reads it too, so it's
+/// reported rather than skipped.
 fn stale_engram_bin(bin: &Path) -> Option<String> {
-    (!bin.is_file()).then(|| {
-        format!(
-            "ENGRAM_BIN points to {}, which doesn't exist. Fix or remove it.",
-            bin.display()
-        )
-    })
+    pi_rpc::find_program(&bin.to_string_lossy())
+        .is_none()
+        .then(|| {
+            format!(
+                "ENGRAM_BIN points to {}, which can't be run. Fix or remove it.",
+                bin.display()
+            )
+        })
 }
 
 /// `stale_engram_bin` for the current environment. Only for Engram on this
@@ -572,18 +576,23 @@ mod tests {
     }
 
     #[test]
-    fn engram_bin_naming_a_missing_file_is_reported() {
-        let dir = std::env::temp_dir().join(format!("gs-engram-bin-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let missing = dir.join("engram.exe");
+    fn engram_bin_is_judged_the_way_it_is_run() {
+        // An absolute path to a program that runs: this test's own binary.
+        let real = std::env::current_exe().expect("the test binary has a path");
+        assert_eq!(stale_engram_bin(&real), None);
+
+        // A bare name is resolved on the PATH, the way the override is run.
+        let on_path = Path::new(if cfg!(windows) { "cmd" } else { "sh" });
+        assert_eq!(stale_engram_bin(on_path), None);
+
+        // A path that names nothing is reported, with the path in the message.
+        let missing = std::env::temp_dir().join(format!("gs-no-engram-{}", std::process::id()));
         let why = stale_engram_bin(&missing).expect("a missing ENGRAM_BIN is reported");
         assert!(why.contains("ENGRAM_BIN"), "{why}");
         assert!(why.contains(&missing.display().to_string()), "{why}");
 
-        std::fs::write(&missing, b"").unwrap();
-        assert_eq!(stale_engram_bin(&missing), None);
-        // A folder isn't a binary either.
-        assert!(stale_engram_bin(&dir).is_some());
-        std::fs::remove_dir_all(&dir).unwrap();
+        // So is a name that is on no PATH, and a folder is not a program.
+        assert!(stale_engram_bin(Path::new("gs-no-such-engram-anywhere")).is_some());
+        assert!(stale_engram_bin(&std::env::temp_dir()).is_some());
     }
 }
