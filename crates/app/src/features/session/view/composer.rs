@@ -45,14 +45,29 @@ impl SessionView {
         Some((percent, tone))
     }
 
-    /// While the agent works a light runs round the composer's box, on the
-    /// live overlay. Place it in the box (`relative`, 1 px border);
-    /// `radius` is the box's corner radius.
-    fn composer_orbit(&self, radius: Rems) -> Option<Div> {
+    /// While the agent works a light runs round the composer's action
+    /// button (stop, or send while you steer), just outside it, on the live
+    /// overlay. Round buttons get a round lap (the orbit's corner radius
+    /// clamps to a circle); Bar's framed Stop follows its corners; Prompt's
+    /// words get none.
+    fn action_ring(&self, style: InputStyle) -> Option<Div> {
+        /// How far outside the button the light runs.
+        const GAP: f32 = 3.;
+        let radius = match style {
+            InputStyle::Prompt => return None,
+            InputStyle::Bar => rems((6. + GAP) / 16.),
+            _ => rems(99.),
+        };
         self.busy().then(|| {
-            ui::over_border(self.live_slots.slot("orbit", move || {
-                ui::orbit(ui::petal(), radius).into_any_element()
-            }))
+            self.live_slots
+                .slot("action-ring", move || {
+                    ui::orbit(ui::petal(), radius).into_any_element()
+                })
+                .absolute()
+                .top(px(-GAP))
+                .left(px(-GAP))
+                .right(px(-GAP))
+                .bottom(px(-GAP))
         })
     }
 
@@ -61,9 +76,10 @@ impl SessionView {
     /// border fills as the conversation uses its window, in the band's
     /// color ([`Self::context_level`]), its percent riding the fill's end
     /// just above the box. The window's size closes the activity line
-    /// ([`Self::render_context_caption`]). Work in progress is the
-    /// composer's [`Self::composer_orbit`], not this line. Place it in the
-    /// box (`relative`, 1 px border); `radius` is the box's corner radius.
+    /// ([`Self::render_context_caption`]). Work in progress is the light
+    /// round the action button ([`Self::action_ring`]), not this line.
+    /// Place it in the box (`relative`, 1 px border); `radius` is the box's
+    /// corner radius.
     fn render_context_edge(&self, radius: Rems) -> Option<Div> {
         let (percent, alert) = self.context_level()?;
         let fill = alert.unwrap_or(ui::fg().opacity(0.45));
@@ -439,7 +455,6 @@ impl SessionView {
             })
             .bg(ui::surface())
             .shadow_lg()
-            .children(self.composer_orbit(rems(1.)))
             .children(self.render_context_edge(rems(1.)))
     }
 
@@ -535,7 +550,11 @@ impl SessionView {
             .then(|| self.render_usage_chip())
             .flatten()
             .map(|chip| div().flex_shrink_0().child(chip));
-        let action = div().flex_shrink_0().child(action_button);
+        let action = div()
+            .relative()
+            .flex_shrink_0()
+            .child(action_button)
+            .children(self.action_ring(style));
         let spacer = || div().flex_1().min_w_0();
         let row = || h_flex().w_full().min_w_0().gap_1p5().items_center();
         // The line or frame a focused composer lights up.
@@ -663,7 +682,6 @@ impl SessionView {
                     .border_1()
                     .border_color(edge(ui::border_strong()))
                     .bg(ui::well())
-                    .children(self.composer_orbit(rems(6. / 16.)))
                     .children(self.render_context_edge(rems(6. / 16.)))
                     .font_family(ui::mono())
                     // On the text's first line: the text area's own top
@@ -704,7 +722,6 @@ impl SessionView {
                         .border_1()
                         .border_color(edge(ui::border()))
                         .bg(ui::surface())
-                        .children(self.composer_orbit(rems(22. / 16.)))
                         .children(self.render_context_edge(rems(22. / 16.)))
                         // Attach and send sit centered on the last line of
                         // text: each in a box as tall as one line with the
@@ -737,7 +754,6 @@ impl SessionView {
                     .border_1()
                     .border_color(edge(ui::border()))
                     .bg(ui::surface())
-                    .children(self.composer_orbit(rems(20. / 16.)))
                     .children(self.render_context_edge(rems(20. / 16.)))
                     .children(attachments.map(|a| div().px_2p5().pt_2().child(a)))
                     .child(div().min_h(rems(56. / 16.)).child(text))

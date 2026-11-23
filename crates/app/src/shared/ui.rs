@@ -1115,10 +1115,10 @@ pub fn shimmer(text: impl Into<SharedString>, base: Hsla, highlight: Hsla) -> Di
         .child(frames_every(SLOW_FRAME))
 }
 
-/// A short bright streak orbiting a rounded box's border clockwise, its
-/// tail fading out, for a box whose work is in progress (the composer while
-/// the agent works). It fills its bounds: lay those over the border with
-/// [`over_border`]; `radius` is the box's corner radius.
+/// A short bright streak orbiting a rounded box clockwise, its tail fading
+/// out, for work in progress (round the composer's action button while the
+/// agent works). It fills its bounds; `radius` is their corner radius,
+/// clamped to half the shorter side, so a large one runs a circle.
 #[track_caller]
 pub fn orbit(color: Hsla, radius: Rems) -> Div {
     let phase = live_phase(2.4);
@@ -1135,18 +1135,6 @@ pub fn orbit(color: Hsla, radius: Rems) -> Div {
             .size_full(),
         )
         .child(frames_every(SLOW_FRAME))
-}
-
-/// `element` laid over the border of the `relative` box (1 px border) it
-/// sits in: `absolute` insets start inside the border.
-pub fn over_border(element: Div) -> Div {
-    let edge = px(-1.);
-    element
-        .absolute()
-        .top(edge)
-        .left(edge)
-        .right(edge)
-        .bottom(edge)
 }
 
 /// [`orbit`]'s streak: its head `phase` of the way round the border, the
