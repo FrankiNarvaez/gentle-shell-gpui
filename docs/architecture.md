@@ -74,7 +74,7 @@ crates/
 │   └── src/
 │       ├── main.rs              # startup: CLI, single instance, toolchain PATH, config adoption
 │       ├── app/                 # composition root (mod.rs): GPUI, themes, shortcuts, menus, window; integration.rs registers panels and sidebar
-│       ├── cli.rs               # arguments (`[FOLDER] [-p TEXT]`) and initial folder
+│       ├── cli.rs               # arguments (`[FOLDER] [--cwd] [-p TEXT]`) and initial folder
 │       ├── features/            # one folder per feature; its entry point is mod.rs
 │       │   ├── session/  workspace/  workspaces/  sessions/  palette/  profiles/  settings/  usage/  setup/
 │       │   ├── browser/  devices/  music/  files/  terminal/  git/  history/  providers/  memory/  onboarding/  notices/  alerts/  hydration/  docs/
