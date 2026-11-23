@@ -28,9 +28,31 @@ impl Workspace {
             })
     }
 
-    /// Start [`Self::active_session`]'s backend when a screen opens on it: it
-    /// can sit in a tab not shown yet (when the shown tab has no agent).
-    pub(super) fn start_active_session(&self, window: &mut Window, cx: &mut App) {
+    /// Build the current workspace's first unbuilt tab holding an agent when
+    /// no built tab has one, so [`Self::active_session`] finds it.
+    pub(super) fn ensure_agent_built(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_session().is_some() {
+            return;
+        }
+        let unbuilt = self.space().tabs.iter().position(|tab| {
+            tab.state.unbuilt().is_some_and(|saved| {
+                saved
+                    .layout
+                    .leaves()
+                    .iter()
+                    .any(|pane| pane.kind == PaneKind::Agent)
+            })
+        });
+        if let Some(index) = unbuilt {
+            self.ensure_tab_built(self.current, index, window, cx);
+        }
+    }
+
+    /// Build and start [`Self::active_session`]'s backend when a screen opens
+    /// on it: it can sit in a tab not shown, or not built, yet (when the shown
+    /// tab has no agent).
+    pub(super) fn start_active_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_agent_built(window, cx);
         if let Some(session) = self.active_session() {
             session.update(cx, |s, cx| s.ensure_started(window, cx));
         }
@@ -65,22 +87,16 @@ impl Workspace {
             .spaces
             .iter()
             .map(|space| {
-                let (tabs, active_tab) = match &space.saved {
-                    Some((tabs, active)) => (tabs.clone(), *active),
-                    None => (
-                        space
-                            .tabs
-                            .iter()
-                            .filter_map(|tab| saved_tab(tab, |id| self.saved_pane(id, cx)))
-                            .collect(),
-                        space.active,
-                    ),
-                };
+                let tabs = space
+                    .tabs
+                    .iter()
+                    .filter_map(|tab| saved_tab(tab, |id| self.saved_pane(id, cx)))
+                    .collect();
                 SavedWorkspace {
                     name: space.name.clone(),
                     root: space.root.clone(),
                     tabs,
-                    active_tab,
+                    active_tab: space.active,
                     last_active: space.last_active,
                     badge: space.badge,
                 }

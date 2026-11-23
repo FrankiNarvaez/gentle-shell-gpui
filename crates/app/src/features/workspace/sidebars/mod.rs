@@ -18,7 +18,7 @@ pub(super) struct TabEntry {
     /// Its index among its workspace's tabs.
     pub index: usize,
     /// The tab's id.
-    pub id: Option<usize>,
+    pub id: usize,
     /// The focused pane of a built tab; `None` while it is unbuilt.
     pub pane: Option<PaneId>,
     pub title: SharedString,
@@ -146,7 +146,7 @@ impl Workspace {
                 mark: Mark::of(space),
                 current: index == self.current,
                 activity: self.space_activity(space),
-                tabs: space.tab_count(),
+                tabs: space.tabs.len(),
             })
             .collect()
     }
@@ -170,9 +170,9 @@ impl Workspace {
                         TabEntry {
                             space: index,
                             index: i,
-                            id: Some(tab.id),
+                            id: tab.id,
                             pane: None,
-                            title: focused.as_ref().map(saved_title).unwrap_or_default(),
+                            title: focused.map(saved_title).unwrap_or_default(),
                             kind: focused.map_or(PaneKind::Agent, |p| p.kind),
                             shown,
                             pinned: tab.pinned,
@@ -186,7 +186,7 @@ impl Workspace {
                         TabEntry {
                             space: index,
                             index: i,
-                            id: Some(tab.id),
+                            id: tab.id,
                             pane: Some(*focused),
                             title: self.pane_title(*focused),
                             kind: self
@@ -229,11 +229,7 @@ impl Workspace {
             self.switch_workspace(space, window, cx);
         } else {
             // Ranges follow the tabs the search leaves visible.
-            let visible: Vec<usize> = self
-                .visible_tabs(space, cx)
-                .iter()
-                .filter_map(|t| t.id)
-                .collect();
+            let visible: Vec<usize> = self.visible_tabs(space, cx).iter().map(|t| t.id).collect();
             self.on_tab_click(index, event, Some(visible), window, cx);
         }
     }
@@ -265,17 +261,12 @@ impl Workspace {
         tab: &TabEntry,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let (space, index) = (tab.space, tab.index);
+        let (space, index, id) = (tab.space, tab.index, tab.id);
         let row = row.cursor_pointer().on_click(cx.listener(
             move |this, event: &ClickEvent, window, cx| {
                 this.open_sidebar_tab(space, index, event, window, cx)
             },
         ));
-        let Some(id) = tab.id else {
-            return row
-                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
-                .into_any_element();
-        };
         let tabs = &self.spaces[space].tabs;
         let actions = TabMenu {
             space,

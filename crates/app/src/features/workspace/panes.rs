@@ -499,7 +499,7 @@ impl Workspace {
 
     /// Build tab `tab_index` of workspace `space_index` if it is still an
     /// unbuilt placeholder.
-    fn ensure_tab_built(
+    pub(super) fn ensure_tab_built(
         &mut self,
         space_index: usize,
         tab_index: usize,

@@ -200,13 +200,12 @@ impl TabState {
     }
 
     /// The focused pane of an unbuilt tab, as saved.
-    pub(super) fn saved_focused(&self) -> Option<SavedPane> {
+    pub(super) fn saved_focused(&self) -> Option<&SavedPane> {
         let TabState::Unbuilt(saved) = self else {
             return None;
         };
-        let leaves = saved.layout.leaves();
-        let last = leaves.len().saturating_sub(1);
-        leaves.get(saved.focused.min(last)).cloned()
+        let last = saved.layout.len().saturating_sub(1);
+        saved.layout.leaf(saved.focused.min(last))
     }
 
     pub(super) fn built_tree(&self) -> Option<&PaneTree<PaneId>> {
@@ -277,9 +276,6 @@ struct Space {
     last_active: u64,
     tabs: Vec<Tab>,
     active: usize,
-    /// Restored layout not built yet; kept only until [`Workspace::ensure_open`]
-    /// turns it into unbuilt tabs. After that the live model is in `tabs`.
-    saved: Option<(Vec<SavedTab>, usize)>,
     /// The badge's chosen icon and color.
     badge: Badge,
 }
@@ -292,15 +288,7 @@ impl Space {
             last_active: workspaces::now(),
             tabs: Vec::new(),
             active: 0,
-            saved: None,
             badge: Badge::default(),
-        }
-    }
-
-    fn tab_count(&self) -> usize {
-        match &self.saved {
-            Some((tabs, _)) => tabs.len(),
-            None => self.tabs.len(),
         }
     }
 }
@@ -454,17 +442,20 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let saved = workspaces::load();
+        let mut restored = Vec::new();
         let spaces: Vec<Space> = saved
             .workspaces
             .into_iter()
-            .map(|w| Space {
-                name: w.name,
-                root: w.root,
-                last_active: w.last_active,
-                tabs: Vec::new(),
-                active: 0,
-                saved: Some((w.tabs, w.active_tab)),
-                badge: w.badge,
+            .map(|w| {
+                restored.push((w.tabs, w.active_tab));
+                Space {
+                    name: w.name,
+                    root: w.root,
+                    last_active: w.last_active,
+                    tabs: Vec::new(),
+                    active: 0,
+                    badge: w.badge,
+                }
             })
             .collect();
         let tab_search = cx.new(|cx| InputState::new(window, cx).placeholder("Search tabs"));
@@ -560,8 +551,18 @@ impl Workspace {
         };
         // Restore every workspace's tab list as cheap unbuilt placeholders now,
         // so the sidebar, counts, search and menus see one model everywhere.
-        for i in 0..this.spaces.len() {
-            this.ensure_open(i, false, window, cx);
+        for (index, (tabs, active)) in restored.into_iter().enumerate() {
+            let tabs: Vec<Tab> = tabs
+                .into_iter()
+                .map(|saved| Tab {
+                    id: this.alloc_id(),
+                    pinned: saved.pinned,
+                    state: TabState::Unbuilt(saved),
+                })
+                .collect();
+            let space = &mut this.spaces[index];
+            space.active = active.min(tabs.len().saturating_sub(1));
+            space.tabs = tabs;
         }
         let target = match folder {
             Some(folder) => match this.spaces.iter().position(|s| s.root == folder) {
@@ -576,7 +577,7 @@ impl Workspace {
             let root = this.space().root.clone();
             this.open_tab(PaneKind::Agent, root, Some(prompt), None, window, cx);
         } else {
-            this.ensure_open(target, true, window, cx);
+            this.ensure_open(target, window, cx);
             let active = this.space().active;
             this.activate(active, window, cx);
         }
@@ -759,6 +760,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.ensure_agent_built(window, cx);
         let Some(session) = self.active_session() else {
             return false;
         };

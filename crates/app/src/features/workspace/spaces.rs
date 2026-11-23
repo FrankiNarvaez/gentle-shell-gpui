@@ -18,30 +18,15 @@ impl Workspace {
         self.spaces.len() - 1
     }
 
-    /// Restore a workspace's tabs as unbuilt placeholders; with `fill`, give
-    /// an empty one an agent tab. Panes are built only when a tab is shown.
+    /// Give workspace `index` an agent tab when it has none. Restored tabs
+    /// stay unbuilt until shown.
     pub(super) fn ensure_open(
         &mut self,
         index: usize,
-        fill: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some((tabs, active)) = self.spaces[index].saved.take() {
-            let mut restored = Vec::new();
-            for saved in tabs {
-                let id = self.alloc_id();
-                restored.push(Tab {
-                    id,
-                    pinned: saved.pinned,
-                    state: TabState::Unbuilt(saved),
-                });
-            }
-            let space = &mut self.spaces[index];
-            space.tabs = restored;
-            space.active = active.min(space.tabs.len().saturating_sub(1));
-        }
-        if fill && self.spaces[index].tabs.is_empty() {
+        if self.spaces[index].tabs.is_empty() {
             let previous = self.current;
             self.current = index;
             let root = self.spaces[index].root.clone();
@@ -66,7 +51,7 @@ impl Workspace {
         self.finish_workspace_rename(true, window, cx);
         let changed = index != self.current;
         self.current = index;
-        self.ensure_open(index, true, window, cx);
+        self.ensure_open(index, window, cx);
         if !self.space().tabs.is_empty() {
             let active = self.space().active;
             self.activate(active, window, cx);
@@ -254,7 +239,7 @@ impl Workspace {
             return;
         }
         let title = format!("Delete workspace \u{201c}{}\u{201d}?", space.name);
-        let tabs = space.tab_count();
+        let tabs = space.tabs.len();
         let description = format!(
             "Its {tabs} {} close and any running agent in them stops. Files and conversations stay on disk.",
             if tabs == 1 { "tab" } else { "tabs" }

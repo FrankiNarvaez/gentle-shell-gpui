@@ -171,12 +171,11 @@ impl Workspace {
             .gap_1p5()
             .rounded_md()
             .when(tab.shown, |d| d.bg(ui::raised()))
+            .when(!tab.shown && self.is_tab_selected(tab.space, tab.id), |d| {
+                d.bg(ui::surface_hover().opacity(0.75))
+            })
             .when(
-                !tab.shown && tab.id.is_some_and(|id| self.is_tab_selected(tab.space, id)),
-                |d| d.bg(ui::surface_hover().opacity(0.75)),
-            )
-            .when(
-                !tab.shown && tab.id.is_none_or(|id| !self.is_tab_selected(tab.space, id)),
+                !tab.shown && !self.is_tab_selected(tab.space, tab.id),
                 |d| d.hover(|s| s.bg(ui::surface_hover())),
             )
             .when(!self.popups_open(), |d| {
