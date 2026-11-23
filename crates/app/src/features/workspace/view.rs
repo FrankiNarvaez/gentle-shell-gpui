@@ -2,7 +2,7 @@
 
 use super::badge::{Mark, workspace_avatar};
 use super::menu::WorkspaceMenuSource;
-use super::tab_panel::{MultiTabMenu, TabMenu};
+use super::tab_panel::TabMenu;
 use super::*;
 use gpui_kit::component::Selectable as _;
 
@@ -173,7 +173,6 @@ impl Workspace {
                 };
                 let icon_color = if active { ui::petal() } else { ui::faint() };
                 let is_tab_selected = self.is_tab_selected(self.current, tab.id);
-                let selection_count = self.selected_tab_count(self.current);
                 let drag = TabDrag {
                     tab: tab.id,
                     title: title.clone(),
@@ -204,7 +203,8 @@ impl Workspace {
                     // carries the accent. The fill is the opaque popover layer
                     // with a hairline, so it reads over a see-through window
                     // and a busy backdrop alike; every tab keeps the border's
-                    // width so none shifts when another is picked.
+                    // width so none shifts when another is picked. A selected
+                    // tab, the active one included, is ringed in petal.
                     .border_1()
                     .when(active, |this| {
                         this.bg(ui::popover_bg().opacity(0.92))
@@ -213,14 +213,15 @@ impl Workspace {
                             .text_color(ui::fg())
                     })
                     .when(!active && is_tab_selected, |this| {
-                        this.bg(ui::surface_hover().opacity(0.75))
-                            .border_color(ui::border().opacity(0.5))
-                            .text_color(ui::fg())
+                        this.bg(ui::raised()).text_color(ui::fg())
                     })
                     .when(!active && !is_tab_selected, |this| {
                         this.border_color(gpui_kit::transparent_black())
                             .text_color(ui::muted())
                             .hover(|s| s.bg(ui::surface_hover().opacity(0.6)).text_color(ui::fg()))
+                    })
+                    .when(is_tab_selected, |this| {
+                        this.border_color(ui::petal().opacity(0.45))
                     })
                     // Keep clicks on tabs from turning into window drags (see the
                     // workspace chip).
@@ -230,28 +231,7 @@ impl Workspace {
                         MouseButton::Right,
                         cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            if is_tab_selected && selection_count >= 2 {
-                                let ids = this.selected_tab_ids(this.current);
-                                let any_unpinned = ids.iter().any(|&id| {
-                                    this.spaces[this.current]
-                                        .tabs
-                                        .iter()
-                                        .any(|t| t.id == id && !t.pinned)
-                                });
-                                this.open_multi_tab_menu(
-                                    MultiTabMenu {
-                                        space: this.current,
-                                        ids,
-                                        any_unpinned,
-                                        count: selection_count,
-                                    },
-                                    event.position,
-                                    window,
-                                    cx,
-                                );
-                            } else {
-                                this.open_tab_menu(tab_menu, event.position, window, cx);
-                            }
+                            this.open_tab_menu(tab_menu, event.position, window, cx);
                         }),
                     )
                     // A double-click on an agent tab renames its session.

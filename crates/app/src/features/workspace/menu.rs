@@ -202,8 +202,12 @@ impl Workspace {
                     .on_click(move |_, window, cx| {
                         let _ = tower.update(cx, |this, cx| {
                             // Gentle Tower is one tab per window: an open one
-                            // is revealed wherever it is, as `open_tower` does.
-                            this.switch_workspace(index, window, cx);
+                            // is revealed wherever it is; only a new one opens
+                            // in this workspace.
+                            let open = this.panes.values().any(|p| p.item.kind == PaneKind::Tower);
+                            if !open {
+                                this.switch_workspace(index, window, cx);
+                            }
                             this.open_tower(window, cx);
                         });
                     }),
@@ -230,8 +234,9 @@ impl Workspace {
             )
     }
 
-    /// Right-click on a tab opens this menu. Vertical tabs keep Move up/down;
-    /// horizontal tabs use a compact menu without them.
+    /// Right-click on a tab: on one of a 2+ selection, Pin/Unpin and Close
+    /// for the whole selection; otherwise the tab's own menu (vertical tabs
+    /// keep Move up/down, horizontal ones are compact).
     pub(super) fn open_tab_menu(
         &mut self,
         tab: TabMenu,
@@ -240,32 +245,33 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let weak = cx.entity().downgrade();
-        self.open_owned_menu(
-            "tab-menu",
-            position,
-            move |menu, _, _cx| Self::tab_actions_menu(menu, weak, tab),
-            window,
-            cx,
-        );
-    }
-
-    /// Right-click on a tab that is part of a 2+ selection opens this menu
-    /// with exactly Pin/Unpin and Close for the whole selection.
-    pub(super) fn open_multi_tab_menu(
-        &mut self,
-        selection: MultiTabMenu,
-        position: Point<Pixels>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let weak = cx.entity().downgrade();
-        self.open_owned_menu(
-            "tab-menu",
-            position,
-            move |menu, _, _cx| Self::multi_tab_actions_menu(menu, weak.clone(), selection.clone()),
-            window,
-            cx,
-        );
+        let ids = self.selected_tab_ids(tab.space);
+        if ids.len() >= 2 && ids.contains(&tab.id) {
+            let selection = MultiTabMenu {
+                space: tab.space,
+                any_unpinned: self.spaces[tab.space]
+                    .tabs
+                    .iter()
+                    .any(|t| !t.pinned && ids.contains(&t.id)),
+                count: ids.len(),
+                ids,
+            };
+            self.open_owned_menu(
+                "tab-menu",
+                position,
+                move |menu, _, _cx| Self::multi_tab_actions_menu(menu, weak, selection),
+                window,
+                cx,
+            );
+        } else {
+            self.open_owned_menu(
+                "tab-menu",
+                position,
+                move |menu, _, _cx| Self::tab_actions_menu(menu, weak, tab),
+                window,
+                cx,
+            );
+        }
     }
 
     /// Right-click on empty space of the tab area opens this menu.

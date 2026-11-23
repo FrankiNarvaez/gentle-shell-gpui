@@ -221,14 +221,6 @@ impl Workspace {
 
     // ── Tab multi-selection ───────────────────────────────────────────────
 
-    pub(super) fn selected_tab_count(&self, space: usize) -> usize {
-        self.tab_selection
-            .as_ref()
-            .filter(|s| s.space == space)
-            .map(|s| s.selected.len())
-            .unwrap_or(0)
-    }
-
     pub(super) fn is_tab_selected(&self, space: usize, id: usize) -> bool {
         self.tab_selection
             .as_ref()
@@ -551,7 +543,6 @@ impl Workspace {
 }
 
 /// A multi-selection of tabs shown in the context menu.
-#[derive(Clone)]
 pub(super) struct MultiTabMenu {
     pub space: usize,
     pub ids: Vec<usize>,
@@ -967,7 +958,7 @@ mod tests {
             |ws, window, cx| {
                 ws.apply_tab_click(1, false, false, None, window, cx);
                 assert_eq!(ws.space().active, 1);
-                assert_eq!(ws.selected_tab_count(0), 0);
+                assert!(ws.selected_tab_ids(0).is_empty());
                 ws.apply_tab_click(3, false, true, None, window, cx);
                 assert_eq!(sorted(ws.selected_tab_ids(0)), [2, 3, 4]);
                 // The range follows only the tabs shown by a filter.

@@ -149,7 +149,8 @@ impl Workspace {
 
     /// A tab as a 26 px row: kind icon in its state's tone, title, pin,
     /// status dot and pane count; the shown tab raised, with the accent
-    /// marker on its left.
+    /// marker on its left. Selected tabs, the shown one included, are raised
+    /// and ringed in petal.
     pub(super) fn tab_row(
         &self,
         tab: &TabEntry,
@@ -157,6 +158,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let tip = tab.tooltip();
+        let selected = self.is_tab_selected(tab.space, tab.id);
         let row = h_flex()
             .id(SharedString::from(format!(
                 "sidebar-tab-{}-{}",
@@ -170,14 +172,14 @@ impl Workspace {
             .pr_2()
             .gap_1p5()
             .rounded_md()
-            .when(tab.shown, |d| d.bg(ui::raised()))
-            .when(!tab.shown && self.is_tab_selected(tab.space, tab.id), |d| {
-                d.bg(ui::surface_hover().opacity(0.75))
+            // Every row keeps the ring's width so none shifts when selected.
+            .border_1()
+            .border_color(gpui_kit::transparent_black())
+            .when(tab.shown || selected, |d| d.bg(ui::raised()))
+            .when(selected, |d| d.border_color(ui::petal().opacity(0.45)))
+            .when(!tab.shown && !selected, |d| {
+                d.hover(|s| s.bg(ui::surface_hover()))
             })
-            .when(
-                !tab.shown && !self.is_tab_selected(tab.space, tab.id),
-                |d| d.hover(|s| s.bg(ui::surface_hover())),
-            )
             .when(!self.popups_open(), |d| {
                 d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
             })

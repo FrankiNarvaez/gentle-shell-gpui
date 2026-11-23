@@ -161,7 +161,6 @@ impl Pane {
 
 /// A tab is either restored but not yet built (it holds its saved layout
 /// until first shown), or has live panes.
-#[derive(Clone)]
 pub(super) enum TabState {
     Unbuilt(SavedTab),
     Built {
@@ -240,7 +239,6 @@ impl TabState {
     }
 }
 
-#[derive(Clone)]
 struct Tab {
     id: usize,
     pinned: bool,

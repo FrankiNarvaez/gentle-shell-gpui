@@ -3,7 +3,7 @@
 //! `parts`. It acts through the same operations as the horizontal strip.
 
 use super::badge::Mark;
-use super::tab_panel::{MultiTabMenu, TabMenu};
+use super::tab_panel::TabMenu;
 use super::view::new_tab_menu;
 use super::*;
 
@@ -283,30 +283,7 @@ impl Workspace {
             MouseButton::Right,
             cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                let selection_count = this.selected_tab_count(space);
-                let is_selected = this.is_tab_selected(space, id);
-                if is_selected && selection_count >= 2 {
-                    let ids = this.selected_tab_ids(space);
-                    let any_unpinned = ids.iter().any(|&sel_id| {
-                        this.spaces[space]
-                            .tabs
-                            .iter()
-                            .any(|t| t.id == sel_id && !t.pinned)
-                    });
-                    this.open_multi_tab_menu(
-                        MultiTabMenu {
-                            space,
-                            ids,
-                            any_unpinned,
-                            count: selection_count,
-                        },
-                        event.position,
-                        window,
-                        cx,
-                    );
-                } else {
-                    this.open_tab_menu(actions, event.position, window, cx);
-                }
+                this.open_tab_menu(actions, event.position, window, cx);
             }),
         );
         if space != self.current {
