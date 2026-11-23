@@ -807,7 +807,7 @@ impl SessionView {
                 let key = fold_key(ix, 0, OUTPUT);
                 let open = self.expanded.contains(&key);
                 let toggle = self.bubble_toggle(shown, key, open, cx);
-                let bubble = user_bubble(ix, shown, images, open, toggle);
+                let bubble = user_bubble(ix, shown, images, open, toggle, &self.bubble_images);
                 if text.trim().is_empty() {
                     return bubble.into_any_element();
                 }
@@ -1873,6 +1873,7 @@ impl SessionView {
                     pending.images.iter().cloned().map(Some).collect(),
                     open,
                     toggle,
+                    &self.bubble_images,
                 );
                 self.list
                     .appear(("item", base), now, div().w_full().child(bubble))
@@ -2587,13 +2588,16 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
 /// over the text, tokens shown as `🖼 #N`, a long text folded unless
 /// `open`, with its `toggle`. `None` is an image that could not be decoded.
 /// The text is selectable and copies with the platform shortcut, like an
-/// answer's; `ix` keys its selection.
+/// answer's; `ix` keys its selection. Images its Markdown shows load only
+/// from `data:` URLs (decoded into `embedded`) and local files: one linked
+/// on the network shows nothing, so a message fetches nothing.
 fn user_bubble(
     ix: usize,
     shown: &BubbleText,
     images: Vec<Option<Arc<Image>>>,
     open: bool,
     toggle: Option<Stateful<Div>>,
+    embedded: &Arc<crate::features::files::EmbeddedImages>,
 ) -> Div {
     let markdown = shown.visible(open);
     // min_w_0 on both levels: without it the bubble's minimum width is its
@@ -2630,7 +2634,14 @@ fn user_bubble(
                                         .bg(ui::accent().opacity(0.12))
                                         .border_1()
                                         .border_color(ui::border_strong()),
-                                ),
+                                )
+                                .image_source({
+                                    let embedded = embedded.clone();
+                                    move |uri| {
+                                        crate::features::files::offline_image(&embedded, uri)
+                                            .unwrap_or_else(no_image)
+                                    }
+                                }),
                         ),
                 )
             })
@@ -2639,6 +2650,14 @@ fn user_bubble(
                 toggle.map(|toggle| div().ml(rems(-12. / 16.)).mt(rems(-4. / 16.)).child(toggle)),
             ),
     )
+}
+
+/// An image source that fails at once, without loading anything: the
+/// image shows nothing.
+fn no_image() -> ImageSource {
+    ImageSource::Custom(Arc::new(|_, _| {
+        Some(Err(ImageCacheError::Asset("not loaded".into())))
+    }))
 }
 
 /// A rounded, cropped image (or a placeholder) for attachment strips.
@@ -2916,6 +2935,7 @@ mod tests {
                         Vec::new(),
                         true,
                         None,
+                        &Default::default(),
                     )
                     .into_any_element()
                 };
@@ -3054,6 +3074,7 @@ mod tests {
                         Vec::new(),
                         true,
                         None,
+                        &Default::default(),
                     )))
             }
         }
@@ -3109,6 +3130,7 @@ mod tests {
                         Vec::new(),
                         true,
                         None,
+                        &Default::default(),
                     ))
             }
         }
