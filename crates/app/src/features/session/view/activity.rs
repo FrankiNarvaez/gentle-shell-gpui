@@ -105,12 +105,8 @@ impl SessionView {
                 )
             })
             .when(busy, |this| {
-                // It breathes on the live overlay.
-                this.child(self.live_slots.slot("activity-dot", || {
-                    ui::pulse(div().size(rems(6. / 16.)).rounded_full().bg(ui::petal()))
-                        .into_any_element()
-                }))
-                .when_some(since, |this, since| {
+                // The turn's clock; the composer's orbit shows it's live.
+                this.when_some(since, |this, since| {
                     this.child(
                         div()
                             .font_family(ui::mono())

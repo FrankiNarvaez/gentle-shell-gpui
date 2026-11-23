@@ -879,25 +879,10 @@ impl SessionView {
                 if let Some(error) = error {
                     column = column.child(notice_card(NoticeLevel::Error, error));
                 }
-                // While the agent writes, a soft rose dot breathes after the
-                // text (on the live overlay); when it's done, the dot fades
-                // with the line.
+                // While the agent writes, the petal line beside the answer
+                // marks it live (the composer's orbit is the turn's one
+                // moving indicator); when it's done, the line fades.
                 let settle = self.answer_settle(ix, *streaming);
-                if has_text {
-                    match settle {
-                        Some(_) if *streaming => {
-                            column = column.child(self.live_slots.slot(("answer-dot", ix), || {
-                                ui::pulse(answer_dot()).into_any_element()
-                            }))
-                        }
-                        Some(k) if k < 1. => {
-                            column = column.child(
-                                answer_dot().bg(ui::petal().opacity(1. - ease_out_quint()(k))),
-                            )
-                        }
-                        _ => {}
-                    }
-                }
                 if !*streaming && has_text {
                     column = column
                         .group("assistant")
@@ -1027,21 +1012,9 @@ impl SessionView {
         // Live thoughts read along; finished ones fold away. A click flips either.
         let open = live != self.expanded.contains(&key);
         let elapsed = self.live.thinking.get(&(ix, block_ix)).map(Span::elapsed);
-        // Live, it breathes on the live overlay.
-        let star = if live {
-            self.live_slots.slot(("thinking-star", key), || {
-                ui::pulse(
-                    div()
-                        .text_size(rems(13. / 16.))
-                        .italic()
-                        .text_color(ui::info())
-                        .child("✳"),
-                )
-                .into_any_element()
-            })
-        } else {
-            div().text_color(ui::faint()).child("✳")
-        };
+        let star = div()
+            .text_color(if live { ui::info() } else { ui::faint() })
+            .child("✳");
         v_flex()
             .w_full()
             .gap_1p5()
@@ -1372,7 +1345,7 @@ impl SessionView {
                     )))
                 },
             )
-            .child(status_footer(spec.status, duration, &self.live_slots, ix))
+            .child(status_footer(spec.status, duration))
             .into_any_element()
     }
 
@@ -1391,26 +1364,16 @@ impl SessionView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let failed = spec.status == ToolStatus::Failed;
-        let running = spec.status == ToolStatus::Running;
         let icon = if failed { IconName::CircleX } else { spec.icon };
         let icon_color = if failed {
             ui::danger()
         } else {
             step_tone(spec.icon)
         };
-        let icon = if running {
-            self.live_slots
-                .slot(("step-icon", ix), move || {
-                    ui::pulse(div().child(Icon::new(icon).small().text_color(icon_color)))
-                        .into_any_element()
-                })
-                .into_any_element()
-        } else {
-            Icon::new(icon)
-                .small()
-                .text_color(icon_color)
-                .into_any_element()
-        };
+        let icon = Icon::new(icon)
+            .small()
+            .text_color(icon_color)
+            .into_any_element();
         self.step_row(
             ("step", ix),
             spec,
@@ -2605,14 +2568,8 @@ fn clock(elapsed: Duration) -> String {
     }
 }
 
-/// A tool card's last line: how it ended, or a spinner (on the live
-/// overlay, keyed by the card's item `ix`) while it runs.
-fn status_footer(
-    status: ToolStatus,
-    duration: Option<Duration>,
-    slots: &LiveSlots,
-    ix: usize,
-) -> Div {
+/// A tool card's last line: how it ended, or "Running" while it runs.
+fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
     let (icon, label, color) = match status {
         ToolStatus::Running => (None, "Running", ui::info()),
         ToolStatus::Done => (Some(IconName::Check), "Done", ui::success()),
@@ -2624,12 +2581,7 @@ fn status_footer(
         .gap_1p5()
         .text_size(rems(12. / 16.))
         .text_color(color)
-        .map(|this| match icon {
-            Some(icon) => this.child(Icon::new(icon).xsmall()),
-            None => this.child(slots.slot(("tool-spinner", ix), || {
-                ui::spinner(Size::XSmall, ui::info()).into_any_element()
-            })),
-        })
+        .when_some(icon, |this, icon| this.child(Icon::new(icon).xsmall()))
         .child(label)
         .when_some(duration, |this, d| {
             this.child(
@@ -2824,13 +2776,9 @@ fn code_block_header(block: &gpui_kit::base::text::CodeBlock, cx: &App) -> Div {
         )
 }
 
-/// The soft rose dot that breathes after an answer while the agent writes.
-fn answer_dot() -> Div {
-    div().size(rems(7. / 16.)).rounded_full().bg(ui::petal())
-}
-
 /// The petal-and-shimmer "agent is on it" row, its clock counting up once
-/// a second. The petal and the label move on the live overlay, under `key`.
+/// a second. With the composer's orbit, the turn's only moving indicators:
+/// the petal and the label move on the live overlay, under `key`.
 fn working_indicator(
     slots: &LiveSlots,
     key: impl Into<ElementId>,
