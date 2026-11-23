@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn unix_shim_quotes_the_path_and_runs_in_the_background() {
         let body = shim_body(std::path::Path::new("/Apps/It's/gs"));
-        assert!(body.contains(r#"'/Apps/It'''s/gs' --cwd "$@" >/dev/null 2>&1 &"#));
+        assert!(body.contains(r#"'/Apps/It'\''s/gs' --cwd "$@" >/dev/null 2>&1 &"#));
     }
 
     #[test]
