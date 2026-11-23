@@ -195,7 +195,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let folder = workspaces::root_key(folder);
-        let index = match self.spaces.iter().position(|s| s.root == folder) {
+        let index = match workspaces::find_root(self.spaces.iter().map(|s| &s.root), &folder) {
             Some(index) => index,
             None => self.push_space(None, folder),
         };
