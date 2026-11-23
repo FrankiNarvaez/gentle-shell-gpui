@@ -82,70 +82,70 @@ impl SessionView {
                 }
             });
 
-        let left = h_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_2()
-            .overflow_hidden()
-            .whitespace_nowrap()
-            .when_some(question, |this, question| {
-                this.child(
-                    h_flex()
-                        .min_w_0()
-                        .gap_1()
-                        .text_color(ui::warning())
-                        .child(Icon::new(IconName::MessageSquare).xsmall())
-                        .child(
-                            div()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(question),
-                        ),
-                )
-            })
-            .when(busy, |this| {
-                this.child(ui::pulse(
-                    div().size(rems(6. / 16.)).rounded_full().bg(ui::petal()),
-                ))
-                .when_some(since, |this, since| {
+        let left =
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_2()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .when_some(question, |this, question| {
                     this.child(
-                        div()
-                            .font_family(ui::mono())
-                            .text_size(ui::code_rems(11.))
-                            .text_color(ui::muted())
-                            .child(clock(since.elapsed())),
-                    )
-                })
-                .child(div().h(rems(10. / 16.)).w(px(1.)).bg(ui::border_strong()))
-                .map(|this| match (waiting, feed_phase, self.activity.phase) {
-                    _ if stopping => this.child(div().text_color(ui::muted()).child("✿ stopping…")),
-                    (Some(_), _, _) => this.child(
-                        div()
-                            .text_color(ui::petal())
-                            .child(format!("✿ waiting for {provider}…")),
-                    ),
-                    (None, Some(label), _) => {
-                        this.child(div().text_color(ui::petal()).child(format!("✿ {label}")))
-                    }
-                    (None, None, Some(phase)) => {
-                        this.child(div().text_color(ui::petal()).child(format!("✿ {phase}…")))
-                    }
-                    (None, None, None) => {
-                        this.child(div().text_color(ui::petal()).child("✿ working…"))
-                    }
-                })
-                .when_some(current_tool, |this, tool| {
-                    this.child(
-                        div()
+                        h_flex()
                             .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .text_color(ui::muted())
-                            .child(tool),
+                            .gap_1()
+                            .text_color(ui::warning())
+                            .child(Icon::new(IconName::MessageSquare).xsmall())
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .child(question),
+                            ),
                     )
                 })
-            });
+                .when(busy, |this| {
+                    this.child(div().size(rems(6. / 16.)).rounded_full().bg(ui::petal()))
+                        .when_some(since, |this, since| {
+                            this.child(
+                                div()
+                                    .font_family(ui::mono())
+                                    .text_size(ui::code_rems(11.))
+                                    .text_color(ui::muted())
+                                    .child(clock(since.elapsed())),
+                            )
+                            .child(ui::each_second())
+                        })
+                        .child(div().h(rems(10. / 16.)).w(px(1.)).bg(ui::border_strong()))
+                        .map(|this| match (waiting, feed_phase, self.activity.phase) {
+                            _ if stopping => {
+                                this.child(div().text_color(ui::muted()).child("✿ stopping…"))
+                            }
+                            (Some(_), _, _) => this.child(
+                                div()
+                                    .text_color(ui::petal())
+                                    .child(format!("✿ waiting for {provider}…")),
+                            ),
+                            (None, Some(label), _) => this
+                                .child(div().text_color(ui::petal()).child(format!("✿ {label}"))),
+                            (None, None, Some(phase)) => this
+                                .child(div().text_color(ui::petal()).child(format!("✿ {phase}…"))),
+                            (None, None, None) => {
+                                this.child(div().text_color(ui::petal()).child("✿ working…"))
+                            }
+                        })
+                        .when_some(current_tool, |this, tool| {
+                            this.child(
+                                div()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_ellipsis()
+                                    .text_color(ui::muted())
+                                    .child(tool),
+                            )
+                        })
+                });
 
         let width = self.pane_width.get();
         let statuses: Vec<(String, String)> = self
