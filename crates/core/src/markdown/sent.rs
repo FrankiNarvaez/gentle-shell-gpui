@@ -1,6 +1,11 @@
 //! A message you sent as the Markdown its bubble renders: shown as typed,
 //! with complete HTML fragments literal and authored line breaks kept.
 
+use std::borrow::Cow;
+use std::ops::Range;
+
+use markdown::mdast::Node;
+
 use super::{fence, fence_run};
 
 /// `text` as Markdown that shows it as typed: complete HTML fragments
@@ -9,60 +14,106 @@ pub fn sent_message(text: &str) -> String {
     keep_line_breaks(&literal_html(text))
 }
 
-/// Protect complete HTML fragments recognized at their start by the Markdown
-/// parser. Reparse after each pass to uncover constructs hidden by HTML blocks.
+/// Escape the complete HTML fragments the Markdown parser finds, so they
+/// show as typed. One parse finds every fragment start; starts inside a
+/// fragment already escaped are skipped. The text is parsed again only when
+/// a fragment ends inside raw text the parser kept (an HTML block or code
+/// running past it) holding what could start markup: escaping the fragment
+/// uncovers it.
 fn literal_html(text: &str) -> String {
-    let mut text = text.to_string();
+    if !text.contains('<') {
+        return text.to_string();
+    }
     let mut options = markdown::ParseOptions::gfm();
     // TextView reparses unclaimed math containing markup as ordinary prose.
     options.constructs.math_text = false;
     options.constructs.math_flow = false;
-    while let Ok(root) = markdown::to_mdast(&text, &options) {
-        let mut starts = Vec::new();
-        html_starts(&root, &mut starts);
-        // An HTML block indented one to three spaces starts at its indent.
-        for start in &mut starts {
-            *start += text.as_bytes()[*start..]
-                .iter()
-                .take_while(|b| matches!(b, b' ' | b'\t'))
-                .count();
-        }
-        starts.retain(|&start| text.as_bytes().get(start) == Some(&b'<'));
-        if starts.is_empty() {
-            break;
-        }
-        let start = starts[0];
-        let end = fragment_end(&text, start).unwrap_or(start + 1);
-        let mut escaped = String::new();
-        let mut line_start = false;
-        for ch in text[start..end].chars() {
-            if line_start && matches!(ch, ' ' | '\t') {
-                escaped.push_str(if ch == ' ' { "&#32;" } else { "&#9;" });
+    let mut text = Cow::Borrowed(text);
+    // Text before `from` is final.
+    let mut from = 0;
+    loop {
+        let Ok(root) = markdown::to_mdast(&text, &options) else {
+            return text.into_owned();
+        };
+        let (mut html, mut raw) = (Vec::new(), Vec::new());
+        raw_nodes(&root, &mut html, &mut raw);
+        let mut out = String::with_capacity(text.len() + text.len() / 4);
+        // Text before `copied` is in `out`.
+        let mut copied = 0;
+        let mut resume = None;
+        for node in html {
+            // An HTML block indented one to three spaces starts at its indent.
+            let Some(start) = text[node.clone()].find('<').map(|at| node.start + at) else {
+                continue;
+            };
+            if start < from.max(copied) {
                 continue;
             }
-            if line_start && ch == '\n' {
-                escaped.push('\\');
+            let end = fragment_end(&text, start).unwrap_or(start + 1);
+            out.push_str(&text[copied..start]);
+            escape(&text[start..end], &mut out);
+            copied = end;
+            if uncovers(&text, &raw, end) {
+                resume = Some(out.len());
+                break;
             }
-            line_start = ch == '\n';
-            if ch.is_ascii_punctuation() {
-                escaped.push('\\');
-            }
-            escaped.push(ch);
         }
-        text.replace_range(start..end, &escaped);
+        out.push_str(&text[copied..]);
+        let Some(at) = resume else {
+            return out;
+        };
+        (text, from) = (Cow::Owned(out), at);
     }
-    text
 }
 
-fn html_starts(node: &markdown::mdast::Node, starts: &mut Vec<usize>) {
-    if let markdown::mdast::Node::Html(html) = node {
-        if let Some(position) = &html.position {
-            starts.push(position.start.offset);
+/// The HTML nodes' ranges into `html`, and theirs and the code's (the text
+/// the parser keeps raw) into `raw`, in order.
+fn raw_nodes(node: &Node, html: &mut Vec<Range<usize>>, raw: &mut Vec<Range<usize>>) {
+    let range = || node.position().map(|p| p.start.offset..p.end.offset);
+    match node {
+        Node::Html(_) => {
+            if let Some(range) = range() {
+                html.push(range.clone());
+                raw.push(range);
+            }
         }
-    } else if let Some(children) = node.children() {
-        for child in children {
-            html_starts(child, starts);
+        Node::InlineCode(_) | Node::Code(_) => raw.extend(range()),
+        _ => {
+            for child in node.children().into_iter().flatten() {
+                raw_nodes(child, html, raw);
+            }
         }
+    }
+}
+
+/// Whether a fragment ending at `end` cuts a `raw` node short, leaving after
+/// it what may open markup (a tag, a code span or a fence) once no longer raw.
+fn uncovers(text: &str, raw: &[Range<usize>], end: usize) -> bool {
+    // Raw nodes never nest: only the last one starting before `end` can hold it.
+    let at = raw.partition_point(|node| node.start < end);
+    at.checked_sub(1)
+        .map(|at| &raw[at])
+        .is_some_and(|node| end < node.end && text[end..node.end].contains(['<', '`', '~']))
+}
+
+/// `fragment` escaped into `out` so Markdown shows it as typed: punctuation
+/// escaped, a line's indent as character references (it would make code),
+/// and a blank line as a hard break (it would end the paragraph).
+fn escape(fragment: &str, out: &mut String) {
+    let mut line_start = false;
+    for ch in fragment.chars() {
+        if line_start && matches!(ch, ' ' | '\t') {
+            out.push_str(if ch == ' ' { "&#32;" } else { "&#9;" });
+            continue;
+        }
+        if line_start && ch == '\n' {
+            out.push('\\');
+        }
+        line_start = ch == '\n';
+        if ch.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(ch);
     }
 }
 
@@ -254,6 +305,26 @@ mod tests {
     fn html_preprocessing_preserves_code_and_links() {
         let source = "`<div>` [link](<https://example.com>) &amp;\n\n```html\n<div>\n</div>\n```";
         assert_eq!(literal_html(source), source);
+    }
+
+    #[test]
+    fn markup_an_escaped_fragment_uncovers_is_literal_too() {
+        // The `<div>` block runs to the line's end, the `<b>` block to the
+        // blank line: what follows their fragments was raw HTML at first.
+        assert_eq!(
+            literal_html("<div>a</div><span>b</span>"),
+            r"\<div\>a\<\/div\>\<span\>b\<\/span\>"
+        );
+        assert_eq!(
+            literal_html("<b>\n</b>\nmore <i>y</i>\n\nafter"),
+            "\\<b\\>\n\\<\\/b\\>\nmore \\<i\\>y\\<\\/i\\>\n\nafter"
+        );
+        // The fragment ends inside a code span: its other backtick no longer
+        // hides the tag after it.
+        assert_eq!(
+            literal_html("<span>`</span> <b>`"),
+            r"\<span\>\`\<\/span\> \<b\>`"
+        );
     }
 
     #[test]

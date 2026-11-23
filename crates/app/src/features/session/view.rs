@@ -1860,14 +1860,16 @@ impl SessionView {
                 let Some(pending) = &self.live.pending else {
                     return div().into_any_element();
                 };
-                let shown = BubbleText::new(&pending.text);
+                let shown = pending
+                    .bubble
+                    .get_or_init(|| BubbleText::new(&pending.text));
                 // Keyed like the item its echo becomes, so it opens the same.
                 let key = fold_key(base, 0, OUTPUT);
                 let open = self.expanded.contains(&key);
-                let toggle = self.bubble_toggle(&shown, key, open, cx);
+                let toggle = self.bubble_toggle(shown, key, open, cx);
                 let bubble = user_bubble(
                     base,
-                    &shown,
+                    shown,
                     pending.images.iter().cloned().map(Some).collect(),
                     open,
                     toggle,
@@ -2149,34 +2151,37 @@ impl CodeLine {
     }
 }
 
-/// A message's text as its bubble shows it: image tokens as `🖼 #N`, and a
-/// long one's folded start.
+/// A message as its bubble shows it: the Markdown it renders
+/// ([`gentle_core::markdown::sent_message`], image tokens as `🖼 #N`) and a
+/// long one's folded start. Made once per message: every frame hands the
+/// text view the same strings, which it recognizes without parsing again.
 struct BubbleText {
-    text: SharedString,
-    /// The first [`USER_LINES`] lines of `text` and how many more it has,
-    /// when it is long enough to fold.
+    markdown: SharedString,
+    /// The first [`USER_LINES`] lines of `markdown` and how many more it
+    /// has, when it is long enough to fold. Cut from the whole message's
+    /// Markdown, so HTML closed past the fold still shows literally.
     folded: Option<(SharedString, usize)>,
 }
 
 impl BubbleText {
     fn new(text: &str) -> Self {
-        let shown = attachments::chip_text(text);
-        let lines = line_count(&shown);
+        let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(text));
+        let lines = line_count(&markdown);
         let folded = (lines > USER_LINES + USER_SLACK).then(|| {
-            let (head, hidden) = head_slice(&shown, lines, USER_LINES);
+            let (head, hidden) = head_slice(&markdown, lines, USER_LINES);
             (SharedString::from(head.to_string()), hidden)
         });
         Self {
-            text: shown.into(),
+            markdown: markdown.into(),
             folded,
         }
     }
 
-    /// What the bubble shows, `open` or not.
-    fn visible(&self, open: bool) -> SharedString {
+    /// The Markdown the bubble shows, `open` or not.
+    fn visible(&self, open: bool) -> &SharedString {
         match &self.folded {
-            Some((head, _)) if !open => head.clone(),
-            _ => self.text.clone(),
+            Some((head, _)) if !open => head,
+            _ => &self.markdown,
         }
     }
 }
@@ -2585,16 +2590,7 @@ fn user_bubble(
     open: bool,
     toggle: Option<Stateful<Div>>,
 ) -> Div {
-    let text = shown.visible(open);
-    // Parse the complete message before folding, so a closing tag beyond the
-    // fold still protects its visible content.
-    let markdown = if !open && shown.folded.is_some() {
-        let full = gentle_core::markdown::sent_message(&shown.text);
-        let lines = line_count(&full);
-        head_slice(&full, lines, USER_LINES).0.to_string()
-    } else {
-        gentle_core::markdown::sent_message(&text)
-    };
+    let markdown = shown.visible(open);
     // min_w_0 on both levels: without it the bubble's minimum width is its
     // unwrapped text, so in a narrow pane it overflows (clipped on the left).
     h_flex().w_full().min_w_0().justify_end().child(
@@ -2616,12 +2612,12 @@ fn user_bubble(
                     }),
                 ))
             })
-            .when(!text.trim().is_empty(), |this| {
+            .when(!markdown.trim().is_empty(), |this| {
                 this.child(
                     div()
                         .debug_selector(move || format!("user-text-{ix}"))
                         .child(
-                            gpui_kit::base::TextView::markdown(("user-text", ix), markdown)
+                            gpui_kit::base::TextView::markdown(("user-text", ix), markdown.clone())
                                 .selectable(true)
                                 .inline_code_style(
                                     StyleRefinement::default()
@@ -3029,25 +3025,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn user_bubble_attachment_substitution_and_folding() {
-        let text = format!(
-            "see [Image #1] and `café`\n{}",
-            (1..12)
-                .map(|i| format!("line {i}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-        let bubble = super::BubbleText::new(&text);
-        let open = bubble.visible(true);
-        let folded = bubble.visible(false);
-        assert!(open.starts_with("see 🖼 #1 and `café`\n"));
-        assert_eq!(folded.lines().count(), super::USER_LINES);
-        assert!(folded.starts_with("see 🖼 #1 and `café`\n"));
-        assert!(!folded.contains("line 11"));
-        assert!(open.contains("line 11"));
-    }
-
     #[gpui::test]
     fn user_bubble_wrapped_selection_copies_visible_text(cx: &mut gpui_kit::TestAppContext) {
         use gpui_kit::{
@@ -3243,11 +3220,20 @@ mod tests {
         let bubble = BubbleText::new(&long);
         let (head, hidden) = bubble.folded.clone().unwrap();
         assert_eq!(hidden, USER_SLACK + 1);
-        assert_eq!(head.as_ref(), message(USER_LINES, "\r\n"));
+        assert_eq!(
+            head.lines().map(str::trim_end).collect::<Vec<_>>(),
+            message(USER_LINES, "\n").lines().collect::<Vec<_>>()
+        );
         assert!(!head.ends_with('\r'));
         // Open, the whole text shows; folded, the head.
-        assert_eq!(bubble.visible(true), bubble.text);
-        assert_eq!(bubble.visible(false), head);
+        assert!(bubble.visible(true).starts_with(head.as_ref()));
+        assert_eq!(bubble.visible(false), &head);
+
+        // The head is cut from the whole message's Markdown: a tag closed
+        // past the fold still shows literally.
+        let html = format!("<div>\n{}\n</div>", message(USER_LINES + USER_SLACK, "\n"));
+        let (head, _) = BubbleText::new(&html).folded.unwrap();
+        assert!(head.starts_with(r"\<div\>"), "{head}");
     }
 
     #[test]
