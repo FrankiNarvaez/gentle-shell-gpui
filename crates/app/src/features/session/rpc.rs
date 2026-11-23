@@ -773,12 +773,17 @@ impl SessionView {
             json!({"type": "get_session_stats"}),
             cx,
             |this, result, cx| {
-                if let Ok(stats) = result {
-                    this.usage.cost = stats["cost"].as_f64().unwrap_or(0.0);
-                    this.set_context_percent(stats["contextUsage"]["percent"].as_f64(), cx);
-                }
+                this.apply_stats(result, cx);
             },
         );
+    }
+
+    pub(super) fn apply_stats(&mut self, result: Result<Value>, cx: &mut Context<Self>) {
+        self.usage.context_stats_received = true;
+        if let Ok(stats) = result {
+            self.usage.cost = stats["cost"].as_f64().unwrap_or(0.0);
+            self.set_context_percent(stats["contextUsage"]["percent"].as_f64(), cx);
+        }
     }
 
     /// The context meter's number, and the alert when it crosses the

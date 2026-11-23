@@ -503,11 +503,13 @@ impl SessionView {
                     .flex_shrink_0()
                     .child(chip)
             });
-        let ring = div()
-            .id("context-ring")
-            .debug_selector(|| "context-ring".into())
-            .flex_shrink_0()
-            .child(self.render_context_control(cx));
+        let ring = self.usage.context_visible(ready).then(|| {
+            div()
+                .id("context-ring")
+                .debug_selector(|| "context-ring".into())
+                .flex_shrink_0()
+                .child(self.render_context_control(cx))
+        });
         let action = div()
             .relative()
             .flex_shrink_0()
@@ -552,7 +554,7 @@ impl SessionView {
                                     .child(attach)
                                     .child(controls)
                                     .child(spacer())
-                                    .child(ring)
+                                    .children(ring)
                                     .children(usage)
                                     .child(action),
                             ),
@@ -582,7 +584,7 @@ impl SessionView {
                         )
                         .child(attach)
                         .child(spacer())
-                        .child(ring)
+                        .children(ring)
                         .children(usage)
                         .child(action),
                 ),
@@ -624,7 +626,7 @@ impl SessionView {
                         .child(segment(div()).min_w_0().flex_shrink(1.).child(controls))
                         .child(segment(div()).px_1().child(attach))
                         .child(spacer())
-                        .child(ring)
+                        .children(ring)
                         .children(usage.map(|usage| {
                             segment(div()).px_1().border_r_0().border_l_1().child(usage)
                         }))
@@ -701,7 +703,7 @@ impl SessionView {
                         .px_2()
                         .child(controls)
                         .child(spacer())
-                        .child(ring)
+                        .children(ring)
                         .children(usage),
                 ),
             // Soft (after Devin's): a rounded box, the text on top and a
@@ -727,7 +729,7 @@ impl SessionView {
                             .px_0p5()
                             .child(attach)
                             .child(spacer())
-                            .child(ring)
+                            .children(ring)
                             .children(usage)
                             .child(controls)
                             .child(action),

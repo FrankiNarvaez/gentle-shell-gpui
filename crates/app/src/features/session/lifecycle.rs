@@ -282,7 +282,7 @@ impl SessionView {
         self.title = None;
         self.capture = None;
         self.usage.compacting = false;
-        self.usage.context_latch.rearm();
+        self.usage.reset_context();
         self.refresh_git(cx);
         let cwd = self.cwd.clone();
         // A conversation to open goes in at launch (`--session`), not by

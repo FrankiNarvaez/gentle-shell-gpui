@@ -39,6 +39,8 @@ fn tab(cx: &mut TestAppContext) -> (Entity<SessionView>, &mut VisualTestContext)
     cx.add_window_view(|window, cx| {
         let mut view = SessionView::new(cwd, None, window, cx, false);
         view.backend.started = true;
+        view.usage.context_test_ready = true;
+        view.usage.context_stats_received = true;
         view
     })
 }
@@ -366,6 +368,86 @@ fn context_feed_updates_exact_usage_and_clears_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn context_ring_is_hidden_during_startup_even_with_context_data(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_test_ready = false;
+        view.usage.context_stats_received = false;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(61.0);
+        view.usage.context_tokens = Some(122000);
+        view.usage.context_stats_received = true;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        view.usage.context_test_ready = true;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        assert_eq!(view.usage.context_percent, None);
+        assert_eq!(view.usage.context_tokens, None);
+        // A successful empty-session stats response has no percentage.
+        view.usage.context_stats_received = true;
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+}
+
+#[gpui::test]
+fn context_ring_failed_stats_then_refresh(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(Err(anyhow::anyhow!("stats failed")), cx);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(
+            Ok(json!({"cost": 0.5, "contextUsage": {"percent": 61.0}})),
+            cx,
+        );
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-usage-61%"));
+    view.update(cx, |view, _| assert_eq!(view.usage.cost, 0.5));
+}
+
+#[gpui::test]
+fn context_ring_empty_stats_response(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(Ok(json!({})), cx);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+}
+
+#[gpui::test]
 fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     view.update(cx, |view, cx| {
@@ -581,6 +663,8 @@ fn context_ring_fits_and_opens_in_every_style_and_narrow_pane(cx: &mut TestAppCo
         let session = cx.new(|cx| {
             let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
             view.backend.started = true;
+            view.usage.context_test_ready = true;
+            view.usage.context_stats_received = true;
             view.usage.cost = 0.13;
             view
         });
