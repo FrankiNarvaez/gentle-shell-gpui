@@ -140,10 +140,7 @@ impl SessionView {
             .xsmall()
             .text_color(ui::info())
             .tooltip("Choose model")
-            .child(
-                div()
-                    .size(rems(7. / 16.))
-                    .rounded_full()
+            .child(div().size(rems(7. / 16.)).rounded_full().bg(dot))
             .child(
                 div()
                     .min_w_0()
