@@ -20,6 +20,13 @@ fn literal_html(text: &str) -> String {
     while let Ok(root) = markdown::to_mdast(&text, &options) {
         let mut starts = Vec::new();
         html_starts(&root, &mut starts);
+        // An HTML block indented one to three spaces starts at its indent.
+        for start in &mut starts {
+            *start += text.as_bytes()[*start..]
+                .iter()
+                .take_while(|b| matches!(b, b' ' | b'\t'))
+                .count();
+        }
         starts.retain(|&start| text.as_bytes().get(start) == Some(&b'<'));
         if starts.is_empty() {
             break;
@@ -247,6 +254,19 @@ mod tests {
     fn html_preprocessing_preserves_code_and_links() {
         let source = "`<div>` [link](<https://example.com>) &amp;\n\n```html\n<div>\n</div>\n```";
         assert_eq!(literal_html(source), source);
+    }
+
+    #[test]
+    fn indented_html_is_literal() {
+        assert_eq!(literal_html("  <div>x</div>"), r"  \<div\>x\<\/div\>");
+        assert_eq!(
+            literal_html("text\n  <img src=x>"),
+            "text\n  \\<img src\\=x\\>"
+        );
+        assert_eq!(
+            literal_html("   <a href=\"https://x\">y</a>"),
+            r#"   \<a href\=\"https\:\/\/x\"\>y\<\/a\>"#
+        );
     }
 
     #[test]
