@@ -146,6 +146,23 @@ impl SessionView {
             Some(window) => format!("{used} of {window}"),
             None => used,
         };
+        let ring_rows = [
+            (
+                "used-tokens",
+                "Used tokens",
+                self.usage.context_tokens.map(format_tokens),
+            ),
+            (
+                "context-window",
+                "Context window",
+                self.usage.context_window.map(format_tokens),
+            ),
+            (
+                "usage",
+                "Usage",
+                self.usage.context_percent.map(|p| format!("{p:.0}%")),
+            ),
+        ];
         let percent = self.usage.context_percent.unwrap_or(0.);
         let color = if ring {
             if percent >= 90. {
@@ -167,17 +184,36 @@ impl SessionView {
             color,
             label,
         )
-        .title("Context")
-        .count(count);
+        .title("Context");
         let options = if ring {
             options.ring(percent as f32)
         } else {
-            options
+            options.count(count)
         };
         chip_popover(options, move || {
             let compact = weak.clone();
             let toggle = weak.clone();
-            vec![
+            let mut rows = Vec::new();
+            if ring {
+                rows.extend(ring_rows.iter().filter_map(|(id, label, value)| {
+                    let value = value.clone()?;
+                    let selector = format!("context-ring-{id}-{value}");
+                    Some(
+                        h_flex()
+                            .text_size(rems(12. / 16.))
+                            .child(div().flex_1().text_color(ui::muted()).child(*label))
+                            .child(
+                                div()
+                                    .debug_selector(move || selector.clone())
+                                    .font_family(ui::mono())
+                                    .text_color(ui::fg())
+                                    .child(value),
+                            )
+                            .into_any_element(),
+                    )
+                }));
+            }
+            rows.extend(vec![
                     div()
                         .text_size(rems(12. / 16.))
                         .text_color(ui::muted())
@@ -224,7 +260,8 @@ impl SessionView {
                             })
                         })
                         .into_any_element(),
-                ]
+                ]);
+            rows
         })
     }
 

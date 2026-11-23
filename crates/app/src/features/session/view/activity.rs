@@ -253,7 +253,11 @@ impl SessionView {
             )
             // The window's size rides the context line over the composer.
             .when(context_full, |this| {
-                this.child(self.render_context_chip(cx))
+                this.child(
+                    div()
+                        .debug_selector(|| "legacy-context-chip".into())
+                        .child(self.render_context_chip(cx)),
+                )
             })
             // The review switch sits with the permission chip: both are this
             // workspace's rules for the agent (Gentle Shell `main`).
@@ -752,6 +756,10 @@ pub(super) fn chip_popover(
                                 .when(!count.is_empty(), |d| {
                                     d.child(
                                         div()
+                                            .debug_selector({
+                                                let id = id.clone();
+                                                move || format!("{id}-header-count")
+                                            })
                                             .text_size(ui::code_rems(12.))
                                             .font_family(ui::mono())
                                             .text_color(ui::muted())

@@ -378,6 +378,66 @@ fn context_ring_opens_existing_compaction_controls(cx: &mut TestAppContext) {
     assert!(drawn(cx, "context-compact-control"));
 }
 
+#[gpui::test]
+fn context_ring_details_update_live_and_hide_missing_values(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(61.0);
+        view.usage.context_tokens = Some(122000);
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-used-tokens-122k"));
+    assert!(drawn(cx, "context-ring-context-window-200k"));
+    assert!(drawn(cx, "context-ring-usage-61%"));
+    assert!(!drawn(cx, "context-ring-header-count"));
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(25.0);
+        view.usage.context_tokens = None;
+        view.usage.context_window = Some(100000);
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring-used-tokens-122k"));
+    assert!(!drawn(cx, "context-ring-context-window-200k"));
+    assert!(!drawn(cx, "context-ring-usage-61%"));
+    assert!(drawn(cx, "context-ring-context-window-100k"));
+    assert!(drawn(cx, "context-ring-usage-25%"));
+
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = None;
+        view.usage.context_tokens = Some(48100);
+        view.usage.context_window = None;
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-used-tokens-48.1k"));
+    assert!(!drawn(cx, "context-ring-context-window-100k"));
+    assert!(!drawn(cx, "context-ring-usage-25%"));
+    view.update(cx, |view, cx| {
+        view.usage.context_tokens = None;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring-used-tokens-48.1k"));
+    assert!(!drawn(cx, "context-ring-header-count"));
+}
+
+#[gpui::test]
+fn context_ring_preserves_legacy_context_panel(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.compacting = true;
+        view.usage.context_percent = Some(95.0);
+        cx.notify();
+    });
+    click(cx, "legacy-context-chip");
+    assert!(drawn(cx, "context-header-count"));
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+}
+
 struct SizedSession {
     session: Entity<SessionView>,
     width: f32,
