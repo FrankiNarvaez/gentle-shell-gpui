@@ -97,6 +97,12 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             PaletteAction::Welcome,
         ),
         row(
+            IconName::Terminal,
+            "Install `gsd` command",
+            "Type gsd in any terminal folder to open it here as a workspace",
+            PaletteAction::InstallGsd,
+        ),
+        row(
             IconName::Plus,
             "New session",
             &format!(
