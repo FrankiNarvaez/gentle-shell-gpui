@@ -1,7 +1,7 @@
 //! Command line: `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT] [--open-url URL]
 //! [--diagnostics]`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT]`
 pub struct Cli {
@@ -36,18 +36,129 @@ pub fn parse_cli() -> Cli {
     cli
 }
 
-/// The folder the first tab opens: the CLI argument, else the current
-/// directory, else home (GUI launches start in `/`).
+/// The folder the first tab opens: the CLI argument, else the folder the app
+/// was launched in, else home (GUI launches start in `/`).
 pub fn default_cwd() -> PathBuf {
-    parse_cli()
-        .folder
-        .filter(|p| p.is_dir())
-        .and_then(|p| dunce::canonicalize(p).ok())
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .filter(|p| p.parent().is_some())
-        })
+    cli_folder(parse_cli().folder, launch_dir())
+        .or_else(|| launch_folder(launch_dir(), pi_rpc::managed_install_root().as_deref()))
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The CLI folder argument as an existing folder. A relative argument (`.`,
+/// `myproject`) names a folder under `launch`, the folder the app was launched
+/// in, not under the app's current folder, which startup moves (`main`, on
+/// Windows).
+fn cli_folder(arg: Option<PathBuf>, launch: Option<PathBuf>) -> Option<PathBuf> {
+    arg.map(|p| match &launch {
+        Some(launch) if p.is_relative() => launch.join(p),
+        _ => p,
+    })
+    .filter(|p| p.is_dir())
+    .and_then(|p| dunce::canonicalize(p).ok())
+}
+
+static LAUNCH_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Remember the folder the app was launched in, before startup moves the
+/// app out of it (`main`, on Windows).
+pub fn remember_launch_dir() {
+    LAUNCH_DIR.get_or_init(|| std::env::current_dir().ok());
+}
+
+/// The folder the app was launched in: the one [`remember_launch_dir`] saw,
+/// else the current one.
+fn launch_dir() -> Option<PathBuf> {
+    match LAUNCH_DIR.get() {
+        Some(dir) => dir.clone(),
+        None => std::env::current_dir().ok(),
+    }
+}
+
+/// `launch` as the first tab's folder: not the root (where GUI launches
+/// start) nor a folder inside gentle-ai's managed install (`managed_root`),
+/// where a shortcut may start the app and where a tab would hold the
+/// install open.
+fn launch_folder(launch: Option<PathBuf>, managed_root: Option<&Path>) -> Option<PathBuf> {
+    launch.filter(|p| p.parent().is_some() && !managed_root.is_some_and(|root| within(p, root)))
+}
+
+/// `path` is `root` or inside it, ignoring case (Windows paths).
+fn within(path: &Path, root: &Path) -> bool {
+    let lower = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    lower(path).starts_with(&lower(root))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A terminal launch without a folder argument opens the terminal's
+    /// folder, as before the app moved off its launch folder at startup.
+    #[test]
+    fn a_terminal_launch_opens_the_terminals_folder() {
+        let terminal = std::env::temp_dir().join("project");
+        assert_eq!(
+            launch_folder(Some(terminal.clone()), None),
+            Some(terminal.clone())
+        );
+        let root = std::env::temp_dir().join("gentle-shell").join("install");
+        assert_eq!(
+            launch_folder(Some(terminal.clone()), Some(&root)),
+            Some(terminal)
+        );
+    }
+
+    #[test]
+    fn a_gui_launch_at_the_root_opens_home() {
+        let root = std::env::temp_dir()
+            .ancestors()
+            .last()
+            .unwrap()
+            .to_path_buf();
+        assert_eq!(launch_folder(Some(root), None), None);
+    }
+
+    /// A shortcut that starts the app inside gentle-ai's managed install
+    /// doesn't make that install the first tab's folder.
+    #[test]
+    fn a_launch_inside_the_managed_install_opens_home() {
+        let root = std::env::temp_dir().join("gentle-shell").join("install");
+        let programs = root
+            .join("home")
+            .join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("Gentle Shell");
+        assert_eq!(launch_folder(Some(programs), Some(&root)), None);
+        assert_eq!(launch_folder(Some(root.clone()), Some(&root)), None);
+    }
+
+    /// A relative folder argument names a folder under the launch folder,
+    /// even after startup moved the app's current folder elsewhere.
+    #[test]
+    fn a_relative_folder_argument_resolves_against_the_launch_folder() {
+        let launch = std::env::temp_dir().join(format!("gentle-cli-launch-{}", std::process::id()));
+        let project = launch.join("myproject");
+        std::fs::create_dir_all(&project).unwrap();
+        let expected = dunce::canonicalize(&project).unwrap();
+        let resolved = cli_folder(Some(PathBuf::from("myproject")), Some(launch.clone()));
+        let dot = cli_folder(Some(PathBuf::from(".")), Some(project.clone()));
+        std::fs::remove_dir_all(&launch).unwrap();
+        assert_eq!(resolved, Some(expected.clone()));
+        assert_eq!(dot, Some(expected));
+    }
+
+    /// An absolute folder argument opens as given, as before.
+    #[test]
+    fn an_absolute_folder_argument_opens_as_given() {
+        let folder = dunce::canonicalize(std::env::temp_dir()).unwrap();
+        let elsewhere = Some(PathBuf::from("Z:\nowhere"));
+        assert_eq!(cli_folder(Some(folder.clone()), elsewhere), Some(folder));
+        assert_eq!(cli_folder(None, Some(std::env::temp_dir())), None);
+    }
 }
