@@ -1049,6 +1049,18 @@ pub fn prose_style() -> gpui_kit::component::text::TextViewStyle {
             background_color: Some(backing),
             ..Default::default()
         })
+        .code_block(prose_code_block())
+}
+
+/// A fenced block in the agent's Markdown, after Tern's: rounded on a
+/// hairline, its language and Copy along the top (the block's actions,
+/// see `SessionView::markdown_view`), lines with room to read plain text.
+fn prose_code_block() -> gpui_kit::StyleRefinement {
+    gpui_kit::StyleRefinement::default()
+        .pt(rems(36. / 16.))
+        .rounded_lg()
+        .border_color(border())
+        .line_height(gpui_kit::relative(1.7))
 }
 
 /// The code spans' tint: the theme's teal, darker on a light theme.

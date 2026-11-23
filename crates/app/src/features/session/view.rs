@@ -368,6 +368,7 @@ impl SessionView {
                     .selectable(true)
                     .style(ui::prose_style())
                     .list_style(ui::prose_list_style())
+                    .code_block_actions(|block, _, cx| code_block_header(block, cx))
                     .image_source(move |uri| {
                         diagrams.image(uri).unwrap_or_else(|| uri.clone().into())
                     }),
@@ -2728,6 +2729,37 @@ fn notice_card(level: NoticeLevel, text: &str) -> Div {
                 })
                 .whitespace_normal()
                 .child(text.to_string()),
+        )
+}
+
+/// Along the top of a fenced block in an answer, after Tern's: its
+/// language, then Copy, which puts the code on the clipboard and says so.
+/// In the interface's font, not the code's.
+fn code_block_header(block: &gpui_kit::base::text::CodeBlock, cx: &App) -> Div {
+    use gpui_kit::component::WindowExt as _;
+    let code = block.code();
+    h_flex()
+        .gap_3()
+        .px_1()
+        .font_family(cx.theme().font_family.clone())
+        .text_size(rems(12. / 16.))
+        .text_color(ui::muted())
+        .children(block.lang().filter(|lang| !lang.is_empty()))
+        .child(
+            div()
+                .id("copy")
+                .cursor_pointer()
+                .hover(|s| s.text_color(ui::fg()))
+                .child("Copy")
+                .on_click(move |_, window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
+                    window.push_notification(
+                        gpui_kit::component::notification::Notification::success(
+                            "Copied to the clipboard.",
+                        ),
+                        cx,
+                    );
+                }),
         )
 }
 
