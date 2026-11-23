@@ -136,7 +136,7 @@ session/
     ├── live.rs               # timers and transient visual state
     ├── transcript_list.rs    # rows, measurements and caches of the virtualized list
     ├── cards.rs              # extension custom message cards
-    ├── composer.rs           # composer: context line, attachments, text and bottom bar
+    ├── composer.rs           # composer: context ring, attachments, text and bottom bar
     ├── activity.rs           # activity line and status chips (jobs, widgets, usage, helpers, limits)
     ├── slash_menu.rs         # `/` command menu and its keyboard handling
     ├── model_picker.rs       # model picker, search and keyboard handling

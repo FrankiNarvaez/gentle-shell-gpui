@@ -357,7 +357,7 @@ The app-level live check `live_review_changes_and_external_config` (`session/sta
 | `switch_session` | `sessionPath` | `open_session` | Open a saved session in a live backend |
 | `set_session_name` | `name` | `rename` | `/name`, double-click on the tab |
 | `compact` | `customInstructions?` | `compact` | `/compact` |
-| `set_auto_compaction` | `enabled` | `set_auto_compaction` | Context chip |
+| `set_auto_compaction` | `enabled` | `set_auto_compaction` | Context ring |
 | `get_last_assistant_text` | — | `copy_last_answer` | `/copy` |
 | `export_html` | `outputPath` | `export_to` | `/export` |
 

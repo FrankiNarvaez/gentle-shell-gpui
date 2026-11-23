@@ -1,4 +1,4 @@
-//! The composer: context line, attachments, text area and its bottom bar.
+//! The composer: attachments, text area and its bottom bar.
 
 use std::time::{Duration, Instant};
 
@@ -54,15 +54,7 @@ impl SessionView {
         })
     }
 
-    fn render_context_control(
-        &self,
-        ring: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement + use<> {
-        let high = self
-            .usage
-            .context_percent
-            .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
+    fn render_context_control(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let compacting = self.usage.compacting;
         let auto = self.usage.auto_compaction;
         let ready = self.backend.is_ready();
@@ -70,21 +62,10 @@ impl SessionView {
             Some(p) => format!("{p:.0}%"),
             None => "–".into(),
         };
-        let window = self
-            .models
-            .current
-            .as_ref()
-            .map(|m| m.context_window)
-            .filter(|w| *w > 0)
-            .map(format_tokens);
         let label = if compacting {
             "compacting…".to_string()
         } else {
             used.clone()
-        };
-        let count = match &window {
-            Some(window) => format!("{used} of {window}"),
-            None => used,
         };
         let ring_rows = [
             (
@@ -104,105 +85,73 @@ impl SessionView {
             ),
         ];
         let percent = self.usage.context_percent.unwrap_or(0.);
-        let color = if ring {
-            if percent >= 90. {
-                ui::danger()
-            } else if percent >= 70. {
-                ui::warning()
-            } else {
-                ui::success()
-            }
-        } else if high {
+        let color = if percent >= 90. {
+            ui::danger()
+        } else if percent >= 70. {
             ui::warning()
         } else {
-            ui::faint()
+            ui::success()
         };
         let weak = cx.entity().downgrade();
-        let options = ChipPopoverOptions::new(
-            if ring { "context-ring" } else { "context" },
-            IconName::Gauge,
-            color,
-            label,
-        )
-        .title("Context");
-        let options = if ring {
-            options.ring(
+        let options = ChipPopoverOptions::new("context-ring", IconName::Gauge, color, label)
+            .title("Context")
+            .ring(
                 percent as f32,
                 cx.entity(),
                 self.usage.context_details_open,
                 cx,
-            )
-        } else {
-            options.count(count)
-        };
+            );
         chip_popover(options, move || {
             let compact = weak.clone();
             let toggle = weak.clone();
             let mut rows = Vec::new();
-            if ring {
-                rows.extend(ring_rows.iter().filter_map(|(id, label, value)| {
-                    let value = value.clone()?;
-                    let selector = format!("context-ring-{id}-{value}");
-                    Some(
-                        h_flex()
-                            .text_size(rems(12. / 16.))
-                            .child(div().flex_1().text_color(ui::muted()).child(*label))
-                            .child(
-                                div()
-                                    .debug_selector(move || selector.clone())
-                                    .font_family(ui::mono())
-                                    .text_color(ui::fg())
-                                    .child(value),
-                            )
-                            .into_any_element(),
-                    )
-                }));
-            }
-            if ring {
-                let advice = if percent >= 90. {
-                    "Context is nearly full. Consider compacting or starting a new session."
-                } else if percent >= 70. {
-                    "Consider compacting or starting a new session."
-                } else {
-                    "Compacting summarizes the conversation to free context."
-                };
-                let instruction = "Add what to keep with /compact <instructions>.";
-                rows.push(
-                    div()
-                        .debug_selector(|| "context-ring-advice-divider".into())
-                        .my_1()
-                        .h(px(1.))
-                        .w_full()
-                        .bg(ui::border())
-                        .into_any_element(),
-                );
-                rows.push(
-                    v_flex()
+            rows.extend(ring_rows.iter().filter_map(|(id, label, value)| {
+                let value = value.clone()?;
+                let selector = format!("context-ring-{id}-{value}");
+                Some(
+                    h_flex()
                         .text_size(rems(12. / 16.))
-                        .text_color(ui::muted())
-                        .whitespace_normal()
-                        .child(div().debug_selector(move || advice.into()).child(advice))
+                        .child(div().flex_1().text_color(ui::muted()).child(*label))
                         .child(
                             div()
-                                .debug_selector(move || instruction.into())
-                                .child(instruction),
+                                .debug_selector(move || selector.clone())
+                                .font_family(ui::mono())
+                                .text_color(ui::fg())
+                                .child(value),
                         )
                         .into_any_element(),
-                );
+                )
+            }));
+            let advice = if percent >= 90. {
+                "Context is nearly full. Consider compacting or starting a new session."
+            } else if percent >= 70. {
+                "Consider compacting or starting a new session."
             } else {
-                rows.push(
-                    div()
-                        .text_size(rems(12. / 16.))
-                        .text_color(ui::muted())
-                        .whitespace_normal()
-                        .child(if high {
-                            "Context is nearly full. Compacting summarizes the conversation so far to free room."
-                        } else {
-                            "Compacting summarizes the conversation so far to free room. Add what to keep with /compact <instructions>."
-                        })
-                        .into_any_element(),
-                );
-            }
+                "Compacting summarizes the conversation to free context."
+            };
+            let instruction = "Add what to keep with /compact <instructions>.";
+            rows.push(
+                div()
+                    .debug_selector(|| "context-ring-advice-divider".into())
+                    .my_1()
+                    .h(px(1.))
+                    .w_full()
+                    .bg(ui::border())
+                    .into_any_element(),
+            );
+            rows.push(
+                v_flex()
+                    .text_size(rems(12. / 16.))
+                    .text_color(ui::muted())
+                    .whitespace_normal()
+                    .child(div().debug_selector(move || advice.into()).child(advice))
+                    .child(
+                        div()
+                            .debug_selector(move || instruction.into())
+                            .child(instruction),
+                    )
+                    .into_any_element(),
+            );
             rows.extend(vec![
                 h_flex()
                     .id("context-compact-control")
@@ -557,7 +506,7 @@ impl SessionView {
             .id("context-ring")
             .debug_selector(|| "context-ring".into())
             .flex_shrink_0()
-            .child(self.render_context_control(true, cx));
+            .child(self.render_context_control(cx));
         let action = div()
             .relative()
             .flex_shrink_0()
