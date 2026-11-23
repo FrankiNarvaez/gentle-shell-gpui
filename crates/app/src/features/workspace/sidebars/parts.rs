@@ -120,7 +120,8 @@ impl Workspace {
         let query = self.tab_search.read(cx).value().trim().to_lowercase();
         let mut tabs = self.sidebar_tabs(index);
         if !query.is_empty() {
-            tabs.retain(|tab| tab.title.to_lowercase().contains(&query));
+            let workspace_matches = self.spaces[index].name.to_lowercase().contains(&query);
+            tabs.retain(|tab| workspace_matches || tab.title.to_lowercase().contains(&query));
         }
         tabs
     }
@@ -129,9 +130,40 @@ impl Workspace {
         !self.tab_search.read(cx).value().trim().is_empty()
     }
 
-    /// A group's label, as the Files and Settings sidebars set them.
-    pub(super) fn section_row(label: &'static str) -> Div {
-        div().px_2().pt_3().pb_1().child(ui::section_label(label))
+    /// A direct workspace creation action, next to the list it affects.
+    pub(super) fn workspace_section(&self, cx: &mut Context<Self>) -> Div {
+        h_flex()
+            .px_2()
+            .pt_2()
+            .pb_1()
+            .justify_between()
+            .child(ui::section_label("Workspaces"))
+            .child(
+                Button::new("sidebar-new-workspace")
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::FolderPlus))
+                    .tooltip("New workspace")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.pick_workspace_folder(None, window, cx);
+                    })),
+            )
+    }
+
+    pub(super) fn global_activity_row(&self) -> Div {
+        let mut total = Activity::default();
+        for space in &self.spaces {
+            let activity = self.space_activity(space);
+            total.working += activity.working;
+            total.needs_you += activity.needs_you;
+        }
+        h_flex()
+            .px_3()
+            .py_1()
+            .gap_2()
+            .text_xs()
+            .child(div().text_color(ui::accent()).child(format!("{} running", total.working)))
+            .child(div().text_color(ui::warning()).child(format!("{} waiting", total.needs_you)))
     }
 
     /// The row a search with no match leaves, at `indent`.
@@ -305,6 +337,38 @@ impl Workspace {
                     .text_size(ui::code_rems(10.5))
                     .text_color(ui::faint())
                     .child(space.tabs.to_string()),
+            )
+            .child(
+                Button::new(("workspace-new-agent", index))
+                    .ghost()
+                    .xsmall()
+                    .icon(Icon::new(IconName::Plus))
+                    .tooltip("New session in this workspace")
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .dropdown_menu({
+                        let weak = cx.entity().downgrade();
+                        move |menu, _, _| {
+                            let mut menu = menu;
+                            for (kind, label) in [
+                                (PaneKind::Agent, "New agent"),
+                                (PaneKind::Terminal, "New terminal"),
+                                (PaneKind::Canvas, "New canvas"),
+                                (PaneKind::Tower, "New tower"),
+                            ] {
+                                let weak = weak.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label)
+                                        .icon(Icon::new(kind.icon()))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = weak.update(cx, |this, cx| {
+                                                this.open_workspace_tab(index, kind, window, cx);
+                                            });
+                                        }),
+                                );
+                            }
+                            menu
+                        }
+                    }),
             )
             .on_drag(
                 WorkspaceDrag {

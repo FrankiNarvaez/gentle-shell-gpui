@@ -276,6 +276,8 @@ struct Space {
     active: usize,
     /// The badge's chosen icon and color.
     badge: Badge,
+    /// Whether this workspace's sessions are visible in the sidebar.
+    sidebar_expanded: bool,
 }
 
 impl Space {
@@ -287,6 +289,7 @@ impl Space {
             tabs: Vec::new(),
             active: 0,
             badge: Badge::default(),
+            sidebar_expanded: true,
         }
     }
 }
@@ -382,9 +385,6 @@ pub struct Workspace {
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     tab_layout: TabLayout,
-    /// Workspaces opened or closed by hand in the sidebar, by name; one not
-    /// listed is open while it is the shown one.
-    sidebar_open_spaces: HashMap<String, bool>,
     /// The workspace whose badge picker is open, and where it opened.
     badge_picker: Option<(usize, Point<Pixels>)>,
     /// A right-click context menu owned by the workspace so its open state
@@ -453,6 +453,7 @@ impl Workspace {
                     tabs: Vec::new(),
                     active: 0,
                     badge: w.badge,
+                    sidebar_expanded: w.sidebar_expanded,
                 }
             })
             .collect();
@@ -517,7 +518,6 @@ impl Workspace {
             sidebar: None,
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
-            sidebar_open_spaces: HashMap::new(),
             badge_picker: None,
             open_menu: None,
             workspace_rename: None,
@@ -575,7 +575,6 @@ impl Workspace {
             let root = this.space().root.clone();
             this.open_tab(PaneKind::Agent, root, Some(prompt), None, window, cx);
         } else {
-            this.ensure_open(target, window, cx);
             let active = this.space().active;
             this.activate(active, window, cx);
         }

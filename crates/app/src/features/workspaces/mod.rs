@@ -57,6 +57,9 @@ pub struct SavedWorkspace {
     /// The workspace's badge as the person chose it.
     #[serde(default, skip_serializing_if = "Badge::is_default")]
     pub badge: Badge,
+    /// Older layouts show all workspaces expanded by default.
+    #[serde(default = "shown")]
+    pub sidebar_expanded: bool,
 }
 
 /// How a workspace's badge looks: an icon in place of its initials, and a

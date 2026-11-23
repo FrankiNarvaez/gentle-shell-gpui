@@ -236,18 +236,16 @@ impl Workspace {
 
     /// Whether the Accordion shows workspace `index`'s tabs.
     pub(super) fn sidebar_space_open(&self, index: usize) -> bool {
-        self.spaces.get(index).is_some_and(|space| {
-            self.sidebar_open_spaces
-                .get(&space.name)
-                .copied()
-                .unwrap_or(index == self.current)
-        })
+        self.spaces
+            .get(index)
+            .is_some_and(|space| space.sidebar_expanded)
     }
 
     pub(super) fn toggle_sidebar_space(&mut self, index: usize, cx: &mut Context<Self>) {
         let open = !self.sidebar_space_open(index);
-        if let Some(space) = self.spaces.get(index) {
-            self.sidebar_open_spaces.insert(space.name.clone(), open);
+        if let Some(space) = self.spaces.get_mut(index) {
+            space.sidebar_expanded = open;
+            self.schedule_save(cx);
             cx.notify();
         }
     }

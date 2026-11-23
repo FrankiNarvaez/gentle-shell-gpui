@@ -17,11 +17,13 @@ impl Workspace {
             .px_2()
             .pb_2()
             .gap_px()
-            .child(Self::section_row("Workspaces"));
+            .child(self.workspace_section(cx));
         let mut matches = 0;
         for space in self.sidebar_spaces() {
             let tabs = self.visible_tabs(space.index, cx);
-            if searching && tabs.is_empty() {
+            if searching && tabs.is_empty() && !space.name.to_lowercase().contains(
+                &self.tab_search.read(cx).value().trim().to_lowercase(),
+            ) {
                 continue;
             }
             matches += tabs.len();
@@ -49,7 +51,7 @@ impl Workspace {
                 .border_color(ui::border().opacity(0.6))
                 .gap_px();
             if tabs.is_empty() {
-                guide = guide.child(Self::quiet_row("No tabs yet", INDENT - 14.));
+                guide = guide.child(Self::quiet_row("No sessions yet", INDENT - 14.));
             }
             for tab in &tabs {
                 guide = guide.child(self.tab_row(tab, INDENT - 14., cx));
@@ -65,6 +67,7 @@ impl Workspace {
             .child(self.sidebar_header(actions, cx))
             .child(self.sidebar_search())
             .child(list)
+            .child(self.global_activity_row())
             .child(self.new_tab_tiles(("sidebar-add-agent", "sidebar-add-terminal"), cx))
             .into_any_element()
     }
