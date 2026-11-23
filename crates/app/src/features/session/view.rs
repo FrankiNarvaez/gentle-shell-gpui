@@ -807,7 +807,7 @@ impl SessionView {
                 let key = fold_key(ix, 0, OUTPUT);
                 let open = self.expanded.contains(&key);
                 let toggle = self.bubble_toggle(shown, key, open, cx);
-                let bubble = user_bubble(ix, shown, images, open, toggle);
+                let bubble = user_bubble(ix, shown, images, open, toggle, &self.bubble_images);
                 if text.trim().is_empty() {
                     return bubble.into_any_element();
                 }
@@ -1860,17 +1860,20 @@ impl SessionView {
                 let Some(pending) = &self.live.pending else {
                     return div().into_any_element();
                 };
-                let shown = BubbleText::new(&pending.text);
+                let shown = pending
+                    .bubble
+                    .get_or_init(|| BubbleText::new(&pending.text));
                 // Keyed like the item its echo becomes, so it opens the same.
                 let key = fold_key(base, 0, OUTPUT);
                 let open = self.expanded.contains(&key);
-                let toggle = self.bubble_toggle(&shown, key, open, cx);
+                let toggle = self.bubble_toggle(shown, key, open, cx);
                 let bubble = user_bubble(
                     base,
-                    &shown,
+                    shown,
                     pending.images.iter().cloned().map(Some).collect(),
                     open,
                     toggle,
+                    &self.bubble_images,
                 );
                 self.list
                     .appear(("item", base), now, div().w_full().child(bubble))
@@ -2149,34 +2152,42 @@ impl CodeLine {
     }
 }
 
-/// A message's text as its bubble shows it: image tokens as `🖼 #N`, and a
-/// long one's folded start.
+/// A message as its bubble shows it: the Markdown it renders
+/// ([`gentle_core::markdown::sent_message`], image tokens as `🖼 #N`) and a
+/// long one's folded start. Made once per message: every frame hands the
+/// text view the same strings, which it recognizes without parsing again.
 struct BubbleText {
-    text: SharedString,
-    /// The first [`USER_LINES`] lines of `text` and how many more it has,
-    /// when it is long enough to fold.
+    markdown: SharedString,
+    /// The first [`USER_LINES`] lines of `markdown` and how many more it
+    /// has, when it is long enough to fold. Cut from the whole message's
+    /// Markdown, so HTML closed past the fold still shows literally.
     folded: Option<(SharedString, usize)>,
 }
 
 impl BubbleText {
     fn new(text: &str) -> Self {
-        let shown = attachments::chip_text(text);
-        let lines = line_count(&shown);
+        let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(text));
+        let lines = line_count(&markdown);
         let folded = (lines > USER_LINES + USER_SLACK).then(|| {
-            let (head, hidden) = head_slice(&shown, lines, USER_LINES);
-            (SharedString::from(head.to_string()), hidden)
+            let (head, _) = head_slice(&markdown, lines, USER_LINES);
+            let head = gentle_core::markdown::trim_folded(head);
+            // The blank lines trimmed off its end are hidden too.
+            (
+                SharedString::from(head.to_string()),
+                lines - line_count(head),
+            )
         });
         Self {
-            text: shown.into(),
+            markdown: markdown.into(),
             folded,
         }
     }
 
-    /// What the bubble shows, `open` or not.
-    fn visible(&self, open: bool) -> SharedString {
+    /// The Markdown the bubble shows, `open` or not.
+    fn visible(&self, open: bool) -> &SharedString {
         match &self.folded {
-            Some((head, _)) if !open => head.clone(),
-            _ => self.text.clone(),
+            Some((head, _)) if !open => head,
+            _ => &self.markdown,
         }
     }
 }
@@ -2577,15 +2588,18 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
 /// over the text, tokens shown as `🖼 #N`, a long text folded unless
 /// `open`, with its `toggle`. `None` is an image that could not be decoded.
 /// The text is selectable and copies with the platform shortcut, like an
-/// answer's; `ix` keys its selection.
+/// answer's; `ix` keys its selection. Images its Markdown shows load only
+/// from `data:` URLs (decoded into `embedded`) and local files: one linked
+/// on the network shows nothing, so a message fetches nothing.
 fn user_bubble(
     ix: usize,
     shown: &BubbleText,
     images: Vec<Option<Arc<Image>>>,
     open: bool,
     toggle: Option<Stateful<Div>>,
+    embedded: &Arc<crate::features::files::EmbeddedImages>,
 ) -> Div {
-    let text = shown.visible(open);
+    let markdown = shown.visible(open);
     // min_w_0 on both levels: without it the bubble's minimum width is its
     // unwrapped text, so in a narrow pane it overflows (clipped on the left).
     h_flex().w_full().min_w_0().justify_end().child(
@@ -2607,11 +2621,25 @@ fn user_bubble(
                     }),
                 ))
             })
-            .when(!text.trim().is_empty(), |this| {
+            .when(!markdown.trim().is_empty(), |this| {
                 this.child(
                     div()
                         .debug_selector(move || format!("user-text-{ix}"))
-                        .child(gpui_kit::base::SelectableText::new(("user-text", ix), text)),
+                        .child(
+                            // The answers' prose style; the bubble's own
+                            // text size and color, inherited.
+                            TextView::markdown(("user-text", ix), markdown.clone())
+                                .selectable(true)
+                                .style(ui::prose_style())
+                                .list_style(ui::prose_list_style())
+                                .image_source({
+                                    let embedded = embedded.clone();
+                                    move |uri| {
+                                        crate::features::files::offline_image(&embedded, uri)
+                                            .unwrap_or_else(no_image)
+                                    }
+                                }),
+                        ),
                 )
             })
             // The toggle's own padding, undone so its label lines up with the text.
@@ -2619,6 +2647,14 @@ fn user_bubble(
                 toggle.map(|toggle| div().ml(rems(-12. / 16.)).mt(rems(-4. / 16.)).child(toggle)),
             ),
     )
+}
+
+/// An image source that fails at once, without loading anything: the
+/// image shows nothing.
+fn no_image() -> ImageSource {
+    ImageSource::Custom(Arc::new(|_, _| {
+        Some(Err(ImageCacheError::Asset("not loaded".into())))
+    }))
 }
 
 /// A rounded, cropped image (or a placeholder) for attachment strips.
@@ -2866,6 +2902,221 @@ mod tests {
         }
     }
 
+    #[gpui::test]
+    fn user_bubble_selection_changes_and_text_updates(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{
+            AppContext as _, InteractiveElement as _, Modifiers, MouseButton, ParentElement as _,
+            Render, Styled as _, base::TextSelection, point, px,
+        };
+
+        struct Bubble {
+            text: &'static str,
+            focus: gpui_kit::FocusHandle,
+        }
+        impl Render for Bubble {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div()
+                    .id("focus")
+                    .track_focus(&self.focus)
+                    .size_full()
+                    .child(super::user_bubble(
+                        0,
+                        &super::BubbleText::new(self.text),
+                        Vec::new(),
+                        true,
+                        None,
+                        &Default::default(),
+                    ))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let focus = cx.focus_handle();
+            window.focus(&focus, cx);
+            let view = cx.new(|_| Bubble {
+                text: "hello `café` world",
+                focus,
+            });
+            gpui_kit::base::Root::new(view, window, cx)
+        });
+        let view = root.read_with(cx, |root, _| {
+            root.view().clone().downcast::<Bubble>().unwrap()
+        });
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("user-text-0").unwrap();
+        let start = point(bounds.left() + px(1.), bounds.center().y);
+        let end = point(bounds.right() - px(1.), bounds.center().y);
+        let drag = |cx: &mut gpui_kit::VisualTestContext, end| {
+            cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+            cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        };
+        let copy = |cx: &mut gpui_kit::VisualTestContext| {
+            cx.update(|_, cx| {
+                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()))
+            });
+            cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+                "cmd-c"
+            } else {
+                "ctrl-c"
+            });
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .unwrap_or_default()
+            })
+        };
+        drag(cx, end);
+        // TextView's selection API includes a block separator; the copy action
+        // omits that separator from the clipboard.
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                "hello café world\n"
+            );
+        });
+        assert_eq!(copy(cx), "hello café world");
+        drag(cx, point(bounds.left() + px(35.), bounds.center().y));
+        let partial = cx.update(TextSelection::selected_text);
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+        });
+        let after = cx.update(TextSelection::selected_text);
+        assert_eq!(partial, after);
+        assert_eq!(after, "hell\n");
+        assert_eq!(copy(cx), "hell");
+        view.update(cx, |view, cx| {
+            view.text = "replacement `é` text";
+            cx.notify();
+        });
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(TextSelection::selected_text(window, cx), "");
+        });
+        cx.update(TextSelection::clear);
+        cx.update(|window, cx| assert_eq!(TextSelection::selected_text(window, cx), ""));
+        assert_eq!(copy(cx), "sentinel");
+        cx.run_until_parked();
+        let replacement = cx.debug_bounds("user-text-0").unwrap();
+        let replacement_start = point(replacement.left() + px(1.), replacement.center().y);
+        let replacement_end = point(replacement.right() - px(1.), replacement.center().y);
+        cx.simulate_mouse_down(replacement_start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(replacement_end, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(replacement_end, MouseButton::Left, Modifiers::none());
+        assert_eq!(copy(cx), "replacement é text");
+    }
+
+    #[gpui::test]
+    fn user_bubble_wrapped_selection_copies_visible_text(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{
+            Modifiers, MouseButton, ParentElement as _, Render, Styled as _, base::TextSelection,
+            point, px,
+        };
+        const TEXT: &str =
+            "first `café code followed by enough words to wrap onto several lines` end";
+        struct Bubble;
+        impl Render for Bubble {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div()
+                    .size_full()
+                    .child(gpui_kit::base::TextSelectionLayer)
+                    .child(gpui_kit::div().w(px(180.)).child(super::user_bubble(
+                        0,
+                        &super::BubbleText::new(TEXT),
+                        Vec::new(),
+                        true,
+                        None,
+                        &Default::default(),
+                    )))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Bubble);
+        cx.run_until_parked();
+        let bounds = cx.debug_bounds("user-text-0").unwrap();
+        assert!(bounds.size.height > px(30.), "fixture must wrap");
+        let start = point(bounds.left() + px(1.), bounds.top() + px(5.));
+        let end = point(bounds.right() - px(1.), bounds.bottom() - px(5.));
+        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert_eq!(
+                TextSelection::selected_text(window, cx),
+                "first café code followed by enough words to wrap onto several lines end\n"
+            );
+        });
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-c"
+        } else {
+            "ctrl-c"
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .unwrap_or_default()),
+            "first café code followed by enough words to wrap onto several lines end"
+        );
+    }
+
+    #[gpui::test]
+    fn user_bubble_backticks_paint_code_background(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{ParentElement as _, Render, Styled as _};
+
+        struct Bubble;
+        impl Render for Bubble {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div()
+                    .size_full()
+                    .child(gpui_kit::base::TextSelectionLayer)
+                    .child(super::user_bubble(
+                        0,
+                        &super::BubbleText::new("hello `café` world"),
+                        Vec::new(),
+                        true,
+                        None,
+                        &Default::default(),
+                    ))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (_, cx) = cx.add_window_view(|_, _| Bubble);
+        cx.run_until_parked();
+        // The answers' inline code backing, not a style of the bubble's own.
+        let backing: gpui_kit::Background = crate::shared::ui::prose_style()
+            .inline_code
+            .background_color
+            .expect("prose code has a backing")
+            .into();
+        cx.update(|window, cx| {
+            let _ = window.draw(cx);
+            assert!(
+                window
+                    .painted_quads()
+                    .into_iter()
+                    .any(|quad| quad.background == backing),
+                "inline code backing must be painted"
+            );
+        });
+    }
+
     fn step(name: &str, status: ToolStatus) -> Item {
         Item::Tool {
             call_id: format!("{name}-1"),
@@ -2947,11 +3198,30 @@ mod tests {
         let bubble = BubbleText::new(&long);
         let (head, hidden) = bubble.folded.clone().unwrap();
         assert_eq!(hidden, USER_SLACK + 1);
-        assert_eq!(head.as_ref(), message(USER_LINES, "\r\n"));
+        assert_eq!(
+            head.lines().map(str::trim_end).collect::<Vec<_>>(),
+            message(USER_LINES, "\n").lines().collect::<Vec<_>>()
+        );
         assert!(!head.ends_with('\r'));
         // Open, the whole text shows; folded, the head.
-        assert_eq!(bubble.visible(true), bubble.text);
-        assert_eq!(bubble.visible(false), head);
+        assert!(bubble.visible(true).starts_with(head.as_ref()));
+        assert_eq!(bubble.visible(false), &head);
+
+        // The head is cut from the whole message's Markdown: a tag closed
+        // past the fold still shows literally.
+        let html = format!("<div>\n{}\n</div>", message(USER_LINES + USER_SLACK, "\n"));
+        let (head, _) = BubbleText::new(&html).folded.unwrap();
+        assert!(head.starts_with(r"\<div\>"), "{head}");
+        // A blank line inside it, last before the fold, is no stray `\`:
+        // it is hidden with the rest.
+        let gap = format!(
+            "<div>\n{}\n\n{}\n</div>",
+            message(USER_LINES - 2, "\n"),
+            message(USER_SLACK + 2, "\n")
+        );
+        let (head, hidden) = BubbleText::new(&gap).folded.unwrap();
+        assert!(head.ends_with("line 6"), "{head}");
+        assert_eq!(hidden, USER_SLACK + 4);
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub use mermaid::{
     renderer as diagram_renderer,
 };
 pub use tree::{FileTreeEvent, FileTreeView};
-pub use viewer::FileView;
+pub use viewer::{EmbeddedImages, FileView, offline_image};
 
 use std::path::Path;
 

@@ -2393,6 +2393,7 @@ dependencies = [
 name = "gentle-core"
 version = "0.1.27"
 dependencies = [
+ "markdown",
  "regex",
  "serde",
  "serde_json",

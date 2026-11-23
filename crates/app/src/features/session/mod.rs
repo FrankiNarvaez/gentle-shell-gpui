@@ -110,6 +110,8 @@ pub struct SessionView {
     markdown: HashMap<(usize, usize), (Entity<TextViewState>, usize, usize)>,
     /// The conversation's Mermaid diagrams, drawn by the diagram renderer.
     diagrams: std::sync::Arc<crate::features::files::MermaidDiagrams>,
+    /// The `data:` images messages you sent show, decoded once.
+    bubble_images: std::sync::Arc<crate::features::files::EmbeddedImages>,
     expanded: HashSet<usize>,
     /// Generative UI surfaces the agent showed (`gentle_ui`), rebuilt
     /// from the transcript.
@@ -315,6 +317,7 @@ impl SessionView {
             transcript: Transcript::default(),
             markdown: HashMap::new(),
             diagrams: Default::default(),
+            bubble_images: Default::default(),
             expanded: HashSet::new(),
             genui: Default::default(),
             genui_mode: crate::features::genui::mode::mode(cx),
