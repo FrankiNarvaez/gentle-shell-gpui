@@ -64,7 +64,7 @@ impl Workspace {
             .map(|(index, space)| WorkspaceRow {
                 index,
                 name: space.name.clone(),
-                tabs: space.tab_count(),
+                tabs: space.tabs.len(),
                 current: index == self.current,
                 activity: self.space_activity(space),
             })
@@ -77,6 +77,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let needs_agent = matches!(
+            action,
+            PaletteAction::Agents
+                | PaletteAction::NewSession
+                | PaletteAction::Command(_)
+                | PaletteAction::Screen(_)
+        );
+        if needs_agent {
+            self.ensure_agent_built(window, cx);
+        }
         let tab = self.active_session();
         match action {
             PaletteAction::Providers => self.open_providers(window, cx),
@@ -138,7 +148,7 @@ impl Workspace {
             PaletteAction::CreateWorkspace {
                 name,
                 pick_folder: true,
-            } => self.pick_workspace_folder(name, window, cx),
+            } => self.pick_workspace_folder(Some(name), window, cx),
             PaletteAction::OpenFile(path) => self.open_file(path, window, cx),
             PaletteAction::SwitchBranch(branch) => self.confirm_switch_branch(branch, window, cx),
         }

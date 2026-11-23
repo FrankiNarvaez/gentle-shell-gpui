@@ -165,7 +165,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(next) = self.tab().and_then(|t| t.tree.cycle(&t.focused, true)) {
+        if let Some(next) = self
+            .tab()
+            .and_then(|t| t.built_tree()?.cycle(&t.focused()?, true))
+        {
             self.focus_pane(next, window, cx);
         }
     }
@@ -176,7 +179,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(prev) = self.tab().and_then(|t| t.tree.cycle(&t.focused, false)) {
+        if let Some(prev) = self
+            .tab()
+            .and_then(|t| t.built_tree()?.cycle(&t.focused()?, false))
+        {
             self.focus_pane(prev, window, cx);
         }
     }
