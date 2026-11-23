@@ -213,7 +213,39 @@ impl SessionView {
                     )
                 }));
             }
-            rows.extend(vec![
+            if ring {
+                let advice = if percent >= 90. {
+                    "Context is nearly full. Consider compacting or starting a new session."
+                } else if percent >= 70. {
+                    "Consider compacting or starting a new session."
+                } else {
+                    "Compacting summarizes the conversation to free context."
+                };
+                let instruction = "Add what to keep with /compact <instructions>.";
+                rows.push(
+                    div()
+                        .debug_selector(|| "context-ring-advice-divider".into())
+                        .my_1()
+                        .h(px(1.))
+                        .w_full()
+                        .bg(ui::border())
+                        .into_any_element(),
+                );
+                rows.push(
+                    v_flex()
+                        .text_size(rems(12. / 16.))
+                        .text_color(ui::muted())
+                        .whitespace_normal()
+                        .child(div().debug_selector(move || advice.into()).child(advice))
+                        .child(
+                            div()
+                                .debug_selector(move || instruction.into())
+                                .child(instruction),
+                        )
+                        .into_any_element(),
+                );
+            } else {
+                rows.push(
                     div()
                         .text_size(rems(12. / 16.))
                         .text_color(ui::muted())
@@ -224,43 +256,49 @@ impl SessionView {
                             "Compacting summarizes the conversation so far to free room. Add what to keep with /compact <instructions>."
                         })
                         .into_any_element(),
-                    h_flex()
-                        .id("context-compact-control")
-                        .debug_selector(|| "context-compact-control".into())
-                        .pt_1()
-                        .child(
-                            Button::new("context-compact")
-                                .small()
-                                .primary()
-                                .icon(Icon::new(IconName::ChevronsDownUp))
-                                .label(if compacting { "Compacting…" } else { "Compact now" })
-                                .loading(compacting)
-                                .disabled(compacting || !ready)
-                                .on_click(move |_, _, cx| {
-                                    let _ = compact.update(cx, |this, cx| this.compact(None, cx));
-                                }),
-                        )
-                        .into_any_element(),
-                    h_flex()
-                        .id("context-auto-compaction")
-                        .debug_selector(|| "context-auto-compaction".into())
-                        .gap_2()
-                        .pt_1()
-                        .cursor_pointer()
-                        .text_size(rems(12. / 16.))
-                        .text_color(ui::fg())
-                        .when(auto.is_none() || !ready, |d| d.opacity(0.5))
-                        .child(checkbox_box(auto.unwrap_or(false)))
-                        .child("Compact automatically when nearly full")
-                        .when_some(auto.filter(|_| ready), |d, enabled| {
-                            d.on_click(move |_, _, cx| {
-                                let _ = toggle.update(cx, |this, cx| {
-                                    this.set_auto_compaction(!enabled, cx)
-                                });
+                );
+            }
+            rows.extend(vec![
+                h_flex()
+                    .id("context-compact-control")
+                    .debug_selector(|| "context-compact-control".into())
+                    .pt_1()
+                    .child(
+                        Button::new("context-compact")
+                            .small()
+                            .primary()
+                            .icon(Icon::new(IconName::ChevronsDownUp))
+                            .label(if compacting {
+                                "Compacting…"
+                            } else {
+                                "Compact now"
                             })
+                            .loading(compacting)
+                            .disabled(compacting || !ready)
+                            .on_click(move |_, _, cx| {
+                                let _ = compact.update(cx, |this, cx| this.compact(None, cx));
+                            }),
+                    )
+                    .into_any_element(),
+                h_flex()
+                    .id("context-auto-compaction")
+                    .debug_selector(|| "context-auto-compaction".into())
+                    .gap_2()
+                    .pt_1()
+                    .cursor_pointer()
+                    .text_size(rems(12. / 16.))
+                    .text_color(ui::fg())
+                    .when(auto.is_none() || !ready, |d| d.opacity(0.5))
+                    .child(checkbox_box(auto.unwrap_or(false)))
+                    .child("Compact automatically when nearly full")
+                    .when_some(auto.filter(|_| ready), |d, enabled| {
+                        d.on_click(move |_, _, cx| {
+                            let _ = toggle
+                                .update(cx, |this, cx| this.set_auto_compaction(!enabled, cx));
                         })
-                        .into_any_element(),
-                ]);
+                    })
+                    .into_any_element(),
+            ]);
             rows
         })
     }
