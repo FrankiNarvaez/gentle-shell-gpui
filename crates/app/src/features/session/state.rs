@@ -121,6 +121,8 @@ impl Default for Models {
 #[derive(Default)]
 pub(super) struct Usage {
     pub(super) context_percent: Option<f64>,
+    pub(super) context_tokens: Option<u64>,
+    pub(super) context_window: Option<u64>,
     pub(super) cost: f64,
     /// A compaction (manual or automatic) is running.
     pub(super) compacting: bool,

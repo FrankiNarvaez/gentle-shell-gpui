@@ -271,14 +271,17 @@ impl SessionView {
         }
         let sections = self.desktop.sections();
         let todo = sections.todo();
-        let context = sections
-            .context()
-            .map(|context| context.and_then(|context| context.percent));
+        let context = sections.context().map(|context| {
+            context.map(|context| (context.percent, context.tokens, context.window))
+        });
         let question = sections.question_pending();
         if let Some(tasks) = todo {
             self.todo.apply(tasks);
         }
-        if let Some(percent) = context {
+        if let Some(context) = context {
+            let (percent, tokens, window) = context.unwrap_or((None, None, None));
+            self.usage.context_tokens = tokens;
+            self.usage.context_window = window;
             self.set_context_percent(percent, cx);
         }
         if question {

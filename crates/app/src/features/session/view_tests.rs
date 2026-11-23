@@ -288,6 +288,84 @@ impl gpui_kit::Render for Selectable {
 /// A message you sent can be selected with the mouse, like an answer, and
 /// what is selected is its text.
 #[gpui::test]
+fn context_feed_updates_exact_usage_and_clears_it(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"],
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 61.0, "tokens": 122000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(61.0), Some(122000), Some(200000))
+        );
+
+        let event = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections},
+            }))
+        };
+        view.desktop.ui(&event(2, json!({})));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(61.0), Some(122000), Some(200000))
+        );
+
+        view.desktop.ui(&event(
+            3,
+            json!({"context": {"percent": 25.0, "tokens": null, "window": 100000}}),
+        ));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(25.0), None, Some(100000))
+        );
+
+        view.desktop.ui(&event(4, json!({"context": null})));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (None, None, None)
+        );
+    });
+}
+
+#[gpui::test]
 fn a_sent_prompt_can_be_selected(cx: &mut TestAppContext) {
     use gpui_kit::{AppContext as _, MouseButton, base::TextSelection};
 
