@@ -1024,16 +1024,20 @@ pub fn spinner(size: impl Into<gpui_kit::component::Size>, color: Hsla) -> Div {
 /// It goes through the highlight every code span takes, table cells
 /// included.
 pub fn prose_style() -> gpui_kit::component::text::TextViewStyle {
-    let tint = code_tint();
-    let backing = solid_mix(popover_bg(), tint, 0.14);
     gpui_kit::component::text::TextViewStyle::default()
         .paragraph_gap(rems(1.))
         .inline_code(gpui_kit::HighlightStyle {
-            color: Some(tint),
-            background_color: Some(backing),
+            color: Some(code_tint()),
+            background_color: Some(code_backing()),
             ..Default::default()
         })
         .code_block(prose_code_block())
+}
+
+/// The solid backing of the agent's code spans (see [`prose_style`]),
+/// path spans included.
+pub fn code_backing() -> Hsla {
+    solid_mix(popover_bg(), code_tint(), 0.14)
 }
 
 /// A fenced block in the agent's Markdown, after Tern's: rounded on a

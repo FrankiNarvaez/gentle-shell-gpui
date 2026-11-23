@@ -32,6 +32,7 @@ mod dialogs;
 mod effort;
 mod live;
 mod model_picker;
+mod paths;
 mod permissions;
 mod plan_limits;
 mod rail;
@@ -44,6 +45,7 @@ pub(super) use activity::parse_rate_limit;
 pub(super) use cards::markdown_custom;
 pub(super) use live::{Live, RateLimit};
 use live::{Span, TICK, label_stamp, ticker_needed, track};
+pub(super) use paths::PathLookup;
 pub(super) use transcript_list::TranscriptList;
 use transcript_list::{GroupRow, HeaderKey, Prepared, Row, Tail};
 
@@ -347,14 +349,15 @@ impl SessionView {
     }
 
     /// A Markdown block of the conversation: its drawn Mermaid diagrams as
-    /// images, and under it the renderer's banner while they can't be drawn
-    /// (`id` names its button).
+    /// images, code spans naming a file as paths ([`paths`]), and under it
+    /// the renderer's banner while diagrams can't be drawn (`id` names its
+    /// button).
     pub(super) fn markdown_view(
         &self,
         state: &Entity<TextViewState>,
         text: &str,
         id: impl Into<ElementId>,
-        cx: &App,
+        cx: &Context<Self>,
     ) -> Div {
         let diagrams = self.diagrams.clone();
         let blocks = if has_mermaid(text) {
@@ -372,6 +375,10 @@ impl SessionView {
                     .code_block_actions(|block, _, cx| code_block_header(block, cx))
                     .image_source(move |uri| {
                         diagrams.image(uri).unwrap_or_else(|| uri.clone().into())
+                    })
+                    .plugin(paths::AnswerPaths {
+                        lookup: self.paths.clone(),
+                        view: cx.entity().downgrade(),
                     }),
             )
             .children(crate::features::files::mermaid_banner(blocks, id, cx))
