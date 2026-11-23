@@ -284,19 +284,22 @@ impl Workspace {
                 this.open_tab_menu(actions, event.position, window, cx);
             }),
         );
-        if space != self.current {
-            return row.into_any_element();
-        }
-        row.on_drag(
+        let row = row.on_drag(
             TabDrag {
                 tab: id,
                 title: tab.title.clone(),
             },
             |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
-        )
-        .drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
-        .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| this.move_tab(drag.tab, index, cx)))
-        .into_any_element()
+        );
+        if space == self.current {
+            row.drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
+                .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                    this.move_tab(drag.tab, index, cx);
+                }))
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 
     /// A tab's title, or the rename field while it is being renamed.

@@ -523,20 +523,11 @@ impl Workspace {
             id
         });
         let Some(tree) = tree else {
-            // Nothing in this tab could be restored; drop it and start fresh.
+            // Nothing could be restored; keep the workspace empty if this
+            // was its last tab, rather than silently launching another agent.
             self.spaces[space_index].tabs.remove(tab_index);
+            tab_panel::after_removal(&mut self.spaces[space_index], tab_index);
             self.prune_tab_selection(cx);
-            let len = self.spaces[space_index].tabs.len();
-            if len == 0 {
-                let root = self.spaces[space_index].root.clone();
-                let previous = self.current;
-                self.current = space_index;
-                self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-                self.current = previous;
-            } else {
-                self.spaces[space_index].active =
-                    self.spaces[space_index].active.min(len.saturating_sub(1));
-            }
             return;
         };
         let focused = built
@@ -999,15 +990,8 @@ impl Workspace {
         tab_panel::after_removal(&mut self.spaces[space], index);
         self.prune_tab_selection(cx);
         self.announce_close(window, cx);
-        if space == self.current {
-            if self.space().tabs.is_empty() {
-                // Only the shown workspace needs a replacement tab right now.
-                let root = self.space().root.clone();
-                self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-                self.save_now(cx);
-            } else {
-                self.activate(self.space().active, window, cx);
-            }
+        if space == self.current && !self.space().tabs.is_empty() {
+            self.activate(self.space().active, window, cx);
         } else {
             self.schedule_save(cx);
             cx.notify();

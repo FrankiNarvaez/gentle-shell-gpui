@@ -59,6 +59,31 @@ impl Workspace {
         )
     }
 
+    /// Move the existing tab, including all its live pane entities, without
+    /// closing it or changing the agents' working directories.
+    pub(super) fn move_tab_to_workspace(
+        &mut self,
+        id: usize,
+        to: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(from) = self.spaces.iter().position(|s| s.tabs.iter().any(|t| t.id == id)) else {
+            return;
+        };
+        if from == to || to >= self.spaces.len() {
+            return;
+        }
+        self.finish_tab_rename(true, window, cx);
+        let Some(index) = transfer_tab(&mut self.spaces, from, to, id) else {
+            return;
+        };
+        self.clear_tab_selection(cx);
+        self.spaces[to].sidebar_expanded = true;
+        self.spaces[to].active = index;
+        self.switch_workspace(to, window, cx);
+    }
+
     /// Keep the selected tab stable when rows move, and pins ahead of other
     /// tabs. Works on any workspace's tabs, built or not.
     fn with_reordered_tabs(
@@ -658,6 +683,24 @@ fn pruned_selection(
     })
 }
 
+/// Transfer ownership of a tab, preserving its identity and pinned order.
+fn transfer_tab(spaces: &mut [Space], from: usize, to: usize, id: usize) -> Option<usize> {
+    if from == to || from >= spaces.len() || to >= spaces.len() {
+        return None;
+    }
+    let index = spaces[from].tabs.iter().position(|tab| tab.id == id)?;
+    let tab = spaces[from].tabs.remove(index);
+    after_removal(&mut spaces[from], index);
+    let target = &mut spaces[to];
+    let insert = if tab.pinned {
+        target.tabs.iter().take_while(|tab| tab.pinned).count()
+    } else {
+        target.tabs.len()
+    };
+    reorder_keeping_active(target, |tabs| tabs.insert(insert, tab));
+    Some(insert)
+}
+
 /// Keep the selected tab after removal, or select its neighbour if it closed.
 pub(super) fn after_removal(space: &mut Space, index: usize) {
     let active = space.active - usize::from(index < space.active);
@@ -694,6 +737,27 @@ mod tests {
 
     fn ids(tabs: &[Tab]) -> Vec<usize> {
         tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn transfer_preserves_identity_pin_and_source_selection() {
+        let mut spaces = [
+            Space::new("a".into(), PathBuf::from("/a")),
+            Space::new("b".into(), PathBuf::from("/b")),
+        ];
+        spaces[0].tabs = vec![unbuilt(1, true), unbuilt(2, false)];
+        spaces[0].active = 1;
+        spaces[1].tabs = vec![unbuilt(3, true), unbuilt(4, false)];
+        spaces[1].active = 1;
+        assert_eq!(super::transfer_tab(&mut spaces, 0, 1, 1), Some(1));
+        assert_eq!(ids(&spaces[0].tabs), [2]);
+        assert_eq!(spaces[0].active, 0);
+        assert_eq!(ids(&spaces[1].tabs), [3, 1, 4]);
+        assert_eq!(spaces[1].tabs[spaces[1].active].id, 4);
+        assert!(spaces[1].tabs[1].pinned);
+        assert_eq!(super::transfer_tab(&mut spaces, 0, 1, 2), Some(3));
+        assert!(spaces[0].tabs.is_empty());
+        assert_eq!(spaces[0].active, 0);
     }
 
     #[test]

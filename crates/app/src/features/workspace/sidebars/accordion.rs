@@ -55,6 +55,9 @@ impl Workspace {
             }
             for tab in &tabs {
                 guide = guide.child(self.tab_row(tab, INDENT - 14., cx));
+                if tab.panes > 1 {
+                    guide = guide.children(self.split_sidebar_rows(tab, cx));
+                }
             }
             list = list.child(guide);
         }
