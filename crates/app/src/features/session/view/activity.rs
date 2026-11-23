@@ -2,7 +2,7 @@
 //! the session's status chips (jobs, widgets, usage, helpers, rate limits).
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
@@ -644,7 +644,7 @@ pub(super) struct ChipPopoverOptions {
     count: SharedString,
     action: Option<ChipHeaderAction>,
     mono: bool,
-    ring: Option<f32>,
+    ring: Option<(f32, ButtonCustomVariant, Entity<SessionView>, bool)>,
 }
 
 impl ChipPopoverOptions {
@@ -685,8 +685,19 @@ impl ChipPopoverOptions {
         self
     }
 
-    pub(super) fn ring(mut self, percent: f32) -> Self {
-        self.ring = Some(percent);
+    pub(super) fn ring(
+        mut self,
+        percent: f32,
+        session: Entity<SessionView>,
+        open: bool,
+        cx: &App,
+    ) -> Self {
+        self.ring = Some((
+            percent,
+            ButtonCustomVariant::new(cx).hover(ui::surface_hover().opacity(0.6)),
+            session,
+            open,
+        ));
         self
     }
 
@@ -715,24 +726,49 @@ pub(super) fn chip_popover(
         mono,
         ring,
     } = options;
-    let trigger = Button::new(SharedString::from(if ring.is_some() {
-        "context-ring-trigger".to_string()
+    let ring_session = ring.as_ref().map(|(_, _, session, _)| session.downgrade());
+    let trigger = if let Some((percent, style, session, open)) = ring {
+        Button::new("context-ring-trigger")
+            .custom(style)
+            .xsmall()
+            .cursor_pointer()
+            .child(
+                div()
+                    .id("context-ring")
+                    .when(!open, |d| {
+                        d.tooltip(move |window, cx| {
+                            let session = session.clone();
+                            let overview = cx.new(|cx| {
+                                cx.observe(&session, |_, _, cx| cx.notify()).detach();
+                                ContextOverview { session }
+                            });
+                            Tooltip::element(move |_, _| overview.clone()).build(window, cx)
+                        })
+                    })
+                    .child(context_ring(percent, color)),
+            )
     } else {
-        format!("{id}-chip")
-    }))
-    .ghost()
-    .xsmall()
-    .text_color(color)
-    .when(mono, |b| b.font_family(ui::mono()))
-    .map(|b| match ring {
-        Some(percent) => b.child(context_ring(percent, color)),
-        None => b.icon(Icon::new(icon)).label(label),
-    });
+        Button::new(SharedString::from(format!("{id}-chip")))
+            .ghost()
+            .xsmall()
+            .text_color(color)
+            .when(mono, |b| b.font_family(ui::mono()))
+            .icon(Icon::new(icon))
+            .label(label)
+    };
     Popover::new(SharedString::from(format!("{id}-popover")))
         .anchor(Anchor::BottomRight)
         .trigger(trigger)
         .w(rems(360. / 16.))
         .appearance(false)
+        .when_some(ring_session, |popover, session| {
+            popover.on_open_change(move |open, _, cx| {
+                let _ = session.update(cx, |session, cx| {
+                    session.usage.context_details_open = *open;
+                    cx.notify();
+                });
+            })
+        })
         .content(move |_, window, cx| {
             ui::island(cx)
                 .w_full()
@@ -779,6 +815,85 @@ pub(super) fn chip_popover(
                 ))
                 .into_any_element()
         })
+}
+
+struct ContextOverview {
+    session: Entity<SessionView>,
+}
+
+impl Render for ContextOverview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let usage = &self.session.read(cx).usage;
+        let percent = usage.context_percent.map(|p| p.clamp(0., 100.));
+        let tone = match percent {
+            Some(p) if p >= 90. => ui::danger(),
+            Some(p) if p >= 70. => ui::warning(),
+            _ => ui::success(),
+        };
+        let percent_label = percent.map_or_else(|| "–".to_string(), |p| format!("{p:.0}%"));
+        let usage_label = usage.context_tokens.map_or_else(
+            || percent_label.clone(),
+            |tokens| format!("{} ({percent_label})", format_tokens(tokens)),
+        );
+        let window_label = usage
+            .context_window
+            .map_or_else(|| "–".to_string(), format_tokens);
+        let percent_selector = format!("context-ring-overview-{usage_label}");
+        let window_selector = format!("context-ring-overview-window-{window_label}");
+        v_flex()
+            .w(rems(220. / 16.))
+            .py_2()
+            .gap_2()
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .text_color(ui::muted())
+                    .child(Icon::new(IconName::Gauge).xsmall())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(ui::fg())
+                            .child("Context"),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .justify_between()
+                    .text_color(ui::muted())
+                    .child(
+                        div()
+                            .debug_selector(move || percent_selector.clone())
+                            .child(usage_label),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(move || window_selector.clone())
+                            .child(window_label),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(5.))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .bg(ui::border_strong())
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(percent.unwrap_or(0.) as f32 / 100.))
+                            .rounded_full()
+                            .bg(tone),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "context-ring-overview-hint".into())
+                    .text_size(rems(11. / 16.))
+                    .text_color(ui::faint())
+                    .child("Click ring for details"),
+            )
+    }
 }
 
 fn context_ring(percent: f32, color: Hsla) -> impl IntoElement {

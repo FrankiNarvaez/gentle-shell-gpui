@@ -186,7 +186,12 @@ impl SessionView {
         )
         .title("Context");
         let options = if ring {
-            options.ring(percent as f32)
+            options.ring(
+                percent as f32,
+                cx.entity(),
+                self.usage.context_details_open,
+                cx,
+            )
         } else {
             options.count(count)
         };
