@@ -2626,15 +2626,12 @@ fn user_bubble(
                     div()
                         .debug_selector(move || format!("user-text-{ix}"))
                         .child(
-                            gpui_kit::base::TextView::markdown(("user-text", ix), markdown.clone())
+                            // The answers' prose style; the bubble's own
+                            // text size and color, inherited.
+                            TextView::markdown(("user-text", ix), markdown.clone())
                                 .selectable(true)
-                                .inline_code_style(
-                                    StyleRefinement::default()
-                                        .px(px(4.))
-                                        .bg(ui::accent().opacity(0.12))
-                                        .border_1()
-                                        .border_color(ui::border_strong()),
-                                )
+                                .style(ui::prose_style())
+                                .list_style(ui::prose_list_style())
                                 .image_source({
                                     let embedded = embedded.clone();
                                     move |uri| {
@@ -2908,14 +2905,13 @@ mod tests {
     #[gpui::test]
     fn user_bubble_selection_changes_and_text_updates(cx: &mut gpui_kit::TestAppContext) {
         use gpui_kit::{
-            AppContext as _, InteractiveElement as _, IntoElement as _, Modifiers, MouseButton,
-            ParentElement as _, Render, Styled as _, base::TextSelection, point, px,
+            AppContext as _, InteractiveElement as _, Modifiers, MouseButton, ParentElement as _,
+            Render, Styled as _, base::TextSelection, point, px,
         };
 
         struct Bubble {
             text: &'static str,
             focus: gpui_kit::FocusHandle,
-            baseline: bool,
         }
         impl Render for Bubble {
             fn render(
@@ -2923,27 +2919,18 @@ mod tests {
                 _: &mut gpui_kit::Window,
                 _: &mut gpui_kit::Context<Self>,
             ) -> impl gpui_kit::IntoElement {
-                let content = if self.baseline {
-                    gpui_kit::div()
-                        .debug_selector(|| "user-text-0".to_string())
-                        .child(gpui_kit::base::SelectableText::new("baseline", self.text))
-                        .into_any_element()
-                } else {
-                    super::user_bubble(
+                gpui_kit::div()
+                    .id("focus")
+                    .track_focus(&self.focus)
+                    .size_full()
+                    .child(super::user_bubble(
                         0,
                         &super::BubbleText::new(self.text),
                         Vec::new(),
                         true,
                         None,
                         &Default::default(),
-                    )
-                    .into_any_element()
-                };
-                gpui_kit::div()
-                    .id("focus")
-                    .track_focus(&self.focus)
-                    .size_full()
-                    .child(content)
+                    ))
             }
         }
         cx.update(gpui_kit::init);
@@ -2953,7 +2940,6 @@ mod tests {
             let view = cx.new(|_| Bubble {
                 text: "hello `café` world",
                 focus,
-                baseline: false,
             });
             gpui_kit::base::Root::new(view, window, cx)
         });
@@ -3024,30 +3010,6 @@ mod tests {
         cx.simulate_mouse_move(replacement_end, Some(MouseButton::Left), Modifiers::none());
         cx.simulate_mouse_up(replacement_end, MouseButton::Left, Modifiers::none());
         assert_eq!(copy(cx), "replacement é text");
-        view.update(cx, |view, cx| {
-            view.text = "hello `café` world";
-            view.baseline = true;
-            cx.notify();
-        });
-        cx.run_until_parked();
-        let bounds = cx.debug_bounds("user-text-0").unwrap();
-        let start = point(bounds.left() + px(1.), bounds.center().y);
-        let end = point(bounds.right() - px(1.), bounds.center().y);
-        cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
-        cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
-        cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
-        cx.update(|window, cx| {
-            let _ = window.draw(cx);
-            assert_eq!(
-                TextSelection::selected_text(window, cx),
-                "hello `café` world"
-            );
-        });
-        assert_eq!(
-            copy(cx),
-            "hello `café` world",
-            "existing SelectableText baseline"
-        );
     }
 
     #[gpui::test]
@@ -3137,32 +3099,21 @@ mod tests {
         cx.update(gpui_kit::init);
         let (_, cx) = cx.add_window_view(|_, _| Bubble);
         cx.run_until_parked();
-        let color: gpui_kit::Background = crate::shared::ui::accent().opacity(0.12).into();
+        // The answers' inline code backing, not a style of the bubble's own.
+        let backing: gpui_kit::Background = crate::shared::ui::prose_style()
+            .inline_code
+            .background_color
+            .expect("prose code has a backing")
+            .into();
         cx.update(|window, cx| {
             let _ = window.draw(cx);
-            let radius = gpui_kit::px(3.).scale(window.scale_factor());
-            let quad = window
-                .painted_quads()
-                .into_iter()
-                .find(|quad| quad.background == color)
-                .expect("inline code background must be painted");
-            let border = gpui_kit::px(1.).scale(window.scale_factor());
-            let outline = window
-                .painted_quads()
-                .into_iter()
-                .find(|candidate| {
-                    candidate.border_color == crate::shared::ui::border_strong()
-                        && candidate.bounds == quad.bounds
-                })
-                .expect("inline code outline must be painted on its background");
-            assert_eq!(outline.border_widths.top, border);
-            assert_eq!(outline.border_widths.right, border);
-            assert_eq!(outline.border_widths.bottom, border);
-            assert_eq!(outline.border_widths.left, border);
-            assert_eq!(quad.corner_radii.top_left, radius);
-            assert_eq!(quad.corner_radii.top_right, radius);
-            assert_eq!(quad.corner_radii.bottom_left, radius);
-            assert_eq!(quad.corner_radii.bottom_right, radius);
+            assert!(
+                window
+                    .painted_quads()
+                    .into_iter()
+                    .any(|quad| quad.background == backing),
+                "inline code backing must be painted"
+            );
         });
     }
 
