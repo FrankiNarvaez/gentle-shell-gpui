@@ -142,7 +142,12 @@ impl SessionView {
             .text_color(ui::info())
             .tooltip("Choose model")
             .child(if busy {
-                ui::spinner(Size::XSmall, ui::info()).into_any_element()
+                // It turns on the live overlay.
+                self.live_slots
+                    .slot("model-spinner", || {
+                        ui::spinner(Size::XSmall, ui::info()).into_any_element()
+                    })
+                    .into_any_element()
             } else {
                 div()
                     .size(rems(7. / 16.))

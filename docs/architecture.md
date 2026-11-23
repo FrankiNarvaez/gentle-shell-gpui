@@ -81,7 +81,7 @@ crates/
 │       │   └── app_update/  updates/  welcome/  genui/  diagnostics/  canvas/  tower/  review/
 │       ├── platform/            # OS integration: single instance, agent command shims, Dock and window icons, installed editors, power state
 │       └── shared/              # pieces used by several features, with no logic of their own:
-│                                # ui, floating, themes, backdrop (theme scenes), assets, banner, surge, pane, gentle_state
+│                                # ui, overlay (live indicators' layer), floating, themes, backdrop (theme scenes), assets, banner, surge, pane, gentle_state
 ├── core/                        # shared pure logic (gentle-core)
 └── pi-rpc/
 ```

@@ -254,11 +254,10 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .child(if running {
-                                div()
-                                    .size(rems(7. / 16.))
-                                    .rounded_full()
-                                    .bg(ui::accent())
-                                    .into_any_element()
+                                ui::pulse(
+                                    div().size(rems(7. / 16.)).rounded_full().bg(ui::accent()),
+                                )
+                                .into_any_element()
                             } else if kind == PaneKind::Agent {
                                 div()
                                     .text_size(rems(13. / 16.))
@@ -748,6 +747,13 @@ impl Workspace {
                         .clone()
                         .cached(StyleRefinement::default().size_full()),
                 ),
+            )
+            // An agent's live indicators, over it: their frames redraw the
+            // layer and this window, while the agent's view stays cached.
+            .children(
+                pane.session
+                    .as_ref()
+                    .map(|session| session.read(cx).live_layer()),
             )
             .children(
                 self.drop_hint
