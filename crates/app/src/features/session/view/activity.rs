@@ -178,13 +178,6 @@ impl SessionView {
                     .map(|l| l.text.clone()),
             )
             .collect();
-        // The context: the line over the composer tells it; the chip (to
-        // compact, or follow compaction) joins it once the window runs full.
-        let context_full = self.usage.compacting
-            || self
-                .usage
-                .context_percent
-                .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
         let right = h_flex()
             .flex_shrink_0()
             // Each control brings its own 4px inset (an xsmall button's box),
@@ -250,20 +243,10 @@ impl SessionView {
                         )
                     }),
             )
-            // The window's size rides the context line over the composer.
-            .when(context_full, |this| {
-                this.child(
-                    div()
-                        .debug_selector(|| "legacy-context-chip".into())
-                        .child(self.render_context_chip(cx)),
-                )
-            })
             // The review switch sits with the permission chip: both are this
             // workspace's rules for the agent (Gentle Shell `main`).
             .when(!collapse, |this| this.children(self.render_review_chip(cx)))
-            .child(self.render_mode_picker(cx))
-            // The window's size closes the row, over the composer's corner.
-            .children(self.render_context_caption());
+            .child(self.render_mode_picker(cx));
 
         h_flex()
             .w_full()

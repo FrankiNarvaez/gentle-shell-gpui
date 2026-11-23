@@ -527,15 +527,17 @@ fn context_ring_advice_updates_at_boundaries_and_keeps_controls(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn context_ring_preserves_legacy_context_panel(cx: &mut TestAppContext) {
+fn context_ring_replaces_legacy_context_meter(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     view.update(cx, |view, cx| {
         view.usage.compacting = true;
         view.usage.context_percent = Some(95.0);
         cx.notify();
     });
-    click(cx, "legacy-context-chip");
-    assert!(drawn(cx, "context-header-count"));
+    assert!(!drawn(cx, "legacy-context-chip"));
+    assert!(!drawn(cx, "context-percent"));
+    assert!(!drawn(cx, "context-window"));
+    click(cx, "context-ring");
     assert!(drawn(cx, "context-compact-control"));
     assert!(drawn(cx, "context-auto-compaction"));
 }
