@@ -377,6 +377,7 @@ fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
     assert!(drawn(cx, "context-ring"));
     let at = cx.debug_bounds("context-ring").unwrap().center();
     cx.simulate_mouse_move(at, None, Modifiers::none());
+    view.update(cx, |view, _| assert!(view.usage.context_ring_hovered));
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
     assert!(drawn(cx, "context-ring-overview-48.1k (5%)"));
@@ -388,6 +389,12 @@ fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
     });
     assert!(drawn(cx, "context-ring-overview-25%"));
     assert!(!drawn(cx, "context-ring-overview-48.1k (5%)"));
+    cx.simulate_mouse_move(
+        gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+        None,
+        Modifiers::none(),
+    );
+    view.update(cx, |view, _| assert!(!view.usage.context_ring_hovered));
 }
 
 #[gpui::test]

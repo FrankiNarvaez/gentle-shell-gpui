@@ -99,6 +99,7 @@ impl SessionView {
                 percent as f32,
                 cx.entity(),
                 self.usage.context_details_open,
+                self.usage.context_ring_hovered,
                 cx,
             );
         chip_popover(options, move || {

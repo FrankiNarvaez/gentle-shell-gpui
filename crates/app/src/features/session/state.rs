@@ -124,6 +124,7 @@ pub(super) struct Usage {
     pub(super) context_tokens: Option<u64>,
     pub(super) context_window: Option<u64>,
     pub(super) context_details_open: bool,
+    pub(super) context_ring_hovered: bool,
     pub(super) cost: f64,
     /// A compaction (manual or automatic) is running.
     pub(super) compacting: bool,

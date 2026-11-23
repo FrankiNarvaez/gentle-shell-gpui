@@ -628,7 +628,7 @@ pub(super) struct ChipPopoverOptions {
     count: SharedString,
     action: Option<ChipHeaderAction>,
     mono: bool,
-    ring: Option<(f32, ButtonCustomVariant, Entity<SessionView>, bool)>,
+    ring: Option<(f32, ButtonCustomVariant, Entity<SessionView>, bool, bool)>,
 }
 
 impl ChipPopoverOptions {
@@ -674,13 +674,15 @@ impl ChipPopoverOptions {
         percent: f32,
         session: Entity<SessionView>,
         open: bool,
+        hovered: bool,
         cx: &App,
     ) -> Self {
         self.ring = Some((
             percent,
-            ButtonCustomVariant::new(cx).hover(ui::surface_hover().opacity(0.6)),
+            ButtonCustomVariant::new(cx),
             session,
             open,
+            hovered,
         ));
         self
     }
@@ -710,12 +712,29 @@ pub(super) fn chip_popover(
         mono,
         ring,
     } = options;
-    let ring_session = ring.as_ref().map(|(_, _, session, _)| session.downgrade());
-    let trigger = if let Some((percent, style, session, open)) = ring {
+    let ring_session = ring
+        .as_ref()
+        .map(|(_, _, session, _, _)| session.downgrade());
+    let trigger = if let Some((percent, style, session, open, hovered)) = ring {
+        let hover_session = session.downgrade();
         Button::new("context-ring-trigger")
             .custom(style)
             .xsmall()
+            .size(rems(25. / 16.))
+            .p_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
             .cursor_pointer()
+            .on_hover(move |hovered, _, cx| {
+                let _ = hover_session.update(cx, |session, cx| {
+                    if session.usage.context_ring_hovered != *hovered {
+                        session.usage.context_ring_hovered = *hovered;
+                        cx.notify();
+                    }
+                });
+            })
             .child(
                 div()
                     .id("context-ring")
@@ -729,7 +748,7 @@ pub(super) fn chip_popover(
                             Tooltip::element(move |_, _| overview.clone()).build(window, cx)
                         })
                     })
-                    .child(context_ring(percent, color)),
+                    .child(context_ring(percent, color, hovered)),
             )
     } else {
         Button::new(SharedString::from(format!("{id}-chip")))
@@ -886,7 +905,7 @@ impl Render for ContextOverview {
     }
 }
 
-fn context_ring(percent: f32, color: Hsla) -> impl IntoElement {
+fn context_ring(percent: f32, color: Hsla, hovered: bool) -> impl IntoElement {
     let fraction = if percent.is_finite() {
         percent.clamp(0., 100.) / 100.
     } else {
@@ -896,7 +915,13 @@ fn context_ring(percent: f32, color: Hsla) -> impl IntoElement {
         |_, _, _| {},
         move |bounds, _, window, _| {
             let center = bounds.center();
-            let radius = bounds.size.width.min(bounds.size.height) / 2. - px(1.5);
+            let radius = bounds.size.width.min(bounds.size.height) * (17. / 25.) / 2. - px(1.5);
+            if hovered {
+                window.paint_quad(
+                    fill(bounds, ui::surface_hover().opacity(0.6))
+                        .corner_radii(bounds.size.width.min(bounds.size.height) / 2.),
+                );
+            }
             let outer_radius = radius + px(1.);
             let track_bounds = Bounds::new(
                 point(center.x - outer_radius, center.y - outer_radius),
@@ -933,7 +958,7 @@ fn context_ring(percent: f32, color: Hsla) -> impl IntoElement {
             draw(window, fraction, color);
         },
     )
-    .size(rems(17. / 16.))
+    .size(rems(25. / 16.))
 }
 
 /// `Claude rate limit warning: 51% used (seven_day)` → (51, `seven_day`).
