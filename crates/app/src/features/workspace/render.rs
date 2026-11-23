@@ -82,6 +82,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_open_palette))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_open_workspaces))
+            .on_action(cx.listener(Self::on_open_explorer))
             .on_action(cx.listener(Self::on_close_overlay))
             .key_context("GentleWorkspace")
             .relative()
@@ -324,6 +325,7 @@ impl Render for Workspace {
                     Overlay::Providers(view) => (view.clone().into_any_element(), false),
                     Overlay::Sessions(view) => (view.clone().into_any_element(), false),
                     Overlay::Palette(view) => (view.clone().into_any_element(), false),
+                    Overlay::Explorer(view) => (view.clone().into_any_element(), false),
                     Overlay::Usage(view) => (view.clone().into_any_element(), false),
                     Overlay::Memory(view) => (view.clone().into_any_element(), false),
                     Overlay::Docs(view) => (view.clone().into_any_element(), false),
