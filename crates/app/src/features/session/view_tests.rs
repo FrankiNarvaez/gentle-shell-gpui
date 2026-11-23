@@ -366,6 +366,89 @@ fn context_feed_updates_exact_usage_and_clears_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn context_ring_opens_existing_compaction_controls(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(35.0);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(drawn(cx, "context-compact-control"));
+}
+
+struct SizedSession {
+    session: Entity<SessionView>,
+    width: f32,
+}
+
+impl gpui_kit::Render for SizedSession {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _};
+        gpui_kit::div()
+            .w(gpui_kit::px(self.width))
+            .h_full()
+            .child(self.session.clone())
+    }
+}
+
+#[gpui::test]
+fn context_ring_fits_and_opens_in_every_style_and_narrow_pane(cx: &mut TestAppContext) {
+    use gentle_core::input_style::InputStyle;
+    use gpui_kit::AppContext as _;
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            view.usage.cost = 0.13;
+            view
+        });
+        SizedSession {
+            session,
+            width: 700.,
+        }
+    });
+    for style in InputStyle::ALL {
+        for width in [700., 320.] {
+            cx.update(|_, cx| super::input_style::set_test_style(style, cx));
+            root.update(cx, |root, cx| {
+                root.width = width;
+                root.session.update(cx, |view, cx| {
+                    view.pane_width.set(width);
+                    cx.notify();
+                });
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let ring = cx.debug_bounds("context-ring").expect("ring drawn");
+            assert!(
+                f32::from(ring.left()) >= 0. && f32::from(ring.right()) <= width,
+                "{style:?} at {width}: {ring:?}"
+            );
+            if width == 700. {
+                let usage = cx.debug_bounds("context-usage-chip").expect("usage drawn");
+                assert!(ring.right() <= usage.left(), "{style:?}: ring beside usage");
+            }
+            click(cx, "context-ring");
+            assert!(drawn(cx, "context-auto-compaction"), "{style:?} at {width}");
+            assert!(drawn(cx, "context-compact-control"), "{style:?} at {width}");
+            click(cx, "context-ring");
+            assert!(!drawn(cx, "context-auto-compaction"));
+        }
+    }
+}
+
+#[gpui::test]
 fn a_sent_prompt_can_be_selected(cx: &mut TestAppContext) {
     use gpui_kit::{AppContext as _, MouseButton, base::TextSelection};
 

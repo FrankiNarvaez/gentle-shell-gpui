@@ -29,6 +29,11 @@ pub fn follow<T: 'static>(cx: &mut Context<T>) -> Subscription {
     cx.observe_global::<InputStyleChoice>(|_, cx| cx.notify())
 }
 
+#[cfg(test)]
+pub(super) fn set_test_style(style: InputStyle, cx: &mut App) {
+    cx.set_global(InputStyleChoice(style));
+}
+
 /// Choose and save the style. Written at once (a click, a small file), so
 /// writes can't land out of order.
 pub fn set_style(style: InputStyle, cx: &mut App) {

@@ -111,6 +111,14 @@ impl SessionView {
 
     /// The context percentage as a chip: compact now, toggle auto-compaction.
     pub(super) fn render_context_chip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        self.render_context_control(false, cx)
+    }
+
+    fn render_context_control(
+        &self,
+        ring: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let high = self
             .usage
             .context_percent
@@ -138,16 +146,38 @@ impl SessionView {
             Some(window) => format!("{used} of {window}"),
             None => used,
         };
-        let color = if high { ui::warning() } else { ui::faint() };
+        let percent = self.usage.context_percent.unwrap_or(0.);
+        let color = if ring {
+            if percent >= 90. {
+                ui::danger()
+            } else if percent >= 70. {
+                ui::warning()
+            } else {
+                ui::success()
+            }
+        } else if high {
+            ui::warning()
+        } else {
+            ui::faint()
+        };
         let weak = cx.entity().downgrade();
-        chip_popover(
-            ChipPopoverOptions::new("context", IconName::Gauge, color, label)
-                .title("Context")
-                .count(count),
-            move || {
-                let compact = weak.clone();
-                let toggle = weak.clone();
-                vec![
+        let options = ChipPopoverOptions::new(
+            if ring { "context-ring" } else { "context" },
+            IconName::Gauge,
+            color,
+            label,
+        )
+        .title("Context")
+        .count(count);
+        let options = if ring {
+            options.ring(percent as f32)
+        } else {
+            options
+        };
+        chip_popover(options, move || {
+            let compact = weak.clone();
+            let toggle = weak.clone();
+            vec![
                     div()
                         .text_size(rems(12. / 16.))
                         .text_color(ui::muted())
@@ -159,6 +189,8 @@ impl SessionView {
                         })
                         .into_any_element(),
                     h_flex()
+                        .id("context-compact-control")
+                        .debug_selector(|| "context-compact-control".into())
                         .pt_1()
                         .child(
                             Button::new("context-compact")
@@ -175,6 +207,7 @@ impl SessionView {
                         .into_any_element(),
                     h_flex()
                         .id("context-auto-compaction")
+                        .debug_selector(|| "context-auto-compaction".into())
                         .gap_2()
                         .pt_1()
                         .cursor_pointer()
@@ -192,8 +225,7 @@ impl SessionView {
                         })
                         .into_any_element(),
                 ]
-            },
-        )
+        })
     }
 
     /// 64px tiles of what waits to be sent: numbered image thumbnails, then
@@ -497,7 +529,17 @@ impl SessionView {
         let usage = (!narrow)
             .then(|| self.render_usage_chip())
             .flatten()
-            .map(|chip| div().flex_shrink_0().child(chip));
+            .map(|chip| {
+                div()
+                    .debug_selector(|| "context-usage-chip".into())
+                    .flex_shrink_0()
+                    .child(chip)
+            });
+        let ring = div()
+            .id("context-ring")
+            .debug_selector(|| "context-ring".into())
+            .flex_shrink_0()
+            .child(self.render_context_control(true, cx));
         let action = div().flex_shrink_0().child(action_button);
         let spacer = || div().flex_1().min_w_0();
         let row = || h_flex().w_full().min_w_0().gap_1p5().items_center();
@@ -538,6 +580,7 @@ impl SessionView {
                                     .child(attach)
                                     .child(controls)
                                     .child(spacer())
+                                    .child(ring)
                                     .children(usage)
                                     .child(action),
                             ),
@@ -567,6 +610,7 @@ impl SessionView {
                         )
                         .child(attach)
                         .child(spacer())
+                        .child(ring)
                         .children(usage)
                         .child(action),
                 ),
@@ -608,6 +652,7 @@ impl SessionView {
                         .child(segment(div()).min_w_0().flex_shrink(1.).child(controls))
                         .child(segment(div()).px_1().child(attach))
                         .child(spacer())
+                        .child(ring)
                         .children(usage.map(|usage| {
                             segment(div()).px_1().border_r_0().border_l_1().child(usage)
                         }))
@@ -681,7 +726,14 @@ impl SessionView {
                         )
                         .child(on_text_line(action)),
                 )
-                .child(row().px_2().child(controls).child(spacer()).children(usage)),
+                .child(
+                    row()
+                        .px_2()
+                        .child(controls)
+                        .child(spacer())
+                        .child(ring)
+                        .children(usage),
+                ),
             // Soft (after Devin's): a rounded box, the text on top and a
             // row of quiet round controls under it, the spend, the model
             // and a filled send at its end.
@@ -706,6 +758,7 @@ impl SessionView {
                             .px_0p5()
                             .child(attach)
                             .child(spacer())
+                            .child(ring)
                             .children(usage)
                             .child(controls)
                             .child(action),

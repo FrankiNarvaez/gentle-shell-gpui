@@ -640,6 +640,7 @@ pub(super) struct ChipPopoverOptions {
     count: SharedString,
     action: Option<ChipHeaderAction>,
     mono: bool,
+    ring: Option<f32>,
 }
 
 impl ChipPopoverOptions {
@@ -658,6 +659,7 @@ impl ChipPopoverOptions {
             count: "".into(),
             action: None,
             mono: false,
+            ring: None,
         }
     }
 
@@ -676,6 +678,11 @@ impl ChipPopoverOptions {
     /// A right-side control instead of the count (see [`ChipHeaderAction`]).
     pub(super) fn action(mut self, action: ChipHeaderAction) -> Self {
         self.action = Some(action);
+        self
+    }
+
+    pub(super) fn ring(mut self, percent: f32) -> Self {
+        self.ring = Some(percent);
         self
     }
 
@@ -702,14 +709,21 @@ pub(super) fn chip_popover(
         count,
         action,
         mono,
+        ring,
     } = options;
-    let trigger = Button::new(SharedString::from(format!("{id}-chip")))
-        .ghost()
-        .xsmall()
-        .text_color(color)
-        .when(mono, |b| b.font_family(ui::mono()))
-        .icon(Icon::new(icon))
-        .label(label);
+    let trigger = Button::new(SharedString::from(if ring.is_some() {
+        "context-ring-trigger".to_string()
+    } else {
+        format!("{id}-chip")
+    }))
+    .ghost()
+    .xsmall()
+    .text_color(color)
+    .when(mono, |b| b.font_family(ui::mono()))
+    .map(|b| match ring {
+        Some(percent) => b.child(context_ring(percent, color)),
+        None => b.icon(Icon::new(icon)).label(label),
+    });
     Popover::new(SharedString::from(format!("{id}-popover")))
         .anchor(Anchor::BottomRight)
         .trigger(trigger)
@@ -757,6 +771,47 @@ pub(super) fn chip_popover(
                 ))
                 .into_any_element()
         })
+}
+
+fn context_ring(percent: f32, color: Hsla) -> impl IntoElement {
+    let fraction = if percent.is_finite() {
+        percent.clamp(0., 100.) / 100.
+    } else {
+        0.
+    };
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let center = bounds.center();
+            let radius = bounds.size.width.min(bounds.size.height) / 2. - px(1.5);
+            let draw = |window: &mut Window, fraction: f32, color: Hsla| {
+                if fraction <= 0. {
+                    return;
+                }
+                let segments = (64. * fraction).ceil() as usize;
+                let mut path = PathBuilder::stroke(px(2.));
+                for i in 0..=segments {
+                    let angle = -std::f32::consts::FRAC_PI_2
+                        + std::f32::consts::TAU * fraction * i as f32 / segments as f32;
+                    let point = point(
+                        center.x + radius * angle.cos(),
+                        center.y + radius * angle.sin(),
+                    );
+                    if i == 0 {
+                        path.move_to(point);
+                    } else {
+                        path.line_to(point);
+                    }
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+            };
+            draw(window, 1., ui::border_strong());
+            draw(window, fraction, color);
+        },
+    )
+    .size(rems(17. / 16.))
 }
 
 /// `Claude rate limit warning: 51% used (seven_day)` → (51, `seven_day`).
