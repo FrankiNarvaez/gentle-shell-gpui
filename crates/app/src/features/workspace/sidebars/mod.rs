@@ -47,19 +47,16 @@ impl TabEntry {
         }
     }
 
-    /// A dot for a tab that works or waits on you.
+    /// A dot for a tab that works or waits on you, in [`Self::tone`]. It
+    /// holds still: a moving dot would redraw the whole window for as long
+    /// as any agent works.
     pub fn status_dot(&self) -> Option<Div> {
         (self.running || self.needs_you).then(|| {
-            let dot = div()
+            div()
                 .size(rems(6. / 16.))
                 .flex_none()
                 .rounded_full()
-                .bg(self.tone());
-            if self.running && !self.needs_you {
-                ui::pulse(dot)
-            } else {
-                dot
-            }
+                .bg(self.tone())
         })
     }
 

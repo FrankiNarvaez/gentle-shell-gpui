@@ -50,9 +50,9 @@ impl SessionView {
     /// border fills as the conversation uses its window, in the band's
     /// color ([`Self::context_level`]), its percent riding the fill's end
     /// just above the box. The window's size closes the activity line
-    /// ([`Self::render_context_caption`]). Work in progress is the
-    /// composer's [`ui::orbit`], not this line. Place it in the box
-    /// (`relative`, 1 px border); `radius` is the box's corner radius.
+    /// ([`Self::render_context_caption`]). Work in progress shows in the
+    /// model picker's spinner, not here. Place it in the box (`relative`,
+    /// 1 px border); `radius` is the box's corner radius.
     fn render_context_edge(&self, radius: Rems) -> Option<Div> {
         let (percent, alert) = self.context_level()?;
         let fill = alert.unwrap_or(ui::fg().opacity(0.45));
@@ -428,8 +428,6 @@ impl SessionView {
             })
             .bg(ui::surface())
             .shadow_lg()
-            // While the agent works a light runs round the box.
-            .when(self.busy(), |d| d.child(ui::orbit(ui::petal(), rems(1.))))
             .children(self.render_context_edge(rems(1.)))
     }
 
@@ -653,7 +651,6 @@ impl SessionView {
                     .border_1()
                     .border_color(edge(ui::border_strong()))
                     .bg(ui::well())
-                    .when(busy, |d| d.child(ui::orbit(ui::petal(), rems(6. / 16.))))
                     .children(self.render_context_edge(rems(6. / 16.)))
                     .font_family(ui::mono())
                     // On the text's first line: the text area's own top
@@ -694,7 +691,6 @@ impl SessionView {
                         .border_1()
                         .border_color(edge(ui::border()))
                         .bg(ui::surface())
-                        .when(busy, |d| d.child(ui::orbit(ui::petal(), rems(22. / 16.))))
                         .children(self.render_context_edge(rems(22. / 16.)))
                         // Attach and send sit centered on the last line of
                         // text: each in a box as tall as one line with the
@@ -727,7 +723,6 @@ impl SessionView {
                     .border_1()
                     .border_color(edge(ui::border()))
                     .bg(ui::surface())
-                    .when(busy, |d| d.child(ui::orbit(ui::petal(), rems(20. / 16.))))
                     .children(self.render_context_edge(rems(20. / 16.)))
                     .children(attachments.map(|a| div().px_2p5().pt_2().child(a)))
                     .child(div().min_h(rems(56. / 16.)).child(text))

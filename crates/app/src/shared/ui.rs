@@ -910,77 +910,124 @@ pub(crate) fn request_frame_in(delay: Duration, window: &mut Window, cx: &mut Ap
 }
 
 /// [`request_frame_in`], counted under `at`. Every draw of the view moves its
-/// pending frame to `delay` after that draw.
+/// pending frame to `delay` after that draw. Each delay keeps its own frame,
+/// so a clock's second doesn't hold back a spinner's step.
 fn request_frame_from(
     at: &'static std::panic::Location<'static>,
     delay: Duration,
     window: &mut Window,
     cx: &mut App,
 ) {
+    type Pending = std::collections::HashMap<(EntityId, Duration), std::time::Instant>;
     thread_local! {
-        /// Views waiting for a frame, with when each last asked (drew).
-        static PENDING: std::cell::RefCell<std::collections::HashMap<EntityId, std::time::Instant>> =
-            Default::default();
+        /// Frames on the way, by view and delay, with when the view last
+        /// asked (drew).
+        static PENDING: std::cell::RefCell<Pending> = Default::default();
     }
     if cx.reduce_motion() {
         return;
     }
     crate::shared::diagnostics::frame_at(at);
-    let view = window.current_view();
+    let key = (window.current_view(), delay);
     let now = std::time::Instant::now();
-    if PENDING.with(|pending| pending.borrow_mut().insert(view, now).is_some()) {
+    if PENDING.with(|pending| pending.borrow_mut().insert(key, now).is_some()) {
         return;
     }
     cx.spawn(async move |cx| {
         let mut wait = delay;
         loop {
             cx.background_executor().timer(wait).await;
-            let since = PENDING.with(|pending| pending.borrow().get(&view).map(|at| at.elapsed()));
+            let since = PENDING.with(|pending| pending.borrow().get(&key).map(|at| at.elapsed()));
             match since {
                 Some(since) if since < delay => wait = delay - since,
                 _ => break,
             }
         }
-        PENDING.with(|pending| pending.borrow_mut().remove(&view));
-        cx.update(|cx| cx.notify(view));
+        PENDING.with(|pending| pending.borrow_mut().remove(&key));
+        cx.update(|cx| cx.notify(key.0));
     })
     .detach();
 }
 
-/// A zero-size element that keeps its view redrawing at the slow rate while
+/// A zero-size element that keeps its view redrawing every `delay` while
 /// it's on screen, counted under the line that placed the indicator.
 #[track_caller]
-fn slow_frames() -> impl IntoElement {
+fn frames_every(delay: Duration) -> impl IntoElement {
     let at = std::panic::Location::caller();
     canvas(
-        move |_, window, cx| request_frame_from(at, SLOW_FRAME, window, cx),
+        move |_, window, cx| request_frame_from(at, delay, window, cx),
         |_, _, _, _| {},
     )
     .size_0()
+}
+
+/// Keeps a clock counting whole seconds current: one redraw a second,
+/// for rows where nothing else moves.
+#[track_caller]
+pub(crate) fn each_second() -> impl IntoElement {
+    frames_every(Duration::from_secs(1))
 }
 
 /// A soft breathing pulse for live indicators.
 #[track_caller]
 pub fn pulse(element: Div) -> Div {
     let breath = gpui_kit::pulsating_between(0.35, 1.0)(live_phase(1.4));
-    element.opacity(breath).child(slow_frames())
+    element.opacity(breath).child(frames_every(SLOW_FRAME))
 }
 
-/// A loading spinner (the Loader icon turning), for rows that stay on screen
-/// while work runs.
+/// How long the spinner holds each spoke: 12.5 steps a second.
+const SPIN_STEP: Duration = Duration::from_millis(80);
+/// The spinner's spokes.
+const SPOKES: usize = 8;
+
+/// A loading spinner: eight spokes, the brightest one stepping round like
+/// the system's activity indicator. It steps rather than turns, so it
+/// needs a frame per spoke (12.5 a second), not a smooth 30: it's the one
+/// indicator a turn keeps going.
 #[track_caller]
 pub fn spinner(size: impl Into<gpui_kit::component::Size>, color: Hsla) -> Div {
+    use gpui_kit::component::Size;
+    let side = match size.into() {
+        Size::Size(side) => side,
+        Size::XSmall => px(12.),
+        Size::Small => px(14.),
+        Size::Medium => px(16.),
+        Size::Large => px(24.),
+    };
+    let head = (live_clock() / SPIN_STEP.as_secs_f32()) as usize % SPOKES;
     div()
         .flex_none()
+        .size(side)
         .child(
-            gpui_kit::component::Icon::new(gpui_kit::component::IconName::Loader)
-                .with_size(size)
-                .text_color(color)
-                .transform(gpui_kit::Transformation::rotate(gpui_kit::percentage(
-                    live_phase(0.8),
-                ))),
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| paint_spinner(bounds, head, color, window),
+            )
+            .size_full(),
         )
-        .child(slow_frames())
+        .child(frames_every(SPIN_STEP))
+}
+
+/// [`spinner`]'s spokes round `bounds`' center, `head` the brightest and
+/// the ones behind it fading.
+fn paint_spinner(bounds: gpui_kit::Bounds<Pixels>, head: usize, color: Hsla, window: &mut Window) {
+    let side = f32::from(bounds.size.width.min(bounds.size.height));
+    let stroke = (side / 8.).max(1.25);
+    let center = bounds.center();
+    let (inner, outer) = (side * 0.22, side / 2. - stroke / 2.);
+    for spoke in 0..SPOKES {
+        let angle = spoke as f32 / SPOKES as f32 * std::f32::consts::TAU;
+        let (sin, cos) = angle.sin_cos();
+        let at = |r: f32| point(center.x + px(r * sin), center.y - px(r * cos));
+        let mut path = gpui_kit::PathBuilder::stroke(px(stroke));
+        path.move_to(at(inner));
+        path.line_to(at(outer));
+        if let Ok(path) = path.build() {
+            let behind = (head + SPOKES - spoke) % SPOKES;
+            let fade = 1. - behind as f32 / SPOKES as f32 * 0.8;
+            window.paint_path(path, color.opacity(fade));
+        }
+    }
 }
 
 /// Markdown the agent writes, after Tern's: more air between blocks than
@@ -1069,115 +1116,7 @@ pub fn shimmer(text: impl Into<SharedString>, base: Hsla, highlight: Hsla) -> Di
         .min_w_0()
         .text_color(base)
         .child(gpui_kit::StyledText::new(text).with_highlights(runs))
-        .child(slow_frames())
-}
-
-/// A short bright streak orbiting a rounded box's border clockwise, its
-/// tail fading out, for a box whose work is in progress (the composer while
-/// the agent works). Place it inside a `relative` box with a 1px border;
-/// `radius` is the box's corner radius.
-#[track_caller]
-pub fn orbit(color: Hsla, radius: Rems) -> Div {
-    let phase = live_phase(2.4);
-    // Over the border: `absolute` insets start inside it.
-    let edge = px(-1.);
-    div()
-        .absolute()
-        .top(edge)
-        .left(edge)
-        .right(edge)
-        .bottom(edge)
-        .child(
-            canvas(
-                |_, _, _| (),
-                move |bounds, _, window, _| {
-                    let radius = radius.to_pixels(window.rem_size());
-                    paint_orbit(bounds, radius, phase, color, window);
-                },
-            )
-            .size_full(),
-        )
-        .child(slow_frames())
-}
-
-/// [`orbit`]'s streak: its head `phase` of the way round the border, the
-/// tail drawn as pieces of rising opacity.
-fn paint_orbit(
-    bounds: gpui_kit::Bounds<Pixels>,
-    radius: Pixels,
-    phase: f32,
-    color: Hsla,
-    window: &mut Window,
-) {
-    use std::f32::consts::{FRAC_PI_2, PI};
-    const STROKE: f32 = 1.5;
-    const PIECES: usize = 16;
-    // On the border's own line.
-    let inset = STROKE / 2.;
-    let w = f32::from(bounds.size.width) - 2. * inset;
-    let h = f32::from(bounds.size.height) - 2. * inset;
-    if w <= 0. || h <= 0. {
-        return;
-    }
-    let r = (f32::from(radius) - inset).clamp(0., w.min(h) / 2.);
-    let (ox, oy) = (
-        f32::from(bounds.origin.x) + inset,
-        f32::from(bounds.origin.y) + inset,
-    );
-    // The perimeter, clockwise from the top edge's start: edge, corner, ...
-    let (a, b, q) = (w - 2. * r, h - 2. * r, FRAC_PI_2 * r);
-    let total = 2. * a + 2. * b + 4. * q;
-    let arc = |cx: f32, cy: f32, start: f32, s: f32| {
-        let t = start + if q > 0. { s / q * FRAC_PI_2 } else { 0. };
-        point(px(ox + cx + r * t.cos()), px(oy + cy + r * t.sin()))
-    };
-    let at = |s: f32| {
-        let mut s = s.rem_euclid(total);
-        if s < a {
-            return point(px(ox + r + s), px(oy));
-        }
-        s -= a;
-        if s < q {
-            return arc(w - r, r, -FRAC_PI_2, s);
-        }
-        s -= q;
-        if s < b {
-            return point(px(ox + w), px(oy + r + s));
-        }
-        s -= b;
-        if s < q {
-            return arc(w - r, h - r, 0., s);
-        }
-        s -= q;
-        if s < a {
-            return point(px(ox + w - r - s), px(oy + h));
-        }
-        s -= a;
-        if s < q {
-            return arc(r, h - r, FRAC_PI_2, s);
-        }
-        s -= q;
-        if s < b {
-            return point(px(ox), px(oy + h - r - s));
-        }
-        s -= b;
-        arc(r, r, PI, s.min(q))
-    };
-    let length = (total * 0.2).min(180.);
-    let head = phase * total;
-    let piece = length / PIECES as f32;
-    for i in 0..PIECES {
-        let from = head - length + i as f32 * piece;
-        let mut path = gpui_kit::PathBuilder::stroke(px(STROKE));
-        path.move_to(at(from));
-        for k in 1..=4 {
-            path.line_to(at(from + piece * k as f32 / 4.));
-        }
-        if let Ok(path) = path.build() {
-            let fade = (i + 1) as f32 / PIECES as f32;
-            window.paint_path(path, color.opacity(fade * fade));
-        }
-    }
+        .child(frames_every(SLOW_FRAME))
 }
 
 /// `~/a/b/leaf` split into a muted prefix and the leaf, for path labels.

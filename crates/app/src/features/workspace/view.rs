@@ -254,10 +254,11 @@ impl Workspace {
                             .items_center()
                             .justify_center()
                             .child(if running {
-                                ui::pulse(
-                                    div().size(rems(7. / 16.)).rounded_full().bg(ui::accent()),
-                                )
-                                .into_any_element()
+                                div()
+                                    .size(rems(7. / 16.))
+                                    .rounded_full()
+                                    .bg(ui::accent())
+                                    .into_any_element()
                             } else if kind == PaneKind::Agent {
                                 div()
                                     .text_size(rems(13. / 16.))

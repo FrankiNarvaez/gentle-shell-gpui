@@ -868,27 +868,9 @@ impl SessionView {
                 if let Some(error) = error {
                     column = column.child(notice_card(NoticeLevel::Error, error));
                 }
-                // While the agent writes, a soft rose dot breathes after the
-                // text; when it's done, the dot fades with the line.
+                // While the agent writes, the petal line beside the answer
+                // marks it live; when it's done, the line fades.
                 let settle = self.answer_settle(ix, *streaming);
-                if has_text {
-                    match settle {
-                        Some(_) if *streaming => {
-                            column = column.child(ui::pulse(
-                                div().size(rems(7. / 16.)).rounded_full().bg(ui::petal()),
-                            ))
-                        }
-                        Some(k) if k < 1. => {
-                            column = column.child(
-                                div()
-                                    .size(rems(7. / 16.))
-                                    .rounded_full()
-                                    .bg(ui::petal().opacity(1. - ease_out_quint()(k))),
-                            )
-                        }
-                        _ => {}
-                    }
-                }
                 if !*streaming && has_text {
                     column = column
                         .group("assistant")
@@ -1034,11 +1016,9 @@ impl SessionView {
                     .text_color(ui::muted())
                     .hover(|s| s.text_color(ui::fg()))
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(key, cx)))
-                    .child(if live {
-                        ui::pulse(star).into_any_element()
-                    } else {
-                        star.into_any_element()
-                    })
+                    .child(star)
+                    // Live, its time counts up once a second.
+                    .when(live, |this| this.child(ui::each_second()))
                     .child(if live { "Thinking…" } else { "Thought" })
                     .when_some(elapsed, |this, d| {
                         this.child(
@@ -1372,22 +1352,16 @@ impl SessionView {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let failed = spec.status == ToolStatus::Failed;
-        let running = spec.status == ToolStatus::Running;
         let icon = if failed { IconName::CircleX } else { spec.icon };
         let icon_color = if failed {
             ui::danger()
         } else {
             step_tone(spec.icon)
         };
-        let icon = if running {
-            ui::pulse(div().child(Icon::new(icon).small().text_color(icon_color)))
-                .into_any_element()
-        } else {
-            Icon::new(icon)
-                .small()
-                .text_color(icon_color)
-                .into_any_element()
-        };
+        let icon = Icon::new(icon)
+            .small()
+            .text_color(icon_color)
+            .into_any_element();
         self.step_row(
             ("step", ix),
             spec,
@@ -2020,6 +1994,28 @@ impl Render for SessionView {
                             .size_full(),
                         )
                         .children(self.render_rail(&scroll, cx))
+                        // Text fades out as it reaches the composer, after
+                        // Tern's, instead of cutting off on a hard edge. As
+                        // tall as the column's bottom padding, so the last
+                        // line, scrolled to the end, stays clear. Only on an
+                        // opaque pane: GPUI can't mask, so the fade is the
+                        // pane's color laid over the text, and over glass
+                        // that color doubles up into a dark band.
+                        .when(ui::panel().a > 0.99, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .h(rems(32. / 16.))
+                                    .bg(linear_gradient(
+                                        180.,
+                                        linear_color_stop(ui::panel().opacity(0.), 0.),
+                                        linear_color_stop(ui::panel(), 1.),
+                                    )),
+                            )
+                        })
                         .children(self.render_jump_down(cx)),
                 ),
             })
@@ -2735,21 +2731,24 @@ fn notice_card(level: NoticeLevel, text: &str) -> Div {
         )
 }
 
-/// The petal-and-shimmer "agent is on it" row.
+/// The petal "agent is on it" row: still, its clock counting up once a
+/// second.
 fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
     h_flex()
         .gap_2()
         .items_center()
-        .child(ui::pulse(
+        .child(
             div()
                 .text_size(rems(15. / 16.))
                 .text_color(ui::petal())
                 .child("✿"),
-        ))
+        )
         .child(
-            ui::shimmer(label, ui::muted(), ui::fg())
+            div()
                 .text_size(rems(13. / 16.))
-                .italic(),
+                .italic()
+                .text_color(ui::muted())
+                .child(label),
         )
         .when_some(elapsed, |this, d| {
             this.child(
@@ -2759,6 +2758,7 @@ fn working_indicator(label: &'static str, elapsed: Option<Duration>) -> Div {
                     .text_color(ui::faint())
                     .child(clock(d)),
             )
+            .child(ui::each_second())
         })
 }
 
