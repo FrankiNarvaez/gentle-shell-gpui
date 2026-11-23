@@ -108,6 +108,8 @@ impl Workspace {
                 .flex_1()
                 .min_w_0()
                 .h(rems(30. / 16.))
+                // The field's own Cut/Copy/Paste menu is the only one.
+                .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                 .child(Icon::new(IconName::Search).small().text_color(ui::faint()))
                 .child(Input::new(&self.tab_search).appearance(false).small()),
         )

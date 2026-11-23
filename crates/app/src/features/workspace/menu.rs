@@ -155,14 +155,10 @@ impl Workspace {
                     .icon(Icon::new(IconName::Palette))
                     .on_click(move |_, window, cx| {
                         let _ = badge.update(cx, |this, cx| {
-                            // Open the picker where the menu was; if the
-                            // menu's position is stale, center on the chip.
-                            let position = this
-                                .open_menu
-                                .as_ref()
-                                .map(|m| m.position)
-                                .unwrap_or_else(|| window.mouse_position());
-                            this.open_badge_picker(index, position, window, cx)
+                            // Open the picker where the menu was.
+                            if let Some(position) = this.open_menu.as_ref().map(|m| m.position) {
+                                this.open_badge_picker(index, position, window, cx)
+                            }
                         });
                     }),
             )
@@ -403,6 +399,8 @@ impl Workspace {
             .rounded_md()
             .bg(ui::well())
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            // The field's own Cut/Copy/Paste menu is the only one.
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
             .on_action(cx.listener(Self::cancel_workspace_rename))
             .child(Input::new(&rename.input).appearance(false).xsmall())
             .into_any_element()
