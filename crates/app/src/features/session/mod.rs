@@ -108,6 +108,9 @@ pub struct SessionView {
     /// the shown text already pushed and how many Mermaid diagrams it showed
     /// drawn (a new drawing replaces source, so the text is set again).
     markdown: HashMap<(usize, usize), (Entity<TextViewState>, usize, usize)>,
+    /// Which code spans in the answers name a file under `cwd` (see
+    /// `view::paths`); remade with `cwd`.
+    paths: std::sync::Arc<view::PathLookup>,
     /// The conversation's Mermaid diagrams, drawn by the diagram renderer.
     diagrams: std::sync::Arc<crate::features::files::MermaidDiagrams>,
     /// The `data:` images messages you sent show, decoded once.
@@ -315,6 +318,7 @@ impl SessionView {
         ];
         let live_slots = crate::shared::overlay::LiveSlots::default();
         let live_layer = cx.new(|_| crate::shared::overlay::LiveLayer::new(live_slots.clone()));
+        let paths = std::sync::Arc::new(view::PathLookup::new(cwd.clone()));
         let mut this = Self {
             cwd,
             backend: state::Backend::new(prompt),
@@ -322,6 +326,7 @@ impl SessionView {
             permission: state::desktop::permission::Permission::default(),
             transcript: Transcript::default(),
             markdown: HashMap::new(),
+            paths,
             diagrams: Default::default(),
             bubble_images: Default::default(),
             expanded: HashSet::new(),
