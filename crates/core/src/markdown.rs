@@ -6,7 +6,7 @@ use std::ops::Range;
 
 mod sent;
 
-pub use sent::sent_message;
+pub use sent::{sent_message, trim_folded};
 
 /// A fenced ` ```mermaid ` block.
 #[derive(Debug, Clone, PartialEq, Eq)]

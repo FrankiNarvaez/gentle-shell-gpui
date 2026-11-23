@@ -2168,8 +2168,13 @@ impl BubbleText {
         let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(text));
         let lines = line_count(&markdown);
         let folded = (lines > USER_LINES + USER_SLACK).then(|| {
-            let (head, hidden) = head_slice(&markdown, lines, USER_LINES);
-            (SharedString::from(head.to_string()), hidden)
+            let (head, _) = head_slice(&markdown, lines, USER_LINES);
+            let head = gentle_core::markdown::trim_folded(head);
+            // The blank lines trimmed off its end are hidden too.
+            (
+                SharedString::from(head.to_string()),
+                lines - line_count(head),
+            )
         });
         Self {
             markdown: markdown.into(),
@@ -3234,6 +3239,16 @@ mod tests {
         let html = format!("<div>\n{}\n</div>", message(USER_LINES + USER_SLACK, "\n"));
         let (head, _) = BubbleText::new(&html).folded.unwrap();
         assert!(head.starts_with(r"\<div\>"), "{head}");
+        // A blank line inside it, last before the fold, is no stray `\`:
+        // it is hidden with the rest.
+        let gap = format!(
+            "<div>\n{}\n\n{}\n</div>",
+            message(USER_LINES - 2, "\n"),
+            message(USER_SLACK + 2, "\n")
+        );
+        let (head, hidden) = BubbleText::new(&gap).folded.unwrap();
+        assert!(head.ends_with("line 6"), "{head}");
+        assert_eq!(hidden, USER_SLACK + 4);
     }
 
     #[test]

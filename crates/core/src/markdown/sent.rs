@@ -14,6 +14,29 @@ pub fn sent_message(text: &str) -> String {
     keep_line_breaks(&literal_html(text))
 }
 
+/// A start of [`sent_message`]'s Markdown cut at a line end, without the
+/// blank lines it ends with. Inside literal HTML a blank line is a hard
+/// break, a lone `\` ([`escape`]): as the cut's last line it would show.
+pub fn trim_folded(head: &str) -> &str {
+    let mut head = head.trim_end();
+    loop {
+        let (rest, last) = head.rsplit_once('\n').unwrap_or(("", head));
+        let Some(mut indent) = last.strip_suffix('\\') else {
+            return head;
+        };
+        while let Some(rest) = indent
+            .strip_prefix("&#32;")
+            .or_else(|| indent.strip_prefix("&#9;"))
+        {
+            indent = rest;
+        }
+        if !indent.is_empty() {
+            return head;
+        }
+        head = rest.trim_end();
+    }
+}
+
 /// Escape the complete HTML fragments the Markdown parser finds, so they
 /// show as typed. One parse finds every fragment start; starts inside a
 /// fragment already escaped are skipped. The text is parsed again only when
@@ -325,6 +348,23 @@ mod tests {
             literal_html("<span>`</span> <b>`"),
             r"\<span\>\`\<\/span\> \<b\>`"
         );
+    }
+
+    #[test]
+    fn a_folded_start_drops_the_blank_lines_it_ends_with() {
+        let markdown = sent_message("<div>\na\n\nb\n</div>");
+        let head = |lines: usize| {
+            let end = markdown.match_indices('\n').nth(lines - 1).unwrap().0;
+            trim_folded(&markdown[..end])
+        };
+        assert_eq!(head(3), "\\<div\\>  \na");
+        assert_eq!(head(4), "\\<div\\>  \na  \n\\\nb");
+        // A blank line with spaces keeps them as character references.
+        let markdown = sent_message("<div>\na\n  \nb\n</div>");
+        let end = markdown.find("\nb").unwrap();
+        assert_eq!(trim_folded(&markdown[..end]), "\\<div\\>  \na");
+        // An authored hard break at the end stays.
+        assert_eq!(trim_folded("one\\"), "one\\");
     }
 
     #[test]
