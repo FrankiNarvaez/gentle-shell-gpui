@@ -37,6 +37,7 @@ pub mod sessions;
 pub mod setup;
 pub mod text;
 pub mod tools;
+pub mod tower;
 pub mod transcript;
 pub mod typing_kisses;
 pub mod usage;
