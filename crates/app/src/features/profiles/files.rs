@@ -14,11 +14,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use gentle_core::profiles::{
     AgentEntry, Drops, PinStatus, ProfilesFile, RouteEntry, Routing, assignment_names,
     bootstrap_profiles, entry_from_model_profile, is_review_role, is_thinking_level,
-    normalize_entry, parse_profiles, pretty, read_frontmatter_routing, serialize_profiles,
-    without_key,
+    normalize_entry, parse_profiles, pretty, read_frontmatter_routing, reported_assignment_names,
+    serialize_profiles, without_key,
 };
 use pi_rpc::desktop_rpc::{
-    ConfigState, ConfigStatus, ConfigStore, ConfigWrite, ProfileFallbacksData, ProfilesData,
+    AgentDefinitions, ConfigState, ConfigStatus, ConfigStore, ConfigWrite, DefaultOrchestrator,
+    ProfileFallbacksData, ProfilesData,
 };
 use serde_json::{Map, Value};
 
@@ -248,6 +249,34 @@ pub(super) fn read_orchestrator_settings(path: &Path) -> Option<RouteEntry> {
         thinking: thinking.map(str::to_string),
         tier: None,
     })
+}
+
+/// `readOrchestratorSettings` as Gentle Shell reports it
+/// (`list_agent_definitions`): the same entry [`read_orchestrator_settings`]
+/// reads from the file, only when Pi names a default.
+pub(super) fn orchestrator_route(orchestrator: &DefaultOrchestrator) -> Option<RouteEntry> {
+    let (model, thinking) = orchestrator.route()?;
+    Some(RouteEntry {
+        model: Some(model.to_string()),
+        thinking: thinking
+            .filter(|t| is_thinking_level(t))
+            .map(str::to_string),
+        tier: None,
+    })
+}
+
+/// The screen's assignment names from what Gentle Shell reported, joined
+/// with the agents of the roots its read does not cover.
+pub(super) fn reported_names(
+    definitions: &AgentDefinitions,
+    uncovered: &[AgentEntry],
+) -> Vec<String> {
+    let reported: Vec<String> = definitions
+        .agents
+        .iter()
+        .map(|agent| agent.name.clone())
+        .collect();
+    reported_assignment_names(&reported, uncovered)
 }
 
 /// `followProfileRename` for `profile-fallbacks.json`; a broken file is left alone.

@@ -853,6 +853,8 @@ pub(in crate::features::session) fn route_desktop_widget(
                 Some(DesktopMethod::GetConfig)
                     | Some(DesktopMethod::SetConfig)
                     | Some(DesktopMethod::ApplyProfile)
+                    | Some(DesktopMethod::GetProfileBinding)
+                    | Some(DesktopMethod::ClearProfileBinding)
             ) {
                 DesktopRoute::Config
             } else if matches!(
@@ -892,7 +894,8 @@ pub(in crate::features::session) fn route_desktop_widget(
         }
         Ok(Some(DesktopRecord::Event(event)))
             if event.event == desktop::config::CONFIG_CHANGED
-                || event.event == desktop::config::PROFILE_APPLIED =>
+                || event.event == desktop::config::PROFILE_APPLIED
+                || event.event == desktop::config::PROFILE_BINDING_CHANGED =>
         {
             DesktopRoute::Config
         }

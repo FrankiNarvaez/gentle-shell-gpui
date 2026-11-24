@@ -103,7 +103,9 @@ macro_rules! wire_enum {
 
 mod auth;
 mod background;
+mod binding;
 mod changes;
+mod definitions;
 mod output;
 mod review;
 mod session_state;
@@ -116,7 +118,15 @@ pub use background::{
     BackgroundCapability, BackgroundConfirmation, BackgroundPolicy, BackgroundSource,
     BackgroundSubagents, PolicyFile, SetBackgroundSubagentsOutcome, SetBackgroundSubagentsResult,
 };
+pub use binding::{
+    ClearBindingStatus, ClearProfileBindingResult, ProfileBinding, ProfileBindingChanged,
+    ProfileBindingKind, ProfileBindingOrigin,
+};
 pub use changes::{ChangeDiff, ChangeRoot, ChangeStatus, ChangedFile, Changes};
+pub use definitions::{
+    AgentDefinition, AgentDefinitionProblems, AgentDefinitionScope, AgentDefinitions,
+    DefaultOrchestrator, OrchestratorStatus, SubagentDefaults,
+};
 pub use output::{JobOutput, SubagentThread, ThreadItem};
 pub use review::{
     ReviewConfirmation, ReviewEffective, ReviewMode, ReviewModeChanged, ReviewScope, ReviewScopes,
@@ -186,17 +196,20 @@ pub enum DesktopMethod {
     SetReviewMode,
     GetUsageStats,
     GetUpdateStatus,
+    ListAgentDefinitions,
     GetBackgroundSubagents,
     SetBackgroundSubagents,
+    GetProfileBinding,
+    ClearProfileBinding,
     GetAuthStatus,
     ReloadCredentials,
 }
 
 impl DesktopMethod {
     /// Every method this client knows, in the order `capabilities` lists
-    /// them on Gentle Shell `main`. Which ones a peer offers is only what its
+    /// them on Gentle Shell 5.0.0. Which ones a peer offers is only what its
     /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 31] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -221,8 +234,11 @@ impl DesktopMethod {
         Self::SetReviewMode,
         Self::GetUsageStats,
         Self::GetUpdateStatus,
+        Self::ListAgentDefinitions,
         Self::GetBackgroundSubagents,
         Self::SetBackgroundSubagents,
+        Self::GetProfileBinding,
+        Self::ClearProfileBinding,
         Self::GetAuthStatus,
         Self::ReloadCredentials,
     ];
@@ -254,8 +270,11 @@ impl DesktopMethod {
             Self::SetReviewMode => "set_review_mode",
             Self::GetUsageStats => "get_usage_stats",
             Self::GetUpdateStatus => "get_update_status",
+            Self::ListAgentDefinitions => "list_agent_definitions",
             Self::GetBackgroundSubagents => "get_background_subagents",
             Self::SetBackgroundSubagents => "set_background_subagents",
+            Self::GetProfileBinding => "get_profile_binding",
+            Self::ClearProfileBinding => "clear_profile_binding",
             Self::GetAuthStatus => "get_auth_status",
             Self::ReloadCredentials => "reload_credentials",
         }
@@ -309,8 +328,11 @@ impl DesktopMethod {
             "set_review_mode" => Ok(Self::SetReviewMode),
             "get_usage_stats" => Ok(Self::GetUsageStats),
             "get_update_status" => Ok(Self::GetUpdateStatus),
+            "list_agent_definitions" => Ok(Self::ListAgentDefinitions),
             "get_background_subagents" => Ok(Self::GetBackgroundSubagents),
             "set_background_subagents" => Ok(Self::SetBackgroundSubagents),
+            "get_profile_binding" => Ok(Self::GetProfileBinding),
+            "clear_profile_binding" => Ok(Self::ClearProfileBinding),
             "get_auth_status" => Ok(Self::GetAuthStatus),
             "reload_credentials" => Ok(Self::ReloadCredentials),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
@@ -1002,7 +1024,8 @@ wire_enum! {
     /// are also [`ConfigErrorCode`] and [`ProfileApplyErrorCode`].
     /// `changes_unavailable`, `session_unavailable` and `updates_unavailable`
     /// are answered by Gentle Shell `main` but missing from its specification's
-    /// list of codes; they are kept here because the server sends them.
+    /// list of codes; they are kept here because the server sends them, as is
+    /// `agent_definitions_unavailable` (5.0.0).
     DesktopErrorCode, "error.code" {
         InvalidRequest => "invalid_request",
         UnknownStore => "unknown_store",
@@ -1029,6 +1052,7 @@ wire_enum! {
         ReviewModeBusy => "review_mode_busy",
         StatsUnavailable => "stats_unavailable",
         UpdatesUnavailable => "updates_unavailable",
+        AgentDefinitionsUnavailable => "agent_definitions_unavailable",
         BackgroundSubagentsBusy => "background_subagents_busy",
         BackgroundSubagentsUnavailable => "background_subagents_unavailable",
         AuthUnavailable => "auth_unavailable",
@@ -1195,6 +1219,11 @@ impl DesktopResponse {
         UpdateStatus::from_data(self.data()?)
     }
 
+    /// The response to `list_agent_definitions`.
+    pub fn agent_definitions(&self) -> Result<AgentDefinitions, DesktopRpcError> {
+        AgentDefinitions::from_data(self.data()?)
+    }
+
     /// The response to `get_background_subagents`.
     pub fn background_subagents(&self) -> Result<BackgroundSubagents, DesktopRpcError> {
         BackgroundSubagents::from_data(self.data()?)
@@ -1205,6 +1234,16 @@ impl DesktopResponse {
         &self,
     ) -> Result<SetBackgroundSubagentsResult, DesktopRpcError> {
         SetBackgroundSubagentsResult::from_data(self.data()?)
+    }
+
+    /// The response to `get_profile_binding`.
+    pub fn profile_binding(&self) -> Result<ProfileBinding, DesktopRpcError> {
+        ProfileBinding::from_data(self.data()?)
+    }
+
+    /// The response to `clear_profile_binding`.
+    pub fn clear_profile_binding(&self) -> Result<ClearProfileBindingResult, DesktopRpcError> {
+        ClearProfileBindingResult::from_data(self.data()?)
     }
 
     /// The response to `get_auth_status`.
@@ -1296,6 +1335,14 @@ impl DesktopEvent {
         expect_event(self, "review_mode_changed")?;
         ReviewModeChanged::from_data(&self.data)
     }
+
+    /// Decode the data of a `profile_binding_changed` event, verifying the
+    /// exact event name before the shape, exactly like
+    /// [`Self::agents_update`].
+    pub fn profile_binding_changed(&self) -> Result<ProfileBindingChanged, DesktopRpcError> {
+        expect_event(self, "profile_binding_changed")?;
+        ProfileBindingChanged::from_data(&self.data)
+    }
 }
 
 /// A record decoded from the Desktop widget.
@@ -1336,7 +1383,9 @@ impl Capabilities {
     /// gate for every method newer than a peer (Gentle Shell 4.8.0 offers
     /// none of `get_job_output`, `get_subagent_thread`, `list_sessions`,
     /// `switch_session`, `get_changes`, `get_change_diff`, `get_review_mode`,
-    /// `set_review_mode`, `get_usage_stats` or `get_update_status`).
+    /// `set_review_mode`, `get_usage_stats` or `get_update_status`, and 4.9.0
+    /// none of `list_agent_definitions`, `get_profile_binding` or
+    /// `clear_profile_binding`).
     pub fn require(&self, method: DesktopMethod) -> Result<(), DesktopRpcError> {
         if self.supports(method) {
             Ok(())
@@ -1750,7 +1799,10 @@ impl DesktopAgentUsage {
 /// One projected subagent entry. Only these fields exist on the wire: identity,
 /// the agent name, the status word, the routed model plus its launch-layer
 /// source and the fallback it moved away from, the thinking level, the closed
-/// step label, and the bounded usage window.
+/// step label, the in-run progress (turns finished, tool calls started, the
+/// tool running now) and the bounded usage window. The progress fields are
+/// `None` from an owner that predates them (Gentle Shell before 5.0.0);
+/// `active_tool` is also `None` while no tool runs or the task is not active.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DesktopAgent {
     pub id: String,
@@ -1761,6 +1813,9 @@ pub struct DesktopAgent {
     pub fallback_from: Option<String>,
     pub thinking: Option<String>,
     pub last_step: DesktopAgentStep,
+    pub turns: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub active_tool: Option<String>,
     pub usage: DesktopAgentUsage,
 }
 
@@ -1781,6 +1836,9 @@ impl DesktopAgent {
             fallback_from: text_field(data, "fallbackFrom")?,
             thinking: text_field(data, "thinking")?,
             last_step: last_step_field(data, "lastStep")?,
+            turns: optional_u64_field(data, "turns")?,
+            tool_calls: optional_u64_field(data, "toolCalls")?,
+            active_tool: text_field(data, "activeTool")?,
             usage: DesktopAgentUsage::from_data(field_object(data, "usage")?)?,
         })
     }

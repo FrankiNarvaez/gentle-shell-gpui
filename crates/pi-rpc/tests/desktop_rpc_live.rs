@@ -942,6 +942,7 @@ impl Probe {
             capabilities.supports_session_sections() && capabilities.emits("review_mode_changed"),
             "main advertises session_snapshot and review_mode_changed: {capabilities:?}"
         );
+        self.run_binding_and_definitions(capabilities)?;
 
         // 1. get_snapshot with every section.
         capabilities.require(DesktopMethod::GetSnapshot)?;
@@ -1140,6 +1141,47 @@ impl Probe {
             "desktop_rpc_live: {} session_snapshot event(s) decoded",
             snapshots.len()
         );
+        Ok(())
+    }
+
+    /// 5.0.0: the agent definitions, the session's profile binding and its
+    /// clear decode against the real owners; skipped on an older Shell.
+    fn run_binding_and_definitions(&mut self, capabilities: &Capabilities) -> Result<()> {
+        if capabilities.supports(DesktopMethod::ListAgentDefinitions) {
+            let definitions = self
+                .typed(DesktopMethod::ListAgentDefinitions)?
+                .agent_definitions()
+                .map_err(|e| anyhow!("list_agent_definitions decode: {e}"))?;
+            eprintln!(
+                "desktop_rpc_live: list_agent_definitions -> {} agent(s), orchestrator {:?}",
+                definitions.agents.len(),
+                definitions.default_orchestrator
+            );
+        }
+        if capabilities.supports(DesktopMethod::GetProfileBinding) {
+            let binding = self
+                .typed(DesktopMethod::GetProfileBinding)?
+                .profile_binding()
+                .map_err(|e| anyhow!("get_profile_binding decode: {e}"))?;
+            eprintln!("desktop_rpc_live: get_profile_binding -> {binding:?}");
+        }
+        if capabilities.supports(DesktopMethod::ClearProfileBinding) {
+            let cleared = self
+                .typed(DesktopMethod::ClearProfileBinding)?
+                .clear_profile_binding()
+                .map_err(|e| anyhow!("clear_profile_binding decode: {e}"))?;
+            eprintln!("desktop_rpc_live: clear_profile_binding -> {cleared:?}");
+        }
+        if capabilities.supports(DesktopMethod::ListSubagents) {
+            let agents = self
+                .typed(DesktopMethod::ListSubagents)?
+                .list_subagents()
+                .map_err(|e| anyhow!("list_subagents decode: {e}"))?;
+            eprintln!(
+                "desktop_rpc_live: list_subagents -> {} agent(s)",
+                agents.agents.len()
+            );
+        }
         Ok(())
     }
 

@@ -3,20 +3,22 @@
 //! adapter only builds the outer prompt and decodes the widget records.
 
 use pi_rpc::desktop_rpc::{
-    ActivityState, ApplyProfileOutcome, ApplyProfileResult, AuthSource, AuthType,
-    BackgroundCapability, BackgroundConfirmation, BackgroundPolicy, BackgroundSource,
-    BackgroundSubagents, BannerData, Capabilities, ChangeDiff, ChangeRoot, ChangeSource,
-    ChangeStatus, ChangedFile, Changes, CommandSource, ConfigChangeOrigin, ConfigChanged,
-    ConfigErrorCode, ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus,
-    ConfigStore, ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas,
-    DesignCanvasEvent, DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep,
-    DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod,
-    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff,
-    JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
-    MAX_SESSIONS_LIMIT, NotificationsData, PROMPT_COMMAND, PackageKind, PackageScope,
+    ActivityState, AgentDefinition, AgentDefinitionScope, ApplyProfileOutcome, ApplyProfileResult,
+    AuthSource, AuthType, BackgroundCapability, BackgroundConfirmation, BackgroundPolicy,
+    BackgroundSource, BackgroundSubagents, BannerData, Capabilities, ChangeDiff, ChangeRoot,
+    ChangeSource, ChangeStatus, ChangedFile, Changes, ClearBindingStatus,
+    ClearProfileBindingResult, CommandSource, ConfigChangeOrigin, ConfigChanged, ConfigErrorCode,
+    ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus, ConfigStore,
+    ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent,
+    DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep, DesktopAgentUsage,
+    DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord,
+    DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff, JobExitCode,
+    JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT,
+    NotificationsData, OrchestratorStatus, PROMPT_COMMAND, PackageKind, PackageScope,
     PackageUpdate, PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
     PermissionModeState, PersonaMode, PiUpdate, PinSource, PolicyFile, ProfileApplied,
-    ProfileApplyErrorCode, ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData,
+    ProfileApplyErrorCode, ProfileApplyMode, ProfileBinding, ProfileBindingChanged,
+    ProfileBindingKind, ProfileBindingOrigin, ProfileConfirmation, ProfileFallbacksData,
     ProfileNote, ProfileNoteLevel, ProfilesData, ProviderAuth, ProviderUsage, RateLimitEvent,
     RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope, ReviewScopes,
     ReviewSetting, ReviewSource, SCHEMA, SessionActivity, SessionChangedFile, SessionChanges,
@@ -1266,6 +1268,9 @@ fn full_agent() -> DesktopAgent {
         fallback_from: Some("anthropic/claude-opus-4".into()),
         thinking: Some("high".into()),
         last_step: DesktopAgentStep::Answered,
+        turns: None,
+        tool_calls: None,
+        active_tool: None,
         usage: DesktopAgentUsage {
             total: 15234,
             cost: 0.0421,
@@ -4811,9 +4816,9 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
 // --- Gentle Shell main additions: jobs output, subagent thread, sessions,
 // --- changes, review mode, usage stats, update status, session sections ---
 
-/// The `capabilities` methods of Gentle Shell `main` (0336985), as the spec
-/// and a live backend list them.
-const MAIN_METHODS: [&str; 28] = [
+/// The `capabilities` methods of Gentle Shell 5.0.0, as the spec and a live
+/// backend list them.
+const MAIN_METHODS: [&str; 31] = [
     "capabilities",
     "get_snapshot",
     "get_config",
@@ -4838,12 +4843,15 @@ const MAIN_METHODS: [&str; 28] = [
     "set_review_mode",
     "get_usage_stats",
     "get_update_status",
+    "list_agent_definitions",
     "get_background_subagents",
     "set_background_subagents",
+    "get_profile_binding",
+    "clear_profile_binding",
     "get_auth_status",
     "reload_credentials",
 ];
-const MAIN_EVENTS: [&str; 9] = [
+const MAIN_EVENTS: [&str; 10] = [
     "config_changed",
     "permission_mode_changed",
     "rate_limit",
@@ -4852,6 +4860,7 @@ const MAIN_EVENTS: [&str; 9] = [
     "profile_applied",
     "agents_update",
     "review_mode_changed",
+    "profile_binding_changed",
     "session_snapshot",
 ];
 /// The `capabilities` of an installed Gentle Shell 4.8.0, captured live.
@@ -4880,7 +4889,7 @@ const RELEASE_4_8_EVENTS: [&str; 7] = [
     "profile_applied",
     "agents_update",
 ];
-const NEW_METHODS: [DesktopMethod; 14] = [
+const NEW_METHODS: [DesktopMethod; 17] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -4891,8 +4900,11 @@ const NEW_METHODS: [DesktopMethod; 14] = [
     DesktopMethod::SetReviewMode,
     DesktopMethod::GetUsageStats,
     DesktopMethod::GetUpdateStatus,
+    DesktopMethod::ListAgentDefinitions,
     DesktopMethod::GetBackgroundSubagents,
     DesktopMethod::SetBackgroundSubagents,
+    DesktopMethod::GetProfileBinding,
+    DesktopMethod::ClearProfileBinding,
     DesktopMethod::GetAuthStatus,
     DesktopMethod::ReloadCredentials,
 ];
@@ -4969,6 +4981,7 @@ fn capabilities_gate_the_new_methods_and_events_per_backend() {
         }
     }
     assert!(!release.emits("session_snapshot") && !release.emits("review_mode_changed"));
+    assert!(!release.emits("profile_binding_changed"));
     // 4.8.0 ignores `sections` instead of refusing it, so the gate is the
     // feed event, not the method.
     assert!(release.supports(DesktopMethod::GetSnapshot));
@@ -4979,7 +4992,7 @@ fn capabilities_gate_the_new_methods_and_events_per_backend() {
     );
 
     // Without the feed seam the server omits `session_snapshot`.
-    let without_feed = capabilities_of(&MAIN_METHODS, &MAIN_EVENTS[..8]);
+    let without_feed = capabilities_of(&MAIN_METHODS, &MAIN_EVENTS[..9]);
     assert!(!without_feed.supports_session_sections());
 }
 
@@ -6536,6 +6549,7 @@ fn every_documented_error_code_is_typed() {
         "review_mode_busy",
         "stats_unavailable",
         "updates_unavailable",
+        "agent_definitions_unavailable",
         "background_subagents_busy",
         "background_subagents_unavailable",
         "auth_unavailable",
@@ -6589,4 +6603,209 @@ fn every_documented_error_code_is_typed() {
     assert!(DesktopErrorCode::SessionSwitching.is_retryable());
     assert!(DesktopErrorCode::ReviewModeBusy.is_retryable());
     assert!(!DesktopErrorCode::NotFound.is_retryable());
+}
+
+// --- 5.0.0: subagent progress, agent definitions, profile binding ---------
+
+#[test]
+fn subagent_progress_decodes_when_present_and_stays_absent_from_older_owners() {
+    // The `agents_update` entry of the spec, with the 5.0.0 progress fields.
+    let mut data = agent_data();
+    data["status"] = json!("running");
+    data["lastStep"] = json!("running");
+    data["turns"] = json!(3);
+    data["toolCalls"] = json!(7);
+    data["activeTool"] = json!("read");
+    let agent = single_agent(data);
+    assert_eq!(agent.turns, Some(3));
+    assert_eq!(agent.tool_calls, Some(7));
+    assert_eq!(agent.active_tool.as_deref(), Some("read"));
+
+    // Gentle Shell 4.9.0 sends none of them.
+    let older = single_agent(agent_data());
+    assert_eq!(
+        (older.turns, older.tool_calls, older.active_tool),
+        (None, None, None)
+    );
+
+    // A negative count is malformed, never a guess.
+    let mut bad = agent_data();
+    bad["turns"] = json!(-1);
+    let refused = record_response(
+        decode_widget(&widget(&response_line(
+            "desktop-1",
+            json!({ "agents": [bad] }),
+        )))
+        .unwrap()
+        .unwrap(),
+    )
+    .list_subagents();
+    assert!(matches!(refused, Err(DesktopRpcError::MalformedPayload(_))));
+}
+
+#[test]
+fn agent_definitions_decode_the_spec_answer() {
+    let request =
+        DesktopRequest::new("desktop-90", DesktopMethod::ListAgentDefinitions, json!({})).unwrap();
+    assert_eq!(
+        request.payload(),
+        payload("desktop-90", "list_agent_definitions", "{}")
+    );
+    let definitions = ok_response(json!({
+        "agents": [
+            { "name": "explore", "description": "Global explorer.", "scope": "global", "model": "openai-codex/gpt-5.6-terra", "thinking": "high", "mode": null, "tools": ["read", "grep"], "toolsTruncated": false },
+            { "name": "worker", "description": "Project worker.", "scope": "project", "model": null, "thinking": null, "mode": "background", "tools": [], "toolsTruncated": false }
+        ],
+        "truncated": false,
+        "problems": { "invalid": 1, "notices": 0 },
+        "subagentDefaults": { "model": "anthropic/claude-luna", "thinking": null, "mode": "background" },
+        "defaultOrchestrator": { "status": "set", "model": "openai-codex/gpt-5.6-terra", "thinking": "medium" }
+    }))
+    .agent_definitions()
+    .unwrap();
+    assert_eq!(
+        definitions.agents[0],
+        AgentDefinition {
+            name: "explore".into(),
+            description: Some("Global explorer.".into()),
+            scope: AgentDefinitionScope::Global,
+            model: Some("openai-codex/gpt-5.6-terra".into()),
+            thinking: Some("high".into()),
+            mode: None,
+            tools: vec!["read".into(), "grep".into()],
+            tools_truncated: false,
+        }
+    );
+    assert_eq!(definitions.agents[1].scope, AgentDefinitionScope::Project);
+    assert_eq!(definitions.agents[1].mode.as_deref(), Some("background"));
+    assert!(!definitions.truncated);
+    assert_eq!(definitions.problems.invalid, 1);
+    assert_eq!(definitions.subagent_defaults.mode, "background");
+    assert_eq!(
+        definitions.default_orchestrator.route(),
+        Some(("openai-codex/gpt-5.6-terra", Some("medium")))
+    );
+
+    // Without a named orchestrator there is no route, whatever else is sent.
+    for status in ["unset", "missing", "invalid"] {
+        let orchestrator = ok_response(json!({
+            "agents": [], "truncated": false, "problems": { "invalid": 0, "notices": 0 },
+            "subagentDefaults": { "model": null, "thinking": null, "mode": "task" },
+            "defaultOrchestrator": { "status": status }
+        }))
+        .agent_definitions()
+        .unwrap()
+        .default_orchestrator;
+        assert_eq!(orchestrator.route(), None, "{status}");
+    }
+    assert_eq!(
+        "set".parse::<OrchestratorStatus>(),
+        Ok(OrchestratorStatus::Set)
+    );
+
+    let refused = record_response(
+        decode_widget(&widget(&error_line(
+            "desktop-90",
+            "agent_definitions_unavailable",
+            "Agent definitions are unavailable",
+        )))
+        .unwrap()
+        .unwrap(),
+    );
+    assert_eq!(
+        refused.error().and_then(DesktopErrorInfo::kind),
+        Some(DesktopErrorCode::AgentDefinitionsUnavailable)
+    );
+}
+
+#[test]
+fn profile_binding_reads_clears_and_changes_decode_the_spec_shapes() {
+    for (method, name) in [
+        (DesktopMethod::GetProfileBinding, "get_profile_binding"),
+        (DesktopMethod::ClearProfileBinding, "clear_profile_binding"),
+    ] {
+        assert_eq!(
+            DesktopRequest::new("desktop-91", method, json!({}))
+                .unwrap()
+                .payload(),
+            payload("desktop-91", name, "{}")
+        );
+    }
+
+    let binding =
+        ok_response(json!({ "kind": "explicit", "profile": "fast", "origin": "session" }))
+            .profile_binding()
+            .unwrap();
+    assert_eq!(
+        binding,
+        ProfileBinding {
+            kind: ProfileBindingKind::Explicit,
+            profile: Some("fast".into()),
+            origin: Some(ProfileBindingOrigin::Session),
+        }
+    );
+    assert_eq!(binding.explicit_profile(), Some("fast"));
+
+    // An inherited or layered profile is not one a clear would undo.
+    let inherited =
+        ok_response(json!({ "kind": "inherited", "profile": "team", "origin": "repo" }))
+            .profile_binding()
+            .unwrap();
+    assert_eq!(inherited.explicit_profile(), None);
+
+    let cleared = ok_response(json!({
+        "status": "cleared", "changed": true,
+        "binding": { "kind": "inherited", "profile": null, "origin": null }
+    }))
+    .clear_profile_binding()
+    .unwrap();
+    assert_eq!(
+        cleared,
+        ClearProfileBindingResult {
+            status: ClearBindingStatus::Cleared,
+            changed: true,
+            binding: ProfileBinding {
+                kind: ProfileBindingKind::Inherited,
+                profile: None,
+                origin: None,
+            },
+        }
+    );
+    assert_eq!(
+        ok_response(json!({
+            "status": "not_cleared", "changed": false,
+            "binding": { "kind": "explicit", "profile": "fast", "origin": "session" }
+        }))
+        .clear_profile_binding()
+        .unwrap()
+        .status,
+        ClearBindingStatus::NotCleared
+    );
+
+    let changed = some_event(
+        4,
+        "profile_binding_changed",
+        json!({ "kind": "explicit", "profile": "fast", "origin": "session", "source": "external" }),
+    );
+    assert_eq!(
+        changed.profile_binding_changed().unwrap(),
+        ProfileBindingChanged {
+            binding: binding.clone(),
+            source: ChangeSource::External,
+        }
+    );
+    // The exact event name is checked before the shape.
+    let foreign = some_event(
+        5,
+        "profile_applied",
+        json!({ "kind": "explicit", "profile": "fast", "origin": "session", "source": "desktop" }),
+    );
+    assert!(foreign.profile_binding_changed().is_err());
+
+    // A kind outside the documented set is refused, never misread.
+    assert!(
+        ok_response(json!({ "kind": "pinned", "profile": "fast", "origin": "session" }))
+            .profile_binding()
+            .is_err()
+    );
 }

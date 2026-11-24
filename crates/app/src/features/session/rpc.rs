@@ -392,10 +392,11 @@ impl SessionView {
         Ok(ticket)
     }
 
-    /// The profile this session is bound to: what Gentle Shell's
-    /// `apply_profile` reported, or what the Profiles screen applied on an
-    /// older Shell. Forgotten with the session (new, resumed, or a replaced
-    /// backend).
+    /// The profile this session is bound to: Gentle Shell's own
+    /// `get_profile_binding` answer (an explicit binding) where it offers
+    /// that read; otherwise what its `apply_profile` reported, or what the
+    /// Profiles screen applied on an older Shell. Forgotten with the session
+    /// (new, resumed, or a replaced backend).
     pub(crate) fn session_profile(&self) -> Option<&str> {
         self.desktop.session_profile()
     }
@@ -404,6 +405,25 @@ impl SessionView {
     pub(crate) fn set_session_profile(&mut self, profile: Option<String>, cx: &mut Context<Self>) {
         self.desktop.set_session_profile(profile);
         cx.notify();
+    }
+
+    /// Whether this tab's Gentle Shell clears the session binding itself
+    /// (`clear_profile_binding`); otherwise the Profiles screen sends
+    /// `/gentle:profiles clear` as before.
+    pub(crate) fn binding_clear_supported(&self) -> bool {
+        matches!(self.backend.status, BackendStatus::Ready(_))
+            && self.desktop.binding_clear_supported()
+    }
+
+    /// Ask Gentle Shell to clear this session's binding; the answer arrives
+    /// as a [`ConfigOutcome::Cleared`] for the returned ticket.
+    pub(crate) fn clear_profile_binding(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<ConfigTicket, ConfigFailure> {
+        let ticket = self.desktop.config_clear_binding()?;
+        self.sync_config(cx);
+        Ok(ticket)
     }
 
     /// The answers to config tickets since the last call (the Profiles
@@ -570,7 +590,11 @@ impl SessionView {
                 let applied = self.desktop.design_expire(generation);
                 self.apply_design(applied, cx);
             }
-            DesktopMethod::GetConfig | DesktopMethod::SetConfig | DesktopMethod::ApplyProfile => {
+            DesktopMethod::GetConfig
+            | DesktopMethod::SetConfig
+            | DesktopMethod::ApplyProfile
+            | DesktopMethod::GetProfileBinding
+            | DesktopMethod::ClearProfileBinding => {
                 let applied = self.desktop.config_expire(generation);
                 self.apply_config(applied, cx);
             }
@@ -586,6 +610,7 @@ impl SessionView {
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions
             | DesktopMethod::GetBackgroundSubagents
             | DesktopMethod::SetBackgroundSubagents
             | DesktopMethod::GetAuthStatus
@@ -641,7 +666,11 @@ impl SessionView {
                 let applied = self.desktop.design_outer(generation, handled);
                 self.apply_design(applied, cx);
             }
-            DesktopMethod::GetConfig | DesktopMethod::SetConfig | DesktopMethod::ApplyProfile => {
+            DesktopMethod::GetConfig
+            | DesktopMethod::SetConfig
+            | DesktopMethod::ApplyProfile
+            | DesktopMethod::GetProfileBinding
+            | DesktopMethod::ClearProfileBinding => {
                 let applied = self.desktop.config_outer(generation, handled);
                 self.apply_config(applied, cx);
             }
@@ -657,6 +686,7 @@ impl SessionView {
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions
             | DesktopMethod::GetBackgroundSubagents
             | DesktopMethod::SetBackgroundSubagents
             | DesktopMethod::GetAuthStatus

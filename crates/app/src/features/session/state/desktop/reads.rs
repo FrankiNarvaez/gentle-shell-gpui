@@ -1,14 +1,15 @@
 //! The one-shot reads window screens make of a tab's Gentle Shell over the
 //! Desktop channel: the Sessions browser (`list_sessions`, `switch_session`),
 //! Usage › Local stats (`get_usage_stats`), Configuration's update status
-//! (`get_update_status`), background-subagents policy
+//! (`get_update_status`), the Profiles screen's agent list and Pi default
+//! orchestrator (`list_agent_definitions`), background-subagents policy
 //! (`get_background_subagents`, `set_background_subagents`) and sign-ins
 //! (`get_auth_status`), and the tab's own credentials reload
 //! (`reload_credentials`). Each method is used only when `capabilities`
 //! advertises it; otherwise the caller keeps its own path (session files,
-//! the stats file scan, the npm registry, the policy files and
-//! `/gentle:background-subagents`, `auth.json`, a tab restart) and nothing is
-//! sent.
+//! the stats file scan, the npm registry, the agent files and Pi's
+//! `settings.json`, the policy files and `/gentle:background-subagents`,
+//! `auth.json`, a tab restart) and nothing is sent.
 //!
 //! Requests wait for the shared slot in a queue, like the config stores; each
 //! is answered once, as an outcome for its ticket that the screen takes.
@@ -20,10 +21,11 @@ use std::collections::VecDeque;
 
 use pi_rpc::UiRequest;
 use pi_rpc::desktop_rpc::{
-    AuthStatus, BackgroundPolicy, BackgroundSubagents, Capabilities, DesktopErrorCode,
-    DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError, DesktopSession,
-    ListSessionsQuery, ReloadCredentials, SessionList, SessionsScope, SetBackgroundSubagentsResult,
-    StatsRange, StatsScope, SwitchSessionResult, UpdateStatus, UsageStats,
+    AgentDefinitions, AuthStatus, BackgroundPolicy, BackgroundSubagents, Capabilities,
+    DesktopErrorCode, DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError,
+    DesktopSession, ListSessionsQuery, ReloadCredentials, SessionList, SessionsScope,
+    SetBackgroundSubagentsResult, StatsRange, StatsScope, SwitchSessionResult, UpdateStatus,
+    UsageStats,
 };
 
 use super::Send;
@@ -69,6 +71,8 @@ pub(crate) enum ReadRequest {
     UpdateStatus {
         refresh: bool,
     },
+    /// The agent definitions and Pi's default orchestrator.
+    AgentDefinitions,
     /// The background-subagents policy as this session's project resolves it.
     BackgroundSubagents,
     /// Write the machine-wide policy: without a token the Shell answers the
@@ -90,6 +94,7 @@ impl ReadRequest {
             Self::SwitchSession { .. } => DesktopMethod::SwitchSession,
             Self::UsageStats { .. } => DesktopMethod::GetUsageStats,
             Self::UpdateStatus { .. } => DesktopMethod::GetUpdateStatus,
+            Self::AgentDefinitions => DesktopMethod::ListAgentDefinitions,
             Self::BackgroundSubagents => DesktopMethod::GetBackgroundSubagents,
             Self::SetBackgroundSubagents { .. } => DesktopMethod::SetBackgroundSubagents,
             Self::AuthStatus => DesktopMethod::GetAuthStatus,
@@ -110,6 +115,7 @@ impl ReadRequest {
             Self::UpdateStatus { refresh } => {
                 session.issue_get_update_status(refresh.then_some(true))
             }
+            Self::AgentDefinitions => session.issue(DesktopMethod::ListAgentDefinitions),
             Self::BackgroundSubagents => session.issue(DesktopMethod::GetBackgroundSubagents),
             Self::SetBackgroundSubagents {
                 policy,
@@ -173,6 +179,7 @@ pub(crate) enum ReadOutcome {
     Switched(SwitchSessionResult),
     UsageStats(UsageStats),
     UpdateStatus(UpdateStatus),
+    AgentDefinitions(AgentDefinitions),
     BackgroundSubagents(BackgroundSubagents),
     BackgroundSubagentsSet(SetBackgroundSubagentsResult),
     AuthStatus(AuthStatus),
@@ -382,6 +389,9 @@ impl Reads {
             ReadRequest::UpdateStatus { .. } => {
                 response.update_status().map(ReadOutcome::UpdateStatus)
             }
+            ReadRequest::AgentDefinitions => response
+                .agent_definitions()
+                .map(ReadOutcome::AgentDefinitions),
             ReadRequest::BackgroundSubagents => response
                 .background_subagents()
                 .map(ReadOutcome::BackgroundSubagents),
@@ -436,6 +446,7 @@ pub(in crate::features::session) fn is_read(method: DesktopMethod) -> bool {
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions
             | DesktopMethod::GetBackgroundSubagents
             | DesktopMethod::SetBackgroundSubagents
             | DesktopMethod::GetAuthStatus
@@ -846,5 +857,65 @@ mod tests {
             applied.outcome,
             SetBackgroundSubagentsOutcome::Applied { changed: true }
         );
+    }
+
+    #[test]
+    fn agent_definitions_are_asked_only_of_a_shell_that_offers_them() {
+        // Gentle Shell 4.9.0 (the reads of `main`, no definitions): the
+        // Profiles screen keeps reading the agent files.
+        let mut older = main_shell();
+        assert_eq!(
+            older.reads_support(DesktopMethod::ListAgentDefinitions),
+            ReadSupport::Legacy
+        );
+        assert_eq!(
+            older.reads_enqueue(ReadRequest::AgentDefinitions),
+            Err(ReadFailure::NotOffered)
+        );
+
+        let mut methods = RELEASE_METHODS.to_vec();
+        methods.push("list_agent_definitions");
+        let mut desktop = probed(&methods);
+        assert_eq!(
+            desktop.reads_support(DesktopMethod::ListAgentDefinitions),
+            ReadSupport::Rpc
+        );
+        let ticket = desktop
+            .reads_enqueue(ReadRequest::AgentDefinitions)
+            .unwrap();
+        let sends = desktop.reads_pump().sends;
+        let (id, payload) = sent(&sends);
+        assert_eq!(payload["method"], "list_agent_definitions");
+        assert_eq!(payload["params"], json!({}));
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({
+                "agents": [
+                    { "name": "explore", "description": "Global explorer.", "scope": "global", "model": "openai-codex/gpt-5.6-terra", "thinking": "high", "mode": null, "tools": ["read", "grep"], "toolsTruncated": false }
+                ],
+                "truncated": false,
+                "problems": { "invalid": 0, "notices": 0 },
+                "subagentDefaults": { "model": null, "thinking": null, "mode": "task" },
+                "defaultOrchestrator": { "status": "set", "model": "openai-codex/gpt-5.6-terra", "thinking": "medium" }
+            }),
+        ));
+        let Some(ReadOutcome::AgentDefinitions(definitions)) = desktop.reads_take(ticket) else {
+            panic!("the definitions answer the ticket")
+        };
+        assert_eq!(definitions.agents[0].name, "explore");
+
+        // A documented refusal is the screen's cue to read the files.
+        let ticket = desktop
+            .reads_enqueue(ReadRequest::AgentDefinitions)
+            .unwrap();
+        let (id, _) = sent(&desktop.reads_pump().sends);
+        let _ = desktop.reads_apply(&error(&id, "agent_definitions_unavailable"));
+        assert!(matches!(
+            desktop.reads_take(ticket),
+            Some(ReadOutcome::Failed(ReadFailure::Refused {
+                code: Some(DesktopErrorCode::AgentDefinitionsUnavailable),
+                ..
+            }))
+        ));
     }
 }
