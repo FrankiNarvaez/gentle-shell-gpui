@@ -27,10 +27,6 @@ impl SidebarMotion {
         self.allocation_start = self.slide.map(|_| (width, open));
     }
 
-    pub(super) fn resize_immediately(&mut self) {
-        self.allocation_start = None;
-    }
-
     fn allocation(&self, width: f32, fraction: f32, now: Instant) -> f32 {
         if let (Some((at, _)), Some((start, open))) = (self.slide, self.allocation_start) {
             let remaining = SidebarSlide::new(1., false)
@@ -63,6 +59,20 @@ impl SidebarMotion {
 }
 
 impl Workspace {
+    /// The visible panel and inner gap, shared by layout and painting.
+    pub(super) fn visible_sidebar_geometry(
+        &self,
+        side: Side,
+        window: f32,
+        now: Instant,
+    ) -> (f32, f32) {
+        let (width, fraction) = self.sidebar_geometry(side, window, now);
+        (
+            self.sidebar_allocation(side, width, fraction, now),
+            6. * fraction,
+        )
+    }
+
     pub(super) fn sidebar_allocation(
         &self,
         side: Side,

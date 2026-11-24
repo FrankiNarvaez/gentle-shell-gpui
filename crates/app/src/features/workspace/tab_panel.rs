@@ -1102,31 +1102,125 @@ mod tests {
         });
     }
 
-    #[gpui::test]
-    fn held_sidebar_reversal_preserves_rendered_width_and_gap(cx: &mut TestAppContext) {
-        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
-            let side = super::Side::Tabs;
-            let geometry = |ws: &Workspace| {
-                let now = std::time::Instant::now();
-                let (width, fraction) = ws.sidebar_geometry(side, 1200., now);
-                (
-                    ws.sidebar_allocation(side, width, fraction, now),
-                    6. * fraction,
-                )
-            };
-            for compact in [true, false] {
-                ws.set_tab_layout(TabLayout::Vertical, cx);
-                ws.resize_tab_sidebar(365., cx);
-                ws.set_sidebar_compact(compact, cx);
-                ws.tabs_sidebar_motion = Default::default();
-                ws.retarget_sidebar_drag(side, false, false, 1200., cx);
-                let before = geometry(ws);
-                ws.retarget_sidebar_drag(side, true, !compact, 1200., cx);
-                let after = geometry(ws);
-                assert!((before.0 - after.0).abs() < 5., "{before:?} → {after:?}");
-                assert!((before.1 - after.1).abs() < 0.1, "{before:?} → {after:?}");
-            }
+    #[cfg(debug_assertions)]
+    fn rendered_sidebar_window(
+        cx: &mut TestAppContext,
+        compact: bool,
+    ) -> (gpui::AnyWindowHandle, gpui::Entity<Workspace>) {
+        let out = Rc::new(RefCell::new(None));
+        let capture = out.clone();
+        with_workspace(cx, vec![space_with("A", &[])], 0, move |ws, window, cx| {
+            ws.tab_layout = TabLayout::Vertical;
+            ws.tabs_sidebar_width = 365.;
+            ws.sidebar_compact_first = true;
+            ws.sidebar_compact = compact;
+            *capture.borrow_mut() = Some((window.window_handle(), cx.entity().clone()));
         });
+        let (handle, ws) = out.borrow_mut().take().unwrap();
+        cx.update(|cx| {
+            crate::shared::themes::init(cx);
+            crate::features::hydration::init(cx);
+        });
+        handle
+            .update(cx, |_, window, cx| {
+                window.replace_root(cx, |window, cx| {
+                    gpui_kit::base::Root::new(ws.clone(), window, cx)
+                });
+                window.draw(cx).clear(cx);
+            })
+            .unwrap();
+        (handle, ws)
+    }
+
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn held_sidebar_reversal_keeps_surface_filled_through_next_move(cx: &mut TestAppContext) {
+        use gpui::{
+            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+            VisualTestContext, point, px,
+        };
+        for compact in [false, true] {
+            let (handle, ws) = rendered_sidebar_window(cx, compact);
+            let mut visual = VisualTestContext::from_window(handle, cx);
+            let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
+            let pos = |x| point(px((6. + x) * scale), px(100. * scale));
+            let draw = |visual: &mut VisualTestContext| {
+                visual.update(|window, cx| window.draw(cx).clear(cx));
+                let row = visual.debug_bounds("tabs-slide-row").unwrap();
+                let surface = visual.debug_bounds("tabs-slide-surface").unwrap();
+                let body = visual.debug_bounds("sidebar-adjacent-body").unwrap();
+                let width = f32::from(row.size.width) / scale;
+                let painted = f32::from(surface.size.width.min(row.size.width)) / scale;
+                let gap = f32::from(body.left() - row.right()) / scale;
+                assert!(
+                    (painted - width).abs() < 1.,
+                    "compact start={compact}: {width} allocated, {painted} painted"
+                );
+                (width, gap)
+            };
+            let initial = draw(&mut visual);
+            assert_eq!(initial.1, 6.);
+            let x = initial.0 + 2.;
+            let move_to = |visual: &mut VisualTestContext, x| {
+                visual.update(|window, cx| {
+                    window.dispatch_event(
+                        MouseMoveEvent {
+                            position: pos(x),
+                            pressed_button: Some(MouseButton::Left),
+                            modifiers: Modifiers::none(),
+                        }
+                        .to_platform_input(),
+                        cx,
+                    );
+                });
+            };
+            visual.update(|window, cx| {
+                window.dispatch_event(
+                    MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: pos(x),
+                        modifiers: Modifiers::none(),
+                        click_count: 1,
+                        first_mouse: false,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            });
+            move_to(&mut visual, x + 4.);
+            move_to(&mut visual, 16.);
+            visual.update(|_, cx| assert_eq!(ws.read(cx).tab_layout, TabLayout::Horizontal));
+            let before = draw(&mut visual);
+            move_to(&mut visual, if compact { 200. } else { 70. });
+            visual.update(|_, cx| {
+                assert_eq!(ws.read(cx).tab_layout, TabLayout::Vertical);
+                assert_eq!(ws.read(cx).sidebar_compact, !compact);
+            });
+            let reversed = draw(&mut visual);
+            assert!(
+                (before.0 - reversed.0).abs() < 80.,
+                "{before:?} → {reversed:?}"
+            );
+            assert!(
+                (before.1 - reversed.1).abs() < 2.,
+                "{before:?} → {reversed:?}"
+            );
+            move_to(&mut visual, 390.);
+            let next = draw(&mut visual);
+            assert!((reversed.0 - next.0).abs() < 80., "{reversed:?} → {next:?}");
+            visual.update(|window, cx| {
+                window.dispatch_event(
+                    MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: pos(390.),
+                        modifiers: Modifiers::none(),
+                        click_count: 1,
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            });
+        }
     }
 
     fn sorted(ids: Vec<usize>) -> Vec<usize> {

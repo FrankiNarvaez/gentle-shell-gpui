@@ -5,24 +5,20 @@ use super::*;
 /// The title bar's height; overlay screens open below it.
 pub(super) const TITLE_BAR_HEIGHT: f32 = 36.;
 
-/// Clip a full-size panel as it slides toward the window edge, so its
-/// controls never reflow at intermediate widths.
-fn sidebar_clip(side: Side, width: f32, content: impl IntoElement) -> Div {
-    div().size_full().relative().overflow_hidden().child(
-        div()
-            .absolute()
-            .top_0()
-            .bottom_0()
-            .when(matches!(side, Side::Tabs), |d| d.right_0())
-            .when(matches!(side, Side::Files), |d| d.left_0())
-            .w(rems(width / 16.))
-            .rounded_xl()
-            .bg(ui::panel())
-            .border_1()
-            .border_color(gpui_kit::transparent_black())
-            .overflow_hidden()
-            .child(content),
-    )
+/// Paint and clip the content inside the width allocated by the row.
+fn sidebar_surface(side: Side, content: impl IntoElement) -> Div {
+    div()
+        .size_full()
+        .debug_selector(|| match side {
+            Side::Tabs => "tabs-slide-surface".into(),
+            Side::Files => "files-slide-surface".into(),
+        })
+        .rounded_xl()
+        .bg(ui::panel())
+        .border_1()
+        .border_color(gpui_kit::transparent_black())
+        .overflow_hidden()
+        .child(content)
 }
 
 fn drag_saved_width(
@@ -113,8 +109,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let now = std::time::Instant::now();
-        let (width, fraction) = self.sidebar_geometry(side, window_width, now);
-        let allocation = self.sidebar_allocation(side, width, fraction, now);
+        let (allocation, _) = self.visible_sidebar_geometry(side, window_width, now);
         match side {
             Side::Tabs if open => {
                 self.set_sidebar_compact(compact, cx);
@@ -216,10 +211,10 @@ impl Workspace {
             self.sidebar_motion_mut(side).active_drag = Default::default();
             cx.notify();
         }
+        // Held width updates change the destination of an active slide, not
+        // its interpolated start. Without a slide they still resize directly.
         match (side, action) {
-            (_, Some(Width(_))) => self.sidebar_motion_mut(side).resize_immediately(),
             (Side::Tabs, Some(Compact | Expand)) => {
-                self.tabs_sidebar_motion.resize_immediately();
                 self.set_sidebar_compact(action == Some(Compact), cx);
             }
             (_, Some(Collapse | Reopen | ReopenExpanded)) => self.retarget_sidebar_drag(
@@ -264,15 +259,13 @@ impl Render for Workspace {
         if tabs_moving || (files_moving && has_files_sidebar) {
             ui::request_animation_frame(window);
         }
-        let (tabs_width, tabs_fraction) = self.sidebar_geometry(Side::Tabs, window_px_at_100, now);
-        let (files_width, files_fraction) =
-            self.sidebar_geometry(Side::Files, window_px_at_100, now);
-        let tabs_allocated = self.sidebar_allocation(Side::Tabs, tabs_width, tabs_fraction, now);
-        let files_allocated =
-            self.sidebar_allocation(Side::Files, files_width, files_fraction, now);
+        let (tabs_width, tabs_gap) =
+            self.visible_sidebar_geometry(Side::Tabs, window_px_at_100, now);
+        let (files_width, files_gap) =
+            self.visible_sidebar_geometry(Side::Files, window_px_at_100, now);
         let tabs_resizing = self.sidebar_drag_active(Side::Tabs, cx);
         let files_resizing = self.sidebar_drag_active(Side::Files, cx);
-        let files_sidebar = self.sidebar.clone().filter(|_| files_fraction > 0.);
+        let files_sidebar = self.sidebar.clone().filter(|_| files_width > 0.);
         // Native web views would cover a screen or a dialog opened over
         // them, and swallow the pointer while a pane is dragged over them;
         // device cards stop capturing while covered.
@@ -530,12 +523,13 @@ impl Render for Workspace {
                         },
                     ))
                     // The vertical tab navigator remains independent of the Files panel.
-                    .when(tabs_fraction > 0., |row| {
+                    .when(tabs_width > 0., |row| {
                         row.child(
                             div()
                                 .id("vertical-tab-panel")
-                                .w(rems(tabs_allocated / 16.))
-                                .mr(rems(-6. * (1. - tabs_fraction) / 16.))
+                                .debug_selector(|| "tabs-slide-row".into())
+                                .w(rems(tabs_width / 16.))
+                                .mr(rems((tabs_gap - 6.) / 16.))
                                 .flex_none()
                                 .h_full()
                                 .relative()
@@ -546,11 +540,7 @@ impl Render for Workspace {
                                         this.open_empty_area_menu(event.position, window, cx);
                                     }),
                                 )
-                                .child(sidebar_clip(
-                                    Side::Tabs,
-                                    tabs_width,
-                                    self.render_tab_sidebar(cx),
-                                ))
+                                .child(sidebar_surface(Side::Tabs, self.render_tab_sidebar(cx)))
                                 .when(tabs_resizing || (vertical_tabs && !tabs_moving), |column| {
                                     column.child(self.sidebar_handle(Side::Tabs, cx))
                                 }),
@@ -563,6 +553,7 @@ impl Render for Workspace {
                             .flex_1()
                             .min_w_0()
                             .h_full()
+                            .debug_selector(|| "sidebar-adjacent-body".into())
                             .child(self.render_body(window, cx))
                             .child(self.measure_conversation()),
                     )
@@ -573,14 +564,13 @@ impl Render for Workspace {
                         row.child(
                             div()
                                 .id("files-sidebar-panel")
-                                .w(rems(files_allocated / 16.))
-                                .ml(rems(-6. * (1. - files_fraction) / 16.))
+                                .w(rems(files_width / 16.))
+                                .ml(rems((files_gap - 6.) / 16.))
                                 .flex_none()
                                 .h_full()
                                 .relative()
-                                .child(sidebar_clip(
+                                .child(sidebar_surface(
                                     Side::Files,
-                                    files_width,
                                     view.cached(StyleRefinement::default().size_full()),
                                 ))
                                 .when(
