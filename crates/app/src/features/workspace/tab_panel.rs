@@ -20,6 +20,13 @@ impl Workspace {
         }
     }
 
+    /// The menu's vertical views: the sidebar expanded or as its icon rail,
+    /// from either tab placement.
+    pub(super) fn show_vertical_tabs(&mut self, compact: bool, cx: &mut Context<Self>) {
+        self.set_sidebar_compact(compact, cx);
+        self.set_tab_layout(TabLayout::Vertical, cx);
+    }
+
     pub(super) fn set_sidebar_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
         if self.sidebar_compact == compact {
             return;
@@ -60,44 +67,60 @@ impl Workspace {
     }
 
     /// The horizontal strip and the sidebar use the same placement menu.
+    /// Two sections: the view (an action: where the tabs show and whether
+    /// the sidebar is the icon rail) and the drag preference (what dragging
+    /// the sidebar's edge inward does; it never moves the tabs by itself).
     pub(super) fn tab_placement_menu(
         menu: PopupMenu,
         layout: TabLayout,
+        compact: bool,
         compact_first: bool,
         workspace: WeakEntity<Self>,
     ) -> PopupMenu {
         let horizontal = workspace.clone();
         let vertical = workspace.clone();
-        menu.item(
-            PopupMenuItem::new("Horizontal tabs")
-                .icon(Icon::new(IconName::List))
-                .checked(layout == TabLayout::Horizontal)
-                .on_click(move |_, _, cx| {
-                    let _ = horizontal.update(cx, |this, cx| {
-                        this.set_tab_layout(TabLayout::Horizontal, cx)
-                    });
-                }),
-        )
-        .item(
-            PopupMenuItem::new("Vertical tabs")
-                .icon(Icon::new(IconName::PanelLeft))
-                .checked(layout == TabLayout::Vertical)
-                .on_click(move |_, _, cx| {
-                    let _ = vertical
-                        .update(cx, |this, cx| this.set_tab_layout(TabLayout::Vertical, cx));
-                }),
-        )
-        .separator()
-        .item(Self::sidebar_drag_preference_item(
-            workspace.clone(),
-            compact_first,
-            false,
-        ))
-        .item(Self::sidebar_drag_preference_item(
-            workspace,
-            compact_first,
-            true,
-        ))
+        let vertical_compact = workspace.clone();
+        let vertical_tabs = layout == TabLayout::Vertical;
+        menu.label("View")
+            .item(
+                PopupMenuItem::new("Horizontal tabs")
+                    .icon(Icon::new(IconName::List))
+                    .checked(layout == TabLayout::Horizontal)
+                    .on_click(move |_, _, cx| {
+                        let _ = horizontal.update(cx, |this, cx| {
+                            this.set_tab_layout(TabLayout::Horizontal, cx)
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Vertical tabs")
+                    .icon(Icon::new(IconName::PanelLeft))
+                    .checked(vertical_tabs && !compact)
+                    .on_click(move |_, _, cx| {
+                        let _ = vertical.update(cx, |this, cx| this.show_vertical_tabs(false, cx));
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Vertical compact tabs")
+                    .icon(Icon::new(IconName::PanelLeft))
+                    .checked(vertical_tabs && compact)
+                    .on_click(move |_, _, cx| {
+                        let _ = vertical_compact
+                            .update(cx, |this, cx| this.show_vertical_tabs(true, cx));
+                    }),
+            )
+            .separator()
+            .label("When dragged smaller")
+            .item(Self::sidebar_drag_preference_item(
+                workspace.clone(),
+                compact_first,
+                false,
+            ))
+            .item(Self::sidebar_drag_preference_item(
+                workspace,
+                compact_first,
+                true,
+            ))
     }
 
     fn sidebar_drag_preference_item(
@@ -297,6 +320,7 @@ impl Workspace {
         menu: PopupMenu,
         weak: WeakEntity<Self>,
         layout: TabLayout,
+        compact: bool,
         compact_first: bool,
     ) -> PopupMenu {
         let new_space = weak.clone();
@@ -310,7 +334,7 @@ impl Workspace {
                     }),
             )
             .separator();
-        Self::tab_placement_menu(menu, layout, compact_first, weak)
+        Self::tab_placement_menu(menu, layout, compact, compact_first, weak)
     }
 
     // ── Tab multi-selection ───────────────────────────────────────────────
@@ -1078,6 +1102,23 @@ mod tests {
                 assert!(!ws.panes.contains_key(&pane));
             },
         );
+    }
+
+    #[gpui::test]
+    fn view_menu_picks_vertical_or_compact_from_any_layout(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
+            assert_eq!(ws.tab_layout, TabLayout::Horizontal);
+            ws.show_vertical_tabs(true, cx);
+            assert_eq!(ws.tab_layout, TabLayout::Vertical);
+            assert!(ws.sidebar_compact);
+            ws.show_vertical_tabs(false, cx);
+            assert_eq!(ws.tab_layout, TabLayout::Vertical);
+            assert!(!ws.sidebar_compact);
+            ws.set_tab_layout(TabLayout::Horizontal, cx);
+            ws.show_vertical_tabs(false, cx);
+            assert_eq!(ws.tab_layout, TabLayout::Vertical);
+            assert!(!ws.sidebar_compact);
+        });
     }
 
     #[gpui::test]
