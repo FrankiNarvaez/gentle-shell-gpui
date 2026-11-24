@@ -272,6 +272,7 @@ impl Render for Workspace {
         let window_px_at_100 =
             f32::from(window.viewport_size().width) / (f32::from(window.rem_size()) / 16.);
         let now = std::time::Instant::now();
+        self.tabs_sidebar_motion.window = window_px_at_100;
         let tabs_moving = self.tabs_sidebar_motion.advance(now, cx.reduce_motion());
         let files_moving = self.files_sidebar_motion.advance(now, cx.reduce_motion());
         if tabs_moving || (files_moving && has_files_sidebar) {

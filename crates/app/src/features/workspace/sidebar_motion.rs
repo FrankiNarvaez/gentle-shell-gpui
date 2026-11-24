@@ -11,6 +11,10 @@ pub(super) struct SidebarMotion {
     pub(super) revision: u64,
     allocation_start: Option<(f32, bool)>,
     pub(super) active_drag: std::rc::Weak<std::cell::Cell<u64>>,
+    /// The window width (px at 100 %) of the last layout, so a change made
+    /// outside a render (a menu, a button) can slide from what is on screen.
+    /// 0 until the first layout.
+    pub(super) window: f32,
 }
 
 impl SidebarMotion {

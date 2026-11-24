@@ -17,7 +17,7 @@ impl Workspace {
     }
 
     /// The main navigator stays on the left; the button picks the mode it
-    /// shows, right away and without a transition.
+    /// shows, sliding between the rail and the expanded width.
     pub(super) fn toggle_sidebar_compact(&mut self, cx: &mut Context<Self>) {
         if self.tab_layout == TabLayout::Horizontal {
             self.set_sidebar_compact(false, cx);
@@ -48,9 +48,20 @@ impl Workspace {
             return;
         }
         self.cancel_workspace_rename_state(cx);
+        // Slide from what is on screen, like a drag into or out of the rail.
+        // Hidden (horizontal tabs) or before the first layout there is no
+        // width to move from.
+        let window = self.tabs_sidebar_motion.window;
+        let from = (self.tab_layout == TabLayout::Vertical && window > 0.).then(|| {
+            self.sidebar_geometry(Side::Tabs, window, std::time::Instant::now())
+                .0
+        });
         self.sidebar_compact = compact;
         self.tabs_sidebar_peek = false;
         self.tabs_sidebar_motion.revision += 1;
+        if let Some(from) = from {
+            self.animate_sidebar_width(Side::Tabs, window, from, cx.reduce_motion());
+        }
         self.schedule_save(cx);
         cx.notify();
     }
@@ -1159,6 +1170,35 @@ mod tests {
     /// The saved expanded width survives the Compact / Expand button, and a
     /// drag that shows the rail never overwrites it.
     #[gpui::test]
+    fn the_compact_option_slides_the_width_both_ways(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
+            ws.set_tab_layout(TabLayout::Vertical, cx);
+            // What the last layout measured.
+            ws.tabs_sidebar_motion.window = 1600.;
+            ws.resize_tab_sidebar(345., cx);
+            let start = std::time::Instant::now();
+            ws.choose_compact_tabs(cx);
+            assert!(ws.sidebar_compact);
+            assert!(ws.tabs_sidebar_motion.width_moving());
+            let shown = ws.sidebar_geometry(super::Side::Tabs, 1600., start).0;
+            assert!(shown > 300., "the rail slides in from 345, not 48: {shown}");
+            let done = start + std::time::Duration::from_millis(400);
+            assert_eq!(ws.sidebar_geometry(super::Side::Tabs, 1600., done).0, 48.);
+            // The next frames finish the slide before the next click.
+            ws.tabs_sidebar_motion.advance(done, false);
+
+            let start = std::time::Instant::now();
+            ws.choose_compact_tabs(cx);
+            assert!(!ws.sidebar_compact);
+            assert!(ws.tabs_sidebar_motion.width_moving());
+            let shown = ws.sidebar_geometry(super::Side::Tabs, 1600., start).0;
+            assert!(shown < 100., "the panel slides out from the rail: {shown}");
+            let done = start + std::time::Duration::from_millis(400);
+            assert_eq!(ws.sidebar_geometry(super::Side::Tabs, 1600., done).0, 345.);
+        });
+    }
+
+    #[gpui::test]
     fn sidebar_width_survives_compact_toggle_and_respects_limits(cx: &mut TestAppContext) {
         with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
             let width = |ws: &Workspace| {
@@ -1170,8 +1210,7 @@ mod tests {
             assert_eq!(width(ws), 345.);
             ws.toggle_sidebar_compact(cx);
             assert_eq!(width(ws), 48.);
-            // The Compact / Expand button still changes the width at once: the
-            // transition belongs to the drag gesture only.
+            // Before the first layout there is no on-screen width to move from.
             assert!(!ws.tabs_sidebar_motion.width_moving());
             ws.resize_tab_sidebar(420., cx);
             ws.toggle_sidebar_compact(cx);
