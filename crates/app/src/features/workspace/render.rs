@@ -66,8 +66,8 @@ impl Workspace {
     ) {
         use gentle_core::workspaces::SidebarDrag::{Collapse, Reopen, Width};
 
-        // The row survives the handle unmounting. GPUI dispatches moves to
-        // this row with the same payload until mouse-up clears the active drag.
+        // The row survives the handle unmounting. A missed mouse-up can
+        // leave GPUI's active payload in place even when left is no longer held.
         let drag = event.drag(cx);
         if drag.owner != cx.entity_id() {
             return;
@@ -97,10 +97,12 @@ impl Workspace {
         let pointer = f32::from(distance) / scale - 6.;
         let window_width = f32::from(window.viewport_size().width) / scale;
         let side = drag.side;
-        let action = drag
-            .gesture
-            .borrow_mut()
-            .update(pointer, window_width, open);
+        let action = drag.gesture.borrow_mut().update(
+            pointer,
+            window_width,
+            open,
+            event.event.pressed_button == Some(MouseButton::Left),
+        );
         if matches!(action, Some(Collapse | Reopen)) {
             drag.revision.set(revision + 1);
         }

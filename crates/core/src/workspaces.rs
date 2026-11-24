@@ -249,10 +249,22 @@ pub fn drag_sidebar_width(pointer: f32, window: f32) -> SidebarDrag {
 #[derive(Clone, Default)]
 pub struct SidebarGesture {
     collapsed: bool,
+    ended: bool,
 }
 
 impl SidebarGesture {
-    pub fn update(&mut self, pointer: f32, window: f32, visible: bool) -> Option<SidebarDrag> {
+    pub fn update(
+        &mut self,
+        pointer: f32,
+        window: f32,
+        visible: bool,
+        left_held: bool,
+    ) -> Option<SidebarDrag> {
+        // A later left press must not revive a stale drag payload.
+        self.ended |= !left_held;
+        if self.ended {
+            return None;
+        }
         if visible {
             let action = drag_sidebar_width(pointer, window);
             self.collapsed = action == SidebarDrag::Collapse;
@@ -313,15 +325,36 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_drag_without_left_held_cannot_resume() {
+        let mut drag = SidebarGesture::default();
+        assert_eq!(
+            drag.update(139., 1000., true, true),
+            Some(SidebarDrag::Collapse)
+        );
+        assert_eq!(drag.update(240., 1000., false, false), None);
+        assert_eq!(drag.update(240., 1000., false, true), None);
+        assert_eq!(drag.update(240., 1000., true, true), None);
+    }
+
+    #[test]
     fn sidebar_drag_reopens_only_a_collapse_in_the_same_gesture() {
         let mut held = SidebarGesture::default();
-        assert_eq!(held.update(139., 1000., true), Some(SidebarDrag::Collapse));
-        assert_eq!(held.update(140., 1000., false), None);
-        assert_eq!(held.update(199., 1000., false), None);
-        assert_eq!(SidebarGesture::default().update(240., 1000., false), None);
-        assert_eq!(held.update(200., 1000., false), Some(SidebarDrag::Reopen));
         assert_eq!(
-            held.update(450., 1000., true),
+            held.update(139., 1000., true, true),
+            Some(SidebarDrag::Collapse)
+        );
+        assert_eq!(held.update(140., 1000., false, true), None);
+        assert_eq!(held.update(199., 1000., false, true), None);
+        assert_eq!(
+            SidebarGesture::default().update(240., 1000., false, true),
+            None
+        );
+        assert_eq!(
+            held.update(200., 1000., false, true),
+            Some(SidebarDrag::Reopen)
+        );
+        assert_eq!(
+            held.update(450., 1000., true, true),
             Some(SidebarDrag::Width(400.))
         );
     }
