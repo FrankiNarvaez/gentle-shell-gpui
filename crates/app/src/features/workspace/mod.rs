@@ -58,6 +58,8 @@ mod render;
 mod sidebars;
 mod spaces;
 mod stages;
+#[cfg(test)]
+mod t8_verifier;
 mod tab_panel;
 mod tabs;
 mod view;

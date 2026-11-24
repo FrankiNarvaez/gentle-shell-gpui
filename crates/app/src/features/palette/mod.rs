@@ -326,6 +326,13 @@ impl PaletteView {
         cx.notify();
     }
 
+    /// Enter the workspace picker from its command row, not from a category shortcut.
+    pub fn show_workspace_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.set_category(Category::Workspaces, window, cx);
+    }
+
     /// The workspaces changed while the switcher is open (an agent started,
     /// finished or asked something): re-list them in place.
     pub fn set_workspaces(&mut self, workspaces: Vec<WorkspaceRow>, cx: &mut Context<Self>) {

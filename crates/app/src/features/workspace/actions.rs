@@ -537,7 +537,14 @@ impl Workspace {
     pub(super) fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let restore = match &self.overlay {
             Some((Overlay::Palette(view), _)) if view.read(cx).category() == Category::Tabs => {
-                Some(view.read(cx).previous_focus.clone())
+                let previous = &view.read(cx).previous_focus;
+                // Opening the chooser exits pane mode on render. Its former
+                // focus handle is no longer mounted, so return to the pane.
+                if !self.pane_mode && previous.as_ref() == Some(&self.pane_mode_focus) {
+                    None
+                } else {
+                    Some(previous.clone())
+                }
             }
             _ => None,
         };

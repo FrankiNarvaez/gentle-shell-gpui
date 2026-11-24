@@ -59,7 +59,7 @@ impl Workspace {
         let subscription = cx.subscribe_in(
             &view,
             window,
-            |this, _, event: &PaletteEvent, window, cx| match event {
+            |this, palette, event: &PaletteEvent, window, cx| match event {
                 PaletteEvent::Close => this.close_overlay(window, cx),
                 PaletteEvent::Run(PaletteAction::RenameWorkspace { index, name }) => {
                     // Renaming happens in place; the switcher stays open.
@@ -78,7 +78,7 @@ impl Workspace {
                     this.open_palette(Category::Tabs, window, cx)
                 }
                 PaletteEvent::Run(PaletteAction::OpenWorkspaces) => {
-                    this.open_palette(Category::Workspaces, window, cx)
+                    palette.update(cx, |view, cx| view.show_workspace_picker(window, cx));
                 }
                 PaletteEvent::Run(action) => {
                     this.close_overlay(window, cx);
