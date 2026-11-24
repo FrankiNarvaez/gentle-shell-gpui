@@ -103,10 +103,12 @@ Terminal panes get every key that the app has no binding for. The app takes ⌃S
 
 The leader waits about a second for its second key.
 
-## Coming from tmux / nvim
+## Coming from tmux / Neovim / Herdr TUI
 
 - **Leader = tmux prefix.** ⌃Space plays the part of `C-b`: press it, release, press one key. `v` and `s` split like `%` and `"` (right and down); `x` closes like `&`/`x`; `n` / `p` / `1`–`9` switch windows (tabs) like tmux's `n`, `p` and digits; `h j k l` move between panes like `select-pane` with vim keys; `c` creates; `:` is the command prompt, here the palette.
-- **Pane mode = a resize/move submode**, like herdr's modes or tmux's repeatable keys: enter once, use bare keys, leave with Esc.
+- **Neovim window keys.** [Neovim's window help](https://github.com/neovim/neovim/blob/master/runtime/doc/windows.txt) uses `Ctrl+W` then `h j k l` to move left/down/up/right, `v` to split vertically (side by side), `s` to split horizontally (stacked), and `c` to close. Gentle uses the same movement and split letters after its leader, but closes with `x`.
+- **Herdr TUI prefix.** [Herdr TUI's keybinding docs](https://herdr.dev/tui/docs/configuration/#keybindings) give `Ctrl+B` as the default prefix and show `Ctrl+Space` as a configuration example, not a default. Gentle defaults to `Ctrl+Space`. The docs' example uses `prefix+c` for a new tab and `prefix+n` for the next tab, as Gentle does, but uses `prefix+minus` for a horizontal split where Gentle uses leader `s`.
+- **Pane mode** is Gentle's sticky move/resize layer: leader then Space, bare keys to work, Esc to leave.
 - **Vim keys = netrw/oil habits.** `j k gg G h l` in lists once the setting is on; `s` and `u` stage and unstage as in fugitive and lazygit.
 - **`:` opens the palette**, which also takes `/` agent commands, so `⌃Space :` is your command line.
 - **Discoverability**: press ⌃Space and wait; the which-key panel shows the rest, like which-key.nvim.
