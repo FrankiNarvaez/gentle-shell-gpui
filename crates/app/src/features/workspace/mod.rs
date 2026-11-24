@@ -100,6 +100,10 @@ actions!(
     ]
 );
 
+/// The vertical tabs sidebar's width (px at 100 % interface size) as an
+/// icon rail; it has no resize handle.
+const COMPACT_SIDEBAR_WIDTH: f32 = 48.;
+
 /// What the window tells whoever embeds things in it (the sidebar's owner).
 pub enum WorkspaceEvent {
     /// The shown workspace changed; its root folder.
@@ -278,6 +282,8 @@ struct Space {
     active: usize,
     /// The badge's chosen icon and color.
     badge: Badge,
+    /// Whether this workspace's sessions are visible in the sidebar.
+    sidebar_expanded: bool,
 }
 
 impl Space {
@@ -289,6 +295,7 @@ impl Space {
             tabs: Vec::new(),
             active: 0,
             badge: Badge::default(),
+            sidebar_expanded: true,
         }
     }
 }
@@ -413,13 +420,12 @@ pub struct Workspace {
     tabs_sidebar_motion: sidebar_motion::SidebarMotion,
     files_sidebar_motion: sidebar_motion::SidebarMotion,
     tab_layout: TabLayout,
-    /// Width of the vertical tabs sidebar (px at 100 % interface size).
+    /// The vertical tabs sidebar shows as the narrow icon rail.
+    sidebar_compact: bool,
+    /// Width of the expanded vertical tabs sidebar (px at 100 % interface size).
     tabs_sidebar_width: f32,
     /// Width of the right Files sidebar (px at 100 % interface size).
     files_sidebar_width: f32,
-    /// Workspaces opened or closed by hand in the sidebar, by name; one not
-    /// listed is open while it is the shown one.
-    sidebar_open_spaces: HashMap<String, bool>,
     /// The workspace whose badge picker is open, and where it opened.
     badge_picker: Option<(usize, Point<Pixels>)>,
     /// A right-click context menu owned by the workspace so its open state
@@ -498,6 +504,7 @@ impl Workspace {
                     tabs: Vec::new(),
                     active: 0,
                     badge: w.badge,
+                    sidebar_expanded: w.sidebar_expanded,
                 }
             })
             .collect();
@@ -564,13 +571,13 @@ impl Workspace {
             tabs_sidebar_motion: Default::default(),
             files_sidebar_motion: Default::default(),
             tab_layout: saved.tab_layout,
+            sidebar_compact: saved.sidebar_compact,
             tabs_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
                 saved.tabs_sidebar_width,
             ),
             files_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
                 saved.files_sidebar_width,
             ),
-            sidebar_open_spaces: HashMap::new(),
             badge_picker: None,
             open_menu: None,
             workspace_rename: None,
@@ -631,7 +638,6 @@ impl Workspace {
             let root = this.space().root.clone();
             this.open_tab(PaneKind::Agent, root, Some(prompt), None, window, cx);
         } else {
-            this.ensure_open(target, window, cx);
             let active = this.space().active;
             this.activate(active, window, cx);
         }

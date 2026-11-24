@@ -39,6 +39,8 @@ impl SidebarMotion {
 
 impl Workspace {
     /// The full content width and the fraction allocated to it in the row.
+    /// The icon rail keeps its fixed width; an expanded sidebar shows its
+    /// saved width within the window's share.
     pub(super) fn sidebar_geometry(&self, side: Side, window: f32, now: Instant) -> (f32, f32) {
         let (saved, open, motion) = match side {
             Side::Tabs => (
@@ -57,6 +59,11 @@ impl Workspace {
         } else {
             motion.fraction(open, now)
         };
-        (shown_sidebar_width(saved, window), fraction)
+        let width = if matches!(side, Side::Tabs) && self.sidebar_compact {
+            COMPACT_SIDEBAR_WIDTH
+        } else {
+            shown_sidebar_width(saved, window)
+        };
+        (width, fraction)
     }
 }

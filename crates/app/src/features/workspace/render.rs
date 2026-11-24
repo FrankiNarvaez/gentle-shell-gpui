@@ -75,6 +75,8 @@ impl Workspace {
         let scale = f32::from(window.rem_size()) / 16.;
         let x = event.event.position.x;
         let (distance, open, width, revision) = match drag.side {
+            // The icon rail keeps its fixed width.
+            Side::Tabs if self.sidebar_compact => return,
             Side::Tabs => (
                 x - event.bounds.left(),
                 self.tab_layout == TabLayout::Vertical,
@@ -342,21 +344,23 @@ impl Render for Workspace {
                                             ))
                                     })
                                     .child(
-                                        Button::new("toggle-tab-layout")
+                                        Button::new("toggle-tab-sidebar")
                                             .ghost()
                                             .xsmall()
-                                            .icon(Icon::new(if vertical_tabs {
-                                                IconName::PanelLeft
+                                            .icon(Icon::new(
+                                                if vertical_tabs && !self.sidebar_compact {
+                                                    IconName::PanelLeftClose
+                                                } else {
+                                                    IconName::PanelLeftOpen
+                                                },
+                                            ))
+                                            .tooltip(if vertical_tabs && !self.sidebar_compact {
+                                                "Collapse workspace sidebar"
                                             } else {
-                                                IconName::List
-                                            }))
-                                            .tooltip(if vertical_tabs {
-                                                "Use horizontal tabs"
-                                            } else {
-                                                "Show tabs in the sidebar"
+                                                "Expand workspace sidebar"
                                             })
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.toggle_tab_layout(cx)
+                                                this.toggle_sidebar_compact(cx)
                                             })),
                                     )
                                     .child(
@@ -433,9 +437,10 @@ impl Render for Workspace {
                                     tabs_width,
                                     self.render_tab_sidebar(cx),
                                 ))
-                                .when(vertical_tabs && !tabs_moving, |column| {
-                                    column.child(self.sidebar_handle(Side::Tabs, cx))
-                                }),
+                                .when(
+                                    vertical_tabs && !self.sidebar_compact && !tabs_moving,
+                                    |column| column.child(self.sidebar_handle(Side::Tabs, cx)),
+                                ),
                         )
                     })
                     .child(
