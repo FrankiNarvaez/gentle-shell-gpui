@@ -360,6 +360,10 @@ Inside the composer's box, right after the effort picker (`📎 · model · effo
 
 The composer's bottom bar inside the box reads `📎 · model · effort · NN% · … · send` (`NN%` is the plan-limits chip, when it has data): the model and effort pickers sit first, right after the attach button, because they are per-message decisions made just before sending; their menus open upward from the bar (`Anchor::BottomLeft`). Below the box, a quiet row carries the folder path, the branch ±n and the session's cost on the left; the group shrinks and truncates before anything else — the folder's path truncates from the start (`text_ellipsis_start()`, so the leaf name stays readable) and the branch keeps its ellipsis.
 
+### Terminal pane chips
+
+A terminal pane (`features/terminal/mod.rs`) states what happens to it in a chip at its bottom-right corner, 10 px in from the edges, over the grid: `Process exited` (`faint`) once the shell ends, and `Press ⌃C again to close` (`Ctrl+C` off macOS; `muted`, on a `panel` backing so it reads over the text) after a first Ctrl+C at an idle prompt. That hint lives exactly as long as the double press's window (`gentle_core::double_interrupt::WINDOW`, 700 ms): one `with_animation` over the window (`NamedInteger("close-hint", n)`, a new id per hint) fades it in over its first 15 % and out over its last 35 %, and the view drops it when the window ends, so it shows exactly while a second press would close the pane.
+
 ### Conversation cards
 
 Tool cards (`render_card` in `features/session/view.rs`) and extension message cards (`features/session/view/cards.rs`) share a shape:
