@@ -431,6 +431,61 @@ fn post_compaction_estimate_is_shown_approximately(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn compaction_without_estimate_restores_interaction_without_inventing_usage(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({"type": "compaction_start"}))],
+            window,
+            cx,
+        );
+    });
+    assert!(!drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-compaction-orbit"));
+    click(cx, "context-ring");
+    assert!(!drawn(cx, "context-compact-control"));
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {}
+            }))],
+            window,
+            cx,
+        );
+    });
+    assert!(!drawn(cx, "context-compaction-orbit"));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.usage.context_tokens, None);
+        assert_eq!(view.usage.context_percent, None);
+        assert_eq!(view.usage.context_window, Some(200000));
+        assert!(!view.usage.context_estimated);
+    });
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(
+        gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+        None,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-hint"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-0"));
+}
+
+#[gpui::test]
 fn post_compaction_estimate_handles_missing_failure_and_stale_stats(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     view.update_in(cx, |view, window, cx| {
