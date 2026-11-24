@@ -262,6 +262,11 @@ fn bind_keys_from(user: keymap::Keymap, cx: &mut App) -> Vec<String> {
     files::bind_keys(cx);
     crate::features::workspace::sidebars::bind_keys(cx);
     crate::features::canvas::bind_keys(cx);
+    // What "Open keymap file" documents: the keymap as it is with no user file.
+    crate::shared::keymap::remember_defaults(
+        &user.leader,
+        crate::features::shortcuts::live_bindings(cx),
+    );
     // Defaults with no context: a user entry in a context never beats these.
     let globals: Vec<String> = cx
         .key_bindings()
@@ -597,5 +602,52 @@ mod tests {
     #[test]
     fn pane_mode_bindings_parse() {
         assert_eq!(pane_mode_bindings().len(), 13);
+    }
+
+    /// The template "Open keymap file" writes lists the keys the app really
+    /// binds with no user file: its reference comes from the default keymap.
+    #[gpui::test]
+    fn template_reference_matches_the_default_keymap(cx: &mut TestAppContext) {
+        use gentle_core::shortcuts::{Section, reference};
+
+        cx.update(gpui_kit::init);
+        let messages = cx.update(|cx| bind_keys_from(keymap::Keymap::default(), cx));
+        assert!(messages.is_empty(), "{messages:?}");
+        let defaults = crate::shared::keymap::default_keymap();
+        assert!(!defaults.is_empty());
+
+        let sections = reference(&defaults, DEFAULT_LEADER);
+        let sections_present: Vec<Section> = sections.iter().map(|s| s.section).collect();
+        for section in [Section::Direct, Section::Leader, Section::PaneMode] {
+            assert!(sections_present.contains(&section), "{section:?}");
+        }
+
+        let text = keymap::template(DEFAULT_LEADER, &defaults);
+        let parsed = keymap::parse(&text);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        assert!(parsed.bindings.is_empty());
+        // Every default key of a labelled action is in the reference, except
+        // the spellings the cheat sheet collapses into the glyph (`shift-/`).
+        let live: Vec<String> = cx
+            .update(|cx| crate::features::shortcuts::live_bindings(cx))
+            .iter()
+            .map(|b| b.keys.join(" "))
+            .collect();
+        for binding in &defaults {
+            if gentle_core::shortcuts::label(&binding.action).is_none() {
+                continue;
+            }
+            let keys = binding.keys.join(" ");
+            assert!(live.contains(&keys), "{keys} is not bound");
+            if gentle_core::shortcuts::preferred_display_sequence(&binding.action, &keys, &defaults)
+                .is_some()
+            {
+                continue;
+            }
+            assert!(text.contains(&keys), "{keys} is missing from the template");
+        }
+        // The direct chords and the leader prefix are both documented.
+        assert!(text.contains(&format!("{DEFAULT_LEADER} h")));
+        assert!(text.contains(&format!("{DEFAULT_LEADER} ?")));
     }
 }

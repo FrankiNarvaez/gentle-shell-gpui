@@ -124,4 +124,4 @@ The leader waits for its second key as long as you need: it is not on a timer.
 
 ## Custom key bindings
 
-Bindings and the leader can be changed in `keymap.json` (palette: **Open keymap file**, then **Reload keymap**). The format, action names, contexts and how to unbind a key are in [integrations: Keymap file](integrations.md#keymap-file-sharedkeymaprs-gentle_corekeymap). The cheat sheet and the palette hints show your bindings after a reload.
+Bindings and the leader can be changed in `keymap.json` (palette: **Open keymap file**, then **Reload keymap**). The file documents itself: the app creates it with a commented reference of every action you can bind, its label, its default keys and its exact `action` name. Comments (`//`, `/* */`) and a comma before a closing bracket are allowed, so keep the notes you find useful. The format, action names, contexts and how to unbind a key are in [integrations: Keymap file](integrations.md#keymap-file-sharedkeymaprs-gentle_corekeymap). The cheat sheet and the palette hints show your bindings after a reload.

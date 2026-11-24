@@ -1,8 +1,10 @@
 //! The user's keymap file (`<data>/gentle-shell-gpui/keymap.json`): parsing
 //! and validation, without touching GPUI or the disk.
 //!
-//! The file is forgiving: a bad entry is reported with its index and the rest
-//! still apply; an unreadable file means the defaults plus one error.
+//! The file is forgiving: `//` and `/* */` comments and a comma before a
+//! closing bracket are allowed (JSONC), a bad entry is reported with its index
+//! and the rest still apply; an unreadable file means the defaults plus one
+//! error.
 
 use serde_json::Value;
 
@@ -65,7 +67,7 @@ pub fn parse(text: &str) -> Keymap {
     if text.trim().is_empty() {
         return keymap;
     }
-    let root: Value = match serde_json::from_str(text) {
+    let root: Value = match serde_json::from_str(&strip_jsonc(text)) {
         Ok(v) => v,
         Err(e) => {
             keymap
@@ -113,6 +115,118 @@ fn file_issue(message: String) -> Issue {
         index: None,
         message,
     }
+}
+
+/// The file's text as plain JSON: `//` line comments and `/* */` block
+/// comments removed, and a comma before a closing `]` or `}` dropped. Both are
+/// replaced with spaces (newlines kept), so the parser's line and column still
+/// point at the original place.
+fn strip_jsonc(text: &str) -> String {
+    drop_trailing_commas(&strip_comments(text))
+}
+
+fn strip_comments(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if in_string {
+            out.push(byte);
+            match byte {
+                // A backslash escapes the next byte, `"` included.
+                b'\\' => {
+                    if let Some(next) = bytes.get(i + 1) {
+                        out.push(*next);
+                    }
+                    i += 2;
+                    continue;
+                }
+                b'"' => in_string = false,
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        match byte {
+            b'"' => {
+                in_string = true;
+                out.push(byte);
+                i += 1;
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    out.push(b' ');
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                out.extend_from_slice(b"  ");
+                while i < bytes.len() {
+                    if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                        i += 2;
+                        out.extend_from_slice(b"  ");
+                        break;
+                    }
+                    out.push(if bytes[i] == b'\n' { b'\n' } else { b' ' });
+                    i += 1;
+                }
+            }
+            _ => {
+                out.push(byte);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn drop_trailing_commas(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if in_string {
+            out.push(byte);
+            match byte {
+                b'\\' => {
+                    if let Some(next) = bytes.get(i + 1) {
+                        out.push(*next);
+                    }
+                    i += 2;
+                    continue;
+                }
+                b'"' => in_string = false,
+                _ => {}
+            }
+            i += 1;
+            continue;
+        }
+        match byte {
+            b'"' => {
+                in_string = true;
+                out.push(byte);
+            }
+            b',' => {
+                let mut next = i + 1;
+                while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+                    next += 1;
+                }
+                if matches!(bytes.get(next), Some(b']') | Some(b'}')) {
+                    out.push(b' ');
+                } else {
+                    out.push(byte);
+                }
+            }
+            _ => out.push(byte),
+        }
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn leader_ok(value: &Value) -> Result<String, String> {
@@ -182,9 +296,165 @@ fn validate_keystroke(stroke: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The file written by "Open keymap file" when none exists.
-pub fn template(leader: &str) -> String {
-    format!("{{\n  \"leader\": \"{leader}\",\n  \"bindings\": []\n}}\n")
+/// The file written by "Open keymap file" when none exists: the leader, an
+/// empty `bindings` array and a commented reference — every labelled action
+/// with its label, its default keys on this platform and its context.
+/// `defaults` is the keymap the app binds with no user file, handed over with
+/// its leader keys already spelled like `leader` (see `shared/keymap.rs`).
+pub fn template(leader: &str, defaults: &[crate::shortcuts::Binding]) -> String {
+    let mut out = String::from(HEADER);
+    out.push('\n');
+    out.push_str("{\n");
+    out.push_str("  // The leader: one keystroke with a modifier. Press it, then one key.\n");
+    out.push_str(
+        "  // Examples: \"ctrl-space\" (default), \"ctrl-a\", \"ctrl-b\" (tmux), \"cmd-k\".\n",
+    );
+    out.push_str("  // Every leader binding in the reference below follows this value.\n");
+    out.push_str(&format!("  \"leader\": \"{leader}\",\n\n"));
+    out.push_str(BINDINGS_HELP);
+    out.push_str(&examples(leader, defaults));
+    out.push_str("  \"bindings\": []\n}\n\n");
+    out.push_str(&reference(leader, defaults));
+    out.push_str(CONTEXTS);
+    out
+}
+
+const HEADER: &str = "\
+// Gentle Shell keymap.
+//
+// Read at startup and again when you run \"Reload keymap\" (Configuration →
+// Appearance → Keyboard, or the command palette). Nothing here is required:
+// without this file the defaults apply, and the reference at the end of the
+// file lists them.
+//
+// Lines and blocks starting with // and /* */ are comments, and a comma before
+// a closing ] or } is allowed. Delete the notes you don't want.
+";
+
+const BINDINGS_HELP: &str = concat!(
+    "  // Your bindings. An entry wins over a default that uses the same keys.\n",
+    "  //   \"keys\":    one keystroke or a space-separated sequence (\"cmd-shift-p\",\n",
+    "  //              \"ctrl-space o\"). Modifiers are cmd, ctrl, alt and shift,\n",
+    "  //              then the key. The leader is written literally: with\n",
+    "  //              \"leader\": \"ctrl-a\", write \"ctrl-a o\".\n",
+    "  //   \"action\":  one of the names in the reference below, or null to unbind\n",
+    "  //              the keys.\n",
+    "  //   \"context\": optional. Leave it out to change a default: a default with\n",
+    "  //              no context is matched deepest, so an entry with one on the\n",
+    "  //              same keys never wins.\n",
+);
+
+/// Four examples written with the real leader and the platform's own composer
+/// chord: unbind, add a leader key, a Files key, and a terminal rest.
+fn examples(leader: &str, defaults: &[crate::shortcuts::Binding]) -> String {
+    let composer = defaults
+        .iter()
+        .find(|b| b.action == "gentle::FocusComposer")
+        .and_then(|b| b.keys.first().cloned())
+        .unwrap_or_else(|| "cmd-l".into());
+    let mut text = String::from("  //\n  // Examples — delete the leading // of one to start:\n");
+    text.push_str(&format!(
+        "  //   {{ \"keys\": \"{composer}\", \"action\": null }},\n"
+    ));
+    text.push_str(&format!(
+        "  //   {{ \"keys\": \"{leader} e\", \"action\": \"gentle::FocusFiles\" }},\n"
+    ));
+    text.push_str(
+        "  //   { \"keys\": \"shift-enter\", \"action\": \"file_tree::OpenToSide\", \"context\": \"FileTree\" },\n",
+    );
+    text.push_str(
+        "  //   { \"keys\": \"ctrl-shift-space\", \"action\": \"gentle::FocusComposer\", \"context\": \"Terminal\" }\n",
+    );
+    text.push_str(
+        "  //\n  // In order: unbind a default chord, add a leader key, add a Files key,\n  // and give a terminal pane its own chord (plain ctrl-letter chords there\n  // belong to the shell).\n",
+    );
+    text
+}
+
+/// The commented reference: the cheat sheet's sections, one row per labelled
+/// action with its default keys here, and the labelled actions that have none.
+fn reference(leader: &str, defaults: &[crate::shortcuts::Binding]) -> String {
+    let sections = crate::shortcuts::reference(defaults, leader);
+    let unbound = crate::shortcuts::unbound(defaults);
+    let label_width = sections
+        .iter()
+        .flat_map(|section| section.rows.iter())
+        .map(|row| row.label.len())
+        .chain(unbound.iter().map(|(_, label)| label.len()))
+        .max()
+        .unwrap_or(0);
+    let keys_width = sections
+        .iter()
+        .flat_map(|section| section.rows.iter())
+        .map(|row| row.keys.join(", ").len())
+        .max()
+        .unwrap_or(0)
+        .max(1);
+
+    let mut text = String::from(
+        "// Reference: every action you can bind, grouped as in the keyboard cheat\n\
+         // sheet (⌘/ or leader ?), with its label, its default keys on this\n\
+         // platform and the name \"action\" takes. A row with a context in\n\
+         // parentheses only applies there.\n",
+    );
+    for section in &sections {
+        text.push_str(&format!("//\n// {}\n", section.section.title()));
+        for row in &section.rows {
+            let keys = row.keys.join(", ");
+            let context = match &row.context {
+                Some(context) => format!("  ({context})"),
+                None => String::new(),
+            };
+            text.push_str(&format!(
+                "//   {label:<label_width$}  {keys:<keys_width$}  {action}{context}\n",
+                label = row.label,
+                action = row.action,
+            ));
+        }
+    }
+    if !unbound.is_empty() {
+        text.push_str("//\n// No default keys — add one of these in \"bindings\":\n");
+        for (action, label) in &unbound {
+            text.push_str(&format!(
+                "//   {label:<label_width$}  {keys:<keys_width$}  {action}\n",
+                keys = "—",
+            ));
+        }
+    }
+    text
+}
+
+const CONTEXTS: &str = "\
+//
+// Contexts. A binding without one applies everywhere; with one it applies only
+// while the context matches. && and ! combine them.
+//   GentleWorkspace   the window; add pane_mode to match pane mode only
+//   GentleSession     an agent pane (the conversation)
+//   Terminal          a terminal pane
+//   FileTree          the Files tree (add Input inside its text fields)
+//   GentleChanges     the Git changes list (add Input the same way)
+//   GentleFileView    the file and diff viewer
+//   GentleCanvas      the canvas
+//   GentleTabList     the tab list in the right sidebar
+//   Input             a focused text field
+//   vim               on while the \"Vim keys\" setting is on
+";
+
+/// The leader of a file that is still exactly the template older versions
+/// wrote — plain JSON, `{"leader": …, "bindings": []}` and no other keys —
+/// which the app upgrades to the documented one. `None` for anything else, so
+/// an edited or commented file is never rewritten.
+pub fn bare_template_leader(text: &str) -> Option<String> {
+    let root: Value = serde_json::from_str(text).ok()?;
+    let root = root.as_object()?;
+    if root.len() != 2 {
+        return None;
+    }
+    let leader = root.get("leader")?.as_str()?.to_string();
+    match root.get("bindings")? {
+        Value::Array(entries) if entries.is_empty() => Some(leader),
+        _ => None,
+    }
 }
 
 /// The warning for an entry that names a context but whose keys the app binds
@@ -335,9 +605,208 @@ mod tests {
 
     #[test]
     fn template_is_a_valid_file_with_the_leader() {
-        let k = parse(&template("ctrl-a"));
+        let k = parse(&template("ctrl-a", &[]));
         assert_eq!(k.leader, "ctrl-a");
         assert!(k.errors.is_empty() && k.bindings.is_empty());
+    }
+
+    fn defaults() -> Vec<crate::shortcuts::Binding> {
+        use crate::shortcuts::Binding as Live;
+        vec![
+            Live {
+                keys: vec!["cmd-t".into()],
+                action: "gentle::NewTab".into(),
+                context: None,
+            },
+            Live {
+                keys: vec!["ctrl-space".into(), "c".into()],
+                action: "gentle::NewTab".into(),
+                context: None,
+            },
+            Live {
+                keys: vec!["cmd-shift-b".into()],
+                action: "gentle::FocusFiles".into(),
+                context: None,
+            },
+            Live {
+                keys: vec!["j".into()],
+                action: "file_tree::SelectNext".into(),
+                context: Some("FileTree && vim && !Input".into()),
+            },
+        ]
+    }
+
+    #[test]
+    fn comments_and_trailing_commas_are_tolerated() {
+        let k = parse(
+            r#"// my keymap
+            {
+              /* the prefix */
+              "leader": "ctrl-a", // one keystroke
+              "bindings": [
+                {"keys": "cmd-p", "action": "gentle::OpenPalette"}, // palette
+                {"keys": "ctrl-a h", "action": "gentle::FocusPaneLeft"},
+              ],
+            }
+            // the end
+            "#,
+        );
+        assert!(k.errors.is_empty(), "{:?}", k.errors);
+        assert_eq!(k.leader, "ctrl-a");
+        assert_eq!(
+            k.bindings,
+            vec![
+                b(0, "cmd-p", Some("gentle::OpenPalette"), None),
+                b(1, "ctrl-a h", Some("gentle::FocusPaneLeft"), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn slashes_and_commas_inside_strings_are_not_comments() {
+        let k = parse(
+            r#"{"leader": "ctrl-/", "bindings": [
+              {"keys": "ctrl-/", "action": "gentle::OpenPalette", "url": "https://x//y/*z*/"},
+              {"keys": "cmd-space", "action": null, "note": "a,],} and \"//\""},
+            ],}"#,
+        );
+        assert!(k.errors.is_empty(), "{:?}", k.errors);
+        assert_eq!(k.leader, "ctrl-/");
+        assert_eq!(
+            k.bindings,
+            vec![
+                b(0, "ctrl-/", Some("gentle::OpenPalette"), None),
+                b(1, "cmd-space", None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn comments_do_not_move_the_reported_binding_index() {
+        let k = parse(
+            r#"{
+              "bindings": [
+                // the first one is fine
+                {"keys": "cmd-p", "action": "gentle::OpenPalette"},
+                /* this one is not */
+                {"keys": "ctrl-", "action": "gentle::OpenPalette"},
+                {"keys": "cmd-j", "action": "gentle::NewTab"}, // and this one
+              ],
+            }"#,
+        );
+        assert_eq!(k.errors.len(), 1, "{:?}", k.errors);
+        assert_eq!(k.errors[0].index, Some(1));
+        assert!(
+            k.errors[0]
+                .describe()
+                .starts_with("keymap.json bindings[1]:"),
+            "{}",
+            k.errors[0].describe()
+        );
+        let kept: Vec<_> = k.bindings.iter().map(|b| b.index).collect();
+        assert_eq!(kept, vec![0, 2]);
+    }
+
+    #[test]
+    fn an_unterminated_block_comment_is_one_file_error() {
+        let k = parse("/* never closed");
+        assert_eq!(k.errors.len(), 1);
+        assert_eq!(k.errors[0].index, None);
+        assert_eq!(k.leader, DEFAULT_LEADER);
+    }
+
+    #[test]
+    fn bare_template_leader_matches_only_the_old_empty_file() {
+        assert_eq!(
+            bare_template_leader("{\n  \"leader\": \"ctrl-a\",\n  \"bindings\": []\n}\n"),
+            Some("ctrl-a".into())
+        );
+        assert_eq!(
+            bare_template_leader(r#"{"bindings" : [ ], "leader" : "ctrl-b"}"#),
+            Some("ctrl-b".into())
+        );
+        for other in [
+            "",
+            "not json",
+            r#"{"leader": "ctrl-a", "bindings": [{"keys": "cmd-p", "action": null}]}"#,
+            r#"{"leader": "ctrl-a", "bindings": [], "version": 1}"#,
+            r#"{"bindings": []}"#,
+            r#"{"leader": "ctrl-a"}"#,
+            // Plain JSON only: a commented file is someone's edit.
+            "// mine\n{\"leader\": \"ctrl-a\", \"bindings\": []}",
+            r#"{"leader": 3, "bindings": []}"#,
+        ] {
+            assert_eq!(bare_template_leader(other), None, "{other:?}");
+        }
+    }
+
+    #[test]
+    fn template_documents_the_leader_and_the_whole_reference() {
+        let text = template("ctrl-space", &defaults());
+        let k = parse(&text);
+        assert!(k.errors.is_empty(), "{:?}", k.errors);
+        assert_eq!(k.leader, "ctrl-space");
+        assert!(k.bindings.is_empty());
+
+        // It documents itself: comments, the reload path, the leader examples.
+        assert!(text.starts_with("// "), "{text}");
+        assert!(text.contains("Reload keymap"));
+        assert!(text.contains("\"ctrl-a\"") && text.contains("\"ctrl-b\""));
+        assert!(text.contains("\"bindings\": []"));
+
+        // Every labelled action is named, with its label and this platform's
+        // default keys and its context.
+        for (action, label) in crate::shortcuts::LABELS {
+            assert!(text.contains(action), "{action} missing");
+            assert!(text.contains(label), "{label} missing");
+        }
+        for keys in ["cmd-t", "ctrl-space c", "cmd-shift-b", "j"] {
+            assert!(text.contains(keys), "{keys} missing");
+        }
+        assert!(text.contains("(FileTree && vim && !Input)"));
+
+        // Grouped like the cheat sheet, with the contexts listed once.
+        for title in ["Direct", "Leader", "Files & Git changes"] {
+            assert!(text.contains(title), "{title} missing");
+        }
+        assert!(!text.contains("\n// Composer & session\n"));
+        for context in [
+            "GentleWorkspace",
+            "GentleSession",
+            "FileTree",
+            "GentleChanges",
+            "GentleFileView",
+            "GentleCanvas",
+            "GentleTabList",
+            "Input",
+            "vim",
+        ] {
+            assert!(text.contains(context), "{context} missing");
+        }
+    }
+
+    #[test]
+    fn template_follows_the_leader_and_is_deterministic() {
+        // The app hands the defaults over with the leader's own spelling.
+        let mut defaults = defaults();
+        defaults[1].keys = vec!["ctrl-a".into(), "c".into()];
+        let text = template("ctrl-a", &defaults);
+        assert_eq!(text, template("ctrl-a", &defaults));
+        assert!(text.contains("\"leader\": \"ctrl-a\""));
+        assert!(text.contains("ctrl-a c"), "{text}");
+        // The example follows the file's leader too.
+        assert!(text.contains("ctrl-a e"));
+        assert!(!text.contains("ctrl-space c"));
+    }
+
+    #[test]
+    fn template_without_defaults_still_names_every_action() {
+        let text = template("ctrl-space", &[]);
+        let k = parse(&text);
+        assert!(k.errors.is_empty(), "{:?}", k.errors);
+        for (action, _) in crate::shortcuts::LABELS {
+            assert!(text.contains(action), "{action} missing");
+        }
     }
 
     #[test]

@@ -75,95 +75,110 @@ pub struct Group {
     pub rows: Vec<Row>,
 }
 
+/// Every action with a human label, in the template's reference order.
+/// Actions that are not shortcuts worth listing are absent.
+pub const LABELS: &[(&str, &str)] = &[
+    ("gentle::NewTab", "New agent tab"),
+    ("gentle::NewTerminalTab", "New terminal tab"),
+    ("gentle::NewCanvasTab", "New canvas tab"),
+    ("gentle::CloseTab", "Close tab"),
+    ("gentle::NextTab", "Next tab"),
+    ("gentle::PrevTab", "Previous tab"),
+    ("gentle::SplitRight", "Split right"),
+    ("gentle::SplitDown", "Split down"),
+    ("gentle::SplitLeft", "Split left"),
+    ("gentle::SplitUp", "Split up"),
+    ("gentle::TilePane", "New pane (tiled)"),
+    ("gentle::ClosePane", "Close pane"),
+    ("gentle::ReopenClosed", "Reopen closed pane"),
+    ("gentle::FocusNextPane", "Focus next pane"),
+    ("gentle::FocusPrevPane", "Focus previous pane"),
+    ("gentle::FocusPaneLeft", "Focus pane left"),
+    ("gentle::FocusPaneRight", "Focus pane right"),
+    ("gentle::FocusPaneUp", "Focus pane up"),
+    ("gentle::FocusPaneDown", "Focus pane down"),
+    ("gentle::ResizePaneLeft", "Resize pane left"),
+    ("gentle::ResizePaneRight", "Resize pane right"),
+    ("gentle::ResizePaneUp", "Resize pane up"),
+    ("gentle::ResizePaneDown", "Resize pane down"),
+    ("gentle::TogglePaneMode", "Pane mode"),
+    ("gentle::ExitPaneMode", "Exit pane mode"),
+    ("gentle::ToggleSidebar", "Toggle Files sidebar"),
+    ("gentle::FocusComposer", "Focus composer"),
+    ("gentle::FocusFiles", "Focus Files"),
+    ("gentle::FocusChanges", "Focus Git changes"),
+    ("gentle::OpenPalette", "Command palette"),
+    ("gentle::OpenShortcuts", "Keyboard shortcuts"),
+    ("gentle::OpenSessions", "Sessions"),
+    ("gentle::OpenWorkspaces", "Switch workspace…"),
+    ("gentle::OpenExplorer", "Browse folders"),
+    ("gentle::GoToTab", "Go to tab…"),
+    ("gentle::FocusTabList", "Browse tabs"),
+    ("gentle::CreateWorkspace", "Create workspace"),
+    ("gentle::DeleteWorkspace", "Delete workspace…"),
+    ("gentle::OpenSettings", "Settings"),
+    ("gentle::CloseOverlay", "Close screen"),
+    ("gentle::Quit", "Quit"),
+    ("gentle::ZoomIn", "Zoom in"),
+    ("gentle::ZoomOut", "Zoom out"),
+    ("gentle::ActualSize", "Actual size"),
+    ("gentle::ActivateTab1", "Go to tab 1"),
+    ("gentle::ActivateTab2", "Go to tab 2"),
+    ("gentle::ActivateTab3", "Go to tab 3"),
+    ("gentle::ActivateTab4", "Go to tab 4"),
+    ("gentle::ActivateTab5", "Go to tab 5"),
+    ("gentle::ActivateTab6", "Go to tab 6"),
+    ("gentle::ActivateTab7", "Go to tab 7"),
+    ("gentle::ActivateTab8", "Go to tab 8"),
+    ("gentle::ActivateTab9", "Go to last tab (9)"),
+    ("session::Abort", "Interrupt the agent"),
+    ("session::Stop", "Stop the agent"),
+    ("session::ToggleAgents", "Agents panel"),
+    ("session::NewSession", "New session"),
+    ("file_tree::Open", "Files · open"),
+    ("file_tree::OpenToSide", "Files · open to the side"),
+    ("file_tree::OpenInNewTab", "Files · open in a new tab"),
+    (
+        "file_tree::InsertPath",
+        "Files · insert path in the composer",
+    ),
+    ("file_tree::CopyPath", "Files · copy path"),
+    ("file_tree::CopyRelativePath", "Files · copy relative path"),
+    (
+        "file_tree::RevealInFinder",
+        "Files · reveal in the file manager",
+    ),
+    ("file_tree::Rename", "Files · rename"),
+    ("file_tree::CutEntry", "Files · cut"),
+    ("file_tree::CopyEntry", "Files · copy"),
+    ("file_tree::PasteEntry", "Files · paste"),
+    ("file_tree::MoveToTrash", "Files · move to trash"),
+    ("file_tree::SelectPrev", "Files · previous"),
+    ("file_tree::SelectNext", "Files · next"),
+    ("file_tree::SelectFirst", "Files · first"),
+    ("file_tree::SelectLast", "Files · last"),
+    ("file_tree::CollapseSelected", "Files · collapse"),
+    ("file_tree::ExpandSelected", "Files · expand"),
+    ("changes::SelectPrev", "Changes · previous"),
+    ("changes::SelectNext", "Changes · next"),
+    ("changes::SelectFirst", "Changes · first"),
+    ("changes::SelectLast", "Changes · last"),
+    ("changes::OpenSelected", "Changes · open diff"),
+    ("changes::ToggleSelected", "Changes · select"),
+    ("changes::StageSelected", "Changes · stage"),
+    ("changes::UnstageSelected", "Changes · unstage"),
+];
+
+/// The action and the human label of an action worth listing, or `None` for
+/// actions that are not shortcuts.
+pub fn labelled(action: &str) -> Option<(&'static str, &'static str)> {
+    LABELS.iter().copied().find(|(name, _)| *name == action)
+}
+
 /// The human label of an action, or `None` for actions that are not
 /// shortcuts worth listing.
 pub fn label(action: &str) -> Option<&'static str> {
-    Some(match action {
-        "gentle::NewTab" => "New agent tab",
-        "gentle::NewTerminalTab" => "New terminal tab",
-        "gentle::NewCanvasTab" => "New canvas tab",
-        "gentle::CloseTab" => "Close tab",
-        "gentle::NextTab" => "Next tab",
-        "gentle::PrevTab" => "Previous tab",
-        "gentle::SplitRight" => "Split right",
-        "gentle::SplitDown" => "Split down",
-        "gentle::SplitLeft" => "Split left",
-        "gentle::SplitUp" => "Split up",
-        "gentle::TilePane" => "New pane (tiled)",
-        "gentle::ClosePane" => "Close pane",
-        "gentle::ReopenClosed" => "Reopen closed pane",
-        "gentle::FocusNextPane" => "Focus next pane",
-        "gentle::FocusPrevPane" => "Focus previous pane",
-        "gentle::FocusPaneLeft" => "Focus pane left",
-        "gentle::FocusPaneRight" => "Focus pane right",
-        "gentle::FocusPaneUp" => "Focus pane up",
-        "gentle::FocusPaneDown" => "Focus pane down",
-        "gentle::ResizePaneLeft" => "Resize pane left",
-        "gentle::ResizePaneRight" => "Resize pane right",
-        "gentle::ResizePaneUp" => "Resize pane up",
-        "gentle::ResizePaneDown" => "Resize pane down",
-        "gentle::TogglePaneMode" => "Pane mode",
-        "gentle::ExitPaneMode" => "Exit pane mode",
-        "gentle::ToggleSidebar" => "Toggle Files sidebar",
-        "gentle::FocusComposer" => "Focus composer",
-        "gentle::FocusFiles" => "Focus Files",
-        "gentle::FocusChanges" => "Focus Git changes",
-        "gentle::OpenPalette" => "Command palette",
-        "gentle::OpenShortcuts" => "Keyboard shortcuts",
-        "gentle::OpenSessions" => "Sessions",
-        "gentle::OpenWorkspaces" => "Switch workspace…",
-        "gentle::OpenExplorer" => "Browse folders",
-        "gentle::GoToTab" => "Go to tab…",
-        "gentle::FocusTabList" => "Browse tabs",
-        "gentle::CreateWorkspace" => "Create workspace",
-        "gentle::DeleteWorkspace" => "Delete workspace…",
-        "gentle::OpenSettings" => "Settings",
-        "gentle::CloseOverlay" => "Close screen",
-        "gentle::Quit" => "Quit",
-        "gentle::ZoomIn" => "Zoom in",
-        "gentle::ZoomOut" => "Zoom out",
-        "gentle::ActualSize" => "Actual size",
-        "gentle::ActivateTab1" => "Go to tab 1",
-        "gentle::ActivateTab2" => "Go to tab 2",
-        "gentle::ActivateTab3" => "Go to tab 3",
-        "gentle::ActivateTab4" => "Go to tab 4",
-        "gentle::ActivateTab5" => "Go to tab 5",
-        "gentle::ActivateTab6" => "Go to tab 6",
-        "gentle::ActivateTab7" => "Go to tab 7",
-        "gentle::ActivateTab8" => "Go to tab 8",
-        "gentle::ActivateTab9" => "Go to last tab (9)",
-        "session::Abort" => "Interrupt the agent",
-        "session::Stop" => "Stop the agent",
-        "session::ToggleAgents" => "Agents panel",
-        "session::NewSession" => "New session",
-        "file_tree::Open" => "Files · open",
-        "file_tree::OpenToSide" => "Files · open to the side",
-        "file_tree::OpenInNewTab" => "Files · open in a new tab",
-        "file_tree::InsertPath" => "Files · insert path in the composer",
-        "file_tree::CopyPath" => "Files · copy path",
-        "file_tree::CopyRelativePath" => "Files · copy relative path",
-        "file_tree::RevealInFinder" => "Files · reveal in the file manager",
-        "file_tree::Rename" => "Files · rename",
-        "file_tree::CutEntry" => "Files · cut",
-        "file_tree::CopyEntry" => "Files · copy",
-        "file_tree::PasteEntry" => "Files · paste",
-        "file_tree::MoveToTrash" => "Files · move to trash",
-        "file_tree::SelectPrev" => "Files · previous",
-        "file_tree::SelectNext" => "Files · next",
-        "file_tree::SelectFirst" => "Files · first",
-        "file_tree::SelectLast" => "Files · last",
-        "file_tree::CollapseSelected" => "Files · collapse",
-        "file_tree::ExpandSelected" => "Files · expand",
-        "changes::SelectPrev" => "Changes · previous",
-        "changes::SelectNext" => "Changes · next",
-        "changes::SelectFirst" => "Changes · first",
-        "changes::SelectLast" => "Changes · last",
-        "changes::OpenSelected" => "Changes · open diff",
-        "changes::ToggleSelected" => "Changes · select",
-        "changes::StageSelected" => "Changes · stage",
-        "changes::UnstageSelected" => "Changes · unstage",
-        _ => return None,
-    })
+    labelled(action).map(|(_, label)| label)
 }
 
 /// The last keystroke of a binding string (a single keystroke or the last
@@ -258,7 +273,7 @@ pub fn same_keys(a: &str, b: &str) -> bool {
     }
 }
 
-fn section_of(binding: &Binding, leader: &str) -> Section {
+pub(crate) fn section_of(binding: &Binding, leader: &str) -> Section {
     if binding.keys.len() > 1 && same_keys(&binding.keys[0], leader) {
         return Section::Leader;
     }
@@ -312,6 +327,94 @@ pub fn groups(bindings: &[Binding], leader: &str) -> Vec<Group> {
             rows.sort_by_key(|r| r.label.to_lowercase());
             (!rows.is_empty()).then_some(Group { section, rows })
         })
+        .collect()
+}
+
+/// One row of the keymap template's reference: an action, the keys it has by
+/// default in one section and the context those keys live in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceRow {
+    /// The registered action name (`"gentle::NewTab"`).
+    pub action: &'static str,
+    pub label: &'static str,
+    /// Binding strings (`"cmd-t"`, `"ctrl-space h"`), in the order bound.
+    pub keys: Vec<String>,
+    /// The context the default keys use (`FileTree && vim && !Input`).
+    pub context: Option<String>,
+    /// Only works while the "Vim keys" setting is on.
+    pub vim: bool,
+}
+
+/// The template's reference for one section of the cheat sheet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceSection {
+    pub section: Section,
+    pub rows: Vec<ReferenceRow>,
+}
+
+/// Every labelled binding as reference rows, grouped like the cheat sheet
+/// (empty sections left out) and alphabetical inside each section. One row per
+/// action and section: several bindings of the same action share it.
+/// `leader` is the leader's first keystroke.
+pub fn reference(bindings: &[Binding], leader: &str) -> Vec<ReferenceSection> {
+    Section::ALL
+        .into_iter()
+        .filter_map(|section| {
+            let mut rows: Vec<ReferenceRow> = Vec::new();
+            for binding in bindings {
+                let Some((action, label)) = labelled(&binding.action) else {
+                    continue;
+                };
+                if section_of(binding, leader) != section {
+                    continue;
+                }
+                let keys = binding.keys.join(" ");
+                // One row per action and context: a Vim key of the same action
+                // keeps its own row, so it never reads as always on.
+                match rows
+                    .iter_mut()
+                    .find(|row| row.action == action && row.context == binding.context)
+                {
+                    Some(row) => {
+                        if !row.keys.contains(&keys) {
+                            row.keys.push(keys);
+                        }
+                    }
+                    None => rows.push(ReferenceRow {
+                        action,
+                        label,
+                        keys: vec![keys],
+                        context: binding.context.clone(),
+                        vim: binding
+                            .context
+                            .as_deref()
+                            .is_some_and(|c| c.contains("vim")),
+                    }),
+                }
+            }
+            for row in &mut rows {
+                // One entry per action, as in the cheat sheet: `?` over `shift-/`.
+                collapse_shift_aliases(&mut row.keys);
+            }
+            // Alphabetical, and stable for one label in several contexts.
+            rows.sort_by_key(|row| {
+                (
+                    row.label.to_lowercase(),
+                    row.keys.first().cloned().unwrap_or_default(),
+                )
+            });
+            (!rows.is_empty()).then_some(ReferenceSection { section, rows })
+        })
+        .collect()
+}
+
+/// The labelled actions no binding uses, as `(action, label)`, in the label
+/// table's order.
+pub fn unbound(bindings: &[Binding]) -> Vec<(&'static str, &'static str)> {
+    LABELS
+        .iter()
+        .copied()
+        .filter(|(action, _)| !bindings.iter().any(|b| b.action == *action))
         .collect()
 }
 
@@ -569,6 +672,87 @@ mod tests {
         let all = groups(&keymap(), "ctrl-space");
         assert!(search(&all, "zzz", true).is_empty());
         assert_eq!(search(&all, "   ", true), all);
+    }
+
+    #[test]
+    fn reference_groups_labelled_defaults_by_section_and_action() {
+        let defaults = vec![
+            b(&["cmd-t"], "gentle::NewTab", None),
+            b(&["ctrl-space", "c"], "gentle::NewTab", None),
+            b(&["ctrl-space", ":"], "gentle::OpenPalette", None),
+            b(&["ctrl-space", "shift-;"], "gentle::OpenPalette", None),
+            b(
+                &["j"],
+                "file_tree::SelectNext",
+                Some("FileTree && vim && !Input"),
+            ),
+            b(
+                &["down"],
+                "file_tree::SelectNext",
+                Some("FileTree && !Input"),
+            ),
+            b(&["enter"], "file_tree::Open", Some("FileTree && !Input")),
+            // Not a labelled action: never in the reference.
+            b(&["ctrl-alt-9"], "keymap_test::Probe", None),
+        ];
+        let sections = reference(&defaults, "ctrl-space");
+        let titles: Vec<_> = sections.iter().map(|s| s.section).collect();
+        assert_eq!(titles, [Section::Direct, Section::Leader, Section::Files]);
+
+        let direct = &sections[0].rows;
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[0].action, "gentle::NewTab");
+        assert_eq!(direct[0].label, "New agent tab");
+        assert_eq!(direct[0].keys, ["cmd-t"]);
+        assert_eq!(direct[0].context, None);
+        assert!(!direct[0].vim);
+
+        let leader = &sections[1].rows;
+        let labels: Vec<_> = leader.iter().map(|r| r.label).collect();
+        assert_eq!(labels, ["Command palette", "New agent tab"]);
+        assert_eq!(leader[0].keys, ["ctrl-space :"]);
+        assert_eq!(leader[1].keys, ["ctrl-space c"]);
+
+        let files = &sections[2].rows;
+        // Keys that live in different contexts stay on their own row, so a
+        // Vim key is never shown as one that works without the setting.
+        assert_eq!(files.len(), 3);
+        let next: Vec<_> = files
+            .iter()
+            .filter(|r| r.action == "file_tree::SelectNext")
+            .collect();
+        assert_eq!(next.len(), 2);
+        assert_eq!(next[0].keys, ["down"]);
+        assert!(!next[0].vim);
+        assert_eq!(next[0].context.as_deref(), Some("FileTree && !Input"));
+        assert_eq!(next[1].keys, ["j"]);
+        assert!(next[1].vim);
+        assert_eq!(
+            next[1].context.as_deref(),
+            Some("FileTree && vim && !Input")
+        );
+        let open = files
+            .iter()
+            .find(|r| r.action == "file_tree::Open")
+            .unwrap();
+        assert!(!open.vim);
+        assert_eq!(open.context.as_deref(), Some("FileTree && !Input"));
+    }
+
+    #[test]
+    fn unbound_lists_every_labelled_action_no_binding_uses() {
+        let all: Vec<Binding> = LABELS
+            .iter()
+            .map(|(action, _)| b(&["cmd-alt-f24"], action, None))
+            .collect();
+        assert!(unbound(&all).is_empty());
+        assert_eq!(unbound(&[]).len(), LABELS.len(),);
+        let one = unbound(&all[..all.len() - 1]);
+        assert_eq!(one, [LABELS[LABELS.len() - 1]]);
+        assert_eq!(
+            unbound(&[b(&["x"], "keymap_test::Probe", None)]).len(),
+            LABELS.len()
+        );
     }
 
     #[test]
