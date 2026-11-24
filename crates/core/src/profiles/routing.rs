@@ -54,10 +54,11 @@ impl ModelChoice {
     }
 }
 
-/// Gentle Shell's model selector order (`sortModels`): the current model,
-/// then the default one, then the rest by provider name. Within a provider
-/// the catalog order stays. `route` gives a model's `provider/id`; `current`
-/// and `default` are routes too.
+/// The current model, then the default, then the rest by provider name.
+/// Provider ordering approximates Gentle Shell's locale-aware sort for IDs;
+/// models within a provider stay in catalog order. `route` gives a model's
+/// `provider/id`; `current` and `default` are routes too. When the backend
+/// reports no usable default, pass `None`.
 pub fn sort_like_shell<T>(
     models: &mut [T],
     route: impl Fn(&T) -> (String, String),
@@ -75,7 +76,20 @@ pub fn sort_like_shell<T>(
         } else {
             2
         };
-        (rank, provider.to_lowercase())
+        let primary = provider
+            .to_lowercase()
+            .chars()
+            // Give underscore its own weight just before hyphen.
+            .map(|c| {
+                if c == '_' {
+                    2 * u32::from('-') - 1
+                } else {
+                    2 * u32::from(c)
+                }
+            })
+            .collect::<Vec<_>>();
+        let case = provider.chars().map(char::is_uppercase).collect::<Vec<_>>();
+        (rank, primary, case, provider)
     });
 }
 
@@ -330,6 +344,62 @@ mod tests {
         assert_eq!(
             models,
             [("anthropic", "opus"), ("zai", "glm"), ("zai", "air")]
+        );
+    }
+
+    #[test]
+    fn stale_default_does_not_displace_any_models() {
+        let mut models = [
+            ("zulu", "first"),
+            ("x_y", "a"),
+            ("x-y", "b"),
+            ("Zulu", "upper"),
+            ("zulu", "second"),
+        ];
+        sort_like_shell(
+            &mut models,
+            |m| (m.0.to_string(), m.1.to_string()),
+            Some("zulu/second"),
+            Some("missing/id"),
+        );
+        assert_eq!(
+            models,
+            [
+                ("zulu", "second"),
+                ("x_y", "a"),
+                ("x-y", "b"),
+                ("zulu", "first"),
+                ("Zulu", "upper"),
+            ]
+        );
+    }
+
+    #[test]
+    fn models_match_shell_provider_collation_es_cr() {
+        let mut models = [
+            ("Zulu", "upper"),
+            ("team-a", "first"),
+            ("team_a", "b"),
+            ("zulu", "lower"),
+            ("team_a", "a"),
+            ("zai", "active"),
+        ];
+        sort_like_shell(
+            &mut models,
+            |m| (m.0.to_string(), m.1.to_string()),
+            Some("zai/active"),
+            Some("zai/active"),
+        );
+        assert_eq!(
+            models,
+            [
+                ("zai", "active"),
+                ("team_a", "b"),
+                ("team_a", "a"),
+                ("team-a", "first"),
+                ("zulu", "lower"),
+                ("Zulu", "upper"),
+            ]
         );
     }
 
