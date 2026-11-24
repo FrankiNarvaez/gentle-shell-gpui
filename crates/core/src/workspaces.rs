@@ -233,6 +233,12 @@ pub enum SidebarDrag {
     Collapse,
     /// The same held drag moved back to the minimum usable width.
     Reopen,
+    /// Show the narrow icon rail without changing the saved width.
+    Compact,
+    /// Restore the saved expanded width.
+    Expand,
+    /// Reverse a fast collapse directly to expanded.
+    ReopenExpanded,
 }
 
 /// Dragging a sidebar's edge to `pointer`, its distance from the sidebar's
@@ -253,6 +259,44 @@ pub struct SidebarGesture {
 }
 
 impl SidebarGesture {
+    pub fn update_compact(
+        &mut self,
+        pointer: f32,
+        window: f32,
+        visible: bool,
+        compact: bool,
+        left_held: bool,
+    ) -> Option<SidebarDrag> {
+        use SidebarDrag::{Collapse, Compact, Expand, Reopen, ReopenExpanded, Width};
+        const HIDE_BELOW: f32 = 24.;
+        const REOPEN_AT: f32 = 48.;
+        self.ended |= !left_held;
+        if self.ended || !pointer.is_finite() {
+            return None;
+        }
+        if !visible {
+            if !self.collapsed || pointer < REOPEN_AT {
+                return None;
+            }
+            self.collapsed = false;
+            return Some(if pointer >= SIDEBAR_MIN_WIDTH {
+                ReopenExpanded
+            } else {
+                Reopen
+            });
+        }
+        if pointer < HIDE_BELOW {
+            self.collapsed = true;
+            Some(Collapse)
+        } else if compact {
+            (pointer >= SIDEBAR_MIN_WIDTH).then_some(Expand)
+        } else if pointer < SIDEBAR_COLLAPSE_BELOW {
+            Some(Compact)
+        } else {
+            Some(Width(shown_sidebar_width(pointer, window)))
+        }
+    }
+
     pub fn update(
         &mut self,
         pointer: f32,
@@ -310,6 +354,60 @@ impl SidebarSlide {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_drag_handles_skipped_steps_and_hysteresis() {
+        use SidebarDrag::{Collapse, Compact, Expand, Reopen};
+        let mut drag = SidebarGesture::default();
+        assert_eq!(
+            drag.update_compact(139., 1000., true, false, true),
+            Some(Compact)
+        );
+        assert_eq!(drag.update_compact(141., 1000., true, true, true), None);
+        assert_eq!(
+            drag.update_compact(20., 1000., true, true, true),
+            Some(Collapse)
+        );
+        assert_eq!(drag.update_compact(23., 1000., false, true, true), None);
+        assert_eq!(
+            drag.update_compact(48., 1000., false, true, true),
+            Some(Reopen)
+        );
+        assert_eq!(
+            drag.update_compact(200., 1000., true, true, true),
+            Some(Expand)
+        );
+        assert_eq!(
+            drag.update_compact(20., 1000., true, false, true),
+            Some(Collapse)
+        );
+        assert_eq!(drag.update_compact(200., 1000., false, true, false), None);
+        assert_eq!(drag.update_compact(200., 1000., false, true, true), None);
+        let mut fast = SidebarGesture::default();
+        assert_eq!(
+            fast.update_compact(20., 1000., true, false, true),
+            Some(Collapse)
+        );
+        assert_eq!(
+            fast.update_compact(240., 1000., false, false, true),
+            Some(SidebarDrag::ReopenExpanded)
+        );
+        let mut rail = SidebarGesture::default();
+        assert_eq!(
+            rail.update_compact(200., 1000., true, true, true),
+            Some(Expand)
+        );
+        let mut released = SidebarGesture::default();
+        assert_eq!(
+            released.update_compact(139., 1000., true, false, true),
+            Some(Compact)
+        );
+        assert_eq!(
+            released.update_compact(200., 1000., true, true, false),
+            None
+        );
+        assert_eq!(released.update_compact(200., 1000., true, true, true), None);
+    }
 
     #[test]
     fn sidebar_slide_reverses_from_its_current_width_and_lands_exactly() {

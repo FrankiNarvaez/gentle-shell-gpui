@@ -57,6 +57,11 @@ impl Workspace {
         } else {
             motion.fraction(open, now)
         };
-        (shown_sidebar_width(saved, window), fraction)
+        let width = if matches!(side, Side::Tabs) && self.sidebar_compact {
+            COMPACT_SIDEBAR_WIDTH
+        } else {
+            shown_sidebar_width(saved, window)
+        };
+        (width, fraction)
     }
 }

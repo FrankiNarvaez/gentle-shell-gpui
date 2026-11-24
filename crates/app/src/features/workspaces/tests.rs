@@ -41,6 +41,7 @@ fn sample() -> SavedState {
                 active_tab: 0,
                 last_active: 10,
                 badge: Badge::default(),
+                sidebar_expanded: true,
             },
             SavedWorkspace {
                 name: "project".into(),
@@ -62,6 +63,7 @@ fn sample() -> SavedState {
                 }],
                 active_tab: 0,
                 last_active: 20,
+                sidebar_expanded: false,
                 badge: Badge {
                     icon: Some(BadgeIcon::Rocket),
                     color: Some(BadgeColor::Teal),
@@ -72,6 +74,8 @@ fn sample() -> SavedState {
         tab_layout: TabLayout::Vertical,
         tabs_sidebar_width: 300.,
         files_sidebar_width: 350.,
+        sidebar_compact: true,
+        sidebar_compact_first: true,
     }
 }
 
@@ -95,6 +99,22 @@ fn unknown_badge_values_read_as_unset() {
 }
 
 #[test]
+fn restores_legacy_compact_rail_and_width() {
+    let state: SavedState = serde_json::from_value(serde_json::json!({
+        "workspaces": [], "tab_layout": "vertical",
+        "sidebar_compact": true, "sidebar_width": 340.
+    }))
+    .unwrap();
+    assert!(state.sidebar_compact);
+    assert!(!state.sidebar_compact_first);
+    assert_eq!(state.tabs_sidebar_width, 340.);
+    assert_eq!(state.files_sidebar_width, 260.);
+    let stored = serde_json::to_value(state).unwrap();
+    assert_eq!(stored["tabs_sidebar_width"], 340.);
+    assert!(stored.get("sidebar_width").is_none());
+}
+
+#[test]
 fn json_round_trip() {
     let state = sample();
     let json = serde_json::to_string(&state).unwrap();
@@ -108,7 +128,12 @@ fn json_round_trip() {
     assert_eq!(minimal.current, 0);
     // A file from before the sidebar was saved keeps it showing.
     assert!(minimal.sidebar);
+    assert!(minimal.workspaces[0].sidebar_expanded);
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
+    assert!(!minimal.sidebar_compact);
+    assert!(!minimal.sidebar_compact_first);
+    assert!(back.sidebar_compact);
+    assert!(back.sidebar_compact_first);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
     // Both sidebar widths round-trip and legacy files default to 260.

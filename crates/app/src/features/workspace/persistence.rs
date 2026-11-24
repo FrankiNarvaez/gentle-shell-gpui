@@ -99,6 +99,7 @@ impl Workspace {
                     active_tab: space.active,
                     last_active: space.last_active,
                     badge: space.badge,
+                    sidebar_expanded: space.sidebar_expanded,
                 }
             })
             .collect();
@@ -110,6 +111,8 @@ impl Workspace {
             tab_layout: self.tab_layout,
             tabs_sidebar_width: self.tabs_sidebar_width,
             files_sidebar_width: self.files_sidebar_width,
+            sidebar_compact: self.sidebar_compact,
+            sidebar_compact_first: self.sidebar_compact_first,
         }
     }
 
