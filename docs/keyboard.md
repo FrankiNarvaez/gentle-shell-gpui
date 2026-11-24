@@ -101,6 +101,10 @@ More Files keys (always on): open to the side ⌘↵, open in a new tab ⌥⌘�
 
 Terminal panes get every key that the app has no binding for. The app takes ⌃Space for the leader, so a terminal program never sees it: that is Ctrl+Space (NUL), which readline, emacs and tmux use for set-mark and as an alternative prefix. If you rely on it, run tmux with another prefix inside the app; the leader's key is configurable in `keymap.json` (see below).
 
+Leader `w` opens **Go to tab…**. Search by tab title or workspace name; each result shows both. Up and Down highlight without switching. Enter opens the highlighted tab directly, and Esc returns to the previous focus.
+
+Leader `Shift+w` opens **Switch workspace…**, and leader `a` opens **Create workspace from folder…**. For new tabs, use leader `c` (Agent), `t` (Terminal), or `Shift+c` (Canvas).
+
 The leader waits about a second for its second key.
 
 ## Coming from tmux / Neovim / Herdr TUI

@@ -20,6 +20,9 @@ mod rows;
 mod sources;
 mod view;
 
+#[cfg(test)]
+mod tests;
+
 use commands::{apply_binding_hints, command_row, screen_rows};
 pub use sources::switch_branch;
 use sources::{list_branches, walk_files};
@@ -84,6 +87,10 @@ pub enum PaletteAction {
     Command(String),
     /// A Gentle Shell command whose UI is terminal-only, opened natively.
     Screen(Screen),
+    GoToTab,
+    ActivateGlobalTab(usize),
+    OpenWorkspaces,
+    CreateWorkspaceFromFolder,
     SwitchWorkspace(usize),
     RenameWorkspace {
         index: usize,
@@ -101,6 +108,7 @@ pub enum PaletteAction {
     SwitchBranch(String),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaletteEvent {
     Run(PaletteAction),
     Close,
@@ -111,14 +119,16 @@ pub enum Category {
     All,
     Commands,
     Workspaces,
+    Tabs,
     Files,
     Branches,
 }
 
-const CATEGORIES: [(Category, &str); 5] = [
+const CATEGORIES: [(Category, &str); 6] = [
     (Category::All, "All"),
     (Category::Commands, "Commands"),
     (Category::Workspaces, "Workspaces"),
+    (Category::Tabs, "Tabs"),
     (Category::Files, "Files"),
     (Category::Branches, "Branches"),
 ];
@@ -129,6 +139,7 @@ impl Category {
             Category::All => "Search commands, workspaces, files…",
             Category::Commands => "Type a command or screen…",
             Category::Workspaces => "Find or create a workspace…",
+            Category::Tabs => "Find a tab by title or workspace…",
             Category::Files => "Find a file…",
             Category::Branches => "Find a branch…",
         }
@@ -154,7 +165,16 @@ pub struct Activity {
     pub needs_you: usize,
 }
 
+pub struct TabRow {
+    pub id: usize,
+    pub title: String,
+    pub workspace: String,
+    pub icon: IconName,
+    pub current: bool,
+}
+
 pub struct PaletteInput {
+    pub tabs: Vec<TabRow>,
     /// Slash commands of the active agent pane.
     pub commands: Vec<gentle_core::commands::SlashCommand>,
     pub workspaces: Vec<WorkspaceRow>,
@@ -186,6 +206,8 @@ enum Line {
 const MAX_FILES: usize = 20_000;
 
 pub struct PaletteView {
+    pub previous_focus: Option<FocusHandle>,
+    tabs: Vec<TabRow>,
     query: Entity<InputState>,
     category: Category,
     selected: usize,
@@ -210,6 +232,7 @@ impl EventEmitter<PaletteEvent> for PaletteView {}
 
 impl PaletteView {
     pub fn new(input: PaletteInput, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let previous_focus = window.focused(cx);
         let query =
             cx.new(|cx| InputState::new(window, cx).placeholder(input.category.placeholder()));
         query.update(cx, |state, cx| state.focus(window, cx));
@@ -256,6 +279,8 @@ impl PaletteView {
         });
 
         let mut this = Self {
+            previous_focus,
+            tabs: input.tabs,
             query,
             category: input.category,
             selected: 0,
@@ -291,6 +316,9 @@ impl PaletteView {
         self.renaming = None;
         self.scroll.scroll_to_item(0);
         self.query.update(cx, |state, cx| {
+            if category == Category::Tabs {
+                state.set_value("", window, cx);
+            }
             state.set_placeholder(category.placeholder(), window, cx);
             state.focus(window, cx);
         });

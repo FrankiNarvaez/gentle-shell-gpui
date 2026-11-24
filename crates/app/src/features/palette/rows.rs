@@ -19,6 +19,32 @@ impl PaletteView {
         let typed = !self.needle.text.is_empty();
         let all = self.category == Category::All;
         let mut rows = Vec::new();
+        if self.category == Category::Tabs {
+            let mut tabs: Vec<_> = self
+                .tabs
+                .iter()
+                .filter_map(|tab| {
+                    let query = &self.needle.lower;
+                    let score = fuzzy_score(query, &tab.title)
+                        .or_else(|| fuzzy_score(query, &tab.workspace))
+                        .or_else(|| {
+                            fuzzy_score(query, &format!("{} {}", tab.workspace, tab.title))
+                        })?;
+                    Some((score, tab))
+                })
+                .collect();
+            tabs.sort_by_key(|(score, _)| *score);
+            rows.extend(tabs.into_iter().map(|(_, tab)| Row {
+                icon: tab.icon,
+                title: tab.title.clone(),
+                meta: tab.workspace.clone(),
+                detail: String::new(),
+                group: "Tabs",
+                action: PaletteAction::ActivateGlobalTab(tab.id),
+                workspace: None,
+                current: tab.current,
+            }));
+        }
         if matches!(self.category, Category::All | Category::Workspaces) {
             rows.extend(self.workspace_rows(all));
         }

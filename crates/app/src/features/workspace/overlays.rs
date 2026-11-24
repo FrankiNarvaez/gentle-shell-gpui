@@ -23,13 +23,32 @@ impl Workspace {
             }
             return;
         }
-        self.start_active_session(window, cx);
+        if category != Category::Tabs {
+            self.start_active_session(window, cx);
+        }
         let commands = self
             .active_session()
             .map(|t| t.read(cx).commands())
             .unwrap_or_default();
         let workspaces = self.workspace_rows();
+        let tabs = self
+            .spaces
+            .iter()
+            .enumerate()
+            .flat_map(|(index, space)| {
+                self.sidebar_tabs(index)
+                    .into_iter()
+                    .map(|tab| crate::features::palette::TabRow {
+                        id: tab.id,
+                        title: tab.title.to_string(),
+                        workspace: space.name.clone(),
+                        icon: tab.kind.icon(),
+                        current: tab.shown,
+                    })
+            })
+            .collect();
         let input = PaletteInput {
+            tabs,
             commands,
             workspaces,
             root: self.space().root.clone(),
@@ -45,6 +64,21 @@ impl Workspace {
                 PaletteEvent::Run(PaletteAction::RenameWorkspace { index, name }) => {
                     // Renaming happens in place; the switcher stays open.
                     this.rename_workspace(*index, name.clone(), cx);
+                }
+                PaletteEvent::Run(PaletteAction::ActivateGlobalTab(id)) => {
+                    let target = super::spaces::resolve_tab(&this.spaces, *id);
+                    if let Some((space, tab)) = target {
+                        this.overlay = None;
+                        this.switch_workspace_to(space, Some(tab), window, cx);
+                    } else {
+                        this.close_overlay(window, cx);
+                    }
+                }
+                PaletteEvent::Run(PaletteAction::GoToTab) => {
+                    this.open_palette(Category::Tabs, window, cx)
+                }
+                PaletteEvent::Run(PaletteAction::OpenWorkspaces) => {
+                    this.open_palette(Category::Workspaces, window, cx)
                 }
                 PaletteEvent::Run(action) => {
                     this.close_overlay(window, cx);
@@ -218,6 +252,12 @@ impl Workspace {
                 }
             }
             PaletteAction::Screen(screen) => self.open_screen(screen, tab, window, cx),
+            PaletteAction::GoToTab => self.open_palette(Category::Tabs, window, cx),
+            PaletteAction::ActivateGlobalTab(_) => {}
+            PaletteAction::OpenWorkspaces => self.open_palette(Category::Workspaces, window, cx),
+            PaletteAction::CreateWorkspaceFromFolder => {
+                self.pick_workspace_folder(None, window, cx)
+            }
             PaletteAction::SwitchWorkspace(index) => self.switch_workspace(index, window, cx),
             PaletteAction::RenameWorkspace { index, name } => {
                 self.rename_workspace(index, name, cx)

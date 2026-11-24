@@ -149,6 +149,24 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             PaletteAction::NewCanvasTab,
         ),
         row(
+            IconName::Layers,
+            "Go to tab…",
+            "Find a tab in any workspace",
+            PaletteAction::GoToTab,
+        ),
+        row(
+            IconName::Layers,
+            "Switch workspace…",
+            "Find a workspace by name",
+            PaletteAction::OpenWorkspaces,
+        ),
+        row(
+            IconName::FolderOpen,
+            "Create workspace from folder…",
+            "Choose a folder for a new workspace",
+            PaletteAction::CreateWorkspaceFromFolder,
+        ),
+        row(
             IconName::Building2,
             "Gentle Tower",
             "Every session as a floor of its project's building: tasks, talk, artifacts, cost",
@@ -347,6 +365,11 @@ pub(super) fn palette_action_to_gpui(action: &PaletteAction) -> Option<Box<dyn A
         PaletteAction::NewTab => Some(Box::new(NewTab)),
         PaletteAction::NewTerminalTab => Some(Box::new(NewTerminalTab)),
         PaletteAction::NewCanvasTab => Some(Box::new(NewCanvasTab)),
+        PaletteAction::GoToTab => Some(Box::new(crate::features::workspace::GoToTab)),
+        PaletteAction::OpenWorkspaces => Some(Box::new(crate::features::workspace::OpenWorkspaces)),
+        PaletteAction::CreateWorkspaceFromFolder => Some(Box::new(
+            crate::features::workspace::CreateWorkspaceFromFolder,
+        )),
         PaletteAction::ClosePane => Some(Box::new(ClosePane)),
         PaletteAction::ReopenClosed => Some(Box::new(ReopenClosed)),
         PaletteAction::NextTab => Some(Box::new(NextTab)),

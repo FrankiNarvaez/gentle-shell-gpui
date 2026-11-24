@@ -535,6 +535,12 @@ impl Workspace {
     }
 
     pub(super) fn close_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let restore = match &self.overlay {
+            Some((Overlay::Palette(view), _)) if view.read(cx).category() == Category::Tabs => {
+                Some(view.read(cx).previous_focus.clone())
+            }
+            _ => None,
+        };
         let retry = match &self.overlay {
             Some((Overlay::Onboarding(view), _)) => view.read(cx).usable(),
             Some((Overlay::Welcome(view), _)) => view.read(cx).usable(cx),
@@ -544,8 +550,30 @@ impl Workspace {
         if retry {
             self.retry_failed_sessions(window, cx);
         }
-        self.focus_active(window, cx);
+        match restore {
+            Some(Some(focus)) => focus.focus(window, cx),
+            Some(None) => window.blur(cx),
+            None => self.focus_active(window, cx),
+        }
         cx.notify();
+    }
+
+    pub(super) fn on_go_to_tab(
+        &mut self,
+        _: &GoToTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_palette(Category::Tabs, window, cx);
+    }
+
+    pub(super) fn on_create_workspace_from_folder(
+        &mut self,
+        _: &CreateWorkspaceFromFolder,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pick_workspace_folder(None, window, cx);
     }
 
     pub(super) fn on_open_sessions(

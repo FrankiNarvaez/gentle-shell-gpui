@@ -70,6 +70,10 @@ fn leader_bindings(prefix: &str) -> Vec<(String, Box<dyn Action>)> {
         // `?` is shift-/ on most layouts.
         entry(p, "?", workspace::OpenShortcuts),
         entry(p, "shift-/", workspace::OpenShortcuts),
+        entry(p, "w", workspace::GoToTab),
+        entry(p, "shift-w", workspace::OpenWorkspaces),
+        entry(p, "a", workspace::CreateWorkspaceFromFolder),
+        entry(p, "shift-c", NewCanvasTab),
     ]
 }
 
@@ -532,6 +536,7 @@ mod tests {
         .collect();
         expected.extend((1..=9).map(|n| format!("ctrl-space {n}")));
         expected.extend(["ctrl-space ?".to_string(), "ctrl-space shift-/".to_string()]);
+        expected.extend(["w", "shift-w", "a", "shift-c"].map(|key| format!("ctrl-space {key}")));
         assert_eq!(keys, expected);
     }
 

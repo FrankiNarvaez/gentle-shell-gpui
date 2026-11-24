@@ -92,6 +92,8 @@ actions!(
         OpenSessions,
         OpenPalette,
         OpenWorkspaces,
+        GoToTab,
+        CreateWorkspaceFromFolder,
         OpenSettings,
         OpenShortcuts,
         CloseOverlay,
