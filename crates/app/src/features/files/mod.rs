@@ -33,6 +33,7 @@ use crate::shared::ui;
 /// Key bindings and the diagram renderer's state.
 pub fn init(cx: &mut App) {
     tree::init(cx);
+    changes::init(cx);
     mermaid::init(cx);
 }
 

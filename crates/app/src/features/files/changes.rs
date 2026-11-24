@@ -42,6 +42,40 @@ pub enum ChangesEvent {
     Changed,
 }
 
+actions!(
+    changes,
+    [
+        SelectPrev,
+        SelectNext,
+        SelectFirst,
+        SelectLast,
+        OpenSelected,
+        ToggleSelected,
+        StageSelected,
+        UnstageSelected,
+    ]
+);
+
+/// Bindings for the changes list. Arrows, Enter and Space work always;
+/// j/k/gg/G/s/u/d are gated by the opt-in vim-keys setting.
+pub fn init(cx: &mut App) {
+    let ctx = Some("GentleChanges && !Input");
+    let vim_ctx = Some("GentleChanges && vim && !Input");
+    cx.bind_keys([
+        KeyBinding::new("up", SelectPrev, ctx),
+        KeyBinding::new("down", SelectNext, ctx),
+        KeyBinding::new("enter", OpenSelected, ctx),
+        KeyBinding::new("space", ToggleSelected, ctx),
+        KeyBinding::new("j", SelectNext, vim_ctx),
+        KeyBinding::new("k", SelectPrev, vim_ctx),
+        KeyBinding::new("g g", SelectFirst, vim_ctx),
+        KeyBinding::new("shift-g", SelectLast, vim_ctx),
+        KeyBinding::new("s", StageSelected, vim_ctx),
+        KeyBinding::new("u", UnstageSelected, vim_ctx),
+        KeyBinding::new("d", OpenSelected, vim_ctx),
+    ]);
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Side {
     Unstaged,
@@ -118,6 +152,7 @@ pub struct ChangesView {
     _commit: Task<()>,
     _generate: Task<()>,
     _subscriptions: Vec<Subscription>,
+    _vim_keys: Subscription,
 }
 
 impl EventEmitter<ChangesEvent> for ChangesView {}
@@ -145,6 +180,7 @@ impl ChangesView {
                 cx.notify();
             }
         })];
+        let vim_keys = crate::shared::vim_keys::follow(cx);
         let mut this = Self {
             root,
             repo: None,
@@ -167,6 +203,7 @@ impl ChangesView {
             _commit: Task::ready(()),
             _generate: Task::ready(()),
             _subscriptions: subscriptions,
+            _vim_keys: vim_keys,
         };
         this._poll = cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -398,6 +435,120 @@ impl ChangesView {
         self.selected = Some((side, path.to_string()));
         cx.emit(ChangesEvent::OpenDiff(toplevel.join(path)));
         cx.notify();
+    }
+
+    /// Whether a line is selectable for keyboard navigation.
+    fn line_selectable(&self, line: &Line) -> bool {
+        matches!(line, Line::Entry { .. })
+    }
+
+    fn selectable_rows(&self) -> Vec<bool> {
+        self.lines.iter().map(|l| self.line_selectable(l)).collect()
+    }
+
+    fn selected_index(&self) -> Option<usize> {
+        let (side, path) = self.selected.as_ref()?;
+        self.lines.iter().position(|line| match line {
+            Line::Entry { side: s, entry, .. } => self
+                .tree()
+                .and_then(|tree| tree.entries.get(*entry))
+                .is_some_and(|e| *s == *side && e.path == *path),
+            _ => false,
+        })
+    }
+
+    fn select_index(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(Line::Entry { side, entry, .. }) = self.lines.get(ix) else {
+            return;
+        };
+        let Some(tree) = self.tree() else { return };
+        let Some(entry) = tree.entries.get(*entry) else {
+            return;
+        };
+        self.selected = Some((*side, entry.path.clone()));
+        self.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
+        cx.notify();
+    }
+
+    fn select_prev(&mut self, _: &SelectPrev, _: &mut Window, cx: &mut Context<Self>) {
+        let current = self.selected_index();
+        if let Some(ix) = gentle_core::list_nav::prev(current, &self.selectable_rows()) {
+            self.select_index(ix, cx);
+        }
+    }
+
+    fn select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+        let current = self.selected_index();
+        if let Some(ix) = gentle_core::list_nav::next(current, &self.selectable_rows()) {
+            self.select_index(ix, cx);
+        }
+    }
+
+    fn select_first(&mut self, _: &SelectFirst, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = gentle_core::list_nav::first(&self.selectable_rows()) {
+            self.select_index(ix, cx);
+        }
+    }
+
+    fn select_last(&mut self, _: &SelectLast, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = gentle_core::list_nav::last(&self.selectable_rows()) {
+            self.select_index(ix, cx);
+        }
+    }
+
+    fn open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((side, path)) = self.selected.clone() else {
+            return;
+        };
+        self.click_entry(&path, side, cx);
+    }
+
+    fn toggle_selected(&mut self, _: &ToggleSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((side, path)) = self.selected.clone() else {
+            return;
+        };
+        let Some(entry) = self
+            .tree()
+            .and_then(|tree| tree.entries.iter().find(|e| e.path == path))
+            .cloned()
+        else {
+            return;
+        };
+        self.toggle(&entry, side, cx);
+    }
+
+    fn stage_selected(&mut self, _: &StageSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((side, path)) = self.selected.clone() else {
+            return;
+        };
+        if side != Side::Unstaged {
+            return;
+        }
+        let Some(entry) = self
+            .tree()
+            .and_then(|tree| tree.entries.iter().find(|e| e.path == path))
+            .cloned()
+        else {
+            return;
+        };
+        self.toggle(&entry, side, cx);
+    }
+
+    fn unstage_selected(&mut self, _: &UnstageSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let Some((side, path)) = self.selected.clone() else {
+            return;
+        };
+        if side != Side::Staged {
+            return;
+        }
+        let Some(entry) = self
+            .tree()
+            .and_then(|tree| tree.entries.iter().find(|e| e.path == path))
+            .cloned()
+        else {
+            return;
+        };
+        self.toggle(&entry, side, cx);
     }
 
     fn confirm_discard(
@@ -1180,11 +1331,24 @@ impl ChangesView {
 impl Render for ChangesView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The sidebar slot paints the glass; no fill here.
+        let ctx = if crate::shared::vim_keys::enabled(cx) {
+            "GentleChanges vim"
+        } else {
+            "GentleChanges"
+        };
         v_flex()
             .track_focus(&self.focus)
-            .key_context("GentleChanges")
+            .key_context(ctx)
             .size_full()
             .min_h_0()
+            .on_action(cx.listener(Self::select_prev))
+            .on_action(cx.listener(Self::select_next))
+            .on_action(cx.listener(Self::select_first))
+            .on_action(cx.listener(Self::select_last))
+            .on_action(cx.listener(Self::open_selected))
+            .on_action(cx.listener(Self::toggle_selected))
+            .on_action(cx.listener(Self::stage_selected))
+            .on_action(cx.listener(Self::unstage_selected))
             .child(self.render_header(cx))
             .when_some(self.repository_path(), |d, path| {
                 let line = format!("Repository: {path}");
