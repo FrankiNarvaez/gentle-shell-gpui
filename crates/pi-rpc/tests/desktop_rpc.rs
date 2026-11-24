@@ -1263,6 +1263,9 @@ fn full_agent() -> DesktopAgent {
         fallback_from: Some("anthropic/claude-opus-4".into()),
         thinking: Some("high".into()),
         last_step: DesktopAgentStep::Answered,
+        turns: None,
+        tool_calls: None,
+        active_tool: None,
         usage: DesktopAgentUsage {
             total: 15234,
             cost: 0.0421,

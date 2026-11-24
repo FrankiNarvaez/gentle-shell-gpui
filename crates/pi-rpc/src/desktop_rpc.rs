@@ -1681,7 +1681,10 @@ impl DesktopAgentUsage {
 /// One projected subagent entry. Only these fields exist on the wire: identity,
 /// the agent name, the status word, the routed model plus its launch-layer
 /// source and the fallback it moved away from, the thinking level, the closed
-/// step label, and the bounded usage window.
+/// step label, the in-run progress (turns finished, tool calls started, the
+/// tool running now) and the bounded usage window. The progress fields are
+/// `None` from an owner that predates them (Gentle Shell before 5.0.0);
+/// `active_tool` is also `None` while no tool runs or the task is not active.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DesktopAgent {
     pub id: String,
@@ -1692,6 +1695,9 @@ pub struct DesktopAgent {
     pub fallback_from: Option<String>,
     pub thinking: Option<String>,
     pub last_step: DesktopAgentStep,
+    pub turns: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub active_tool: Option<String>,
     pub usage: DesktopAgentUsage,
 }
 
@@ -1712,6 +1718,9 @@ impl DesktopAgent {
             fallback_from: text_field(data, "fallbackFrom")?,
             thinking: text_field(data, "thinking")?,
             last_step: last_step_field(data, "lastStep")?,
+            turns: optional_u64_field(data, "turns")?,
+            tool_calls: optional_u64_field(data, "toolCalls")?,
+            active_tool: text_field(data, "activeTool")?,
             usage: DesktopAgentUsage::from_data(field_object(data, "usage")?)?,
         })
     }
