@@ -7,14 +7,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use gentle_core::profiles::{AgentEntry, AgentSource, parse_agent_name};
+use gentle_core::profiles::{AgentEntry, AgentSource, CORE_AGENTS, parse_agent_name};
 use pi_rpc::desktop_rpc::{
-    ApplyProfileOutcome, ApplyProfileResult, ConfigErrorCode, ConfigState, ConfigStore,
-    ConfigWrite, ProfileApplyErrorCode, ProfileApplyMode, ProfileNote, SetConfigResult,
+    ApplyProfileOutcome, ApplyProfileResult, ClearProfileBindingResult, ConfigErrorCode,
+    ConfigState, ConfigStore, ConfigWrite, ProfileApplyErrorCode, ProfileApplyMode, ProfileNote,
+    SetConfigResult,
 };
-
-/// `CORE_MODEL_AGENT_NAMES`: listed first, the rest alphabetically.
-const CORE_AGENTS: [&str; 3] = ["jd-judge-a", "jd-judge-b", "jd-fix-agent"];
 
 /// Every location the screen reads or writes, resolved once off the UI thread.
 #[derive(Clone, Debug)]
@@ -204,6 +202,21 @@ pub fn discover_agents(env: &Env) -> Vec<AgentEntry> {
     ordered
 }
 
+/// The agents of the roots Gentle Shell's `list_agent_definitions` does not
+/// read (it covers `<agent home>/agents`, `<agent home>/subagents`,
+/// `<cwd>/.pi/agents` and `<cwd>/.pi/subagents`): the built-in package
+/// agents, `~/.agents` and `<cwd>/.agents`. The screen joins them to what
+/// the Shell reported, so its routing table keeps listing every agent.
+pub fn uncovered_agents(env: &Env) -> Vec<AgentEntry> {
+    let mut agents = Vec::new();
+    for dir in builtin_dirs(env) {
+        agents.extend(agents_in(&dir, AgentSource::Builtin));
+    }
+    agents.extend(agents_in(&env.home.join(".agents"), AgentSource::User));
+    agents.extend(agents_in(&env.cwd.join(".agents"), AgentSource::Project));
+    agents
+}
+
 // ---------------------------------------------------------------------------
 // Gentle Shell's config stores over Desktop RPC
 // ---------------------------------------------------------------------------
@@ -326,6 +339,8 @@ pub(crate) enum ConfigOutcome {
     Read(ConfigState),
     Written(SetConfigResult),
     Applied(ApplyProfileResult),
+    /// A `clear_profile_binding` answer; the screen takes it itself.
+    Cleared(ClearProfileBindingResult),
     Failed(ConfigFailure),
 }
 
@@ -420,8 +435,16 @@ pub(crate) trait ConfigPort {
 }
 
 /// Every store the screen reads: the three it writes and the three it only
-/// shows.
-pub(super) const SCREEN_STORES: [ConfigStore; 6] = ConfigStore::ALL;
+/// shows. The settings stores (`persona`, `banner`, `notifications`) are
+/// Configuration's.
+pub(super) const SCREEN_STORES: [ConfigStore; 6] = [
+    ConfigStore::Profiles,
+    ConfigStore::Models,
+    ConfigStore::ProfileFallbacks,
+    ConfigStore::Subagents,
+    ConfigStore::Pins,
+    ConfigStore::ManagedAssets,
+];
 
 /// What one answer meant for the screen. `K` is what the screen wants done
 /// once its write lands; it comes back exactly once, or is dropped with the
@@ -662,14 +685,13 @@ impl<K> Remote<K> {
                 self.failures.remove(&store);
                 Landed::Written(then, result)
             }
-            ConfigOutcome::Written(_) | ConfigOutcome::Read(_) | ConfigOutcome::Applied(_) => {
-                Landed::Rejected(
-                    then,
-                    ConfigFailure::Failure(format!(
-                        "the answer to a {store} write did not match it"
-                    )),
-                )
-            }
+            ConfigOutcome::Written(_)
+            | ConfigOutcome::Read(_)
+            | ConfigOutcome::Applied(_)
+            | ConfigOutcome::Cleared(_) => Landed::Rejected(
+                then,
+                ConfigFailure::Failure(format!("the answer to a {store} write did not match it")),
+            ),
             ConfigOutcome::Failed(ConfigFailure::Rejected {
                 code: ConfigErrorCode::RevisionConflict,
                 ..
@@ -714,7 +736,7 @@ impl<K> Remote<K> {
             ConfigOutcome::Written(_) => {
                 ConfigFailure::Failure(format!("a {store} read was answered as a write"))
             }
-            ConfigOutcome::Applied(_) => {
+            ConfigOutcome::Applied(_) | ConfigOutcome::Cleared(_) => {
                 ConfigFailure::Failure(format!("a {store} read was answered as an apply"))
             }
             ConfigOutcome::Failed(failure) if failure.is_legacy() => {
@@ -729,14 +751,17 @@ impl<K> Remote<K> {
 
     /// Stores changed on the server: re-read each one whose revision differs
     /// from the one held (a write's own echo does not), or every one named
-    /// after a gap.
+    /// after a gap. Stores the screen does not show are left alone.
     pub(super) fn changed(
         &mut self,
         port: &mut dyn ConfigPort,
         changes: &[ConfigChange],
     ) -> Result<(), ConfigFailure> {
         let mut stale: Vec<ConfigStore> = Vec::new();
-        for change in changes {
+        for change in changes
+            .iter()
+            .filter(|change| SCREEN_STORES.contains(&change.store))
+        {
             let held = self
                 .states
                 .get(&change.store)

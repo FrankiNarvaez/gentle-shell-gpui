@@ -606,7 +606,7 @@ impl Workspace {
                 }
                 ProvidersEvent::Changed => {
                     for tab in this.sessions() {
-                        tab.update(cx, |session, cx| session.reload_models(window, cx));
+                        tab.update(cx, |session, cx| session.reload_credentials(window, cx));
                     }
                 }
                 ProvidersEvent::Terminal(cwd, command) => {

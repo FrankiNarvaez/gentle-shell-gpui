@@ -784,8 +784,8 @@ impl SessionView {
 /// `config_changed`; review owns `get_review_mode`/`set_review_mode` and
 /// `review_mode_changed`; output owns `get_job_output`/`get_subagent_thread`;
 /// reads owns
-/// `list_sessions`, `switch_session`, `get_usage_stats` and
-/// `get_update_status`; everything else belongs to the channel (probe,
+/// `list_sessions`, `switch_session`, `get_usage_stats`,
+/// `get_update_status` and `get_status`; everything else belongs to the channel (probe,
 /// resync, `session_snapshot`, and every benign foreign/late record). The
 /// shared session then accepts the record exactly once, in the slice that
 /// owns it.
@@ -853,6 +853,8 @@ pub(in crate::features::session) fn route_desktop_widget(
                 Some(DesktopMethod::GetConfig)
                     | Some(DesktopMethod::SetConfig)
                     | Some(DesktopMethod::ApplyProfile)
+                    | Some(DesktopMethod::GetProfileBinding)
+                    | Some(DesktopMethod::ClearProfileBinding)
             ) {
                 DesktopRoute::Config
             } else if matches!(
@@ -892,7 +894,8 @@ pub(in crate::features::session) fn route_desktop_widget(
         }
         Ok(Some(DesktopRecord::Event(event)))
             if event.event == desktop::config::CONFIG_CHANGED
-                || event.event == desktop::config::PROFILE_APPLIED =>
+                || event.event == desktop::config::PROFILE_APPLIED
+                || event.event == desktop::config::PROFILE_BINDING_CHANGED =>
         {
             DesktopRoute::Config
         }

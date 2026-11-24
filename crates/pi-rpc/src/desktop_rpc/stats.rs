@@ -1,6 +1,7 @@
 //! `get_usage_stats`: cross-session usage, the same history and aggregation
-//! `/gentle:stats` shows. Counts, token sums, costs, model ids, day keys and
-//! project display names only.
+//! `/gentle:stats` shows. Counts, token sums, costs, model ids, provider ids,
+//! day keys and project display names only. Gentle Shell 5.0.0 added the
+//! cost per day and `byProvider`; older Shells answer without them.
 
 use super::{DesktopRpcError, decode_data};
 use serde::Deserialize;
@@ -66,11 +67,24 @@ pub struct UsageStatsModel {
     pub share: f64,
 }
 
-/// Tokens on one local calendar day (`YYYY-MM-DD`), oldest first.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Tokens on one local calendar day (`YYYY-MM-DD`), oldest first, and their
+/// cost (`None` from a Shell older than 5.0.0, which sends none).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct UsageStatsDay {
     pub day: String,
     pub tokens: u64,
+    pub cost: Option<f64>,
+}
+
+/// One provider id as Pi records it (`unknown` when missing), largest
+/// `tokens` first; `share` is its fraction of `totals.total_tokens`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct UsageStatsProvider {
+    pub provider: String,
+    pub messages: u64,
+    pub tokens: u64,
+    pub cost: f64,
+    pub share: f64,
 }
 
 /// One working directory, by display name (never the path), largest
@@ -85,17 +99,19 @@ pub struct UsageStatsProject {
 }
 
 /// Which arrays had more rows than their bound (models 50, days 400,
-/// projects 50). `by_project` is present only with `by_project`.
+/// providers 50, projects 50). `by_project` is present only with
+/// `by_project`, `by_provider` only from a Shell that sends `by_provider`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStatsTruncated {
     pub by_model: bool,
     pub by_day: bool,
+    pub by_provider: Option<bool>,
     pub by_project: Option<bool>,
 }
 
 /// The decoded `get_usage_stats` data. `by_project` is present only for
-/// `scope: all`.
+/// `scope: all`; `by_provider` only from Gentle Shell 5.0.0 on.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStats {
@@ -104,6 +120,7 @@ pub struct UsageStats {
     pub totals: UsageStatsTotals,
     pub by_model: Vec<UsageStatsModel>,
     pub by_day: Vec<UsageStatsDay>,
+    pub by_provider: Option<Vec<UsageStatsProvider>>,
     pub by_project: Option<Vec<UsageStatsProject>>,
     pub truncated: UsageStatsTruncated,
 }

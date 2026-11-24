@@ -44,9 +44,36 @@ pub fn failed_version(path: &Path, stderr: Option<&str>) -> String {
     }
 }
 
+/// The provider check from Gentle Shell's own model registry (the Desktop
+/// `get_auth_status`): the providers it has usable credentials for, by id,
+/// whatever their source (a sign-in, an environment variable, `models.json`,
+/// an extension), or why the check fails.
+pub fn registry_sign_in<'a>(
+    configured: impl IntoIterator<Item = &'a str>,
+) -> Result<String, String> {
+    let configured: Vec<&str> = configured.into_iter().collect();
+    if configured.is_empty() {
+        Err("No provider signed in".to_string())
+    } else {
+        Ok(format!("Signed in: {}", configured.join(", ")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_registry_answers_the_provider_check() {
+        assert_eq!(
+            registry_sign_in(["anthropic", "groq"]),
+            Ok("Signed in: anthropic, groq".to_string())
+        );
+        assert_eq!(
+            registry_sign_in([]),
+            Err("No provider signed in".to_string())
+        );
+    }
 
     #[test]
     fn protected_launcher_without_a_version_refuses_npm() {
