@@ -72,7 +72,7 @@ impl SettingsPage {
             Self::Appearance => "Theme and window appearance",
             Self::Agents => "Agent behavior and background work",
             Self::Models => "Model and profile defaults",
-            Self::Devices => "Connected development devices",
+            Self::Devices => "Development devices and the browser",
             Self::Integrations => "Companions and external tools",
             Self::Notifications => "Alerts and notification preferences",
             Self::Updates => "Application and tool updates",
@@ -111,7 +111,7 @@ impl SettingsPage {
                 "model models provider providers thinking effort profile profiles routing default scoped sign-ins authentication claude bridge pro max code manage"
             }
             Self::Devices => {
-                "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access"
+                "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access browser browsers web page pages link links url open external default system safari chrome chromium canary arc dia firefox zen librewolf brave edge opera vivaldi orion inside app"
             }
             Self::Integrations => {
                 "mcp servers maestro ui testing music gentle stream player instruments soundfont external tools integrations"
@@ -409,5 +409,15 @@ mod tests {
                 .iter()
                 .all(|page| page.matches_query("  "))
         );
+    }
+
+    #[test]
+    fn the_browser_choice_is_found_under_devices_first() {
+        for query in ["browser", "open pages", "firefox", "inside app", "safari"] {
+            let first = SettingsPage::ALL
+                .into_iter()
+                .find(|page| page.matches_query(query));
+            assert_eq!(first, Some(SettingsPage::Devices), "{query:?}");
+        }
     }
 }

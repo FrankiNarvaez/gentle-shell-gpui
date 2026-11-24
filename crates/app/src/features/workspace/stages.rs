@@ -6,8 +6,9 @@
 //! their own panel (`features::devices`).
 
 use super::*;
-use crate::features::browser::{BrowserEvent, BrowserPanel, CanvasNotice};
+use crate::features::browser::{BrowserEvent, BrowserPanel, CanvasNotice, external};
 use crate::shared::floating;
+use gentle_core::web_browsers::AgentPages;
 use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::{ActiveTheme as _, Selectable};
 
@@ -84,8 +85,36 @@ impl Workspace {
         self.add_stage(panel, origin, reveal, window, cx);
     }
 
-    /// Gentle Design's canvas: kept in the tray when it opens, reloaded in
-    /// place when it refreshes, removed when it stops.
+    /// A page an agent opened (`gentle-open`, a dev server's URL in a tool's
+    /// output): in the tray, or in the browser outside the app when
+    /// Configuration › Devices › Browser says so. `once`: a URL picked out
+    /// of a tool's output or a notice, which only opens outside the first
+    /// time this window sees it.
+    pub(super) fn open_agent_page(
+        &mut self,
+        url: String,
+        origin: Option<PaneId>,
+        once: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if external::agent_pages(cx) == AgentPages::Browser {
+            self.open_outside(url, once, cx);
+        } else {
+            self.open_web(url, origin, false, window, cx);
+        }
+    }
+
+    fn open_outside(&mut self, url: String, once: bool, cx: &mut Context<Self>) {
+        if !self.opened_outside.insert(url.clone()) && once {
+            return;
+        }
+        external::open(&url, cx);
+    }
+
+    /// Gentle Design's canvas: kept in the tray when it opens (or opened once
+    /// in the browser outside the app, which the canvas then reloads itself),
+    /// reloaded in place when it refreshes, removed when it stops.
     pub(super) fn show_design_canvas(
         &mut self,
         canvas: CanvasNotice,
@@ -116,6 +145,9 @@ impl Workspace {
                 let label = Some("Design canvas".to_string());
                 match self.stages.iter().find_map(|stage| design(stage, cx)) {
                     Some(entity) => entity.update(cx, |panel, cx| panel.navigate(url, label, cx)),
+                    None if external::agent_pages(cx) == AgentPages::Browser => {
+                        self.open_outside(url, true, cx)
+                    }
                     None => {
                         let panel = cx.new(|cx| BrowserPanel::new(url, label, cx));
                         self.add_stage(panel, Some(origin), false, window, cx);

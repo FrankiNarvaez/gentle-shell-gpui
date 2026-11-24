@@ -12,6 +12,7 @@ use crate::{features::app_update, features::workspaces::TabLayout};
 mod agent_ui;
 mod app;
 mod background;
+mod browser;
 mod claude;
 mod devices;
 mod diagnostics;
@@ -80,6 +81,8 @@ pub struct SettingsView {
     tower: tower::Tower,
     /// Devices: the switches, what this machine has, an install running.
     devices: devices::Devices,
+    /// Browser: the browsers found on this machine.
+    browsers: browser::Browsers,
     /// Engram's own update.
     engram: upgrade::EngramUpdate,
     /// Theme: importing and sharing themes.
@@ -152,6 +155,7 @@ impl SettingsView {
             music: music::Music::default(),
             tower: tower::Tower::default(),
             devices: devices::Devices::default(),
+            browsers: browser::Browsers::default(),
             engram: upgrade::EngramUpdate::default(),
             theme_share: theme::ThemeShare::new(window, cx),
             fonts: fonts::FontsUi::new(window, cx),
@@ -167,6 +171,7 @@ impl SettingsView {
         this.refresh_music(cx);
         this.refresh_tower(cx);
         this.refresh_devices(cx);
+        this.refresh_browsers(cx);
         this.refresh_runs_on(cx);
         this
     }

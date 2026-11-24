@@ -229,7 +229,9 @@ impl Workspace {
             SessionEvent::OpenFile { path, line } => {
                 self.open_file_at(path.clone(), *line, window, cx)
             }
-            SessionEvent::AgentWeb(url) => self.open_web(url.clone(), Some(id), false, window, cx),
+            SessionEvent::AgentWeb(url) => {
+                self.open_agent_page(url.clone(), Some(id), true, window, cx)
+            }
             SessionEvent::Notice { level, message } => {
                 let source = self.pane_title(id);
                 let (level, message) = (*level, message.clone());

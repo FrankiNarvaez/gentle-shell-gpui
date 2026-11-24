@@ -56,7 +56,9 @@ fn spawn(program: PathBuf, args: Vec<std::ffi::OsString>, dir: &Path) -> std::io
     Ok(())
 }
 
-fn find(lookup: &Lookup) -> Option<PathBuf> {
+/// The first place `lookup` names that exists here (shared with
+/// `platform::browsers`).
+pub(crate) fn find(lookup: &Lookup) -> Option<PathBuf> {
     match lookup {
         Lookup::Command(name) => pi_rpc::find_program(name),
         Lookup::Path(base, path) => {

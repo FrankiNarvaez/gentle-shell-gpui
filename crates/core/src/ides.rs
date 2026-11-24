@@ -78,33 +78,40 @@ const MAC_APP_DIRS: [(Base, &str); 4] = [
 impl Ide {
     /// Where to look on `os`, most preferred first; the first hit is used.
     pub fn lookups(&self, os: Os) -> Vec<Lookup> {
-        let spots = match os {
-            Os::Mac => {
-                return self
-                    .mac
-                    .iter()
-                    .flat_map(|app| {
-                        MAC_APP_DIRS
-                            .iter()
-                            .map(move |(base, dir)| Lookup::Path(*base, format!("{dir}/{app}")))
-                    })
-                    .collect();
-            }
-            Os::Windows => self.windows,
-            Os::Linux => self.linux,
-        };
-        spots
-            .iter()
-            .flat_map(|spot| match *spot {
-                Spot::Path(base, path) => vec![Lookup::Path(base, path.into())],
-                Spot::Command(name) => vec![Lookup::Command(name)],
-                Spot::Flatpak(id) => vec![
-                    Lookup::Path(Base::Root, format!("var/lib/flatpak/exports/bin/{id}")),
-                    Lookup::Path(Base::Home, format!(".local/share/flatpak/exports/bin/{id}")),
-                ],
-            })
-            .collect()
+        app_lookups(os, self.mac, self.windows, self.linux)
     }
+}
+
+/// Where an app with these macOS bundles (looked up in the usual app
+/// folders), Windows spots and Linux spots may be on `os`, most preferred
+/// first. Shared by the editors here and the web browsers
+/// (`crate::web_browsers`).
+pub fn app_lookups(os: Os, mac: &[&'static str], windows: &[Spot], linux: &[Spot]) -> Vec<Lookup> {
+    let spots = match os {
+        Os::Mac => {
+            return mac
+                .iter()
+                .flat_map(|app| {
+                    MAC_APP_DIRS
+                        .iter()
+                        .map(move |(base, dir)| Lookup::Path(*base, format!("{dir}/{app}")))
+                })
+                .collect();
+        }
+        Os::Windows => windows,
+        Os::Linux => linux,
+    };
+    spots
+        .iter()
+        .flat_map(|spot| match *spot {
+            Spot::Path(base, path) => vec![Lookup::Path(base, path.into())],
+            Spot::Command(name) => vec![Lookup::Command(name)],
+            Spot::Flatpak(id) => vec![
+                Lookup::Path(Base::Root, format!("var/lib/flatpak/exports/bin/{id}")),
+                Lookup::Path(Base::Home, format!(".local/share/flatpak/exports/bin/{id}")),
+            ],
+        })
+        .collect()
 }
 
 /// A JetBrains IDE: `Program Files\JetBrains\<Name> <version>\bin\<exe>`

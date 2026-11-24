@@ -352,6 +352,7 @@ mod tests {
                     _surge_end: None,
                     stages: Vec::new(),
                     next_stage: 1,
+                    opened_outside: Default::default(),
                     resume_welcome: None,
                     drop_hint: None,
                     closed: vec![closed],

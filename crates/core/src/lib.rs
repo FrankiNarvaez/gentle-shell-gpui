@@ -41,4 +41,5 @@ pub mod typing_kisses;
 pub mod usage;
 pub mod version;
 pub mod web;
+pub mod web_browsers;
 pub mod workspaces;

@@ -2,7 +2,9 @@
 //! system's web view (WKWebView on macOS, WebView2 on Windows, WebKitGTK on
 //! Linux). It shows Gentle Design's live canvas and any other http(s) page,
 //! opened with `gentle-open`, `/web` or a loopback URL printed by a tool.
-//! Pages an agent opens wait in the window's instance tray; the native view
+//! Pages an agent opens wait in the window's instance tray (or open in the
+//! user's own browser when Configuration › Devices › Browser says so, see
+//! [`external`]); the native view
 //! (and its web process) only exists while the card is shown. A lone card
 //! sits at the bottom-right by default; multiple cards are tiled by the
 //! workspace. Drag its header to move it, any edge or corner to resize it, or
@@ -31,6 +33,7 @@ use crate::shared::ui;
 
 pub mod automation;
 pub mod cli;
+pub mod external;
 mod surface;
 pub use surface::WebSurface;
 
@@ -359,8 +362,9 @@ struct NamedProfiles(Vec<String>);
 
 impl Global for NamedProfiles {}
 
-/// Read the profiles the user made.
+/// Read the profiles the user made, and where pages outside the app open.
 pub fn init(cx: &mut App) {
+    external::init(cx);
     let names = crate::shared::themes::store_path()
         .and_then(|path| crate::shared::themes::read_key(&path, PROFILES_KEY))
         .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
@@ -720,7 +724,7 @@ impl BrowserPanel {
                             .xsmall()
                             .icon(Icon::new(IconName::ArrowUpRight))
                             .tooltip("Open in your browser")
-                            .on_click(move |_, _, cx| cx.open_url(&url)),
+                            .on_click(move |_, _, cx| external::open(&url, cx)),
                     )
                     .child(
                         Button::new("browser-maximize")
