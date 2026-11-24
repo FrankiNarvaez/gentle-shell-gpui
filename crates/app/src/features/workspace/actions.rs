@@ -427,7 +427,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.pane_mode = !self.pane_mode;
-        if !self.pane_mode {
+        if self.pane_mode {
+            self.pane_mode_focus.focus(window, cx);
+        } else {
             self.focus_active(window, cx);
         }
         cx.notify();

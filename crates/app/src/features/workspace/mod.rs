@@ -454,6 +454,10 @@ pub struct Workspace {
     /// Sticky pane mode: hjkl/HJKL/v/s/x act on panes and other keys are
     /// swallowed until Esc or Enter.
     pane_mode: bool,
+    /// Holds keyboard focus during pane mode: it has no input handler (no IME)
+    /// and no deeper key contexts, so the pane-mode keys and the swallow of
+    /// everything else apply wherever focus was before.
+    pane_mode_focus: FocusHandle,
     /// Panes and tabs closed, most recent last, to reopen.
     closed: Vec<closed::Closed>,
     /// gentle-stream, behind the title bar's ♪ button.
@@ -569,6 +573,7 @@ impl Workspace {
             resume_welcome: None,
             drop_hint: None,
             pane_mode: false,
+            pane_mode_focus: cx.focus_handle(),
             closed: Vec::new(),
             music,
             devices,

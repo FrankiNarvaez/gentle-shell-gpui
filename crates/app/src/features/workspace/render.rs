@@ -33,6 +33,11 @@ impl Render for Workspace {
             || crate::features::browser::popovers_open(cx);
         if self.pane_mode && (covered || !window.is_window_active()) {
             self.pane_mode = false;
+            // Focus still parked on the pane-mode handle goes back to the
+            // active pane; an overlay that already took it keeps it.
+            if self.pane_mode_focus.is_focused(window) {
+                self.focus_active(window, cx);
+            }
         }
         self.set_stages_covered(covered, cx);
         self.sync_web_views(covered, cx);
@@ -116,11 +121,12 @@ impl Render for Workspace {
                 "GentleWorkspace"
             })
             .when(self.pane_mode, |this| {
-                this.capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
-                    if this.pane_mode {
-                        cx.stop_propagation();
-                    }
-                }))
+                this.track_focus(&self.pane_mode_focus)
+                    .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
+                        if this.pane_mode {
+                            cx.stop_propagation();
+                        }
+                    }))
             })
             .relative()
             .left(px(shake_x))

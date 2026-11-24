@@ -81,6 +81,16 @@ impl Workspace {
 
     /// Approximate on-screen size of each pane in the current tab.
     pub(super) fn pane_sizes(&self, window: &Window) -> Vec<(PaneId, f32, f32)> {
+        let (w, h) = self.pane_area(window);
+        let mut out = Vec::new();
+        if let Some(tree) = self.tab().and_then(|t| t.built_tree()) {
+            leaf_sizes(tree, w, h, &mut out);
+        }
+        out
+    }
+
+    /// Approximate size of the area the tab's pane tree fills.
+    pub(super) fn pane_area(&self, window: &Window) -> (f32, f32) {
         let viewport = window.viewport_size();
         let rem = |n: f32| f32::from(rems(n / 16.).to_pixels(window.rem_size()));
         // Vertical tabs and Files are separate columns. Keep pane hit-testing
@@ -97,11 +107,7 @@ impl Workspace {
         };
         let w = (f32::from(viewport.width) - 12. - left - right).max(0.);
         let h = f32::from(viewport.height) - rem(super::render::TITLE_BAR_HEIGHT) - 6.;
-        let mut out = Vec::new();
-        if let Some(tree) = self.tab().and_then(|t| t.built_tree()) {
-            leaf_sizes(tree, w, h, &mut out);
-        }
-        out
+        (w, h)
     }
 
     // ── Workspaces ──────────────────────────────────────────────────────────
@@ -731,14 +737,8 @@ impl Workspace {
         let Some(tree) = self.tab().and_then(|t| t.built_tree()) else {
             return;
         };
-        let sizes = self.pane_sizes(window);
-        let Some((w, h)) = sizes
-            .into_iter()
-            .find(|(id, _, _)| *id == focused)
-            .map(|(_, w, h)| (w, h))
-        else {
-            return;
-        };
+        // `neighbour` wants the full size the tree fills, not the pane's.
+        let (w, h) = self.pane_area(window);
         if let Some(next) = tree.neighbour(&focused, direction, w, h) {
             self.focus_pane(next, window, cx);
         }

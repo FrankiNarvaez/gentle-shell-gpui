@@ -421,8 +421,14 @@ impl<L: Clone + PartialEq> PaneTree<L> {
                 PaneDirection::Up => fcy - ccy,
                 PaneDirection::Down => ccy - fcy,
             };
+            // Overlaps are normalized ratios: differences below EPSILON are
+            // float noise, so such ties fall to distance and then to reading
+            // order (the first candidate seen is kept).
+            const EPSILON: f32 = 1e-4;
             let better = best.as_ref().is_none_or(|(_, best_overlap, best_dist)| {
-                overlap > *best_overlap || (overlap == *best_overlap && distance < *best_dist)
+                overlap > *best_overlap + EPSILON
+                    || ((overlap - *best_overlap).abs() <= EPSILON
+                        && distance < *best_dist - EPSILON)
             });
             if better {
                 best = Some((l, overlap, distance));
@@ -780,6 +786,55 @@ mod tests {
             panic!("expected a split")
         };
         assert!((*ratio - 0.45).abs() < 0.001);
+    }
+
+    #[test]
+    fn neighbour_uneven_ratios_and_tie() {
+        // [1 | [2 / 3]]: both 2 and 3 are fully beside 1, so they tie on
+        // overlap whatever the ratios; reading order (2) must always win.
+        for outer in [0.3, 0.37, 0.5, 0.63, 0.7] {
+            for inner in [0.3, 0.37, 0.5, 0.63, 0.7] {
+                let mut tree = h(1, 2);
+                tree.split(&2, 3, SplitAxis::Vertical);
+                tree.set_ratio(&[], outer);
+                tree.set_ratio(&[true], inner);
+                assert_eq!(
+                    tree.neighbour(&1, PaneDirection::Right, SIZE, SIZE),
+                    Some(2),
+                    "outer {outer} inner {inner}"
+                );
+                assert_eq!(tree.neighbour(&3, PaneDirection::Left, SIZE, SIZE), Some(1));
+            }
+        }
+    }
+
+    #[test]
+    fn neighbour_single_pane_none() {
+        let tree = leaf(1);
+        for d in [
+            PaneDirection::Left,
+            PaneDirection::Right,
+            PaneDirection::Up,
+            PaneDirection::Down,
+        ] {
+            assert_eq!(tree.neighbour(&1, d, SIZE, SIZE), None);
+        }
+    }
+
+    #[test]
+    fn resize_nested_uses_closest_divider() {
+        // [1 | [2 / 3]]: growing 3 upward moves only the inner divider.
+        let mut tree = h(1, 2);
+        tree.split(&2, 3, SplitAxis::Vertical);
+        assert!(tree.resize_toward(&3, PaneDirection::Up, 0.05));
+        let PaneTree::Split { ratio, second, .. } = &tree else {
+            panic!("expected a split")
+        };
+        assert_eq!(*ratio, 0.5);
+        let PaneTree::Split { ratio: inner, .. } = &**second else {
+            panic!("expected a nested split")
+        };
+        assert!((*inner - 0.45).abs() < 0.001);
     }
 
     #[test]
