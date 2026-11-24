@@ -12,36 +12,15 @@ fn platform_select_modifier(event: &ClickEvent, cx: &App) -> bool {
 impl Workspace {
     /// The main navigator stays on the left; toggle only its width.
     pub(super) fn toggle_sidebar_compact(&mut self, cx: &mut Context<Self>) {
-        self.cancel_workspace_rename_state(cx);
         if self.tab_layout == TabLayout::Horizontal {
-            self.tab_layout = TabLayout::Vertical;
             self.sidebar_compact = false;
-        } else {
-            self.sidebar_compact = !self.sidebar_compact;
-        }
-        self.schedule_save(cx);
-        cx.notify();
-    }
-
-    pub(super) fn tab_sidebar_width(&self) -> f32 {
-        if self.sidebar_compact {
-            COMPACT_SIDEBAR_WIDTH
-        } else {
-            self.sidebar_width
-        }
-    }
-
-    /// Resize only the expanded navigator, keeping its width while compact.
-    pub(super) fn resize_tab_sidebar(&mut self, width: f32, cx: &mut Context<Self>) {
-        if self.tab_layout != TabLayout::Vertical || self.sidebar_compact || !width.is_finite() {
+            self.set_tab_layout(TabLayout::Vertical, cx);
             return;
         }
-        let width = width.round().clamp(MIN_TAB_SIDEBAR_WIDTH, MAX_TAB_SIDEBAR_WIDTH);
-        if self.sidebar_width != width {
-            self.sidebar_width = width;
-            self.schedule_save(cx);
-            cx.notify();
-        }
+        self.cancel_workspace_rename_state(cx);
+        self.sidebar_compact = !self.sidebar_compact;
+        self.schedule_save(cx);
+        cx.notify();
     }
 
     /// All presentation controls share one idempotent, persisted state change.
@@ -50,6 +29,8 @@ impl Workspace {
             return;
         }
         self.cancel_workspace_rename_state(cx);
+        self.tabs_sidebar_motion
+            .retarget(self.tab_layout == TabLayout::Vertical, cx.reduce_motion());
         self.tab_layout = layout;
         // File browsing is a separate right sidebar; switching tab placement
         // must neither open nor hide that independent panel.
@@ -927,8 +908,8 @@ mod tests {
     use gpui_kit::{AppContext as _, Context, Task, TestAppContext, Window, WindowOptions};
 
     use super::super::{
-        DevicePanel, Invisible, Music, Notices, PaneFactories, PaneItem, TabLayout, TabSelection,
-        Workspace,
+        COMPACT_SIDEBAR_WIDTH, DevicePanel, Invisible, Music, Notices, PaneFactories, PaneItem,
+        Side, TabLayout, TabSelection, Workspace,
     };
 
     fn space_with(name: &str, ids: &[usize]) -> Space {
@@ -980,8 +961,11 @@ mod tests {
                         sidebar: None,
                         sidebar_visible: false,
                         tab_layout: TabLayout::Horizontal,
+                        tabs_sidebar_motion: Default::default(),
+                        files_sidebar_motion: Default::default(),
                         sidebar_compact: false,
-                        sidebar_width: super::super::SIDEBAR_WIDTH,
+                        tabs_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
+                        files_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         badge_picker: None,
                         open_menu: None,
                         workspace_rename: None,
@@ -1038,20 +1022,20 @@ mod tests {
     }
 
     #[gpui::test]
-    fn sidebar_width_survives_compact_toggle_and_respects_limits(cx: &mut TestAppContext) {
+    fn expanded_sidebar_width_survives_compact_toggle(cx: &mut TestAppContext) {
         with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
+            let shown =
+                |ws: &Workspace| ws.sidebar_geometry(Side::Tabs, 1600., std::time::Instant::now());
+            // From horizontal tabs the toggle opens the expanded sidebar.
             ws.toggle_sidebar_compact(cx);
-            ws.resize_tab_sidebar(345., cx);
-            assert_eq!(ws.tab_sidebar_width(), 345.);
+            assert_eq!(ws.tab_layout, TabLayout::Vertical);
+            assert!(!ws.sidebar_compact);
+            ws.tabs_sidebar_width = 345.;
+            assert_eq!(shown(ws).0, 345.);
             ws.toggle_sidebar_compact(cx);
-            assert_eq!(ws.tab_sidebar_width(), 48.);
-            ws.resize_tab_sidebar(420., cx);
+            assert_eq!(shown(ws).0, COMPACT_SIDEBAR_WIDTH);
             ws.toggle_sidebar_compact(cx);
-            assert_eq!(ws.tab_sidebar_width(), 345.);
-            ws.resize_tab_sidebar(10., cx);
-            assert_eq!(ws.tab_sidebar_width(), 180.);
-            ws.resize_tab_sidebar(900., cx);
-            assert_eq!(ws.tab_sidebar_width(), 600.);
+            assert_eq!(shown(ws).0, 345.);
         });
     }
 

@@ -318,7 +318,9 @@ impl Workspace {
                     ui::muted()
                 };
                 h_flex()
-                    .id(SharedString::from(format!("sidebar-split-{tab_id}-{index}")))
+                    .id(SharedString::from(format!(
+                        "sidebar-split-{tab_id}-{index}"
+                    )))
                     .h(rems(ROW / 16.))
                     .pl(rems(30. / 16.))
                     .pr_2()
@@ -463,7 +465,13 @@ impl Workspace {
                         }
                     })
                     .when_some(space.dot(), |d, (color, _)| {
-                        d.child(div().size(rems(6. / 16.)).flex_none().rounded_full().bg(color))
+                        d.child(
+                            div()
+                                .size(rems(6. / 16.))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(color),
+                        )
                     })
                     .child(
                         div()
@@ -485,7 +493,8 @@ impl Workspace {
                     .hover(|d| d.bg(ui::surface_hover()))
                     .when(!self.popups_open(), |d| {
                         d.tooltip(|window, cx| {
-                            Tooltip::new("New agent or terminal in this workspace").build(window, cx)
+                            Tooltip::new("New agent or terminal in this workspace")
+                                .build(window, cx)
                         })
                     })
                     // Open the workspace-owned menu directly. Do not combine

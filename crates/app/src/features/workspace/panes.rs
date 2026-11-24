@@ -85,18 +85,17 @@ impl Workspace {
         let rem = |n: f32| f32::from(rems(n / 16.).to_pixels(window.rem_size()));
         // Vertical tabs and Files are separate columns. Keep pane hit-testing
         // and split-size calculations aligned with the actual rendered width.
-        let left = if self.tab_layout == TabLayout::Vertical {
-            rem(self.tab_sidebar_width()) + 6.
-        } else {
-            0.
+        let window_px =
+            f32::from(window.viewport_size().width) / (f32::from(window.rem_size()) / 16.);
+        let now = std::time::Instant::now();
+        let occupied = |side| {
+            let (width, fraction) = self.sidebar_geometry(side, window_px, now);
+            rem((width + 6.) * fraction)
         };
-        let right = if self.sidebar_visible && self.sidebar.is_some() {
-            rem(SIDEBAR_WIDTH) + 6.
-        } else {
-            0.
-        };
-        let w = (f32::from(viewport.width) - 12. - left - right).max(0.);
-        let h = f32::from(viewport.height) - rem(super::render::TITLE_BAR_HEIGHT) - 6.;
+        let w =
+            (f32::from(viewport.width) - rem(12.) - occupied(Side::Tabs) - occupied(Side::Files))
+                .max(0.);
+        let h = f32::from(viewport.height) - rem(super::render::TITLE_BAR_HEIGHT + 6.);
         let mut out = Vec::new();
         if let Some(tree) = self.tab().and_then(|t| t.built_tree()) {
             leaf_sizes(tree, w, h, &mut out);

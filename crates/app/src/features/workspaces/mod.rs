@@ -280,21 +280,27 @@ pub struct SavedState {
     /// Older workspaces.json files keep the familiar horizontal layout.
     #[serde(default)]
     pub tab_layout: TabLayout,
-    /// Whether the vertical navigator uses its narrow icon rail.
+    /// Whether the vertical tabs sidebar shows as its narrow icon rail.
     #[serde(default)]
     pub sidebar_compact: bool,
-    /// Expanded navigator width, in logical pixels at 100% UI scale.
+    /// Width of the expanded vertical tabs sidebar (px at 100 % interface
+    /// size). Files written before the Files sidebar could be resized call it
+    /// `sidebar_width`.
+    #[serde(default = "default_sidebar_width", alias = "sidebar_width")]
+    pub tabs_sidebar_width: f32,
+    /// Width of the right Files sidebar (px at 100 % interface size).
     #[serde(default = "default_sidebar_width")]
-    pub sidebar_width: f32,
-}
-
-fn default_sidebar_width() -> f32 {
-    260.
+    pub files_sidebar_width: f32,
 }
 
 fn shown() -> bool {
     true
 }
+
+fn default_sidebar_width() -> f32 {
+    gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH
+}
+
 /// A first launch shows the sidebar, as a file from before it was saved does.
 impl Default for SavedState {
     fn default() -> Self {
@@ -305,7 +311,8 @@ impl Default for SavedState {
             sidebar: true,
             tab_layout: TabLayout::Horizontal,
             sidebar_compact: false,
-            sidebar_width: default_sidebar_width(),
+            tabs_sidebar_width: default_sidebar_width(),
+            files_sidebar_width: default_sidebar_width(),
         }
     }
 }

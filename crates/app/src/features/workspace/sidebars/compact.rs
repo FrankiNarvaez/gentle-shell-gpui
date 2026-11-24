@@ -196,9 +196,10 @@ impl Workspace {
                             .text_color(tab.tone())
                             .child(number.to_string()),
                     )
-                    .children(tab.status_dot().map(|dot| {
-                        div().absolute().top(px(2.)).right(px(2.)).child(dot)
-                    }));
+                    .children(
+                        tab.status_dot()
+                            .map(|dot| div().absolute().top(px(2.)).right(px(2.)).child(dot)),
+                    );
                 list = list.child(self.tab_row_behavior(row, &tab, cx));
             }
             list = list.child(

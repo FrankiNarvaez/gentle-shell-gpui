@@ -55,6 +55,7 @@ mod overlays;
 mod panes;
 mod persistence;
 mod render;
+mod sidebar_motion;
 mod sidebars;
 mod spaces;
 mod stages;
@@ -99,10 +100,9 @@ actions!(
     ]
 );
 
-pub const SIDEBAR_WIDTH: f32 = 260.;
+/// The vertical tabs sidebar's width (px at 100 % interface size) as an
+/// icon rail; it has no resize handle.
 const COMPACT_SIDEBAR_WIDTH: f32 = 48.;
-const MIN_TAB_SIDEBAR_WIDTH: f32 = 180.;
-const MAX_TAB_SIDEBAR_WIDTH: f32 = 600.;
 
 /// What the window tells whoever embeds things in it (the sidebar's owner).
 pub enum WorkspaceEvent {
@@ -300,15 +300,38 @@ impl Space {
     }
 }
 
-/// Dragged by the right edge of the expanded workspace navigator.
-#[derive(Clone)]
-struct SidebarResizeDrag;
-
 /// Dragged by a divider: which split it resizes.
 #[derive(Clone)]
 struct DividerDrag {
     tab: usize,
     path: Vec<bool>,
+}
+
+/// Which sidebar a drag handle is resizing.
+#[derive(Clone, Copy)]
+enum Side {
+    Tabs,
+    Files,
+}
+
+/// Dragged by a sidebar's inner edge.
+#[derive(Clone)]
+struct SidebarDrag {
+    side: Side,
+    owner: gpui::EntityId,
+    revision: std::cell::Cell<u64>,
+    gesture: std::cell::RefCell<gentle_core::workspaces::SidebarGesture>,
+}
+
+impl SidebarDrag {
+    fn new(side: Side, owner: gpui::EntityId, revision: u64) -> Self {
+        Self {
+            side,
+            owner,
+            revision: std::cell::Cell::new(revision),
+            gesture: Default::default(),
+        }
+    }
 }
 
 /// Dragged by a pane's grip pill: dropped near another pane's edge it moves
@@ -394,9 +417,15 @@ pub struct Workspace {
     web_shown: std::collections::HashSet<PaneId>,
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
+    tabs_sidebar_motion: sidebar_motion::SidebarMotion,
+    files_sidebar_motion: sidebar_motion::SidebarMotion,
     tab_layout: TabLayout,
+    /// The vertical tabs sidebar shows as the narrow icon rail.
     sidebar_compact: bool,
-    sidebar_width: f32,
+    /// Width of the expanded vertical tabs sidebar (px at 100 % interface size).
+    tabs_sidebar_width: f32,
+    /// Width of the right Files sidebar (px at 100 % interface size).
+    files_sidebar_width: f32,
     /// The workspace whose badge picker is open, and where it opened.
     badge_picker: Option<(usize, Point<Pixels>)>,
     /// A right-click context menu owned by the workspace so its open state
@@ -539,11 +568,16 @@ impl Workspace {
             web_shown: Default::default(),
             sidebar: None,
             sidebar_visible: saved.sidebar,
+            tabs_sidebar_motion: Default::default(),
+            files_sidebar_motion: Default::default(),
             tab_layout: saved.tab_layout,
             sidebar_compact: saved.sidebar_compact,
-            sidebar_width: saved
-                .sidebar_width
-                .clamp(MIN_TAB_SIDEBAR_WIDTH, MAX_TAB_SIDEBAR_WIDTH),
+            tabs_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
+                saved.tabs_sidebar_width,
+            ),
+            files_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
+                saved.files_sidebar_width,
+            ),
             badge_picker: None,
             open_menu: None,
             workspace_rename: None,
