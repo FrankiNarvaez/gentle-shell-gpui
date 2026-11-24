@@ -64,7 +64,9 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        use gentle_core::workspaces::SidebarDrag::{Collapse, Reopen, Width};
+        use gentle_core::workspaces::SidebarDrag::{
+            Collapse, Compact, Expand, Reopen, ReopenExpanded, Width,
+        };
 
         // The row survives the handle unmounting. A missed mouse-up can
         // leave GPUI's active payload in place even when left is no longer held.
@@ -74,19 +76,15 @@ impl Workspace {
         }
         let scale = f32::from(window.rem_size()) / 16.;
         let x = event.event.position.x;
-        let (distance, open, width, revision) = match drag.side {
-            // The icon rail keeps its fixed width.
-            Side::Tabs if self.sidebar_compact => return,
+        let (distance, open, revision) = match drag.side {
             Side::Tabs => (
                 x - event.bounds.left(),
                 self.tab_layout == TabLayout::Vertical,
-                &mut self.tabs_sidebar_width,
                 self.tabs_sidebar_motion.revision,
             ),
             Side::Files if self.sidebar.is_some() => (
                 event.bounds.right() - x,
                 self.sidebar_visible,
-                &mut self.files_sidebar_width,
                 self.files_sidebar_motion.revision,
             ),
             Side::Files => return,
@@ -99,34 +97,53 @@ impl Workspace {
         let pointer = f32::from(distance) / scale - 6.;
         let window_width = f32::from(window.viewport_size().width) / scale;
         let side = drag.side;
-        let action = drag.gesture.borrow_mut().update(
-            pointer,
-            window_width,
-            open,
-            event.event.pressed_button == Some(MouseButton::Left),
-        );
-        if matches!(action, Some(Collapse | Reopen)) {
-            drag.revision.set(revision + 1);
+        let held = event.event.pressed_button == Some(MouseButton::Left);
+        let compact_gesture =
+            matches!(side, Side::Tabs) && (self.sidebar_compact_first || self.sidebar_compact);
+        let action = {
+            let mut gesture = drag.gesture.borrow_mut();
+            if compact_gesture {
+                gesture.update_compact(pointer, window_width, open, self.sidebar_compact, held)
+            } else {
+                gesture.update(pointer, window_width, open, held)
+            }
+        };
+        // After restoring the expanded panel, don't jump its edge back to the
+        // pointer on the next event. Resize again once the pointer reaches it.
+        if matches!(action, Some(Expand | ReopenExpanded)) {
+            drag.picking_up_width.set(true);
+        } else if matches!(action, Some(Width(_))) && drag.picking_up_width.get() {
+            let restored =
+                gentle_core::workspaces::shown_sidebar_width(self.tabs_sidebar_width, window_width);
+            if pointer < restored {
+                return;
+            }
+            drag.picking_up_width.set(false);
         }
-        match action {
-            Some(Width(w)) if *width != w => {
-                *width = w;
+        let drag_revision = drag.revision.clone();
+        match (side, action) {
+            (Side::Tabs, Some(Width(w))) => self.resize_tab_sidebar(w, cx),
+            (Side::Files, Some(Width(w))) if self.files_sidebar_width != w => {
+                self.files_sidebar_width = w;
                 self.schedule_save(cx);
                 cx.notify();
             }
-            Some(Collapse | Reopen) => match side {
-                Side::Tabs => self.set_tab_layout(
-                    if open {
-                        TabLayout::Horizontal
-                    } else {
-                        TabLayout::Vertical
-                    },
-                    cx,
-                ),
-                Side::Files => self.toggle_sidebar(cx),
-            },
+            (Side::Tabs, Some(Compact | Expand)) => {
+                self.set_sidebar_compact(action == Some(Compact), cx);
+            }
+            (Side::Tabs, Some(Collapse)) => self.set_tab_layout(TabLayout::Horizontal, cx),
+            (Side::Tabs, Some(Reopen | ReopenExpanded)) => {
+                self.set_sidebar_compact(compact_gesture && action == Some(Reopen), cx);
+                self.set_tab_layout(TabLayout::Vertical, cx);
+            }
+            (Side::Files, Some(Collapse | Reopen)) => self.toggle_sidebar(cx),
             _ => {}
         }
+        // Gestural changes can retarget the motion without invalidating this drag.
+        drag_revision.set(match side {
+            Side::Tabs => self.tabs_sidebar_motion.revision,
+            Side::Files => self.files_sidebar_motion.revision,
+        });
     }
 }
 
@@ -437,10 +454,9 @@ impl Render for Workspace {
                                     tabs_width,
                                     self.render_tab_sidebar(cx),
                                 ))
-                                .when(
-                                    vertical_tabs && !self.sidebar_compact && !tabs_moving,
-                                    |column| column.child(self.sidebar_handle(Side::Tabs, cx)),
-                                ),
+                                .when(vertical_tabs && !tabs_moving, |column| {
+                                    column.child(self.sidebar_handle(Side::Tabs, cx))
+                                }),
                         )
                     })
                     .child(

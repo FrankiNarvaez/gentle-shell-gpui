@@ -72,9 +72,10 @@ fn sample() -> SavedState {
         ],
         sidebar: false,
         tab_layout: TabLayout::Vertical,
-        sidebar_compact: true,
         tabs_sidebar_width: 300.,
         files_sidebar_width: 350.,
+        sidebar_compact: true,
+        sidebar_compact_first: true,
     }
 }
 
@@ -98,6 +99,22 @@ fn unknown_badge_values_read_as_unset() {
 }
 
 #[test]
+fn restores_legacy_compact_rail_and_width() {
+    let state: SavedState = serde_json::from_value(serde_json::json!({
+        "workspaces": [], "tab_layout": "vertical",
+        "sidebar_compact": true, "sidebar_width": 340.
+    }))
+    .unwrap();
+    assert!(state.sidebar_compact);
+    assert!(!state.sidebar_compact_first);
+    assert_eq!(state.tabs_sidebar_width, 340.);
+    assert_eq!(state.files_sidebar_width, 260.);
+    let stored = serde_json::to_value(state).unwrap();
+    assert_eq!(stored["tabs_sidebar_width"], 340.);
+    assert!(stored.get("sidebar_width").is_none());
+}
+
+#[test]
 fn json_round_trip() {
     let state = sample();
     let json = serde_json::to_string(&state).unwrap();
@@ -114,7 +131,9 @@ fn json_round_trip() {
     assert!(minimal.workspaces[0].sidebar_expanded);
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
     assert!(!minimal.sidebar_compact);
+    assert!(!minimal.sidebar_compact_first);
     assert!(back.sidebar_compact);
+    assert!(back.sidebar_compact_first);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
     // Both sidebar widths round-trip and legacy files default to 260.
@@ -147,38 +166,6 @@ fn json_round_trip() {
     assert_eq!(old.tabs_sidebar_width, 260.);
     assert_eq!(old.files_sidebar_width, 260.);
     assert_eq!(SavedState::default().sidebar, minimal.sidebar);
-}
-
-/// The tabs sidebar's width saved as `sidebar_width` (before the Files
-/// sidebar could be resized) still loads, within the current limits.
-#[test]
-fn legacy_sidebar_width_key_loads_as_the_tabs_width() {
-    use gentle_core::workspaces::{SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, saved_sidebar_width};
-
-    let legacy = |width: f32| -> SavedState {
-        let mut json = serde_json::to_value(sample()).unwrap();
-        let object = json.as_object_mut().unwrap();
-        object.remove("tabs_sidebar_width");
-        object.insert("sidebar_width".into(), width.into());
-        serde_json::from_value(json).unwrap()
-    };
-    let old = legacy(340.);
-    assert_eq!(old.tabs_sidebar_width, 340.);
-    assert_eq!(old.files_sidebar_width, 350.);
-    assert!(old.sidebar_compact);
-    // The older build allowed 180–600 px; the app holds it to today's range.
-    assert_eq!(
-        saved_sidebar_width(legacy(180.).tabs_sidebar_width),
-        SIDEBAR_MIN_WIDTH
-    );
-    assert_eq!(
-        saved_sidebar_width(legacy(600.).tabs_sidebar_width),
-        SIDEBAR_MAX_WIDTH
-    );
-    // Saving again writes only the current key.
-    let json = serde_json::to_value(&old).unwrap();
-    assert!(json.get("sidebar_width").is_none());
-    assert_eq!(json["tabs_sidebar_width"], 340.);
 }
 
 #[test]

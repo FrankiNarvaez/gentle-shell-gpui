@@ -280,17 +280,18 @@ pub struct SavedState {
     /// Older workspaces.json files keep the familiar horizontal layout.
     #[serde(default)]
     pub tab_layout: TabLayout,
-    /// Whether the vertical tabs sidebar shows as its narrow icon rail.
-    #[serde(default)]
-    pub sidebar_compact: bool,
-    /// Width of the expanded vertical tabs sidebar (px at 100 % interface
-    /// size). Files written before the Files sidebar could be resized call it
-    /// `sidebar_width`.
+    /// Expanded navigator width (px at 100 % interface size).
     #[serde(default = "default_sidebar_width", alias = "sidebar_width")]
     pub tabs_sidebar_width: f32,
     /// Width of the right Files sidebar (px at 100 % interface size).
     #[serde(default = "default_sidebar_width")]
     pub files_sidebar_width: f32,
+    /// Whether the vertical navigator uses its narrow icon rail.
+    #[serde(default)]
+    pub sidebar_compact: bool,
+    /// Whether resizing inward stops at the rail before hiding.
+    #[serde(default)]
+    pub sidebar_compact_first: bool,
 }
 
 fn shown() -> bool {
@@ -310,9 +311,10 @@ impl Default for SavedState {
             workspaces: Vec::new(),
             sidebar: true,
             tab_layout: TabLayout::Horizontal,
-            sidebar_compact: false,
             tabs_sidebar_width: default_sidebar_width(),
             files_sidebar_width: default_sidebar_width(),
+            sidebar_compact: false,
+            sidebar_compact_first: false,
         }
     }
 }

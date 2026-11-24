@@ -101,8 +101,6 @@ actions!(
     ]
 );
 
-/// The vertical tabs sidebar's width (px at 100 % interface size) as an
-/// icon rail; it has no resize handle.
 const COMPACT_SIDEBAR_WIDTH: f32 = 48.;
 
 /// What the window tells whoever embeds things in it (the sidebar's owner).
@@ -320,8 +318,9 @@ enum Side {
 struct SidebarDrag {
     side: Side,
     owner: gpui::EntityId,
-    revision: std::cell::Cell<u64>,
+    revision: std::rc::Rc<std::cell::Cell<u64>>,
     gesture: std::cell::RefCell<gentle_core::workspaces::SidebarGesture>,
+    picking_up_width: std::cell::Cell<bool>,
 }
 
 impl SidebarDrag {
@@ -329,8 +328,9 @@ impl SidebarDrag {
         Self {
             side,
             owner,
-            revision: std::cell::Cell::new(revision),
+            revision: std::rc::Rc::new(std::cell::Cell::new(revision)),
             gesture: Default::default(),
+            picking_up_width: Default::default(),
         }
     }
 }
@@ -421,9 +421,9 @@ pub struct Workspace {
     tabs_sidebar_motion: sidebar_motion::SidebarMotion,
     files_sidebar_motion: sidebar_motion::SidebarMotion,
     tab_layout: TabLayout,
-    /// The vertical tabs sidebar shows as the narrow icon rail.
     sidebar_compact: bool,
-    /// Width of the expanded vertical tabs sidebar (px at 100 % interface size).
+    sidebar_compact_first: bool,
+    /// Width of the vertical tabs sidebar (px at 100 % interface size).
     tabs_sidebar_width: f32,
     /// Width of the right Files sidebar (px at 100 % interface size).
     files_sidebar_width: f32,
@@ -573,6 +573,7 @@ impl Workspace {
             files_sidebar_motion: Default::default(),
             tab_layout: saved.tab_layout,
             sidebar_compact: saved.sidebar_compact,
+            sidebar_compact_first: saved.sidebar_compact_first,
             tabs_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
                 saved.tabs_sidebar_width,
             ),
