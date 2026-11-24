@@ -168,8 +168,15 @@ fn workspace_at(path: &Path, command: &WorkspaceCommand) -> Result<Option<Worksp
     let addr = SocketAddr::from(([127, 0, 0, 1], record.port));
     let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
         Ok(stream) => stream,
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => return Ok(None),
-        Err(error) => return Err(format!("Could not reach Desktop: {error}")),
+        Err(error) => {
+            // A closed app leaves its instance record behind. On Windows
+            // connecting to that port may time out instead of being refused.
+            // Never start a second app if the recorded owner is still alive.
+            if unavailable_endpoint(error.kind()) && !owner_is_running(record.pid) {
+                return Ok(None);
+            }
+            return Err(format!("Could not reach Desktop: {error}"));
+        }
     };
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
@@ -196,6 +203,25 @@ fn workspace_at(path: &Path, command: &WorkspaceCommand) -> Result<Option<Worksp
         "Desktop did not return a workspace reply; check its state and version before retrying."
             .into()
     })
+}
+
+fn unavailable_endpoint(kind: std::io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        std::io::ErrorKind::ConnectionRefused | std::io::ErrorKind::TimedOut
+    )
+}
+
+fn owner_is_running(pid: u32) -> bool {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
+
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        ProcessRefreshKind::new(),
+    );
+    system.process(pid).is_some()
 }
 
 fn listen(path: &Path) -> std::io::Result<async_channel::Receiver<Incoming>> {
@@ -329,6 +355,16 @@ fn new_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::{Incoming, OpenRequest, forward, listen};
+
+    #[test]
+    fn stale_workspace_endpoint_can_be_refused_or_time_out() {
+        use std::io::ErrorKind;
+
+        assert!(super::unavailable_endpoint(ErrorKind::ConnectionRefused));
+        assert!(super::unavailable_endpoint(ErrorKind::TimedOut));
+        assert!(!super::unavailable_endpoint(ErrorKind::PermissionDenied));
+        assert!(super::owner_is_running(std::process::id()));
+    }
 
     #[test]
     fn workspace_request_waits_for_real_reply() {
