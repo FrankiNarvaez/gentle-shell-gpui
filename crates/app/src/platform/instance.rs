@@ -217,10 +217,7 @@ fn owner_is_running(pid: u32) -> bool {
 
     let pid = Pid::from_u32(pid);
     let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[pid]),
-        ProcessRefreshKind::new(),
-    );
+    system.refresh_processes_specifics(ProcessesToUpdate::Some(&[pid]), ProcessRefreshKind::new());
     system.process(pid).is_some()
 }
 

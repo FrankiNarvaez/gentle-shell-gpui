@@ -19,25 +19,11 @@ pub const HELP: &str = "Usage: gsd workspace <command>\n\
 pub enum Command {
     List,
     Current,
-    Create {
-        name: String,
-        root: PathBuf,
-    },
-    Switch {
-        name: String,
-    },
-    Rename {
-        name: String,
-        new_name: String,
-    },
-    SetRoot {
-        name: String,
-        root: PathBuf,
-    },
-    Remove {
-        name: String,
-        force: bool,
-    },
+    Create { name: String, root: PathBuf },
+    Switch { name: String },
+    Rename { name: String, new_name: String },
+    SetRoot { name: String, root: PathBuf },
+    Remove { name: String, force: bool },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

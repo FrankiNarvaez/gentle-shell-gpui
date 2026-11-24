@@ -99,9 +99,8 @@ pub fn run(
                                     | gentle_core::workspace_commands::Command::Switch { .. }
                             );
                             let answered = handle.update(cx, |_, window, cx| {
-                                workspace.update(cx, |w, cx| {
-                                    w.workspace_command(command, window, cx)
-                                })
+                                workspace
+                                    .update(cx, |w, cx| w.workspace_command(command, window, cx))
                             });
                             let result = match answered {
                                 Ok(Ok(result)) => result,

@@ -45,7 +45,9 @@ impl Workspace {
             }
             Command::Remove { name, force } => {
                 if !force {
-                    return Err("Removal closes tabs and stops agents; use --force to confirm".into());
+                    return Err(
+                        "Removal closes tabs and stops agents; use --force to confirm".into(),
+                    );
                 }
                 if self.spaces.len() < 2 {
                     return Err("Cannot remove the last workspace".into());
@@ -59,9 +61,8 @@ impl Workspace {
         };
         // Acknowledge only after the mutation and its snapshot have been saved.
         // The existing debounce may save the same (or newer) state later.
-        workspaces::save(&self.snapshot(cx)).map_err(|error| {
-            format!("Change applied in Desktop, but saving failed: {error}")
-        })?;
+        workspaces::save(&self.snapshot(cx))
+            .map_err(|error| format!("Change applied in Desktop, but saving failed: {error}"))?;
         Ok(Output::Message(message))
     }
 
@@ -92,9 +93,12 @@ impl Workspace {
                     .into(),
             );
         }
-        if self.spaces.iter().enumerate().any(|(index, space)| {
-            Some(index) != except && space.name.eq_ignore_ascii_case(name)
-        }) {
+        if self
+            .spaces
+            .iter()
+            .enumerate()
+            .any(|(index, space)| Some(index) != except && space.name.eq_ignore_ascii_case(name))
+        {
             return Err(format!("Workspace '{name}' already exists"));
         }
         Ok(())
