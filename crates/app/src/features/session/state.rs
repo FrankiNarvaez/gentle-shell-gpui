@@ -123,6 +123,12 @@ pub(super) struct Usage {
     pub(super) context_percent: Option<f64>,
     pub(super) context_tokens: Option<u64>,
     pub(super) context_window: Option<u64>,
+    /// The displayed token count and percentage came from compaction's estimate.
+    pub(super) context_estimated: bool,
+    /// Invalidates stats requests when newer context information arrives.
+    pub(super) context_revision: u64,
+    /// A snapshot already in flight when a compaction estimate arrived.
+    pub(super) context_stale_snapshot: Option<String>,
     /// The current backend's stats request completed, even if empty or failed.
     pub(super) context_stats_received: bool,
     #[cfg(test)]
@@ -141,6 +147,9 @@ pub(super) struct Usage {
 impl Usage {
     pub(super) fn reset_context(&mut self) {
         self.context_stats_received = false;
+        self.context_revision = self.context_revision.wrapping_add(1);
+        self.context_estimated = false;
+        self.context_stale_snapshot = None;
         self.context_percent = None;
         self.context_tokens = None;
         self.context_window = None;

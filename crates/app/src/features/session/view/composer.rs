@@ -58,8 +58,13 @@ impl SessionView {
         let compacting = self.usage.compacting;
         let auto = self.usage.auto_compaction;
         let ready = self.backend.is_ready();
+        let prefix = if self.usage.context_estimated {
+            "~"
+        } else {
+            ""
+        };
         let used = match self.usage.context_percent {
-            Some(p) => format!("{p:.0}%"),
+            Some(p) => format!("{prefix}{p:.0}%"),
             None => "–".into(),
         };
         let label = if compacting {
@@ -71,7 +76,9 @@ impl SessionView {
             (
                 "used-tokens",
                 "Used tokens",
-                self.usage.context_tokens.map(format_tokens),
+                self.usage
+                    .context_tokens
+                    .map(|tokens| format!("{prefix}{}", format_tokens(tokens))),
             ),
             (
                 "context-window",
@@ -81,7 +88,9 @@ impl SessionView {
             (
                 "usage",
                 "Usage",
-                self.usage.context_percent.map(|p| format!("{p:.0}%")),
+                self.usage
+                    .context_percent
+                    .map(|p| format!("{prefix}{p:.0}%")),
             ),
         ];
         let percent = self.usage.context_percent.unwrap_or(0.);

@@ -265,7 +265,16 @@ impl SessionView {
     /// island (the feed's list wins over tool results while it reports one)
     /// and the context meter. The phase, a pending question and Pi's
     /// built-in commands are read from the sections where they are drawn.
+    #[cfg(test)]
     pub(super) fn sync_sections(&mut self, cx: &mut Context<Self>) {
+        self.sync_sections_if_context(true, cx);
+    }
+
+    pub(super) fn sync_sections_if_context(
+        &mut self,
+        context_changed: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !self.desktop.take_sections_changed() {
             return;
         }
@@ -278,11 +287,22 @@ impl SessionView {
         if let Some(tasks) = todo {
             self.todo.apply(tasks);
         }
-        if let Some(context) = context {
+        if context_changed && let Some(context) = context {
             let (percent, tokens, window) = context.unwrap_or((None, None, None));
-            self.usage.context_tokens = tokens;
             self.usage.context_window = window;
-            self.set_context_percent(percent, cx);
+            if self.usage.context_estimated && percent.is_none() && tokens.is_none() {
+                let estimated_percent = self
+                    .usage
+                    .context_tokens
+                    .zip(window.filter(|w| *w > 0))
+                    .map(|(tokens, window)| tokens as f64 * 100.0 / window as f64);
+                self.set_context_percent(estimated_percent, cx);
+            } else {
+                self.usage.context_revision = self.usage.context_revision.wrapping_add(1);
+                self.usage.context_estimated = false;
+                self.usage.context_tokens = tokens;
+                self.set_context_percent(percent, cx);
+            }
         }
         if question {
             // Mention the question once its grace ran out, unless the app
@@ -769,20 +789,41 @@ impl SessionView {
     /// session feed) and the context use, which the feed's `context` section
     /// (the same `getContextUsage()` read) keeps current between reads.
     pub(super) fn refresh_stats(&mut self, cx: &mut Context<Self>) {
+        self.usage.context_revision = self.usage.context_revision.wrapping_add(1);
+        let revision = self.usage.context_revision;
         self.request(
             json!({"type": "get_session_stats"}),
             cx,
-            |this, result, cx| {
-                this.apply_stats(result, cx);
+            move |this, result, cx| {
+                this.apply_stats_at(revision, result, cx);
             },
         );
     }
 
+    #[cfg(test)]
     pub(super) fn apply_stats(&mut self, result: Result<Value>, cx: &mut Context<Self>) {
+        self.apply_stats_at(self.usage.context_revision, result, cx);
+    }
+
+    pub(super) fn apply_stats_at(
+        &mut self,
+        revision: u64,
+        result: Result<Value>,
+        cx: &mut Context<Self>,
+    ) {
         self.usage.context_stats_received = true;
         if let Ok(stats) = result {
             self.usage.cost = stats["cost"].as_f64().unwrap_or(0.0);
-            self.set_context_percent(stats["contextUsage"]["percent"].as_f64(), cx);
+            let percent = stats["contextUsage"]["percent"].as_f64();
+            if revision == self.usage.context_revision
+                && (!self.usage.context_estimated || percent.is_some())
+            {
+                if self.usage.context_estimated {
+                    self.usage.context_tokens = None;
+                    self.usage.context_estimated = false;
+                }
+                self.set_context_percent(percent, cx);
+            }
         }
     }
 

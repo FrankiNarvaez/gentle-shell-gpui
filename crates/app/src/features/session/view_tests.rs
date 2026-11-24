@@ -402,6 +402,402 @@ fn context_ring_is_hidden_during_startup_even_with_context_data(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn post_compaction_estimate_is_shown_approximately(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, _| {
+        view.usage.context_window = Some(200000);
+        view.usage.context_tokens = Some(120000);
+        view.usage.context_percent = Some(60.0);
+    });
+    click(cx, "context-ring");
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+    });
+    assert!(drawn(cx, "context-ring-used-tokens-~40k"));
+    assert!(drawn(cx, "context-ring-usage-~20%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-40k"));
+    click(cx, "context-ring");
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-~40k (~20%)"));
+}
+
+#[gpui::test]
+fn post_compaction_estimate_handles_missing_failure_and_stale_stats(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.usage.context_window = None;
+        let old = view.usage.context_revision;
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert_eq!(view.usage.context_percent, None);
+        view.usage.context_window = Some(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_percent, None);
+        view.apply_stats_at(old, Ok(json!({"contextUsage": {"percent": 80.0}})), cx);
+        assert_eq!(view.usage.context_percent, None);
+        view.apply_stats_at(
+            view.usage.context_revision,
+            Ok(json!({"contextUsage": {"percent": null}})),
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        for event in [
+            json!({"errorMessage": "failed", "result": {"estimatedTokensAfter": 1}}),
+            json!({"aborted": true, "result": {"estimatedTokensAfter": 2}}),
+            json!({"cancelled": true, "result": {"estimatedTokensAfter": 3}}),
+            json!({"success": false, "result": {"estimatedTokensAfter": 4}}),
+            json!({"result": {"estimatedTokensAfter": null}}),
+        ] {
+            let mut event = event;
+            event["type"] = json!("compaction_end");
+            view.handle_batch(vec![pi_rpc::Incoming::Event(event)], window, cx);
+            assert_eq!(view.usage.context_tokens, Some(40000));
+        }
+        view.apply_stats_at(
+            view.usage.context_revision,
+            Ok(json!({"contextUsage": {"percent": 30.0}})),
+            cx,
+        );
+        assert_eq!(view.usage.context_percent, Some(30.0));
+        assert_eq!(view.usage.context_tokens, None);
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_survives_empty_context(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 163200, "window": 272000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 62800}
+            }))],
+            window,
+            cx,
+        );
+        for (seq, context) in [
+            (
+                2,
+                json!({"percent": null, "tokens": null, "window": 272000}),
+            ),
+            (3, json!({"window": 272000})),
+        ] {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Ui(widget(json!({
+                    "schema": SCHEMA, "kind": "event", "seq": seq,
+                    "event": "session_snapshot", "data": {"sections": {"context": context}}
+                })))],
+                window,
+                cx,
+            );
+        }
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-used-tokens-~62.8k"));
+    assert!(drawn(cx, "context-ring-usage-~23%"));
+    click(cx, "context-ring");
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-~62.8k (~23%)"));
+    view.update_in(cx, |view, window, cx| {
+        for (seq, context, expected_percent) in [
+            (4, json!({"window": 314000}), Some(20.0)),
+            (5, json!({"window": 0}), None),
+            (6, json!({"window": null}), None),
+        ] {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Ui(widget(json!({
+                    "schema": SCHEMA, "kind": "event", "seq": seq,
+                    "event": "session_snapshot", "data": {"sections": {"context": context}}
+                })))],
+                window,
+                cx,
+            );
+            assert_eq!(view.usage.context_tokens, Some(62800));
+            assert_eq!(view.usage.context_percent, expected_percent);
+            assert!(view.usage.context_estimated);
+        }
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": 7,
+                "event": "session_snapshot", "data": {"sections": {"context": {
+                    "tokens": 50000, "percent": 25.0, "window": 200000
+                }}}
+            })))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_accepts_current_stats_after_empty_feed(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        let delta = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections}
+            }))
+        };
+        for (seq, sections) in [
+            (2, json!({})),
+            (3, json!({"context": null})),
+            (
+                4,
+                json!({"context": {"tokens": null, "percent": null, "window": 200000}}),
+            ),
+            (5, json!({"context": {"window": 272000}})),
+        ] {
+            let stale = view.usage.context_revision;
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Event(json!({
+                    "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+                }))],
+                window,
+                cx,
+            );
+            let current = view.usage.context_revision;
+            view.handle_batch(vec![pi_rpc::Incoming::Ui(delta(seq, sections))], window, cx);
+            view.apply_stats_at(stale, Ok(json!({"contextUsage": {"percent": 80.0}})), cx);
+            assert!(view.usage.context_estimated);
+            view.apply_stats_at(current, Ok(json!({"contextUsage": {"percent": 30.0}})), cx);
+            assert_eq!(view.usage.context_percent, Some(30.0), "sequence {seq}");
+            assert_eq!(view.usage.context_tokens, None);
+            assert!(!view.usage.context_estimated);
+        }
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        let current = view.usage.context_revision;
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(
+                6,
+                json!({"context": {
+                    "tokens": 50000, "percent": 25.0, "window": 200000
+                }}),
+            ))],
+            window,
+            cx,
+        );
+        view.apply_stats_at(current, Ok(json!({"contextUsage": {"percent": 30.0}})), cx);
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_survives_unrelated_feed_delta(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        let delta = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections}
+            }))
+        };
+        view.handle_batch(vec![pi_rpc::Incoming::Ui(delta(2, json!({})))], window, cx);
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert!(view.usage.context_estimated);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(
+                3,
+                json!({
+                    "context": {"percent": 25.0, "tokens": 50000, "window": 200000}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(4, json!({"context": null})))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, None);
+        assert_eq!(view.usage.context_percent, None);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_rejects_pre_compaction_snapshot(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.usage.context_window = Some(200000);
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(response(
+                snapshot.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                        "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                    }}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert_eq!(view.usage.context_percent, Some(20.0));
+        assert!(view.usage.context_estimated);
+        let fresh = view.desktop.resync().remove(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(response(
+                fresh.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "sequence": 2, "state": {"session": {
+                        "context": {"percent": 25.0, "tokens": 50000, "window": 200000}
+                    }}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_preserves_normal_stats(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.apply_stats(
+            Ok(json!({"cost": 0.5, "contextUsage": {"percent": 61.0}})),
+            cx,
+        );
+        assert_eq!(view.usage.cost, 0.5);
+        assert_eq!(view.usage.context_percent, Some(61.0));
+        assert!(!view.usage.context_estimated);
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-usage-61%"));
+}
+
+#[gpui::test]
 fn context_ring_failed_stats_then_refresh(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     view.update(cx, |view, cx| {

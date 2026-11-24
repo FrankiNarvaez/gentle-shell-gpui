@@ -839,10 +839,11 @@ impl Render for ContextOverview {
             Some(p) if p >= 70. => ui::warning(),
             _ => ui::success(),
         };
-        let percent_label = percent.map_or_else(|| "–".to_string(), |p| format!("{p:.0}%"));
+        let prefix = if usage.context_estimated { "~" } else { "" };
+        let percent_label = percent.map_or_else(|| "–".to_string(), |p| format!("{prefix}{p:.0}%"));
         let usage_label = usage.context_tokens.map_or_else(
             || percent_label.clone(),
-            |tokens| format!("{} ({percent_label})", format_tokens(tokens)),
+            |tokens| format!("{prefix}{} ({percent_label})", format_tokens(tokens)),
         );
         let window_label = usage
             .context_window
