@@ -9,22 +9,23 @@ use pi_rpc::desktop_rpc::{
     ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState,
     DesignCanvas, DesignCanvasEvent, DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep,
     DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod,
-    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff,
-    JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
-    MAX_SESSIONS_LIMIT, PROMPT_COMMAND, PackageKind, PackageScope, PackageUpdate,
-    PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
-    PermissionModeState, PiUpdate, PinSource, ProfileApplied, ProfileApplyErrorCode,
-    ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData, ProfileNote, ProfileNoteLevel,
-    ProfilesData, ProviderUsage, RateLimitEvent, RateLimitSource, ReviewConfirmation,
-    ReviewEffective, ReviewMode, ReviewScope, ReviewScopes, ReviewSetting, ReviewSource, SCHEMA,
-    SessionActivity, SessionChangedFile, SessionChanges, SessionChangesSummary, SessionCommand,
-    SessionEntry, SessionJobs, SessionList, SessionPermission, SessionProject, SessionSection,
-    SessionTodo, SessionTodoItem, SessionTodoProgress, SessionWorktree, SessionsScope,
-    SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
-    StatsRange, StatsScope, SubagentThread, SwitchSessionResult, ThreadItem, UpdateState,
-    UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel,
-    UsageStatsProvider, UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow,
-    WIDGET_KEY, decode_payload, decode_widget,
+    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, DevBinary,
+    DevBinaryState, Handoff, JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES,
+    MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT, ModelConfigPresence, PROMPT_COMMAND, PackageKind,
+    PackageScope, PackageUpdate, PackageUpdateState, PendingQuestionKind, PermissionMode,
+    PermissionModeChanged, PermissionModeState, PiUpdate, PinSource, ProfileApplied,
+    ProfileApplyErrorCode, ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData,
+    ProfileNote, ProfileNoteLevel, ProfilesData, ProviderUsage, RateLimitEvent, RateLimitSource,
+    ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope, ReviewScopes, ReviewSetting,
+    ReviewSource, RoutingState, SCHEMA, SessionActivity, SessionChangedFile, SessionChanges,
+    SessionChangesSummary, SessionCommand, SessionEntry, SessionJobs, SessionList,
+    SessionPermission, SessionProject, SessionSection, SessionTodo, SessionTodoItem,
+    SessionTodoProgress, SessionWorktree, SessionsScope, SetConfigResult, SetPermissionModeResult,
+    SetReviewModeOutcome, ShellChannel, ShellUpdate, StatsRange, StatsScope, StatusSeverity,
+    SubagentThread, SwitchSessionResult, ThreadItem, UpdateState, UsageLimit, UsageLimitScope,
+    UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel, UsageStatsProvider,
+    UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload,
+    decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -4625,7 +4626,7 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
 
 /// The `capabilities` methods of Gentle Shell `main` (0336985), as the spec
 /// and a live backend list them.
-const MAIN_METHODS: [&str; 24] = [
+const MAIN_METHODS: [&str; 25] = [
     "capabilities",
     "get_snapshot",
     "get_config",
@@ -4650,6 +4651,7 @@ const MAIN_METHODS: [&str; 24] = [
     "set_review_mode",
     "get_usage_stats",
     "get_update_status",
+    "get_status",
 ];
 const MAIN_EVENTS: [&str; 9] = [
     "config_changed",
@@ -4688,7 +4690,7 @@ const RELEASE_4_8_EVENTS: [&str; 7] = [
     "profile_applied",
     "agents_update",
 ];
-const NEW_METHODS: [DesktopMethod; 10] = [
+const NEW_METHODS: [DesktopMethod; 11] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -4699,6 +4701,7 @@ const NEW_METHODS: [DesktopMethod; 10] = [
     DesktopMethod::SetReviewMode,
     DesktopMethod::GetUsageStats,
     DesktopMethod::GetUpdateStatus,
+    DesktopMethod::GetStatus,
 ];
 
 fn capabilities_of(methods: &[&str], events: &[&str]) -> Capabilities {
@@ -4814,6 +4817,7 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
         DesktopMethod::GetReviewMode,
         DesktopMethod::GetUsageStats,
         DesktopMethod::GetUpdateStatus,
+        DesktopMethod::GetStatus,
     ] {
         let mut session = DesktopSession::new();
         let request = session.issue(method).unwrap();
@@ -6040,6 +6044,80 @@ fn usage_stats_decode_the_cost_per_day_and_providers_of_5_0() {
     assert_eq!(stats.truncated.by_provider, Some(false));
 }
 
+// --- get_status -----------------------------------------------------------
+
+#[test]
+fn status_requests_send_empty_params_and_decode_the_spec_answer() {
+    let mut session = DesktopSession::new();
+    assert_eq!(
+        session.issue(DesktopMethod::GetStatus).unwrap().payload(),
+        payload("desktop-1", "get_status", "{}")
+    );
+
+    let status = ok_response(json!({
+        "package": "active",
+        "odd": "active",
+        "persona": "gentleman",
+        "devBinary": { "state": "inactive", "sha256Prefix": null },
+        "assets": {
+            "delegation": { "stale": 0, "userOverrides": 1, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+        },
+        "modelConfig": { "global": "present", "routing": "valid" },
+        "severity": "info"
+    }))
+    .status()
+    .unwrap();
+    assert_eq!(status.persona, "gentleman");
+    assert_eq!(
+        status.dev_binary,
+        DevBinary {
+            state: DevBinaryState::Inactive,
+            sha256_prefix: None,
+        }
+    );
+    assert_eq!(status.assets.delegation.user_overrides, 1);
+    assert_eq!(
+        (status.model_config.global, status.model_config.routing),
+        (ModelConfigPresence::Present, RoutingState::Valid)
+    );
+    assert_eq!(status.severity, StatusSeverity::Info);
+
+    let warning = ok_response(json!({
+        "package": "active", "odd": "active", "persona": "neutral",
+        "devBinary": { "state": "active", "sha256Prefix": "0123456789abcdef" },
+        "assets": {
+            "delegation": { "stale": 2, "userOverrides": 0, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 1 }
+        },
+        "modelConfig": { "global": "missing", "routing": "invalid" },
+        "severity": "warning"
+    }))
+    .status()
+    .unwrap();
+    assert_eq!(warning.severity, StatusSeverity::Warning);
+    assert_eq!(
+        warning.dev_binary.sha256_prefix.as_deref(),
+        Some("0123456789abcdef")
+    );
+
+    // A value outside the documented vocabulary is refused, not misread.
+    let mut bad = json!({
+        "package": "active", "odd": "active", "persona": "gentleman",
+        "devBinary": { "state": "inactive", "sha256Prefix": null },
+        "assets": {
+            "delegation": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+        },
+        "modelConfig": { "global": "present", "routing": "valid" },
+        "severity": "error"
+    });
+    assert!(ok_response(bad.clone()).status().is_err());
+    bad["severity"] = json!("info");
+    bad["modelConfig"]["routing"] = json!("broken");
+    assert!(ok_response(bad).status().is_err());
+}
+
 // --- get_update_status ----------------------------------------------------
 
 #[test]
@@ -6175,6 +6253,7 @@ fn every_documented_error_code_is_typed() {
         "review_mode_busy",
         "stats_unavailable",
         "updates_unavailable",
+        "status_unavailable",
         "not_found",
         "internal_error",
     ];

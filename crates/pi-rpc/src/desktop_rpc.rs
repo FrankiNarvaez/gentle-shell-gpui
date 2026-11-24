@@ -107,6 +107,7 @@ mod review;
 mod session_state;
 mod sessions;
 mod stats;
+mod status;
 mod updates;
 
 pub use changes::{ChangeDiff, ChangeRoot, ChangeStatus, ChangedFile, Changes};
@@ -133,6 +134,10 @@ pub use sessions::{
 pub use stats::{
     StatsRange, StatsScope, UsageStats, UsageStatsDay, UsageStatsModel, UsageStatsProject,
     UsageStatsProvider, UsageStatsTotals, UsageStatsTruncated,
+};
+pub use status::{
+    AssetStatus, DevBinary, DevBinaryState, ModelConfigPresence, ModelConfigStatus, RoutingState,
+    ShellStatus, StatusAssets, StatusSeverity,
 };
 pub use updates::{
     PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PackagesUpdate, PiUpdate,
@@ -179,13 +184,14 @@ pub enum DesktopMethod {
     SetReviewMode,
     GetUsageStats,
     GetUpdateStatus,
+    GetStatus,
 }
 
 impl DesktopMethod {
     /// Every method this client knows, in the order `capabilities` lists
     /// them on Gentle Shell `main`. Which ones a peer offers is only what its
     /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -210,6 +216,7 @@ impl DesktopMethod {
         Self::SetReviewMode,
         Self::GetUsageStats,
         Self::GetUpdateStatus,
+        Self::GetStatus,
     ];
 
     /// The wire name of the method.
@@ -239,6 +246,7 @@ impl DesktopMethod {
             Self::SetReviewMode => "set_review_mode",
             Self::GetUsageStats => "get_usage_stats",
             Self::GetUpdateStatus => "get_update_status",
+            Self::GetStatus => "get_status",
         }
     }
 
@@ -289,6 +297,7 @@ impl DesktopMethod {
             "set_review_mode" => Ok(Self::SetReviewMode),
             "get_usage_stats" => Ok(Self::GetUsageStats),
             "get_update_status" => Ok(Self::GetUpdateStatus),
+            "get_status" => Ok(Self::GetStatus),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
         }
     }
@@ -960,9 +969,10 @@ impl DesktopErrorInfo {
 wire_enum! {
     /// Every documented `error.code`. The config and `apply_profile` subsets
     /// are also [`ConfigErrorCode`] and [`ProfileApplyErrorCode`].
-    /// `changes_unavailable`, `session_unavailable` and `updates_unavailable`
-    /// are answered by Gentle Shell `main` but missing from its specification's
-    /// list of codes; they are kept here because the server sends them.
+    /// `changes_unavailable`, `session_unavailable`, `updates_unavailable`
+    /// and `status_unavailable` are answered by Gentle Shell but missing from
+    /// its specification's list of codes; they are kept here because the
+    /// server sends them.
     DesktopErrorCode, "error.code" {
         InvalidRequest => "invalid_request",
         UnknownStore => "unknown_store",
@@ -989,6 +999,7 @@ wire_enum! {
         ReviewModeBusy => "review_mode_busy",
         StatsUnavailable => "stats_unavailable",
         UpdatesUnavailable => "updates_unavailable",
+        StatusUnavailable => "status_unavailable",
         NotFound => "not_found",
         InternalError => "internal_error",
     }
@@ -1146,6 +1157,11 @@ impl DesktopResponse {
     /// The response to `get_update_status`.
     pub fn update_status(&self) -> Result<UpdateStatus, DesktopRpcError> {
         UpdateStatus::from_data(self.data()?)
+    }
+
+    /// The response to `get_status`.
+    pub fn status(&self) -> Result<ShellStatus, DesktopRpcError> {
+        ShellStatus::from_data(self.data()?)
     }
 
     fn data(&self) -> Result<&Value, DesktopRpcError> {

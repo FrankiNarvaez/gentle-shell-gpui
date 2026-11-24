@@ -1,9 +1,10 @@
 //! The one-shot reads window screens make of a tab's Gentle Shell over the
 //! Desktop channel: the Sessions browser (`list_sessions`, `switch_session`),
-//! Usage › Local stats (`get_usage_stats`) and Configuration's update status
-//! (`get_update_status`). Each method is used only when `capabilities`
-//! advertises it; otherwise the screen keeps its own path (session files, the
-//! stats file scan, the npm registry) and nothing is sent.
+//! Usage › Local stats (`get_usage_stats`), Configuration's update status
+//! (`get_update_status`) and Gentle Shell's own status (`get_status`). Each
+//! method is used only when `capabilities` advertises it; otherwise the
+//! screen keeps its own path (session files, the stats file scan, the npm
+//! registry, no status) and nothing is sent.
 //!
 //! Requests wait for the shared slot in a queue, like the config stores; each
 //! is answered once, as an outcome for its ticket that the screen takes.
@@ -16,8 +17,8 @@ use std::collections::VecDeque;
 use pi_rpc::UiRequest;
 use pi_rpc::desktop_rpc::{
     Capabilities, DesktopErrorCode, DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError,
-    DesktopSession, ListSessionsQuery, SessionList, SessionsScope, StatsRange, StatsScope,
-    SwitchSessionResult, UpdateStatus, UsageStats,
+    DesktopSession, ListSessionsQuery, SessionList, SessionsScope, ShellStatus, StatsRange,
+    StatsScope, SwitchSessionResult, UpdateStatus, UsageStats,
 };
 
 use super::Send;
@@ -63,6 +64,8 @@ pub(crate) enum ReadRequest {
     UpdateStatus {
         refresh: bool,
     },
+    /// The facts `/gentle:status` prints, with its severity.
+    Status,
 }
 
 impl ReadRequest {
@@ -72,6 +75,7 @@ impl ReadRequest {
             Self::SwitchSession { .. } => DesktopMethod::SwitchSession,
             Self::UsageStats { .. } => DesktopMethod::GetUsageStats,
             Self::UpdateStatus { .. } => DesktopMethod::GetUpdateStatus,
+            Self::Status => DesktopMethod::GetStatus,
         }
     }
 
@@ -88,6 +92,7 @@ impl ReadRequest {
             Self::UpdateStatus { refresh } => {
                 session.issue_get_update_status(refresh.then_some(true))
             }
+            Self::Status => session.issue(DesktopMethod::GetStatus),
         }
     }
 }
@@ -144,6 +149,7 @@ pub(crate) enum ReadOutcome {
     Switched(SwitchSessionResult),
     UsageStats(UsageStats),
     UpdateStatus(UpdateStatus),
+    Status(ShellStatus),
     Failed(ReadFailure),
 }
 
@@ -349,6 +355,7 @@ impl Reads {
             ReadRequest::UpdateStatus { .. } => {
                 response.update_status().map(ReadOutcome::UpdateStatus)
             }
+            ReadRequest::Status => response.status().map(ReadOutcome::Status),
         };
         let outcome = match decoded {
             Ok(outcome) => outcome,
@@ -393,6 +400,7 @@ pub(in crate::features::session) fn is_read(method: DesktopMethod) -> bool {
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::GetStatus
     )
 }
 
@@ -487,6 +495,7 @@ mod tests {
             "switch_session",
             "get_usage_stats",
             "get_update_status",
+            "get_status",
         ]);
         probed(&methods)
     }
@@ -506,6 +515,7 @@ mod tests {
             DesktopMethod::SwitchSession,
             DesktopMethod::GetUsageStats,
             DesktopMethod::GetUpdateStatus,
+            DesktopMethod::GetStatus,
         ] {
             assert_eq!(desktop.reads_support(method), ReadSupport::Legacy);
         }
@@ -715,5 +725,64 @@ mod tests {
         let (_, payload) = sent(&desktop.reads_pump().sends);
         assert_eq!(payload["method"], "get_update_status");
         assert!(desktop.reads_take(ticket).is_none());
+    }
+
+    #[test]
+    fn status_is_read_only_from_a_shell_that_advertises_it() {
+        // A Shell with every other read but no `get_status` (4.9.0): the
+        // Configuration screen shows no status, and nothing is sent.
+        let mut methods = RELEASE_METHODS.to_vec();
+        methods.extend(["get_usage_stats", "get_update_status"]);
+        let mut older = probed(&methods);
+        assert_eq!(
+            older.reads_support(DesktopMethod::GetStatus),
+            ReadSupport::Legacy
+        );
+        assert_eq!(
+            older.reads_enqueue(ReadRequest::Status),
+            Err(ReadFailure::NotOffered)
+        );
+        assert!(older.session().pending().is_none());
+
+        let mut desktop = main_shell();
+        assert_eq!(
+            desktop.reads_support(DesktopMethod::GetStatus),
+            ReadSupport::Rpc
+        );
+        let ticket = desktop.reads_enqueue(ReadRequest::Status).unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(payload["method"], "get_status");
+        assert_eq!(payload["params"], json!({}));
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({
+                "package": "active", "odd": "active", "persona": "gentleman",
+                "devBinary": { "state": "inactive", "sha256Prefix": null },
+                "assets": {
+                    "delegation": { "stale": 0, "userOverrides": 1, "activeAgentOverrides": 0 },
+                    "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+                },
+                "modelConfig": { "global": "present", "routing": "valid" },
+                "severity": "info"
+            }),
+        ));
+        let Some(ReadOutcome::Status(status)) = desktop.reads_take(ticket) else {
+            panic!("expected the status");
+        };
+        assert_eq!(status.persona, "gentleman");
+
+        // `status_unavailable` is a refusal the screen shows nothing for.
+        let ticket = desktop.reads_enqueue(ReadRequest::Status).unwrap();
+        let (id, _) = sent(&desktop.reads_pump().sends);
+        let _ = desktop.reads_apply(&error(&id, "status_unavailable"));
+        assert_eq!(
+            desktop
+                .reads_take(ticket)
+                .and_then(|outcome| match outcome {
+                    ReadOutcome::Failed(failure) => failure.code(),
+                    _ => None,
+                }),
+            Some(DesktopErrorCode::StatusUnavailable)
+        );
     }
 }

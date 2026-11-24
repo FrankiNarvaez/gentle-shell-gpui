@@ -32,6 +32,7 @@ mod pages;
 mod reading_desk;
 mod runs_on;
 mod services;
+mod shell_status;
 mod snapshot;
 mod theme;
 mod tower;
@@ -94,6 +95,8 @@ pub struct SettingsView {
     _session_sub: Option<Subscription>,
     /// RPC status and its in-flight ticket; separate from upgrade UI state.
     shell_updates: upgrade::ShellUpdates,
+    /// Gentle Shell's own status (`get_status`), when its Shell offers it.
+    shell_status: shell_status::ShellStatusRead,
     /// Where agents run: this computer, a WSL distro or a command.
     runs_on: runs_on::RunsOn,
 }
@@ -159,11 +162,15 @@ impl SettingsView {
             engram: upgrade::EngramUpdate::default(),
             theme_share: theme::ThemeShare::new(window, cx),
             fonts: fonts::FontsUi::new(window, cx),
-            _session_sub: session
-                .as_ref()
-                .map(|session| cx.observe(session, |this, _, cx| this.update_status_changed(cx))),
+            _session_sub: session.as_ref().map(|session| {
+                cx.observe(session, |this, _, cx| {
+                    this.update_status_changed(cx);
+                    this.shell_status_changed(cx);
+                })
+            }),
             session,
             shell_updates: upgrade::ShellUpdates::default(),
+            shell_status: shell_status::ShellStatusRead::default(),
             runs_on: runs_on::RunsOn::new(window, cx),
         };
         this.reload(cx);
@@ -203,6 +210,7 @@ impl SettingsView {
     /// Prefer update information from the active agent's Desktop RPC.
     /// Fall back to the existing launcher/registry path when unavailable.
     fn reload_with(&mut self, refresh_updates: bool, cx: &mut Context<Self>) {
+        self.ask_shell_status(cx);
         let shell_updates = self.ask_update_status(refresh_updates, cx);
         if !shell_updates {
             self.shell_updates.status = None;
