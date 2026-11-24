@@ -124,6 +124,20 @@ impl Default for Models {
 #[derive(Default)]
 pub(super) struct Usage {
     pub(super) context_percent: Option<f64>,
+    pub(super) context_tokens: Option<u64>,
+    pub(super) context_window: Option<u64>,
+    /// The displayed token count and percentage came from compaction's estimate.
+    pub(super) context_estimated: bool,
+    /// Invalidates stats requests when newer context information arrives.
+    pub(super) context_revision: u64,
+    /// A snapshot already in flight when a compaction estimate arrived.
+    pub(super) context_stale_snapshot: Option<String>,
+    /// The current backend's stats request completed, even if empty or failed.
+    pub(super) context_stats_received: bool,
+    #[cfg(test)]
+    pub(super) context_test_ready: bool,
+    pub(super) context_details_open: bool,
+    pub(super) context_ring_hovered: bool,
     pub(super) cost: f64,
     /// A compaction (manual or automatic) is running.
     pub(super) compacting: bool,
@@ -131,6 +145,27 @@ pub(super) struct Usage {
     pub(super) auto_compaction: Option<bool>,
     /// Context usage crossed the alert threshold.
     pub(super) context_latch: crate::features::alerts::ContextLatch,
+}
+
+impl Usage {
+    pub(super) fn reset_context(&mut self) {
+        self.context_stats_received = false;
+        self.context_revision = self.context_revision.wrapping_add(1);
+        self.context_estimated = false;
+        self.context_stale_snapshot = None;
+        self.context_percent = None;
+        self.context_tokens = None;
+        self.context_window = None;
+        self.context_details_open = false;
+        self.context_ring_hovered = false;
+        self.context_latch.rearm();
+    }
+
+    pub(super) fn context_visible(&self, ready: bool) -> bool {
+        #[cfg(test)]
+        let ready = ready || self.context_test_ready;
+        ready && self.context_stats_received
+    }
 }
 
 pub(super) struct Dialog {

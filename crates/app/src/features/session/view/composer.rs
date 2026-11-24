@@ -1,4 +1,4 @@
-//! The composer: context line, attachments, text area and its bottom bar.
+//! The composer: attachments, text area and its bottom bar.
 
 use std::time::{Duration, Instant};
 
@@ -28,23 +28,6 @@ use gentle_core::input_style::InputStyle;
 use gentle_core::transcript::format_tokens;
 
 impl SessionView {
-    /// How full the context is (0..=100) and its tone, by band
-    /// ([`ContextFill`]): faint while calm, amber while filling, red when
-    /// full; `None` while calm.
-    fn context_level(&self) -> Option<(f32, Option<Hsla>)> {
-        use gentle_core::usage::context::ContextFill;
-        let percent = self
-            .usage
-            .context_percent
-            .map(|p| p.clamp(0.0, 100.0) as f32)?;
-        let tone = match ContextFill::of(f64::from(percent)) {
-            ContextFill::Calm => None,
-            ContextFill::Filling => Some(ui::warning()),
-            ContextFill::Full => Some(ui::danger()),
-        };
-        Some((percent, tone))
-    }
-
     /// While the agent works a light runs round the composer's action
     /// button (stop, or send while you steer), just outside it, on the live
     /// overlay. Round buttons get a round lap (the orbit's corner radius
@@ -71,182 +54,170 @@ impl SessionView {
         })
     }
 
-    /// The context, after Tern's, drawn as part of the composer's own top
-    /// border (one line, not two): from past the box's left corner the
-    /// border fills as the conversation uses its window, in the band's
-    /// color ([`Self::context_level`]), its percent riding the fill's end
-    /// just above the box. The window's size closes the activity line
-    /// ([`Self::render_context_caption`]). Work in progress is the light
-    /// round the action button ([`Self::action_ring`]), not this line.
-    /// Place it in the box (`relative`, 1 px border); `radius` is the box's
-    /// corner radius.
-    fn render_context_edge(&self, radius: Rems) -> Option<Div> {
-        let (percent, alert) = self.context_level()?;
-        let fill = alert.unwrap_or(ui::fg().opacity(0.45));
-        let used = percent / 100.;
-        let tip = self.context_tip(percent);
-        Some(
-            div()
-                .absolute()
-                // On the border's own line: `absolute` insets start inside it.
-                .top(px(-1.))
-                .left(radius)
-                .right(radius)
-                .h(px(1.))
-                .child(div().h_full().w(relative(used)).bg(fill))
-                .when(percent >= 1., |d| {
-                    d.child(
-                        div()
-                            .id("context-percent")
-                            .absolute()
-                            .bottom(px(4.))
-                            .left(relative(used))
-                            .ml(rems(-16. / 16.))
-                            .w(rems(32. / 16.))
-                            .text_center()
-                            .font_family(ui::mono())
-                            .text_size(ui::code_rems(9.))
-                            .line_height(rems(11. / 16.))
-                            .text_color(alert.unwrap_or(ui::faint()))
-                            .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                            .child(format!("{percent:.0}%")),
-                    )
-                }),
-        )
+    /// Prefer the session feed's window, falling back to the current model.
+    pub(super) fn context_window(&self) -> Option<u64> {
+        self.usage.context_window.or_else(|| {
+            self.models
+                .current
+                .as_ref()
+                .map(|model| model.context_window)
+                .filter(|window| *window > 0)
+        })
     }
 
-    /// The current model's context window, in tokens.
-    fn context_window(&self) -> Option<u64> {
-        self.models
-            .current
-            .as_ref()
-            .map(|m| m.context_window)
-            .filter(|w| *w > 0)
-    }
-
-    /// The hover on the context's figures: "Context used: 60K of 1M
-    /// tokens (6%)". The tokens are the percent of the window: the backend
-    /// reports only the percent.
-    fn context_tip(&self, percent: f32) -> SharedString {
-        match self.context_window() {
-            Some(window) => {
-                let used = (window as f64 * f64::from(percent) / 100.).round() as u64;
-                format!(
-                    "Context used: {} of {} tokens ({percent:.0}%)",
-                    format_tokens(used),
-                    format_tokens(window)
-                )
-            }
-            None => format!("Context used: {percent:.0}%"),
-        }
-        .into()
-    }
-
-    /// The window's size at the activity line's end, over the context
-    /// line's end: "1M", faint until the band's tone takes it; its hover
-    /// says how much is used.
-    pub(super) fn render_context_caption(&self) -> Option<Stateful<Div>> {
-        let (percent, alert) = self.context_level()?;
-        let window = format_tokens(self.context_window()?);
-        let tip = self.context_tip(percent);
-        Some(
-            div()
-                .id("context-window")
-                .flex_none()
-                .px_1()
-                .font_family(ui::mono())
-                .text_size(ui::code_rems(10.))
-                .text_color(alert.unwrap_or(ui::faint()))
-                .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                .child(window),
-        )
-    }
-
-    /// The context percentage as a chip: compact now, toggle auto-compaction.
-    pub(super) fn render_context_chip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let high = self
-            .usage
-            .context_percent
-            .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
+    fn render_context_control(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let compacting = self.usage.compacting;
         let auto = self.usage.auto_compaction;
         let ready = self.backend.is_ready();
+        let prefix = if self.usage.context_estimated {
+            "~"
+        } else {
+            ""
+        };
         let used = match self.usage.context_percent {
-            Some(p) => format!("{p:.0}%"),
+            Some(p) => format!("{prefix}{p:.0}%"),
             None => "–".into(),
         };
-        let window = self
-            .models
-            .current
-            .as_ref()
-            .map(|m| m.context_window)
-            .filter(|w| *w > 0)
-            .map(format_tokens);
         let label = if compacting {
             "compacting…".to_string()
         } else {
             used.clone()
         };
-        let count = match &window {
-            Some(window) => format!("{used} of {window}"),
-            None => used,
+        let ring_rows = [
+            (
+                "used-tokens",
+                "Used tokens",
+                self.usage
+                    .context_tokens
+                    .map(|tokens| format!("{prefix}{}", format_tokens(tokens))),
+            ),
+            (
+                "context-window",
+                "Context window",
+                self.context_window().map(format_tokens),
+            ),
+            (
+                "usage",
+                "Usage",
+                self.usage
+                    .context_percent
+                    .map(|p| format!("{prefix}{p:.0}%")),
+            ),
+        ];
+        let percent = self.usage.context_percent.unwrap_or(0.);
+        let color = if percent >= 90. {
+            ui::danger()
+        } else if percent >= 70. {
+            ui::warning()
+        } else {
+            ui::success()
         };
-        let color = if high { ui::warning() } else { ui::faint() };
         let weak = cx.entity().downgrade();
-        chip_popover(
-            ChipPopoverOptions::new("context", IconName::Gauge, color, label)
-                .title("Context")
-                .count(count),
-            move || {
-                let compact = weak.clone();
-                let toggle = weak.clone();
-                vec![
-                    div()
-                        .text_size(rems(12. / 16.))
-                        .text_color(ui::muted())
-                        .whitespace_normal()
-                        .child(if high {
-                            "Context is nearly full. Compacting summarizes the conversation so far to free room."
-                        } else {
-                            "Compacting summarizes the conversation so far to free room. Add what to keep with /compact <instructions>."
-                        })
-                        .into_any_element(),
+        let options = ChipPopoverOptions::new("context-ring", IconName::Gauge, color, label)
+            .title("Context")
+            .ring(
+                percent as f32,
+                cx.entity(),
+                self.usage.context_details_open,
+                self.usage.context_ring_hovered,
+                compacting,
+                cx,
+            );
+        chip_popover(options, move || {
+            let compact = weak.clone();
+            let toggle = weak.clone();
+            let mut rows = Vec::new();
+            rows.extend(ring_rows.iter().filter_map(|(id, label, value)| {
+                let value = value.clone()?;
+                let selector = format!("context-ring-{id}-{value}");
+                Some(
                     h_flex()
-                        .pt_1()
+                        .text_size(rems(12. / 16.))
+                        .child(div().flex_1().text_color(ui::muted()).child(*label))
                         .child(
-                            Button::new("context-compact")
-                                .small()
-                                .primary()
-                                .icon(Icon::new(IconName::ChevronsDownUp))
-                                .label(if compacting { "Compacting…" } else { "Compact now" })
-                                .loading(compacting)
-                                .disabled(compacting || !ready)
-                                .on_click(move |_, _, cx| {
-                                    let _ = compact.update(cx, |this, cx| this.compact(None, cx));
-                                }),
+                            div()
+                                .debug_selector(move || selector.clone())
+                                .font_family(ui::mono())
+                                .text_color(ui::fg())
+                                .child(value),
                         )
                         .into_any_element(),
-                    h_flex()
-                        .id("context-auto-compaction")
-                        .gap_2()
-                        .pt_1()
-                        .cursor_pointer()
-                        .text_size(rems(12. / 16.))
-                        .text_color(ui::fg())
-                        .when(auto.is_none() || !ready, |d| d.opacity(0.5))
-                        .child(checkbox_box(auto.unwrap_or(false)))
-                        .child("Compact automatically when nearly full")
-                        .when_some(auto.filter(|_| ready), |d, enabled| {
-                            d.on_click(move |_, _, cx| {
-                                let _ = toggle.update(cx, |this, cx| {
-                                    this.set_auto_compaction(!enabled, cx)
-                                });
+                )
+            }));
+            let advice = if percent >= 90. {
+                "Context nearly full. Compact or start a new session."
+            } else if percent >= 70. {
+                "Consider compacting or starting a new session."
+            } else {
+                "Compacting summarizes the conversation to free context."
+            };
+            let instruction = "Add what to keep with /compact <instructions>.";
+            rows.push(
+                div()
+                    .debug_selector(|| "context-ring-advice-divider".into())
+                    .my_1()
+                    .h(px(1.))
+                    .w_full()
+                    .bg(ui::border())
+                    .into_any_element(),
+            );
+            rows.push(
+                v_flex()
+                    .text_size(rems(12. / 16.))
+                    .text_color(ui::muted())
+                    .whitespace_normal()
+                    .child(div().debug_selector(move || advice.into()).child(advice))
+                    .child(
+                        div()
+                            .debug_selector(move || instruction.into())
+                            .child(instruction),
+                    )
+                    .into_any_element(),
+            );
+            rows.extend(vec![
+                h_flex()
+                    .id("context-compact-control")
+                    .debug_selector(|| "context-compact-control".into())
+                    .pt_1()
+                    .child(
+                        Button::new("context-compact")
+                            .small()
+                            .primary()
+                            .icon(Icon::new(IconName::ChevronsDownUp))
+                            .label(if compacting {
+                                "Compacting…"
+                            } else {
+                                "Compact now"
                             })
+                            .loading(compacting)
+                            .when(!compacting && ready, |button| button.cursor_pointer())
+                            .disabled(compacting || !ready)
+                            .on_click(move |_, _, cx| {
+                                let _ = compact.update(cx, |this, cx| this.compact(None, cx));
+                            }),
+                    )
+                    .into_any_element(),
+                h_flex()
+                    .id("context-auto-compaction")
+                    .debug_selector(|| "context-auto-compaction".into())
+                    .gap_2()
+                    .pt_1()
+                    .cursor_pointer()
+                    .text_size(rems(12. / 16.))
+                    .text_color(ui::fg())
+                    .when(auto.is_none() || !ready, |d| d.opacity(0.5))
+                    .child(checkbox_box(auto.unwrap_or(false)))
+                    .child("Compact automatically when nearly full")
+                    .when_some(auto.filter(|_| ready), |d, enabled| {
+                        d.on_click(move |_, _, cx| {
+                            let _ = toggle
+                                .update(cx, |this, cx| this.set_auto_compaction(!enabled, cx));
                         })
-                        .into_any_element(),
-                ]
-            },
-        )
+                    })
+                    .into_any_element(),
+            ]);
+            rows
+        })
     }
 
     /// 64px tiles of what waits to be sent: numbered image thumbnails, then
@@ -455,7 +426,6 @@ impl SessionView {
             })
             .bg(ui::surface())
             .shadow_lg()
-            .children(self.render_context_edge(rems(1.)))
     }
 
     /// The composer in the chosen input style, and for Prompt the status
@@ -549,7 +519,34 @@ impl SessionView {
         let usage = (!narrow)
             .then(|| self.render_usage_chip())
             .flatten()
-            .map(|chip| div().flex_shrink_0().child(chip));
+            .map(|chip| {
+                div()
+                    .debug_selector(|| "context-usage-chip".into())
+                    .flex_shrink_0()
+                    .child(chip)
+            });
+        let ring = self.usage.context_visible(ready).then(|| {
+            div()
+                .id("context-ring")
+                .debug_selector(|| "context-ring".into())
+                .relative()
+                .flex_shrink_0()
+                .child(self.render_context_control(cx))
+                .when(self.usage.compacting, |ring| {
+                    ring.child(
+                        self.live_slots
+                            .slot("context-compaction-orbit", || {
+                                ui::paused_orbit(ui::info(), rems(99.)).into_any_element()
+                            })
+                            .debug_selector(|| "context-compaction-orbit".into())
+                            .absolute()
+                            .top(px(-2.))
+                            .left(px(-2.))
+                            .right(px(-2.))
+                            .bottom(px(-2.)),
+                    )
+                })
+        });
         let action = div()
             .relative()
             .flex_shrink_0()
@@ -594,6 +591,7 @@ impl SessionView {
                                     .child(attach)
                                     .child(controls)
                                     .child(spacer())
+                                    .children(ring)
                                     .children(usage)
                                     .child(action),
                             ),
@@ -623,6 +621,7 @@ impl SessionView {
                         )
                         .child(attach)
                         .child(spacer())
+                        .children(ring)
                         .children(usage)
                         .child(action),
                 ),
@@ -664,6 +663,7 @@ impl SessionView {
                         .child(segment(div()).min_w_0().flex_shrink(1.).child(controls))
                         .child(segment(div()).px_1().child(attach))
                         .child(spacer())
+                        .children(ring)
                         .children(usage.map(|usage| {
                             segment(div()).px_1().border_r_0().border_l_1().child(usage)
                         }))
@@ -682,7 +682,6 @@ impl SessionView {
                     .border_1()
                     .border_color(edge(ui::border_strong()))
                     .bg(ui::well())
-                    .children(self.render_context_edge(rems(6. / 16.)))
                     .font_family(ui::mono())
                     // On the text's first line: the text area's own top
                     // padding, then a line as tall as its lines.
@@ -722,7 +721,6 @@ impl SessionView {
                         .border_1()
                         .border_color(edge(ui::border()))
                         .bg(ui::surface())
-                        .children(self.render_context_edge(rems(22. / 16.)))
                         // Attach and send sit centered on the last line of
                         // text: each in a box as tall as one line with the
                         // text area's padding.
@@ -737,7 +735,14 @@ impl SessionView {
                         )
                         .child(on_text_line(action)),
                 )
-                .child(row().px_2().child(controls).child(spacer()).children(usage)),
+                .child(
+                    row()
+                        .px_2()
+                        .child(controls)
+                        .child(spacer())
+                        .children(ring)
+                        .children(usage),
+                ),
             // Soft (after Devin's): a rounded box, the text on top and a
             // row of quiet round controls under it, the spend, the model
             // and a filled send at its end.
@@ -754,7 +759,6 @@ impl SessionView {
                     .border_1()
                     .border_color(edge(ui::border()))
                     .bg(ui::surface())
-                    .children(self.render_context_edge(rems(20. / 16.)))
                     .children(attachments.map(|a| div().px_2p5().pt_2().child(a)))
                     .child(div().min_h(rems(56. / 16.)).child(text))
                     .child(
@@ -762,6 +766,7 @@ impl SessionView {
                             .px_0p5()
                             .child(attach)
                             .child(spacer())
+                            .children(ring)
                             .children(usage)
                             .child(controls)
                             .child(action),

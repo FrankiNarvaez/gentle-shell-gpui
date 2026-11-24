@@ -2,10 +2,10 @@
 //! the session's status chips (jobs, widgets, usage, helpers, rate limits).
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -186,13 +186,6 @@ impl SessionView {
                     .map(|l| l.text.clone()),
             )
             .collect();
-        // The context: the line over the composer tells it; the chip (to
-        // compact, or follow compaction) joins it once the window runs full.
-        let context_full = self.usage.compacting
-            || self
-                .usage
-                .context_percent
-                .is_some_and(|p| p >= crate::features::alerts::context_threshold(cx));
         let right = h_flex()
             .flex_shrink_0()
             // Each control brings its own 4px inset (an xsmall button's box),
@@ -263,16 +256,10 @@ impl SessionView {
                         )
                     }),
             )
-            // The window's size rides the context line over the composer.
-            .when(context_full, |this| {
-                this.child(self.render_context_chip(cx))
-            })
             // The review switch sits with the permission chip: both are this
             // workspace's rules for the agent (Gentle Shell `main`).
             .when(!collapse, |this| this.children(self.render_review_chip(cx)))
-            .child(self.render_mode_picker(cx))
-            // The window's size closes the row, over the composer's corner.
-            .children(self.render_context_caption());
+            .child(self.render_mode_picker(cx));
 
         h_flex()
             .w_full()
@@ -705,6 +692,14 @@ pub(super) struct ChipPopoverOptions {
     action: Option<ChipHeaderAction>,
     footer_action: Option<ChipFooterAction>,
     mono: bool,
+    ring: Option<(
+        f32,
+        ButtonCustomVariant,
+        Entity<SessionView>,
+        bool,
+        bool,
+        bool,
+    )>,
 }
 
 impl ChipPopoverOptions {
@@ -724,6 +719,7 @@ impl ChipPopoverOptions {
             action: None,
             footer_action: None,
             mono: false,
+            ring: None,
         }
     }
 
@@ -742,6 +738,26 @@ impl ChipPopoverOptions {
     /// A right-side control instead of the count (see [`ChipHeaderAction`]).
     pub(super) fn action(mut self, action: ChipHeaderAction) -> Self {
         self.action = Some(action);
+        self
+    }
+
+    pub(super) fn ring(
+        mut self,
+        percent: f32,
+        session: Entity<SessionView>,
+        open: bool,
+        hovered: bool,
+        compacting: bool,
+        cx: &App,
+    ) -> Self {
+        self.ring = Some((
+            percent,
+            ButtonCustomVariant::new(cx),
+            session,
+            open,
+            hovered,
+            compacting,
+        ));
         self
     }
 
@@ -775,19 +791,70 @@ pub(super) fn chip_popover(
         action,
         footer_action,
         mono,
+        ring,
     } = options;
-    let trigger = Button::new(SharedString::from(format!("{id}-chip")))
-        .ghost()
-        .xsmall()
-        .text_color(color)
-        .when(mono, |b| b.font_family(ui::mono()))
-        .icon(Icon::new(icon))
-        .label(label);
+    let ring_session = ring
+        .as_ref()
+        .map(|(_, _, session, open, _, compacting)| (session.downgrade(), *open && !compacting));
+    let trigger = if let Some((percent, style, session, open, hovered, compacting)) = ring {
+        let hover_session = session.downgrade();
+        Button::new("context-ring-trigger")
+            .custom(style)
+            .xsmall()
+            .size(rems(25. / 16.))
+            .p_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .disabled(compacting)
+            .when(!compacting, |button| button.cursor_pointer())
+            .on_hover(move |hovered, _, cx| {
+                let _ = hover_session.update(cx, |session, cx| {
+                    let hovered = *hovered && !session.usage.compacting;
+                    if session.usage.context_ring_hovered != hovered {
+                        session.usage.context_ring_hovered = hovered;
+                        cx.notify();
+                    }
+                });
+            })
+            .child(
+                div()
+                    .id("context-ring")
+                    .when(!open && !compacting, |d| {
+                        d.tooltip(move |window, cx| {
+                            let session = session.clone();
+                            let overview = cx.new(|cx| {
+                                cx.observe(&session, |_, _, cx| cx.notify()).detach();
+                                ContextOverview { session }
+                            });
+                            Tooltip::element(move |_, _| overview.clone()).build(window, cx)
+                        })
+                    })
+                    .child(context_ring(percent, color, hovered && !compacting)),
+            )
+    } else {
+        Button::new(SharedString::from(format!("{id}-chip")))
+            .ghost()
+            .xsmall()
+            .text_color(color)
+            .when(mono, |b| b.font_family(ui::mono()))
+            .icon(Icon::new(icon))
+            .label(label)
+    };
     Popover::new(SharedString::from(format!("{id}-popover")))
         .anchor(Anchor::BottomRight)
         .trigger(trigger)
         .w(rems(360. / 16.))
         .appearance(false)
+        .when_some(ring_session, |popover, (session, open)| {
+            popover.open(open).on_open_change(move |open, _, cx| {
+                let _ = session.update(cx, |session, cx| {
+                    session.usage.context_details_open = *open && !session.usage.compacting;
+                    cx.notify();
+                });
+            })
+        })
         .content(move |_, window, cx| {
             ui::island(cx)
                 .w_full()
@@ -799,7 +866,13 @@ pub(super) fn chip_popover(
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(Icon::new(icon).small().text_color(color))
+                                .child(Icon::new(icon).small().text_color(
+                                    if id == "context-ring" {
+                                        ui::muted()
+                                    } else {
+                                        color
+                                    },
+                                ))
                                 .child(
                                     div()
                                         .text_sm()
@@ -811,6 +884,10 @@ pub(super) fn chip_popover(
                                 .when(!count.is_empty(), |d| {
                                     d.child(
                                         div()
+                                            .debug_selector({
+                                                let id = id.clone();
+                                                move || format!("{id}-header-count")
+                                            })
                                             .text_size(ui::code_rems(12.))
                                             .font_family(ui::mono())
                                             .text_color(ui::muted())
@@ -833,6 +910,144 @@ pub(super) fn chip_popover(
                 ))
                 .into_any_element()
         })
+}
+
+struct ContextOverview {
+    session: Entity<SessionView>,
+}
+
+impl Render for ContextOverview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let usage = &self.session.read(cx).usage;
+        let percent = usage.context_percent.map(|p| p.clamp(0., 100.));
+        let tone = match percent {
+            Some(p) if p >= 90. => ui::danger(),
+            Some(p) if p >= 70. => ui::warning(),
+            _ => ui::success(),
+        };
+        let prefix = if usage.context_estimated { "~" } else { "" };
+        let percent_label = percent.map_or_else(|| "–".to_string(), |p| format!("{prefix}{p:.0}%"));
+        let usage_label = usage.context_tokens.map_or_else(
+            || percent_label.clone(),
+            |tokens| format!("{prefix}{} ({percent_label})", format_tokens(tokens)),
+        );
+        let window_label = self
+            .session
+            .read(cx)
+            .context_window()
+            .map_or_else(|| "–".to_string(), format_tokens);
+        let percent_selector = format!("context-ring-overview-{usage_label}");
+        let window_selector = format!("context-ring-overview-window-{window_label}");
+        v_flex()
+            .w(rems(220. / 16.))
+            .py_2()
+            .gap_2()
+            .child(
+                h_flex()
+                    .gap_1p5()
+                    .text_color(ui::muted())
+                    .child(Icon::new(IconName::Gauge).small())
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(ui::fg())
+                            .child("Context"),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .justify_between()
+                    .text_color(ui::muted())
+                    .child(
+                        div()
+                            .debug_selector(move || percent_selector.clone())
+                            .child(usage_label),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(move || window_selector.clone())
+                            .child(window_label),
+                    ),
+            )
+            .child(
+                div()
+                    .w_full()
+                    .h(px(5.))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .bg(ui::border_strong())
+                    .child(
+                        div()
+                            .h_full()
+                            .w(relative(percent.unwrap_or(0.) as f32 / 100.))
+                            .rounded_full()
+                            .bg(tone),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "context-ring-overview-hint".into())
+                    .text_size(rems(11. / 16.))
+                    .text_color(ui::faint())
+                    .child("Click ring for details"),
+            )
+    }
+}
+
+fn context_ring(percent: f32, color: Hsla, hovered: bool) -> impl IntoElement {
+    let fraction = if percent.is_finite() {
+        percent.clamp(0., 100.) / 100.
+    } else {
+        0.
+    };
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            let center = bounds.center();
+            let radius = bounds.size.width.min(bounds.size.height) * (17. / 25.) / 2. - px(1.5);
+            if hovered {
+                window.paint_quad(
+                    fill(bounds, ui::surface_hover().opacity(0.6))
+                        .corner_radii(bounds.size.width.min(bounds.size.height) / 2.),
+                );
+            }
+            let outer_radius = radius + px(1.);
+            let track_bounds = Bounds::new(
+                point(center.x - outer_radius, center.y - outer_radius),
+                size(outer_radius * 2., outer_radius * 2.),
+            );
+            window.paint_quad(
+                outline(track_bounds, ui::border_strong(), BorderStyle::Solid)
+                    .border_widths(px(2.))
+                    .corner_radii(outer_radius),
+            );
+            let draw = |window: &mut Window, fraction: f32, color: Hsla| {
+                if fraction <= 0. {
+                    return;
+                }
+                let segments = (64. * fraction).ceil() as usize;
+                let mut path = PathBuilder::stroke(px(2.));
+                for i in 0..=segments {
+                    let angle = -std::f32::consts::FRAC_PI_2
+                        + std::f32::consts::TAU * fraction * i as f32 / segments as f32;
+                    let point = point(
+                        center.x + radius * angle.cos(),
+                        center.y + radius * angle.sin(),
+                    );
+                    if i == 0 {
+                        path.move_to(point);
+                    } else {
+                        path.line_to(point);
+                    }
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, color);
+                }
+            };
+            draw(window, fraction, color);
+        },
+    )
+    .size(rems(25. / 16.))
 }
 
 /// `Claude rate limit warning: 51% used (seven_day)` → (51, `seven_day`).

@@ -7,7 +7,6 @@
 
 use serde_json::Value;
 
-pub mod context;
 pub mod stats;
 pub mod subscription;
 pub mod time;

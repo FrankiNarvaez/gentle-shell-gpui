@@ -39,6 +39,8 @@ fn tab(cx: &mut TestAppContext) -> (Entity<SessionView>, &mut VisualTestContext)
     cx.add_window_view(|window, cx| {
         let mut view = SessionView::new(cwd, None, window, cx, false);
         view.backend.started = true;
+        view.usage.context_test_ready = true;
+        view.usage.context_stats_received = true;
         view
     })
 }
@@ -287,6 +289,933 @@ impl gpui_kit::Render for Selectable {
 
 /// A message you sent can be selected with the mouse, like an answer, and
 /// what is selected is its text.
+#[gpui::test]
+fn context_feed_updates_exact_usage_and_clears_it(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"],
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 61.0, "tokens": 122000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(61.0), Some(122000), Some(200000))
+        );
+
+        let event = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections},
+            }))
+        };
+        view.desktop.ui(&event(2, json!({})));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(61.0), Some(122000), Some(200000))
+        );
+
+        view.desktop.ui(&event(
+            3,
+            json!({"context": {"percent": 25.0, "tokens": null, "window": 100000}}),
+        ));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(25.0), None, Some(100000))
+        );
+
+        view.desktop.ui(&event(4, json!({"context": null})));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (None, None, None)
+        );
+    });
+}
+
+#[gpui::test]
+fn context_ring_is_hidden_during_startup_even_with_context_data(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_test_ready = false;
+        view.usage.context_stats_received = false;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(61.0);
+        view.usage.context_tokens = Some(122000);
+        view.usage.context_stats_received = true;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        view.usage.context_test_ready = true;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        assert_eq!(view.usage.context_percent, None);
+        assert_eq!(view.usage.context_tokens, None);
+        // A successful empty-session stats response has no percentage.
+        view.usage.context_stats_received = true;
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+}
+
+#[gpui::test]
+fn post_compaction_estimate_is_shown_approximately(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, _| {
+        view.usage.context_window = Some(200000);
+        view.usage.context_tokens = Some(120000);
+        view.usage.context_percent = Some(60.0);
+    });
+    click(cx, "context-ring");
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+    });
+    assert!(drawn(cx, "context-ring-used-tokens-~40k"));
+    assert!(drawn(cx, "context-ring-usage-~20%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-40k"));
+    click(cx, "context-ring");
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-~40k (~20%)"));
+}
+
+#[gpui::test]
+fn compaction_without_estimate_restores_interaction_without_inventing_usage(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({"type": "compaction_start"}))],
+            window,
+            cx,
+        );
+    });
+    assert!(!drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-compaction-orbit"));
+    click(cx, "context-ring");
+    assert!(!drawn(cx, "context-compact-control"));
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {}
+            }))],
+            window,
+            cx,
+        );
+    });
+    assert!(!drawn(cx, "context-compaction-orbit"));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.usage.context_tokens, None);
+        assert_eq!(view.usage.context_percent, None);
+        assert_eq!(view.usage.context_window, Some(200000));
+        assert!(!view.usage.context_estimated);
+    });
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(
+        gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+        None,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-hint"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-0"));
+}
+
+#[gpui::test]
+fn post_compaction_estimate_handles_missing_failure_and_stale_stats(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.usage.context_window = None;
+        let old = view.usage.context_revision;
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert_eq!(view.usage.context_percent, None);
+        view.usage.context_window = Some(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_percent, None);
+        view.apply_stats_at(old, Ok(json!({"contextUsage": {"percent": 80.0}})), cx);
+        assert_eq!(view.usage.context_percent, None);
+        view.apply_stats_at(
+            view.usage.context_revision,
+            Ok(json!({"contextUsage": {"percent": null}})),
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        for event in [
+            json!({"errorMessage": "failed", "result": {"estimatedTokensAfter": 1}}),
+            json!({"aborted": true, "result": {"estimatedTokensAfter": 2}}),
+            json!({"cancelled": true, "result": {"estimatedTokensAfter": 3}}),
+            json!({"success": false, "result": {"estimatedTokensAfter": 4}}),
+            json!({"result": {"estimatedTokensAfter": null}}),
+        ] {
+            let mut event = event;
+            event["type"] = json!("compaction_end");
+            view.handle_batch(vec![pi_rpc::Incoming::Event(event)], window, cx);
+            assert_eq!(view.usage.context_tokens, Some(40000));
+        }
+        view.apply_stats_at(
+            view.usage.context_revision,
+            Ok(json!({"contextUsage": {"percent": 30.0}})),
+            cx,
+        );
+        assert_eq!(view.usage.context_percent, Some(30.0));
+        assert_eq!(view.usage.context_tokens, None);
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_survives_empty_context(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 163200, "window": 272000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 62800}
+            }))],
+            window,
+            cx,
+        );
+        for (seq, context) in [
+            (
+                2,
+                json!({"percent": null, "tokens": null, "window": 272000}),
+            ),
+            (3, json!({"window": 272000})),
+        ] {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Ui(widget(json!({
+                    "schema": SCHEMA, "kind": "event", "seq": seq,
+                    "event": "session_snapshot", "data": {"sections": {"context": context}}
+                })))],
+                window,
+                cx,
+            );
+        }
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-used-tokens-~62.8k"));
+    assert!(drawn(cx, "context-ring-usage-~23%"));
+    click(cx, "context-ring");
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-~62.8k (~23%)"));
+    view.update_in(cx, |view, window, cx| {
+        for (seq, context, expected_percent) in [
+            (4, json!({"window": 314000}), Some(20.0)),
+            (5, json!({"window": 0}), None),
+            (6, json!({"window": null}), None),
+        ] {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Ui(widget(json!({
+                    "schema": SCHEMA, "kind": "event", "seq": seq,
+                    "event": "session_snapshot", "data": {"sections": {"context": context}}
+                })))],
+                window,
+                cx,
+            );
+            assert_eq!(view.usage.context_tokens, Some(62800));
+            assert_eq!(view.usage.context_percent, expected_percent);
+            assert!(view.usage.context_estimated);
+        }
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": 7,
+                "event": "session_snapshot", "data": {"sections": {"context": {
+                    "tokens": 50000, "percent": 25.0, "window": 200000
+                }}}
+            })))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_accepts_current_stats_after_empty_feed(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        let delta = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections}
+            }))
+        };
+        for (seq, sections) in [
+            (2, json!({})),
+            (3, json!({"context": null})),
+            (
+                4,
+                json!({"context": {"tokens": null, "percent": null, "window": 200000}}),
+            ),
+            (5, json!({"context": {"window": 272000}})),
+        ] {
+            let stale = view.usage.context_revision;
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Event(json!({
+                    "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+                }))],
+                window,
+                cx,
+            );
+            let current = view.usage.context_revision;
+            view.handle_batch(vec![pi_rpc::Incoming::Ui(delta(seq, sections))], window, cx);
+            view.apply_stats_at(stale, Ok(json!({"contextUsage": {"percent": 80.0}})), cx);
+            assert!(view.usage.context_estimated);
+            view.apply_stats_at(current, Ok(json!({"contextUsage": {"percent": 30.0}})), cx);
+            assert_eq!(view.usage.context_percent, Some(30.0), "sequence {seq}");
+            assert_eq!(view.usage.context_tokens, None);
+            assert!(!view.usage.context_estimated);
+        }
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        let current = view.usage.context_revision;
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(
+                6,
+                json!({"context": {
+                    "tokens": 50000, "percent": 25.0, "window": 200000
+                }}),
+            ))],
+            window,
+            cx,
+        );
+        view.apply_stats_at(current, Ok(json!({"contextUsage": {"percent": 30.0}})), cx);
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_survives_unrelated_feed_delta(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        let delta = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections}
+            }))
+        };
+        view.handle_batch(vec![pi_rpc::Incoming::Ui(delta(2, json!({})))], window, cx);
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert!(view.usage.context_estimated);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(
+                3,
+                json!({
+                    "context": {"percent": 25.0, "tokens": 50000, "window": 200000}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(4, json!({"context": null})))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, None);
+        assert_eq!(view.usage.context_percent, None);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_rejects_pre_compaction_snapshot(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.usage.context_window = Some(200000);
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(response(
+                snapshot.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                        "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                    }}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert_eq!(view.usage.context_percent, Some(20.0));
+        assert!(view.usage.context_estimated);
+        let fresh = view.desktop.resync().remove(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(response(
+                fresh.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "sequence": 2, "state": {"session": {
+                        "context": {"percent": 25.0, "tokens": 50000, "window": 200000}
+                    }}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_preserves_normal_stats(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.apply_stats(
+            Ok(json!({"cost": 0.5, "contextUsage": {"percent": 61.0}})),
+            cx,
+        );
+        assert_eq!(view.usage.cost, 0.5);
+        assert_eq!(view.usage.context_percent, Some(61.0));
+        assert!(!view.usage.context_estimated);
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-usage-61%"));
+}
+
+#[gpui::test]
+fn context_ring_failed_stats_then_refresh(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(Err(anyhow::anyhow!("stats failed")), cx);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(
+            Ok(json!({"cost": 0.5, "contextUsage": {"percent": 61.0}})),
+            cx,
+        );
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-usage-61%"));
+    view.update(cx, |view, _| assert_eq!(view.usage.cost, 0.5));
+}
+
+#[gpui::test]
+fn context_ring_empty_stats_response(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(Ok(json!({})), cx);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+}
+
+#[gpui::test]
+fn context_ring_shows_model_window_without_context_feed(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.models.current = super::state::ModelInfo::parse(&json!({
+            "id": "legacy-model", "contextWindow": 200000
+        }));
+        view.apply_stats(Ok(json!({"contextUsage": {"percent": 25.0}})), cx);
+        cx.notify();
+    });
+    let at = cx
+        .debug_bounds("context-ring")
+        .expect("ring drawn")
+        .center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-25%"));
+    assert!(drawn(cx, "context-ring-overview-window-200k"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-context-window-200k"));
+    assert!(drawn(cx, "context-ring-usage-25%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-50k"));
+}
+
+#[gpui::test]
+fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(5.0);
+        view.usage.context_tokens = Some(48100);
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    view.update(cx, |view, _| assert!(view.usage.context_ring_hovered));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-48.1k (5%)"));
+    assert!(drawn(cx, "context-ring-overview-window-200k"));
+    view.update(cx, |view, cx| {
+        view.usage.context_tokens = None;
+        view.usage.context_percent = Some(25.0);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-overview-25%"));
+    assert!(!drawn(cx, "context-ring-overview-48.1k (5%)"));
+    cx.simulate_mouse_move(
+        gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+        None,
+        Modifiers::none(),
+    );
+    view.update(cx, |view, _| assert!(!view.usage.context_ring_hovered));
+}
+
+#[gpui::test]
+fn context_ring_hover_returns_after_toggle_and_outside_click(cx: &mut TestAppContext) {
+    let (_, cx) = tab(cx);
+    assert!(drawn(cx, "context-ring"));
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    let outside = gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.));
+    for outside_click in [false, true] {
+        cx.simulate_mouse_move(outside, None, Modifiers::none());
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(drawn(cx, "context-ring-overview-hint"));
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
+        cx.simulate_mouse_move(outside, None, Modifiers::none());
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
+        if outside_click {
+            cx.simulate_click(outside, Modifiers::none());
+        } else {
+            click(cx, "context-ring");
+        }
+        assert!(!drawn(cx, "context-compact-control"));
+        cx.simulate_mouse_move(outside, None, Modifiers::none());
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(drawn(cx, "context-ring-overview-hint"));
+    }
+}
+
+#[gpui::test]
+fn context_ring_hover_returns_after_escape(cx: &mut TestAppContext) {
+    let (_, cx) = tab(cx);
+    assert!(drawn(cx, "context-ring"));
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    let outside = gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    cx.simulate_keystrokes("escape");
+    assert!(!drawn(cx, "context-compact-control"));
+    cx.simulate_mouse_move(outside, None, Modifiers::none());
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-hint"));
+}
+
+#[gpui::test]
+fn context_ring_opens_existing_compaction_controls(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(35.0);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(drawn(cx, "context-compact-control"));
+}
+
+#[gpui::test]
+fn context_ring_details_update_live_and_hide_missing_values(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(61.0);
+        view.usage.context_tokens = Some(122000);
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-used-tokens-122k"));
+    assert!(drawn(cx, "context-ring-context-window-200k"));
+    assert!(drawn(cx, "context-ring-usage-61%"));
+    assert!(!drawn(cx, "context-ring-header-count"));
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(25.0);
+        view.usage.context_tokens = None;
+        view.usage.context_window = Some(100000);
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring-used-tokens-122k"));
+    assert!(!drawn(cx, "context-ring-context-window-200k"));
+    assert!(!drawn(cx, "context-ring-usage-61%"));
+    assert!(drawn(cx, "context-ring-context-window-100k"));
+    assert!(drawn(cx, "context-ring-usage-25%"));
+
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = None;
+        view.usage.context_tokens = Some(48100);
+        view.usage.context_window = None;
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-used-tokens-48.1k"));
+    assert!(!drawn(cx, "context-ring-context-window-100k"));
+    assert!(!drawn(cx, "context-ring-usage-25%"));
+    view.update(cx, |view, cx| {
+        view.usage.context_tokens = None;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring-used-tokens-48.1k"));
+    assert!(!drawn(cx, "context-ring-header-count"));
+}
+
+#[gpui::test]
+fn context_ring_advice_updates_at_boundaries_and_keeps_controls(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(69.0);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    let low = "Compacting summarizes the conversation to free context.";
+    let medium = "Consider compacting or starting a new session.";
+    let high = "Context nearly full. Compact or start a new session.";
+    for (percent, expected) in [(69.0, low), (70.0, medium), (89.0, medium), (90.0, high)] {
+        view.update(cx, |view, cx| {
+            view.usage.context_percent = Some(percent);
+            cx.notify();
+        });
+        for text in [low, medium, high] {
+            assert_eq!(drawn(cx, text), text == expected, "at {percent}%: {text}");
+        }
+        assert!(drawn(cx, "Add what to keep with /compact <instructions>."));
+        assert!(drawn(cx, "context-ring-advice-divider"));
+        assert!(drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-auto-compaction"));
+    }
+}
+
+#[gpui::test]
+fn context_ring_replaces_legacy_context_meter(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(95.0);
+        cx.notify();
+    });
+    assert!(!drawn(cx, "legacy-context-chip"));
+    assert!(!drawn(cx, "context-percent"));
+    assert!(!drawn(cx, "context-window"));
+    for end in [
+        json!({"type": "compaction_end"}),
+        json!({"type": "compaction_end", "errorMessage": "failed"}),
+    ] {
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        view.update_in(cx, |view, window, cx| {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Event(json!({"type": "compaction_start"}))],
+                window,
+                cx,
+            );
+        });
+        assert!(!drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-compaction-orbit"));
+        click(cx, "context-ring");
+        cx.simulate_keystrokes("enter");
+        assert!(!drawn(cx, "context-compact-control"));
+        let at = cx.debug_bounds("context-ring").unwrap().center();
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
+        view.update_in(cx, |view, window, cx| {
+            view.handle_batch(vec![pi_rpc::Incoming::Event(end)], window, cx);
+        });
+        assert!(!drawn(cx, "context-compaction-orbit"));
+        cx.simulate_mouse_move(
+            gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+            None,
+            Modifiers::none(),
+        );
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(drawn(cx, "context-ring-overview-hint"));
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-auto-compaction"));
+        click(cx, "context-ring");
+    }
+}
+
+struct SizedSession {
+    session: Entity<SessionView>,
+    width: f32,
+}
+
+impl gpui_kit::Render for SizedSession {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _};
+        gpui_kit::div()
+            .w(gpui_kit::px(self.width))
+            .h_full()
+            .child(self.session.clone())
+    }
+}
+
+#[gpui::test]
+fn context_ring_fits_and_opens_in_every_style_and_narrow_pane(cx: &mut TestAppContext) {
+    use gentle_core::input_style::InputStyle;
+    use gpui_kit::AppContext as _;
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            view.usage.context_test_ready = true;
+            view.usage.context_stats_received = true;
+            view.usage.cost = 0.13;
+            view
+        });
+        SizedSession {
+            session,
+            width: 700.,
+        }
+    });
+    for style in InputStyle::ALL {
+        for width in [700., 320.] {
+            cx.update(|_, cx| super::input_style::set_test_style(style, cx));
+            root.update(cx, |root, cx| {
+                root.width = width;
+                root.session.update(cx, |view, cx| {
+                    view.pane_width.set(width);
+                    cx.notify();
+                });
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let ring = cx.debug_bounds("context-ring").expect("ring drawn");
+            assert!(
+                f32::from(ring.left()) >= 0. && f32::from(ring.right()) <= width,
+                "{style:?} at {width}: {ring:?}"
+            );
+            if width == 700. {
+                let usage = cx.debug_bounds("context-usage-chip").expect("usage drawn");
+                assert!(ring.right() <= usage.left(), "{style:?}: ring beside usage");
+            }
+            click(cx, "context-ring");
+            assert!(drawn(cx, "context-auto-compaction"), "{style:?} at {width}");
+            assert!(drawn(cx, "context-compact-control"), "{style:?} at {width}");
+            click(cx, "context-ring");
+            assert!(!drawn(cx, "context-auto-compaction"));
+        }
+    }
+}
+
 #[gpui::test]
 fn a_sent_prompt_can_be_selected(cx: &mut TestAppContext) {
     use gpui_kit::{AppContext as _, MouseButton, base::TextSelection};
