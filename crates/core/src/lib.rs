@@ -12,6 +12,7 @@ pub mod contrast;
 pub mod devices;
 pub mod diagnostics;
 pub mod docs;
+pub mod double_interrupt;
 pub mod engram;
 pub mod explorer;
 pub mod fonts;
