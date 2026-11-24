@@ -280,10 +280,10 @@ impl UpgradeTarget {
         }
     }
 
-    fn into_version(self) -> String {
+    fn version(&self) -> String {
         match self {
-            Self::Default(offer) => offer.latest,
-            Self::Main(commit) => commit,
+            Self::Default(offer) => offer.latest.clone(),
+            Self::Main(commit) => commit.clone(),
         }
     }
 }
@@ -381,6 +381,7 @@ impl SettingsView {
             return;
         }
         let channel = target.channel();
+        let target_version = target.version();
         self.shell_update.upgrading = Some(target);
         self.shell_update.result = None;
         self.start_clock(cx);
@@ -391,12 +392,8 @@ impl SettingsView {
                 .spawn(async move { super::services::updates::upgrade_shell(&cwd, channel.args()) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                let target = this
-                    .shell_update
-                    .upgrading
-                    .take()
-                    .expect("the running upgrade owns the shared job slot")
-                    .into_version();
+                let target = target_version;
+                this.shell_update.upgrading = None;
                 this.stop_clock();
                 forget_claude_auth();
                 let outcome = upgrade_outcome(
