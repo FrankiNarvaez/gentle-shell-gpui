@@ -1,7 +1,9 @@
 //! OS integration: the single-instance guard, the agents' command shims,
 //! the user's `gsd` command, the Dock/window icons, the installed code
-//! editors, the power state and whether a terminal's shell is idle.
+//! editors and web browsers, the power state and whether a terminal's
+//! shell is idle.
 
+pub mod browsers;
 pub mod font_metadata;
 pub mod gsd;
 pub mod icons;
