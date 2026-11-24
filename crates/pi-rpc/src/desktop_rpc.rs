@@ -101,7 +101,9 @@ macro_rules! wire_enum {
     };
 }
 
+mod binding;
 mod changes;
+mod definitions;
 mod output;
 mod review;
 mod session_state;
@@ -109,7 +111,15 @@ mod sessions;
 mod stats;
 mod updates;
 
+pub use binding::{
+    ClearBindingStatus, ClearProfileBindingResult, ProfileBinding, ProfileBindingChanged,
+    ProfileBindingKind, ProfileBindingOrigin,
+};
 pub use changes::{ChangeDiff, ChangeRoot, ChangeStatus, ChangedFile, Changes};
+pub use definitions::{
+    AgentDefinition, AgentDefinitionProblems, AgentDefinitionScope, AgentDefinitions,
+    DefaultOrchestrator, OrchestratorStatus, SubagentDefaults,
+};
 pub use output::{JobOutput, SubagentThread, ThreadItem};
 pub use review::{
     ReviewConfirmation, ReviewEffective, ReviewMode, ReviewModeChanged, ReviewScope, ReviewScopes,
@@ -179,13 +189,16 @@ pub enum DesktopMethod {
     SetReviewMode,
     GetUsageStats,
     GetUpdateStatus,
+    ListAgentDefinitions,
+    GetProfileBinding,
+    ClearProfileBinding,
 }
 
 impl DesktopMethod {
     /// Every method this client knows, in the order `capabilities` lists
-    /// them on Gentle Shell `main`. Which ones a peer offers is only what its
+    /// them on Gentle Shell 5.0.0. Which ones a peer offers is only what its
     /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 27] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -210,6 +223,9 @@ impl DesktopMethod {
         Self::SetReviewMode,
         Self::GetUsageStats,
         Self::GetUpdateStatus,
+        Self::ListAgentDefinitions,
+        Self::GetProfileBinding,
+        Self::ClearProfileBinding,
     ];
 
     /// The wire name of the method.
@@ -239,6 +255,9 @@ impl DesktopMethod {
             Self::SetReviewMode => "set_review_mode",
             Self::GetUsageStats => "get_usage_stats",
             Self::GetUpdateStatus => "get_update_status",
+            Self::ListAgentDefinitions => "list_agent_definitions",
+            Self::GetProfileBinding => "get_profile_binding",
+            Self::ClearProfileBinding => "clear_profile_binding",
         }
     }
 
@@ -289,6 +308,9 @@ impl DesktopMethod {
             "set_review_mode" => Ok(Self::SetReviewMode),
             "get_usage_stats" => Ok(Self::GetUsageStats),
             "get_update_status" => Ok(Self::GetUpdateStatus),
+            "list_agent_definitions" => Ok(Self::ListAgentDefinitions),
+            "get_profile_binding" => Ok(Self::GetProfileBinding),
+            "clear_profile_binding" => Ok(Self::ClearProfileBinding),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
         }
     }
@@ -962,7 +984,8 @@ wire_enum! {
     /// are also [`ConfigErrorCode`] and [`ProfileApplyErrorCode`].
     /// `changes_unavailable`, `session_unavailable` and `updates_unavailable`
     /// are answered by Gentle Shell `main` but missing from its specification's
-    /// list of codes; they are kept here because the server sends them.
+    /// list of codes; they are kept here because the server sends them, as is
+    /// `agent_definitions_unavailable` (5.0.0).
     DesktopErrorCode, "error.code" {
         InvalidRequest => "invalid_request",
         UnknownStore => "unknown_store",
@@ -989,6 +1012,7 @@ wire_enum! {
         ReviewModeBusy => "review_mode_busy",
         StatsUnavailable => "stats_unavailable",
         UpdatesUnavailable => "updates_unavailable",
+        AgentDefinitionsUnavailable => "agent_definitions_unavailable",
         NotFound => "not_found",
         InternalError => "internal_error",
     }
@@ -1148,6 +1172,21 @@ impl DesktopResponse {
         UpdateStatus::from_data(self.data()?)
     }
 
+    /// The response to `list_agent_definitions`.
+    pub fn agent_definitions(&self) -> Result<AgentDefinitions, DesktopRpcError> {
+        AgentDefinitions::from_data(self.data()?)
+    }
+
+    /// The response to `get_profile_binding`.
+    pub fn profile_binding(&self) -> Result<ProfileBinding, DesktopRpcError> {
+        ProfileBinding::from_data(self.data()?)
+    }
+
+    /// The response to `clear_profile_binding`.
+    pub fn clear_profile_binding(&self) -> Result<ClearProfileBindingResult, DesktopRpcError> {
+        ClearProfileBindingResult::from_data(self.data()?)
+    }
+
     fn data(&self) -> Result<&Value, DesktopRpcError> {
         self.result
             .as_ref()
@@ -1227,6 +1266,14 @@ impl DesktopEvent {
         expect_event(self, "review_mode_changed")?;
         ReviewModeChanged::from_data(&self.data)
     }
+
+    /// Decode the data of a `profile_binding_changed` event, verifying the
+    /// exact event name before the shape, exactly like
+    /// [`Self::agents_update`].
+    pub fn profile_binding_changed(&self) -> Result<ProfileBindingChanged, DesktopRpcError> {
+        expect_event(self, "profile_binding_changed")?;
+        ProfileBindingChanged::from_data(&self.data)
+    }
 }
 
 /// A record decoded from the Desktop widget.
@@ -1267,7 +1314,9 @@ impl Capabilities {
     /// gate for every method newer than a peer (Gentle Shell 4.8.0 offers
     /// none of `get_job_output`, `get_subagent_thread`, `list_sessions`,
     /// `switch_session`, `get_changes`, `get_change_diff`, `get_review_mode`,
-    /// `set_review_mode`, `get_usage_stats` or `get_update_status`).
+    /// `set_review_mode`, `get_usage_stats` or `get_update_status`, and 4.9.0
+    /// none of `list_agent_definitions`, `get_profile_binding` or
+    /// `clear_profile_binding`).
     pub fn require(&self, method: DesktopMethod) -> Result<(), DesktopRpcError> {
         if self.supports(method) {
             Ok(())
