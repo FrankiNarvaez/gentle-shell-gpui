@@ -31,10 +31,10 @@ impl Render for Workspace {
             || window.has_active_sheet(cx)
             || cx.has_active_drag()
             || crate::features::browser::popovers_open(cx);
-        if self.composer_leader.is_some()
+        if self.leader.is_some()
             && (covered || !window.is_window_active() || !self.pane_mode_focus.is_focused(window))
         {
-            self.cancel_composer_leader(window, cx);
+            self.cancel_leader(window, cx);
         }
         if self.pane_mode && (covered || !window.is_window_active()) {
             self.pane_mode = false;
@@ -141,7 +141,7 @@ impl Render for Workspace {
             } else {
                 "GentleWorkspace"
             })
-            .when(self.composer_leader.is_some(), |this| {
+            .when(self.leader.is_some(), |this| {
                 this.track_focus(&self.pane_mode_focus)
             })
             .when(self.pane_mode, |this| {
@@ -220,7 +220,7 @@ impl Render for Workspace {
                                                 .bg(ui::border()),
                                         )
                                     })
-                                    .when(self.composer_leader.is_some(), |this| {
+                                    .when(self.leader.is_some(), |this| {
                                         this.track_focus(&self.pane_mode_focus)
                                     })
                                     .when(self.pane_mode, |d| {
@@ -426,7 +426,7 @@ impl Render for Workspace {
             .when(devices_floating, |root| root.child(self.devices.clone()))
             // Which keys come next: while a sequence is pending, or in pane mode.
             .children(
-                self.composer_leader
+                self.leader
                     .as_ref()
                     .and_then(|(_, selection)| selection.hint(cx))
                     .or_else(|| self.which_key.clone())

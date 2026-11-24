@@ -14,8 +14,8 @@ use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 #[derive(Default)]
 pub(crate) struct Trace {
-    built: RefCell<Vec<PathBuf>>,
-    roots: RefCell<Vec<PathBuf>>,
+    pub(crate) built: RefCell<Vec<PathBuf>>,
+    pub(crate) roots: RefCell<Vec<PathBuf>>,
 }
 
 struct ProbePane(Entity<InputState>);
@@ -202,7 +202,7 @@ pub(crate) fn fixture<'a>(
                         pane_mode: false,
                         pane_mode_focus: cx.focus_handle(),
                         which_key: None,
-                        composer_leader: None,
+                        leader: None,
                         tab_list_focus: cx.focus_handle(),
                         tab_list_highlight: None,
                         tab_list_return_focus: None,
@@ -236,6 +236,12 @@ pub(crate) fn active(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> (u
         let w = host.read(cx);
         (w.current, w.tab().unwrap().id)
     })
+}
+
+/// Whether the folder explorer (`⌘O`, and the folder picker of "Create
+/// workspace") is the open screen.
+pub(crate) fn explorer_open(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|_, cx| matches!(host.read(cx).overlay, Some((Overlay::Explorer(_), _))))
 }
 
 pub(crate) fn category(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> Option<Category> {
@@ -373,13 +379,10 @@ fn t8_verifier_palette_commands_and_folder_cancel(cx: &mut TestAppContext) {
     cx.simulate_keystrokes(palette_key);
     cx.simulate_input("Create workspace");
     cx.simulate_keystrokes("enter");
-    assert!(cx.did_prompt_for_paths());
-    cx.simulate_path_prompt_response(|o| {
-        assert!(!o.files && o.directories && !o.multiple);
-        assert_eq!(o.prompt.as_deref(), Some("Create workspace"));
-        None
-    });
-    cx.run_until_parked();
+    // The command picks the folder in the folder explorer now, not natively.
+    assert!(!cx.did_prompt_for_paths());
+    assert!(explorer_open(&host, cx));
+    cx.simulate_keystrokes("escape");
     assert_eq!(active(&host, cx), (0, 11));
     assert_eq!(cx.update(|_, cx| host.read(cx).spaces.len()), 2);
     assert_eq!(trace.roots.borrow().len(), 2);
@@ -423,4 +426,52 @@ fn t8_verifier_switch_workspace_command_clears_search(cx: &mut TestAppContext) {
         (active(&host, cx), cx.did_prompt_for_paths()),
         ((1, 22), false)
     );
+}
+
+#[gpui::test]
+fn t13_leader_waits_for_a_choice_from_any_focus(cx: &mut TestAppContext) {
+    let (host, cx, _root, _trace) = fixture(cx, "leader-any-focus", false);
+    // The interceptor `Workspace::new` installs on the window.
+    let _leader =
+        cx.update(|_, cx| super::composer_leader::watch_leader_keys(host.downgrade(), cx));
+    cx.simulate_input("unsent draft");
+    let pane_focus = cx.update(|window, cx| {
+        let w = host.read(cx);
+        let pane = &w.panes[&w.focused_pane().unwrap()];
+        assert!(pane.item.focus.is_focused(window));
+        pane.item.focus.clone()
+    });
+
+    // A lone leader pressed in the terminal stays pending: the guide is still
+    // shown after the window's own pending-input timeout would have fired.
+    cx.simulate_keystrokes("ctrl-space");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(3));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let w = host.read(cx);
+        let (_, selection) = w.leader.as_ref().expect("the guide is still shown");
+        assert!(selection.hint(cx).is_some());
+        assert!(!window.has_pending_keystrokes());
+    });
+
+    // Esc gives focus back, with the terminal where it was.
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, cx| {
+        let w = host.read(cx);
+        assert!(w.leader.is_none());
+        assert!(pane_focus.is_focused(window));
+        let pane = &w.panes[&w.focused_pane().unwrap()];
+        let view = pane.item.view.clone().downcast::<ProbePane>().unwrap();
+        assert_eq!(view.read(cx).0.read(cx).value().as_str(), "unsent draft");
+    });
+
+    // A key pressed later resolves in the context it was started from.
+    cx.simulate_keystrokes("ctrl-space");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(3));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("n");
+    assert_eq!(active(&host, cx), (0, 12));
+    assert!(cx.update(|_, cx| host.read(cx).leader.is_none()));
 }

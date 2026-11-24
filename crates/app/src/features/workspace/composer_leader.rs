@@ -1,3 +1,8 @@
+//! The leader guide. It started as the composer's own selection, because the
+//! draft lost focus to GPUI's timed pending input; now every focus opens it
+//! (a terminal pane, Files, Changes, the tab list, the canvas) and it owns the
+//! sequence itself, so a lone ⌃Space waits for a choice wherever it is pressed.
+
 use super::*;
 use crate::features::shortcuts::{keystroke_string, live_bindings};
 use gentle_core::{
@@ -5,8 +10,9 @@ use gentle_core::{
     shortcuts::{self, same_keys},
 };
 
-/// Owns the sequence independently of GPUI's timed pending input.
-pub(super) struct ComposerLeader {
+/// Holds the leader's keystrokes and the key context they were started in,
+/// independently of GPUI's timed pending input.
+pub(super) struct LeaderSelection {
     input: Vec<Keystroke>,
     context: Vec<KeyContext>,
 }
@@ -17,7 +23,15 @@ enum Choice {
     Dispatch(Box<dyn Action>),
 }
 
-impl ComposerLeader {
+/// The window's keystroke interceptor: a leader pressed with no overlay open
+/// and outside pane mode starts the guide, whatever has focus.
+pub(super) fn watch_leader_keys(weak: WeakEntity<Workspace>, cx: &mut App) -> Subscription {
+    cx.intercept_keystrokes(move |event, window, cx| {
+        let _ = weak.update(cx, |this, cx| this.leader_key(&event.keystroke, window, cx));
+    })
+}
+
+impl LeaderSelection {
     fn start(
         key: &Keystroke,
         leader: &str,
@@ -64,31 +78,37 @@ impl ComposerLeader {
 }
 
 impl Workspace {
-    pub(super) fn cancel_composer_leader(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some((origin, _)) = self.composer_leader.take() {
+    /// Ends the guide. Esc and a choice both call this: `origin` (where focus
+    /// was when the leader was pressed) takes it back, with no other change to
+    /// that view, or the active pane when nothing was focused.
+    pub(super) fn cancel_leader(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((origin, _)) = self.leader.take() {
             if self.pane_mode_focus.is_focused(window) {
-                origin.focus(window, cx);
+                match origin {
+                    Some(origin) => origin.focus(window, cx),
+                    None => self.focus_active(window, cx),
+                }
             }
             cx.notify();
         }
     }
 
-    pub(super) fn composer_leader_key(
+    pub(super) fn leader_key(
         &mut self,
         key: &Keystroke,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.pane_mode_focus.is_focused(window)
-            && let Some((_, selection)) = self.composer_leader.as_mut()
+            && let Some((_, selection)) = self.leader.as_mut()
         {
             let choice = selection.choose(key, &cx.key_bindings().borrow());
             match choice {
                 Choice::Keep => cx.notify(),
-                Choice::Cancel => self.cancel_composer_leader(window, cx),
+                Choice::Cancel => self.cancel_leader(window, cx),
                 Choice::Dispatch(action) => {
                     // Restore the original action scope before dispatch; an action may move focus elsewhere.
-                    self.cancel_composer_leader(window, cx);
+                    self.cancel_leader(window, cx);
                     window.dispatch_action(action, cx);
                 }
             }
@@ -98,7 +118,7 @@ impl Workspace {
         if self.pane_mode || self.overlay.is_some() || window.has_pending_keystrokes() {
             return;
         }
-        let Some(selection) = ComposerLeader::start(
+        let Some(selection) = LeaderSelection::start(
             key,
             &crate::app::leader(cx),
             window.context_stack(),
@@ -106,23 +126,16 @@ impl Workspace {
         ) else {
             return;
         };
-        if self
-            .sessions()
-            .iter()
-            .any(|session| session.read(cx).composer_has_focus(window, cx))
-            && let Some(origin) = window.focused(cx)
-        {
-            self.composer_leader = Some((origin, selection));
-            self.pane_mode_focus.focus(window, cx);
-            cx.notify();
-            cx.stop_propagation();
-        }
+        self.leader = Some((window.focused(cx), selection));
+        self.pane_mode_focus.focus(window, cx);
+        cx.notify();
+        cx.stop_propagation();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Choice, ComposerLeader, OpenPalette, OpenShortcuts};
+    use super::{Choice, LeaderSelection, OpenPalette, OpenShortcuts};
     use gpui_kit::{KeyBinding, Keymap, Keystroke, TestAppContext};
 
     #[gpui::test]
@@ -135,8 +148,8 @@ mod tests {
             None,
         )]);
         let prefix = Keystroke::parse("ctrl-a").unwrap();
-        assert!(ComposerLeader::start(&prefix, "ctrl-space", vec![], &map).is_none());
-        let mut selection = ComposerLeader::start(&prefix, "ctrl-a", vec![], &map).unwrap();
+        assert!(LeaderSelection::start(&prefix, "ctrl-space", vec![], &map).is_none());
+        let mut selection = LeaderSelection::start(&prefix, "ctrl-a", vec![], &map).unwrap();
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(3));
         assert!(matches!(
@@ -152,7 +165,7 @@ mod tests {
                 .as_any()
                 .is::<crate::features::workspace::FocusFiles>()
         );
-        let mut selection = ComposerLeader::start(&prefix, "ctrl-a", vec![], &map).unwrap();
+        let mut selection = LeaderSelection::start(&prefix, "ctrl-a", vec![], &map).unwrap();
         assert!(matches!(
             selection.choose(&Keystroke::parse("escape").unwrap(), &map),
             Choice::Cancel
@@ -174,7 +187,7 @@ mod tests {
             let leader = crate::app::leader(cx);
             let bindings = cx.key_bindings();
             let map = bindings.borrow();
-            let selection = ComposerLeader::start(&prefix, &leader, vec![], &map).unwrap();
+            let selection = LeaderSelection::start(&prefix, &leader, vec![], &map).unwrap();
             drop(map);
             drop(bindings);
             let composer_hint = selection.hint(cx).unwrap();

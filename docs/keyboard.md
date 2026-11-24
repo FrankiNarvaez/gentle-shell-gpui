@@ -10,7 +10,7 @@ Notation: ⌘ is Cmd on macOS and Ctrl elsewhere unless a column says otherwise.
 2. **Leader** (⌃Space, then one key): short, mnemonic, no modifiers to hold. The tmux/herdr style.
 3. **Pane mode** (⌃Space, `Space`): sticky, so you can move, resize and split with bare keys until Esc.
 
-While a sequence is pending (after ⌃Space, or the first `g` of `gg`), a which-key panel at the bottom of the window lists the keys that can come next and what they do. When you start the leader from the composer, focus leaves the draft and the guide waits without a timeout. Choose a command, or press Esc to return to the unchanged draft. In other contexts, the usual pending-input behavior still applies: the guide disappears when the sequence completes, when you press Esc or a key that continues nothing, or after about a second without a key. Pane mode shows its own keys in the same panel, and a PANE badge in the title bar.
+While a sequence is pending (after ⌃Space, or the first `g` of `gg`), a which-key panel at the bottom of the window lists the keys that can come next and what they do. The leader guide belongs to the window, not to the view that started it: press ⌃Space in a terminal pane, the composer, Files, Changes, the tab sidebar or the canvas and it waits without a timeout until you press one of its keys or Esc. Choosing dispatches the command as if it had been pressed where you were; Esc gives focus back to that view exactly as it was (the terminal keeps its output, the composer its draft), and so does a click elsewhere. Only the leader is held this way: `gg` and the other list sequences keep the usual pending-input behavior, ending after about a second without a key. Pane mode shows its own keys in the same panel, and a PANE badge in the title bar.
 
 ## Direct chords
 
@@ -32,7 +32,7 @@ While a sequence is pending (after ⌃Space, or the first `g` of `gg`), a which-
 | Focus Git changes | ⌘⇧G | Ctrl+Shift+G |
 | Toggle the Files sidebar | ⌘B | Ctrl+B |
 | Command palette | ⌘K | Ctrl+K |
-| Browse folders (folder explorer) | ⌘O | Ctrl+O |
+| Browse folders (folder explorer; also picks the folder for Create workspace) | ⌘O | Ctrl+O |
 | Workspaces | ⌃⌘K | Ctrl+Alt+K |
 | Sessions | ⌘⇧O | Ctrl+Shift+O |
 | Settings | ⌘, | Ctrl+, |
@@ -61,7 +61,7 @@ Esc closes the screen that is open; with none open, in an agent pane, it interru
 | `f` / `g` | Focus Files / focus Git changes |
 | `i` | Focus the composer |
 | `b` | Toggle the Files sidebar |
-| `a` | Create workspace (choose a folder) |
+| `a` | Create workspace (choose the folder in the explorer) |
 | `Shift+d` | Delete workspace… |
 | `:` | Command palette |
 | `?` | Keyboard shortcuts |
@@ -102,13 +102,13 @@ More Files keys (always on): open to the side ⌘↵, open in a new tab ⌥⌘�
 
 ## Terminals
 
-Terminal panes get every key that the app has no binding for. The app takes ⌃Space for the leader, so a terminal program never sees it: that is Ctrl+Space (NUL), which readline, emacs and tmux use for set-mark and as an alternative prefix. If you rely on it, run tmux with another prefix inside the app; the leader's key is configurable in `keymap.json` (see below).
+Terminal panes get every key that the app has no binding for. The app takes ⌃Space for the leader, so a terminal program never sees it, not even a lone ⌃Space with no key after it: the guide waits for your choice instead of replaying it. Ctrl+Space (NUL) is what readline, emacs and tmux use for set-mark and as an alternative prefix, so if a program inside a terminal needs it, run tmux with another prefix in the app, or change the leader in `keymap.json` (see below) and keep ⌃Space for the program.
 
 Leader `w` moves focus to the tab sidebar on the right, on the active tab. Up/Down or `j`/`k` highlight tabs across every workspace without switching; Enter opens the highlighted tab (switching workspace if needed), and Esc returns to the previous focus without changing anything. With tabs on top, the layout switches to the sidebar first. **Go to tab…** (palette) searches tabs by tab title or workspace name instead.
 
-Leader `Shift+w` opens **Switch workspace…**, leader `a` opens **Create workspace** (choose a folder; the workspace is named after it), and leader `Shift+d` opens **Delete workspace…**. For new tabs, use leader `c` (Agent), `t` (Terminal), or `Shift+c` (Canvas).
+Leader `Shift+w` opens **Switch workspace…**, leader `a` opens **Create workspace**, and leader `Shift+d` opens **Delete workspace…**. Create workspace opens the folder explorer (the ⌘O one) at the focused pane's folder: move with the arrows (or `j`/`k`), `-` goes up, typing filters, and ⌘↵ (Ctrl+↵ off macOS, or **Open Gentle Shell here**) makes the shown folder a workspace, named after it and shown, or reuses it when it already exists. Esc closes the explorer and creates nothing. For new tabs, use leader `c` (Agent), `t` (Terminal), or `Shift+c` (Canvas).
 
-The leader waits about a second for its second key.
+The leader waits for its second key as long as you need: it is not on a timer.
 
 ## Coming from tmux / Neovim / Herdr TUI
 

@@ -524,10 +524,6 @@ impl SessionView {
         }
     }
 
-    pub(crate) fn composer_has_focus(&self, window: &Window, cx: &App) -> bool {
-        self.composer.read(cx).focus_handle(cx).is_focused(window)
-    }
-
     fn focus_composer(&self, window: &mut Window, cx: &mut App) {
         self.composer
             .update(cx, |state, cx| state.focus(window, cx));

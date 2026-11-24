@@ -285,9 +285,7 @@ impl Workspace {
             PaletteAction::ActivateGlobalTab(_) => {}
             PaletteAction::OpenWorkspaces => self.open_palette(Category::Workspaces, window, cx),
             PaletteAction::OpenDeleteWorkspace => self.open_workspace_deleter(window, cx),
-            PaletteAction::CreateWorkspaceFromFolder => {
-                self.pick_workspace_folder(None, window, cx)
-            }
+            PaletteAction::CreateWorkspaceFromFolder => self.open_explorer(window, cx),
             PaletteAction::SwitchWorkspace(index) => self.switch_workspace(index, window, cx),
             PaletteAction::RenameWorkspace { index, name } => {
                 self.rename_workspace(index, name, cx)
@@ -295,23 +293,19 @@ impl Workspace {
             PaletteAction::DeleteWorkspace(index) => {
                 self.confirm_delete_workspace(index, window, cx)
             }
-            PaletteAction::CreateWorkspace {
-                name,
-                pick_folder: false,
-            } => {
+            PaletteAction::CreateWorkspace { name } => {
                 let root = self.active_cwd(cx);
                 self.create_workspace(Some(name), root, window, cx);
             }
-            PaletteAction::CreateWorkspace {
-                name,
-                pick_folder: true,
-            } => self.pick_workspace_folder(Some(name), window, cx),
             PaletteAction::OpenFile(path) => self.open_file(path, window, cx),
             PaletteAction::SwitchBranch(branch) => self.confirm_switch_branch(branch, window, cx),
         }
     }
 
-    /// The folder explorer (⌘O / Ctrl+O), from the focused pane's folder.
+    /// The folder explorer (⌘O / Ctrl+O), from the focused pane's folder. Its
+    /// "Open Gentle Shell here" (⌘↵, Ctrl+↵ off macOS) is also how "Create
+    /// workspace" picks the folder: `show_folder` creates or selects the
+    /// workspace rooted there, named after it.
     pub(super) fn open_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((Overlay::Explorer(_), _)) = &self.overlay {
             self.close_overlay(window, cx);

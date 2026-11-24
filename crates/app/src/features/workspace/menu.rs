@@ -217,8 +217,7 @@ impl Workspace {
                 PopupMenuItem::new("New workspace")
                     .icon(Icon::new(IconName::FolderPlus))
                     .on_click(move |_, window, cx| {
-                        let _ = new_space
-                            .update(cx, |this, cx| this.pick_workspace_folder(None, window, cx));
+                        let _ = new_space.update(cx, |this, cx| this.open_explorer(window, cx));
                     }),
             )
             .separator()

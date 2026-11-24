@@ -486,7 +486,8 @@ pub struct Workspace {
     pane_mode_focus: FocusHandle,
     /// The keys that can follow the key sequence pending in the window.
     which_key: Option<WhichKey>,
-    composer_leader: Option<(FocusHandle, ComposerLeader)>,
+    /// The leader guide: pending until a choice, from whatever focus opened it.
+    leader: Option<(Option<FocusHandle>, LeaderSelection)>,
     /// Keyboard focus for the vertical tab sidebar while it is being
     /// navigated with the keyboard.
     tab_list_focus: FocusHandle,
@@ -503,7 +504,7 @@ pub struct Workspace {
 }
 
 mod composer_leader;
-use composer_leader::ComposerLeader;
+use composer_leader::LeaderSelection;
 
 impl EventEmitter<WorkspaceEvent> for Workspace {}
 
@@ -581,12 +582,7 @@ impl Workspace {
                 },
             ),
         ];
-        let weak = cx.weak_entity();
-        lifecycle.push(cx.intercept_keystrokes(move |event, window, cx| {
-            let _ = weak.update(cx, |this, cx| {
-                this.composer_leader_key(&event.keystroke, window, cx)
-            });
-        }));
+        lifecycle.push(composer_leader::watch_leader_keys(cx.weak_entity(), cx));
         // The which-key hint follows the window's pending key sequence.
         lifecycle.push(cx.observe_pending_input(window, |this, window, cx| {
             let hint = crate::features::shortcuts::pending_hint(window, cx);
@@ -631,7 +627,7 @@ impl Workspace {
             pane_mode: false,
             pane_mode_focus: cx.focus_handle(),
             which_key: None,
-            composer_leader: None,
+            leader: None,
             tab_list_focus: cx.focus_handle(),
             tab_list_highlight: None,
             tab_list_return_focus: None,

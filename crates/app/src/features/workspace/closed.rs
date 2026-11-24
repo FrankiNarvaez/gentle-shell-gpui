@@ -360,7 +360,7 @@ mod tests {
                     pane_mode: false,
                     pane_mode_focus: cx.focus_handle(),
                     which_key: None,
-                    composer_leader: None,
+                    leader: None,
                     tab_list_focus: cx.focus_handle(),
                     tab_list_highlight: None,
                     tab_list_return_focus: None,

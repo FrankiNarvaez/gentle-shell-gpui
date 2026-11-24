@@ -1,4 +1,4 @@
-use super::t8_verifier::{active, category, fixture};
+use super::t8_verifier::{active, category, explorer_open, fixture};
 use gpui_kit::TestAppContext;
 
 use super::{Category, PaneKind, PaneTree, SavedPane, SavedTab, Tab, TabState};
@@ -48,7 +48,7 @@ fn t10_create_workspace_names_after_folder(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn t10_create_workspace_cancel_creates_nothing(cx: &mut TestAppContext) {
-    let (host, cx, _root, _trace) = fixture(cx, "create-cancel", false);
+    let (host, cx, _root, trace) = fixture(cx, "create-cancel", false);
     let palette_key = if cfg!(target_os = "macos") {
         "cmd-k"
     } else {
@@ -58,15 +58,44 @@ fn t10_create_workspace_cancel_creates_nothing(cx: &mut TestAppContext) {
     cx.simulate_keystrokes(palette_key);
     cx.simulate_input("Create workspace");
     cx.simulate_keystrokes("enter");
-    assert!(cx.did_prompt_for_paths());
-    cx.simulate_path_prompt_response(|o| {
-        assert!(!o.files && o.directories && !o.multiple);
-        assert_eq!(o.prompt.as_deref(), Some("Create workspace"));
-        None
-    });
-    cx.run_until_parked();
+    // The folder is chosen in the app's own explorer (⌘O), not a native dialog.
+    assert!(!cx.did_prompt_for_paths());
+    assert!(explorer_open(&host, cx));
+    cx.simulate_keystrokes("escape");
+    assert!(!explorer_open(&host, cx));
 
     assert_eq!(cx.update(|_, cx| host.read(cx).spaces.len()), 2);
+    assert!(trace.roots.borrow().is_empty());
+}
+
+#[gpui::test]
+fn t10_create_workspace_chooses_the_folder_in_the_explorer(cx: &mut TestAppContext) {
+    let (host, cx, root, trace) = fixture(cx, "create-explorer", false);
+    let palette_key = if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    };
+
+    cx.simulate_keystrokes(palette_key);
+    cx.simulate_input("Create workspace");
+    cx.simulate_keystrokes("enter");
+    assert!(explorer_open(&host, cx));
+    // It opens in the focused pane's folder (Alpha/twin); `-` twice reaches
+    // the folder both workspaces live in.
+    cx.simulate_keystrokes("- -");
+    cx.simulate_input("Beta");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-enter"
+    } else {
+        "ctrl-enter"
+    });
+
+    // The chosen folder's workspace is shown (it existed already: no duplicate).
+    assert!(!explorer_open(&host, cx));
+    assert_eq!(active(&host, cx), (1, 22));
+    assert_eq!(cx.update(|_, cx| host.read(cx).spaces.len()), 2);
+    assert_eq!(*trace.roots.borrow(), [root.join("Beta")]);
 }
 
 #[gpui::test]

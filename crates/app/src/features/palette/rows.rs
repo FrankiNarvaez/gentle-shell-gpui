@@ -134,7 +134,6 @@ impl PaletteView {
                     group: "Workspaces",
                     action: PaletteAction::CreateWorkspace {
                         name: query.to_string(),
-                        pick_folder: false,
                     },
                     workspace: None,
                     current: false,
@@ -142,33 +141,15 @@ impl PaletteView {
             );
         }
         rows.push(Row {
-            icon: IconName::Folder,
-            title: "Browse folders…".into(),
-            meta: String::new(),
-            detail: format!("Open Gentle Shell in any folder ({})", ui::shortcut("O")),
-            group: "Workspaces",
-            action: PaletteAction::OpenExplorer,
-            workspace: None,
-            current: false,
-        });
-        rows.push(Row {
             icon: IconName::FolderOpen,
             title: "Create workspace".into(),
             meta: String::new(),
-            detail: if query.is_empty() {
-                "Named after the folder".into()
-            } else {
-                format!("Named \u{201c}{query}\u{201d}")
-            },
+            detail: format!(
+                "Choose a folder in the explorer ({}); named after it",
+                ui::shortcut("O")
+            ),
             group: "Workspaces",
-            action: PaletteAction::CreateWorkspace {
-                name: if exists {
-                    String::new()
-                } else {
-                    query.to_string()
-                },
-                pick_folder: true,
-            },
+            action: PaletteAction::CreateWorkspaceFromFolder,
             workspace: None,
             current: false,
         });

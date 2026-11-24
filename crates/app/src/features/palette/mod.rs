@@ -102,11 +102,9 @@ pub enum PaletteAction {
         name: String,
     },
     DeleteWorkspace(usize),
-    /// A new workspace named `name`, rooted at the current folder or, with
-    /// `pick_folder`, at one the user chooses (named after it when `name` is empty).
+    /// A new workspace named `name`, rooted at the current folder.
     CreateWorkspace {
         name: String,
-        pick_folder: bool,
     },
     OpenFile(PathBuf),
     /// Asks for confirmation before running `git switch`.

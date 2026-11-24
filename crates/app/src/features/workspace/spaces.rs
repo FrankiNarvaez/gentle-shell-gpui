@@ -103,30 +103,6 @@ impl Workspace {
         self.switch_workspace(index, window, cx);
     }
 
-    pub(super) fn pick_workspace_folder(
-        &mut self,
-        name: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: false,
-            directories: true,
-            multiple: false,
-            prompt: Some("Create workspace".into()),
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(mut paths))) = paths.await else {
-                return;
-            };
-            let Some(path) = paths.pop() else { return };
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.create_workspace(name, path, window, cx)
-            });
-        })
-        .detach();
-    }
-
     /// Point the shown workspace at another folder: the sidebar re-roots on
     /// [`WorkspaceEvent::RootChanged`] and new tabs open there. Open tabs
     /// keep their own folders.

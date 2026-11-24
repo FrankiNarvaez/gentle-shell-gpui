@@ -583,13 +583,16 @@ impl Workspace {
         self.focus_tab_list(window, cx);
     }
 
+    /// Leader `a`, palette and menus: choose the folder in the app's explorer
+    /// (the same ⌘O one), whose "Open Gentle Shell here" names the workspace
+    /// after that folder and shows it, creating it when it is new.
     pub(super) fn on_create_workspace(
         &mut self,
         _: &CreateWorkspace,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.pick_workspace_folder(None, window, cx);
+        self.open_explorer(window, cx);
     }
 
     pub(super) fn on_delete_workspace(
