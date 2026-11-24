@@ -4623,9 +4623,9 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
 // --- Gentle Shell main additions: jobs output, subagent thread, sessions,
 // --- changes, review mode, usage stats, update status, session sections ---
 
-/// The `capabilities` methods of Gentle Shell `main` (0336985), as the spec
-/// and a live backend list them.
-const MAIN_METHODS: [&str; 24] = [
+/// The methods known to this client in capability order: Gentle Shell
+/// `main` (0336985), plus the agent definitions read from Gentle Shell 5.0.0.
+const MAIN_METHODS: [&str; 25] = [
     "capabilities",
     "get_snapshot",
     "get_config",
@@ -4650,6 +4650,7 @@ const MAIN_METHODS: [&str; 24] = [
     "set_review_mode",
     "get_usage_stats",
     "get_update_status",
+    "list_agent_definitions",
 ];
 const MAIN_EVENTS: [&str; 9] = [
     "config_changed",
@@ -4688,7 +4689,7 @@ const RELEASE_4_8_EVENTS: [&str; 7] = [
     "profile_applied",
     "agents_update",
 ];
-const NEW_METHODS: [DesktopMethod; 10] = [
+const NEW_METHODS: [DesktopMethod; 11] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -4699,6 +4700,7 @@ const NEW_METHODS: [DesktopMethod; 10] = [
     DesktopMethod::SetReviewMode,
     DesktopMethod::GetUsageStats,
     DesktopMethod::GetUpdateStatus,
+    DesktopMethod::ListAgentDefinitions,
 ];
 
 fn capabilities_of(methods: &[&str], events: &[&str]) -> Capabilities {
@@ -4785,6 +4787,76 @@ fn capabilities_gate_the_new_methods_and_events_per_backend() {
     // Without the feed seam the server omits `session_snapshot`.
     let without_feed = capabilities_of(&MAIN_METHODS, &MAIN_EVENTS[..8]);
     assert!(!without_feed.supports_session_sections());
+}
+
+#[test]
+fn list_agent_definitions_sends_empty_params() {
+    let mut session = DesktopSession::new();
+    let request = session.issue(DesktopMethod::ListAgentDefinitions).unwrap();
+    assert_eq!(
+        request.payload(),
+        payload(request.request_id(), "list_agent_definitions", "{}")
+    );
+}
+
+#[test]
+fn list_agent_definitions_extracts_only_the_set_orchestrator_model() {
+    let response = ok_response(json!({
+        "agents": [],
+        "truncated": false,
+        "problems": {"invalid": 0, "notices": 0},
+        "subagentDefaults": {"model": "other/subagent", "thinking": null, "mode": "auto"},
+        "defaultOrchestrator": {
+            "status": "set", "model": "openrouter/anthropic/claude", "thinking": "low",
+            "extra": true
+        },
+        "futureField": []
+    }));
+    assert_eq!(
+        response.default_orchestrator_model().unwrap(),
+        Some("openrouter/anthropic/claude")
+    );
+}
+
+#[test]
+fn list_agent_definitions_does_not_infer_a_default_from_unusable_data() {
+    for orchestrator in [
+        json!({"status": "unset", "model": null, "thinking": null}),
+        json!({"status": "missing", "model": null, "thinking": null}),
+        json!({"status": "invalid", "model": null, "thinking": null}),
+        json!({"status": "set", "model": null, "thinking": "low"}),
+        json!({"status": "set", "model": 42}),
+        json!({"status": "set"}),
+        json!({"status": "SET", "model": "provider/id"}),
+        json!({"status": "unset", "model": "provider/id"}),
+        json!({"model": "provider/id"}),
+        json!(["set", "provider/id"]),
+        Value::Null,
+    ] {
+        let response = ok_response(json!({"defaultOrchestrator": orchestrator}));
+        assert_eq!(
+            response.default_orchestrator_model().unwrap(),
+            None,
+            "{orchestrator}"
+        );
+    }
+    for model in ["", "id", "provider/", "/id", " /id", "provider/ "] {
+        let response = ok_response(json!({
+            "defaultOrchestrator": {"status": "set", "model": model}
+        }));
+        assert_eq!(
+            response.default_orchestrator_model().unwrap(),
+            None,
+            "{model:?}"
+        );
+    }
+    for data in [
+        json!({"subagentDefaults": {"model": "other/subagent"}}),
+        json!([]),
+    ] {
+        let response = ok_response(data);
+        assert_eq!(response.default_orchestrator_model().unwrap(), None);
+    }
 }
 
 #[test]

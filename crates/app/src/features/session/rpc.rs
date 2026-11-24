@@ -219,11 +219,14 @@ impl SessionView {
     }
 
     /// Send the next queued config request once the channel is free, then
-    /// the screens' next queued read: both queues wait for the same slot.
+    /// collect the default model and pump the reads queue. Both queues share one slot.
     pub(super) fn sync_config(&mut self, cx: &mut Context<Self>) {
         let applied = self.desktop.config_pump();
         if !applied.sends.is_empty() || applied.report.is_some() {
             self.apply_config(applied, cx);
+        }
+        if let Some(default) = self.desktop.sync_model_default() {
+            self.set_model_default(default, cx);
         }
         self.sync_reads(cx);
     }
@@ -585,7 +588,8 @@ impl SessionView {
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {
+            | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions => {
                 let applied = self.desktop.reads_expire(generation);
                 self.apply_reads(applied, cx);
             }
@@ -652,7 +656,8 @@ impl SessionView {
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {
+            | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions => {
                 let applied = self.desktop.reads_outer(generation, handled);
                 self.apply_reads(applied, cx);
             }
@@ -704,6 +709,7 @@ impl SessionView {
     }
 
     pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
+        self.set_model_default(None, cx);
         self.request(json!({"type": "get_state"}), cx, |this, result, _| {
             if let Some(state) = this.report(result) {
                 this.models.current = ModelInfo::parse(&state["model"]);
@@ -729,7 +735,6 @@ impl SessionView {
                 }
             },
         );
-        self.refresh_default_model(cx);
         self.refresh_thinking_levels(cx);
         self.refresh_commands(cx);
         self.request(json!({"type": "get_messages"}), cx, |this, result, _| {
@@ -748,10 +753,10 @@ impl SessionView {
             }
         });
         self.refresh_stats(cx);
+        self.refresh_model_default(cx);
     }
 
-    /// Re-read the session's model and thinking level after something other
-    /// than the picker moved them (a profile Gentle Shell applied).
+    /// Re-read the model, thinking level and default after a profile apply.
     fn refresh_model(&mut self, cx: &mut Context<Self>) {
         self.request(json!({"type": "get_state"}), cx, |this, result, _| {
             if let Some(state) = this.report(result) {
@@ -759,27 +764,23 @@ impl SessionView {
                 this.models.thinking = state["thinkingLevel"].as_str().unwrap_or("off").to_string();
             }
         });
-        self.refresh_default_model(cx);
         self.refresh_thinking_levels(cx);
         self.refresh_stats(cx);
+        self.refresh_model_default(cx);
     }
 
-    /// Gentle Shell's default model, which the model pickers list second.
-    fn refresh_default_model(&mut self, cx: &mut Context<Self>) {
-        let cwd = self.cwd.clone();
-        cx.spawn(async move |this, cx| {
-            let default = cx
-                .background_executor()
-                .spawn(async move { crate::features::profiles::shell_default_model(cwd) })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if this.models.default != default {
-                    this.models.default = default;
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+    fn refresh_model_default(&mut self, cx: &mut Context<Self>) {
+        self.desktop.request_model_default();
+        self.sync_config(cx);
+    }
+
+    pub(super) fn set_model_default(&mut self, default: Option<String>, cx: &mut Context<Self>) {
+        if self.models.default != default {
+            self.models.default = default;
+            self.models.rev += 1;
+            self.sync_chrome(cx);
+            cx.notify();
+        }
     }
 
     /// Pi's `get_session_stats`: the cost (its authority, also with the

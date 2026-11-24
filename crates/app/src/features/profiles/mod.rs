@@ -870,9 +870,3 @@ impl ProfilesView {
         }
     }
 }
-
-/// Gentle Shell's default model for `cwd` as `provider/id`
-/// (`defaultProvider`/`defaultModel` in its `settings.json`), if it has one.
-pub(crate) fn shell_default_model(cwd: PathBuf) -> Option<String> {
-    read_orchestrator_settings(&Env::resolve(cwd).settings_path())?.model
-}

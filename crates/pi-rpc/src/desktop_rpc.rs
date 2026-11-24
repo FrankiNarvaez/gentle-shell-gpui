@@ -179,13 +179,14 @@ pub enum DesktopMethod {
     SetReviewMode,
     GetUsageStats,
     GetUpdateStatus,
+    ListAgentDefinitions,
 }
 
 impl DesktopMethod {
-    /// Every method this client knows, in the order `capabilities` lists
-    /// them on Gentle Shell `main`. Which ones a peer offers is only what its
-    /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 24] = [
+    /// Every method this client knows, in capability order. Which ones a peer
+    /// offers is only what its `capabilities` say: Gentle Shell 4.8.0 offers
+    /// fourteen of them.
+    pub const ALL: [Self; 25] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -210,6 +211,7 @@ impl DesktopMethod {
         Self::SetReviewMode,
         Self::GetUsageStats,
         Self::GetUpdateStatus,
+        Self::ListAgentDefinitions,
     ];
 
     /// The wire name of the method.
@@ -239,6 +241,7 @@ impl DesktopMethod {
             Self::SetReviewMode => "set_review_mode",
             Self::GetUsageStats => "get_usage_stats",
             Self::GetUpdateStatus => "get_update_status",
+            Self::ListAgentDefinitions => "list_agent_definitions",
         }
     }
 
@@ -289,6 +292,7 @@ impl DesktopMethod {
             "set_review_mode" => Ok(Self::SetReviewMode),
             "get_usage_stats" => Ok(Self::GetUsageStats),
             "get_update_status" => Ok(Self::GetUpdateStatus),
+            "list_agent_definitions" => Ok(Self::ListAgentDefinitions),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
         }
     }
@@ -1148,6 +1152,12 @@ impl DesktopResponse {
         UpdateStatus::from_data(self.data()?)
     }
 
+    /// The default orchestrator model reported by `list_agent_definitions`.
+    /// The rest of the agent definitions do not contribute a default.
+    pub fn default_orchestrator_model(&self) -> Result<Option<&str>, DesktopRpcError> {
+        Ok(default_orchestrator_model(self.data()?))
+    }
+
     fn data(&self) -> Result<&Value, DesktopRpcError> {
         self.result
             .as_ref()
@@ -1267,7 +1277,8 @@ impl Capabilities {
     /// gate for every method newer than a peer (Gentle Shell 4.8.0 offers
     /// none of `get_job_output`, `get_subagent_thread`, `list_sessions`,
     /// `switch_session`, `get_changes`, `get_change_diff`, `get_review_mode`,
-    /// `set_review_mode`, `get_usage_stats` or `get_update_status`).
+    /// `set_review_mode`, `get_usage_stats`, `get_update_status` or
+    /// `list_agent_definitions`).
     pub fn require(&self, method: DesktopMethod) -> Result<(), DesktopRpcError> {
         if self.supports(method) {
             Ok(())
@@ -1306,6 +1317,19 @@ impl Capabilities {
             widget,
         })
     }
+}
+
+/// Read only the explicit orchestrator default, leaving model IDs that
+/// contain a slash intact (for example, an OpenRouter model).
+fn default_orchestrator_model(data: &Value) -> Option<&str> {
+    let orchestrator = data.get("defaultOrchestrator")?;
+    if orchestrator.get("status")?.as_str()? != "set" {
+        return None;
+    }
+    let model = orchestrator.get("model")?.as_str()?;
+    let (provider, id) = model.split_once('/')?;
+    (!provider.is_empty() && !id.is_empty() && !model.chars().any(char::is_whitespace))
+        .then_some(model)
 }
 
 /// An optional string field of a data document.

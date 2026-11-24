@@ -8,6 +8,7 @@ use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::text::TextViewState;
 use gpui_kit::*;
+use pi_rpc::desktop_rpc::DesktopMethod;
 use pi_rpc::{UiAnswer, UiMethod};
 
 use crate::shared::ui;
@@ -480,8 +481,7 @@ impl SessionView {
             .or_else(|| self.session_file.clone())
     }
 
-    /// The models to pick from, in Gentle Shell's selector order: the current
-    /// one, the default one, then by provider.
+    /// Current model, then the reported default, then by provider, keeping catalog order.
     fn ordered_models(&self) -> Vec<state::ModelInfo> {
         let mut models = self.models.available.clone();
         let current = self
@@ -489,11 +489,18 @@ impl SessionView {
             .current
             .as_ref()
             .map(|m| format!("{}/{}", m.provider, m.id));
+        // A backend restart or exit resets the channel before the next refresh.
+        let default = if self.read_support(DesktopMethod::ListAgentDefinitions) == ReadSupport::Rpc
+        {
+            self.models.default.as_deref()
+        } else {
+            None
+        };
         gentle_core::profiles::sort_like_shell(
             &mut models,
             |m| (m.provider.clone(), m.id.clone()),
             current.as_deref(),
-            self.models.default.as_deref(),
+            default,
         );
         models
     }
