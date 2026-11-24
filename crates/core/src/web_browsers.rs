@@ -79,11 +79,13 @@ impl AgentPages {
 pub const DESIGN_OPEN_BROWSER_ENV: &str = "GENTLE_DESIGN_OPEN_BROWSER";
 
 /// What an agent tab's Gentle Shell starts with about the design canvas:
-/// [`DESIGN_OPEN_BROWSER_ENV`]`=0` while agents' pages show inside the app
-/// and the app can draw a page there, so the canvas opens only in its card.
-/// Nothing when pages go to the browser (Gentle Shell opens it, as always),
-/// nor on Linux under Wayland (`wayland_display` set, which GPUI then
-/// picks): it has no child windows, so the canvas stays in the browser
+/// [`DESIGN_OPEN_BROWSER_ENV`]`=0` whenever the app shows the canvas itself
+/// from its URL: in its card while agents' pages show inside the app, or
+/// in the chosen browser while they go there (the app opens it once), so
+/// Gentle Shell's own system-browser tab would be a second one. Nothing only
+/// where the app would show nothing: pages inside the app on Linux under
+/// Wayland (`wayland_display` set, which GPUI then picks), which has no
+/// child windows, so the card can't draw and the canvas stays in the browser
 /// Gentle Shell opens. Read when the tab's backend starts.
 pub fn design_launch_env(
     pages: AgentPages,
@@ -91,8 +93,7 @@ pub fn design_launch_env(
     wayland_display: Option<&std::ffi::OsStr>,
 ) -> Option<(String, String)> {
     let wayland = os == Os::Linux && wayland_display.is_some_and(|display| !display.is_empty());
-    (pages == AgentPages::InApp && !wayland)
-        .then(|| (DESIGN_OPEN_BROWSER_ENV.to_string(), "0".to_string()))
+    (pages.outside() || !wayland).then(|| (DESIGN_OPEN_BROWSER_ENV.to_string(), "0".to_string()))
 }
 
 /// A web browser the app can open a page in.
@@ -390,16 +391,24 @@ mod tests {
     }
 
     #[test]
-    fn the_design_canvas_keeps_the_system_browser_closed_only_when_shown_in_the_app() {
+    fn the_design_canvas_keeps_the_system_browser_closed_whenever_the_app_opens_it() {
         let off = Some((DESIGN_OPEN_BROWSER_ENV.to_string(), "0".to_string()));
+        // The app's card, or the chosen browser the app opens itself.
         for os in [Os::Mac, Os::Windows, Os::Linux] {
-            assert_eq!(design_launch_env(AgentPages::InApp, os, None), off);
-            assert_eq!(design_launch_env(AgentPages::Browser, os, None), None);
+            for pages in AgentPages::ALL {
+                assert_eq!(design_launch_env(pages, os, None), off);
+            }
         }
+        // Wayland: the card can't draw, so only Gentle Shell's tab shows it;
+        // pages in the browser are still the app's own to open.
         let wayland = Some(std::ffi::OsStr::new("wayland-0"));
         assert_eq!(
             design_launch_env(AgentPages::InApp, Os::Linux, wayland),
             None
+        );
+        assert_eq!(
+            design_launch_env(AgentPages::Browser, Os::Linux, wayland),
+            off
         );
         // X11 (an empty `WAYLAND_DISPLAY` names no compositor), and a
         // variable that means nothing off Linux.
