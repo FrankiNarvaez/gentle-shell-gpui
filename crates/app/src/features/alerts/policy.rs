@@ -1,5 +1,11 @@
 //! notifications.json IO: the cached policy, re-read only when the file
 //! changes, and the atomic write behind [`apply`].
+//!
+//! Playing a sound always reads the file: Gentle Shell's Desktop
+//! `notifications` store never carries a sound file's path (it sends the
+//! `"file"` marker), so only the file can say what to play. Configuration
+//! shows and changes the policy through that store when the active tab's
+//! Shell serves it, and through [`apply`] otherwise.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -8,7 +14,8 @@ use gentle_core::notifications::{Change, Policy};
 use pi_rpc::file_cache::Stamp;
 use serde_json::Value;
 
-fn policy_file() -> PathBuf {
+/// `<gentle-ai config home>/notifications.json`.
+pub fn policy_file() -> PathBuf {
     pi_rpc::resolve_homes().config.join("notifications.json")
 }
 

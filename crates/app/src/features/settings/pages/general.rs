@@ -1,15 +1,20 @@
-//! Environment details and the existing onboarding checklist.
+//! Environment details, Gentle Shell's own status and the existing
+//! onboarding checklist.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::*;
 
+use pi_rpc::desktop_rpc::ShellStatus;
+
 use super::super::{
     SettingsView,
     layout::{row, section},
+    shell_status::{status_rows, warns},
     snapshot::Snapshot,
 };
+use crate::shared::ui;
 
 pub(super) fn render(
     view: &SettingsView,
@@ -18,13 +23,18 @@ pub(super) fn render(
 ) -> Div {
     v_flex()
         .gap_3()
-        .child(gentle_shell_section(snapshot))
+        .child(gentle_shell_section(
+            snapshot,
+            view.shell_status.status.as_ref(),
+        ))
         .child(view.runs_on_section(cx))
         .child(view.diagnostics_section(cx))
         .child(section(IconName::CircleCheck, "Setup & requirements").child(view.setup.clone()))
 }
 
-fn gentle_shell_section(snapshot: &Snapshot) -> Div {
+/// The homes and launcher, then, when the active agent tab's Shell offers
+/// `get_status`, what `/gentle:status` reports and whether it warns.
+fn gentle_shell_section(snapshot: &Snapshot, status: Option<&ShellStatus>) -> Div {
     section(IconName::SquareTerminal, "Gentle Shell")
         .child(row(
             "Home",
@@ -44,6 +54,7 @@ fn gentle_shell_section(snapshot: &Snapshot) -> Div {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "not found".into()),
         ))
+        .children(status.map(status_block))
         .child(
             h_flex()
                 .pt_2()
@@ -67,5 +78,35 @@ fn gentle_shell_section(snapshot: &Snapshot) -> Div {
                         .label("Open config dir")
                         .on_click(move |_, _, cx| cx.open_url(&format!("file://{}", dir.display())))
                 }),
+        )
+}
+
+/// `/gentle:status`'s facts: a chip with its severity, then one row each.
+/// A warning points at `/gentle:doctor`, which repairs from a session.
+fn status_block(status: &ShellStatus) -> Div {
+    let warning = warns(status);
+    v_flex()
+        .child(
+            h_flex()
+                .pt_3()
+                .pb_1()
+                .gap_2()
+                .child(ui::section_label("Status"))
+                .child(if warning {
+                    ui::chip("Needs attention", ui::warning())
+                } else {
+                    ui::chip("OK", ui::success())
+                })
+                .children(warning.then(|| {
+                    div()
+                        .text_xs()
+                        .text_color(ui::muted())
+                        .child("Run /gentle:doctor in a session to repair it.")
+                })),
+        )
+        .children(
+            status_rows(status)
+                .into_iter()
+                .map(|(label, value)| row(label, value)),
         )
 }

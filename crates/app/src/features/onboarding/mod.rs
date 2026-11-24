@@ -15,7 +15,7 @@ mod install;
 mod sequence;
 mod view;
 
-use checks::{install_plan, required_ok, usable};
+use checks::{install_plan, required_ok, usable, with_registry};
 
 /// Where the checklist is shown.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,6 +91,9 @@ pub struct OnboardingView {
     failure: Option<(CheckId, String)>,
     /// Emit [`OnboardingEvent::Installed`] once the checks after an install land.
     announce: bool,
+    /// The provider check as the active agent tab's Gentle Shell answered
+    /// it (`get_auth_status`), applied over every look at the machine.
+    registry_sign_in: Option<Result<String, String>>,
     _probe: Task<()>,
     _job: Task<()>,
 }
@@ -113,6 +116,7 @@ impl OnboardingView {
             log_for: None,
             failure: None,
             announce: false,
+            registry_sign_in: None,
             _probe: Task::ready(()),
             _job: Task::ready(()),
         };
@@ -198,5 +202,17 @@ impl OnboardingView {
     /// Look at the machine again.
     pub fn check_again(&mut self, cx: &mut Context<Self>) {
         self.refresh(cx);
+    }
+
+    /// Gentle Shell's model registry answered which providers have
+    /// credentials (by id): the provider check follows it from now on,
+    /// instead of reading `auth.json`, `models.json` and the environment.
+    pub fn adopt_signed_in(&mut self, configured: &[&str], cx: &mut Context<Self>) {
+        let answer = gentle_core::setup::registry_sign_in(configured.iter().copied());
+        if let Some(checks) = self.checks.as_mut() {
+            with_registry(checks, &answer);
+        }
+        self.registry_sign_in = Some(answer);
+        cx.notify();
     }
 }

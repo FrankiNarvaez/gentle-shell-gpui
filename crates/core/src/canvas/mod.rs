@@ -144,6 +144,15 @@ impl Pen {
             Pen::Fountain => "Fountain pen",
         }
     }
+
+    /// What the pen does, in a few words.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Pen::Pen => "width follows speed",
+            Pen::Monoline => "one even width",
+            Pen::Fountain => "hairlines when fast, full swells when slow, tapered end",
+        }
+    }
 }
 
 /// Stroke widths (page units) of the six sizes.
@@ -193,6 +202,100 @@ impl Style {
     }
     pub fn alpha(&self) -> f32 {
         f32::from(self.opacity.clamp(1, 100)) / 100.
+    }
+
+    /// Takes from `from` what `controls` cover; the rest stays.
+    pub fn adopt(&mut self, from: &Style, controls: Controls) {
+        if controls.color {
+            self.color = from.color;
+        }
+        if controls.fill {
+            self.fill = from.fill;
+            self.fill_color = from.fill_color;
+        }
+        if controls.pen {
+            self.pen = from.pen;
+        }
+        if controls.size {
+            self.size = from.size;
+        }
+        if controls.opacity {
+            self.opacity = from.opacity;
+        }
+    }
+}
+
+/// The style panel's controls that change how a shape looks; the panel
+/// shows only these, and restyling leaves the rest of a shape's style alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Controls {
+    /// The stroke color: a text's ink, a note's paper.
+    pub color: bool,
+    /// The fill style and fill color.
+    pub fill: bool,
+    pub pen: bool,
+    /// Stroke width, or font size for text and notes.
+    pub size: bool,
+    pub opacity: bool,
+}
+
+impl Controls {
+    /// Lines, arrows, highlighter ink, text and notes.
+    pub const MARK: Controls = Controls {
+        color: true,
+        fill: false,
+        pen: false,
+        size: true,
+        opacity: true,
+    };
+    /// Pen ink: its loops fill.
+    pub const INK: Controls = Controls {
+        fill: true,
+        pen: true,
+        ..Controls::MARK
+    };
+    /// Rectangles and ellipses.
+    pub const GEO: Controls = Controls {
+        fill: true,
+        ..Controls::MARK
+    };
+    pub const IMAGE: Controls = Controls {
+        color: false,
+        fill: false,
+        pen: false,
+        size: false,
+        opacity: true,
+    };
+
+    pub fn union(self, other: Controls) -> Controls {
+        Controls {
+            color: self.color || other.color,
+            fill: self.fill || other.fill,
+            pen: self.pen || other.pen,
+            size: self.size || other.size,
+            opacity: self.opacity || other.opacity,
+        }
+    }
+}
+
+impl Kind {
+    /// What of the style shows on this shape.
+    pub fn controls(&self) -> Controls {
+        match self {
+            // The highlighter's stroke ignores the pen type; it never fills.
+            Kind::Ink {
+                highlighter: true, ..
+            } => Controls::MARK,
+            Kind::Ink { closed, .. } => Controls {
+                fill: *closed,
+                ..Controls::INK
+            },
+            Kind::Rect { .. } | Kind::Ellipse { .. } => Controls::GEO,
+            Kind::Line { .. } | Kind::Arrow { .. } | Kind::Text { .. } | Kind::Note { .. } => {
+                Controls::MARK
+            }
+            Kind::Image { .. } => Controls::IMAGE,
+        }
     }
 }
 

@@ -101,15 +101,33 @@ macro_rules! wire_enum {
     };
 }
 
+mod auth;
+mod background;
+mod binding;
 mod changes;
+mod definitions;
 mod output;
 mod review;
 mod session_state;
 mod sessions;
 mod stats;
+mod status;
 mod updates;
 
+pub use auth::{AuthSource, AuthStatus, AuthType, ProviderAuth, ReloadCredentials};
+pub use background::{
+    BackgroundCapability, BackgroundConfirmation, BackgroundPolicy, BackgroundSource,
+    BackgroundSubagents, PolicyFile, SetBackgroundSubagentsOutcome, SetBackgroundSubagentsResult,
+};
+pub use binding::{
+    ClearBindingStatus, ClearProfileBindingResult, ProfileBinding, ProfileBindingChanged,
+    ProfileBindingKind, ProfileBindingOrigin,
+};
 pub use changes::{ChangeDiff, ChangeRoot, ChangeStatus, ChangedFile, Changes};
+pub use definitions::{
+    AgentDefinition, AgentDefinitionProblems, AgentDefinitionScope, AgentDefinitions,
+    DefaultOrchestrator, OrchestratorStatus, SubagentDefaults,
+};
 pub use output::{JobOutput, SubagentThread, ThreadItem};
 pub use review::{
     ReviewConfirmation, ReviewEffective, ReviewMode, ReviewModeChanged, ReviewScope, ReviewScopes,
@@ -132,7 +150,11 @@ pub use sessions::{
 };
 pub use stats::{
     StatsRange, StatsScope, UsageStats, UsageStatsDay, UsageStatsModel, UsageStatsProject,
-    UsageStatsTotals, UsageStatsTruncated,
+    UsageStatsProvider, UsageStatsTotals, UsageStatsTruncated,
+};
+pub use status::{
+    AssetStatus, DevBinary, DevBinaryState, ModelConfigPresence, ModelConfigStatus, RoutingState,
+    ShellStatus, StatusAssets, StatusSeverity,
 };
 pub use updates::{
     PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PackagesUpdate, PiUpdate,
@@ -179,13 +201,21 @@ pub enum DesktopMethod {
     SetReviewMode,
     GetUsageStats,
     GetUpdateStatus,
+    ListAgentDefinitions,
+    GetStatus,
+    GetBackgroundSubagents,
+    SetBackgroundSubagents,
+    GetProfileBinding,
+    ClearProfileBinding,
+    GetAuthStatus,
+    ReloadCredentials,
 }
 
 impl DesktopMethod {
     /// Every method this client knows, in the order `capabilities` lists
-    /// them on Gentle Shell `main`. Which ones a peer offers is only what its
+    /// them on Gentle Shell 5.0.0. Which ones a peer offers is only what its
     /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 32] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -210,6 +240,14 @@ impl DesktopMethod {
         Self::SetReviewMode,
         Self::GetUsageStats,
         Self::GetUpdateStatus,
+        Self::ListAgentDefinitions,
+        Self::GetStatus,
+        Self::GetBackgroundSubagents,
+        Self::SetBackgroundSubagents,
+        Self::GetProfileBinding,
+        Self::ClearProfileBinding,
+        Self::GetAuthStatus,
+        Self::ReloadCredentials,
     ];
 
     /// The wire name of the method.
@@ -239,15 +277,23 @@ impl DesktopMethod {
             Self::SetReviewMode => "set_review_mode",
             Self::GetUsageStats => "get_usage_stats",
             Self::GetUpdateStatus => "get_update_status",
+            Self::ListAgentDefinitions => "list_agent_definitions",
+            Self::GetStatus => "get_status",
+            Self::GetBackgroundSubagents => "get_background_subagents",
+            Self::SetBackgroundSubagents => "set_background_subagents",
+            Self::GetProfileBinding => "get_profile_binding",
+            Self::ClearProfileBinding => "clear_profile_binding",
+            Self::GetAuthStatus => "get_auth_status",
+            Self::ReloadCredentials => "reload_credentials",
         }
     }
 
     /// Whether the method's params can only be built by its typed
     /// constructor: the config methods name a store, never a path,
     /// `apply_profile` takes exactly its documented keys, and the methods with
-    /// a required param (an id, a root and path, a review change) would only
-    /// be refused by the server with `{}`, so the generic `params` path is
-    /// closed to them.
+    /// a required param (an id, a root and path, a review or
+    /// background-subagents change) would only be refused by the server with
+    /// `{}`, so the generic `params` path is closed to them.
     fn requires_typed_params(self) -> bool {
         matches!(
             self,
@@ -259,6 +305,7 @@ impl DesktopMethod {
                 | Self::SwitchSession
                 | Self::GetChangeDiff
                 | Self::SetReviewMode
+                | Self::SetBackgroundSubagents
         )
     }
 
@@ -289,6 +336,14 @@ impl DesktopMethod {
             "set_review_mode" => Ok(Self::SetReviewMode),
             "get_usage_stats" => Ok(Self::GetUsageStats),
             "get_update_status" => Ok(Self::GetUpdateStatus),
+            "list_agent_definitions" => Ok(Self::ListAgentDefinitions),
+            "get_status" => Ok(Self::GetStatus),
+            "get_background_subagents" => Ok(Self::GetBackgroundSubagents),
+            "set_background_subagents" => Ok(Self::SetBackgroundSubagents),
+            "get_profile_binding" => Ok(Self::GetProfileBinding),
+            "clear_profile_binding" => Ok(Self::ClearProfileBinding),
+            "get_auth_status" => Ok(Self::GetAuthStatus),
+            "reload_credentials" => Ok(Self::ReloadCredentials),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
         }
     }
@@ -685,8 +740,8 @@ impl DesktopRequest {
 
     /// The `set_config` request. Params are exactly `{ store, data,
     /// expectedRevision }`; `expected_revision` is the `writeRevision` of the
-    /// target `write` replaces, as last read. Only the three writable stores
-    /// can be named, through [`ConfigWrite`]. Before sending, an empty
+    /// target `write` replaces, as last read. Only the writable stores can
+    /// be named, through [`ConfigWrite`]. Before sending, an empty
     /// `expected_revision` ([`DesktopRpcError::InvalidExpectedRevision`]) and
     /// an empty pin profile ([`DesktopRpcError::InvalidPinProfile`]) are
     /// refused; everything else in `data` is the server's to validate.
@@ -854,6 +909,22 @@ impl DesktopRequest {
         )
     }
 
+    /// The `set_background_subagents` request: `{ policy }`, plus
+    /// `confirmationToken` when resending the token of a
+    /// `confirmation_required` answer the human approved. A token outside
+    /// 1–128 characters is refused before sending.
+    pub fn set_background_subagents(
+        request_id: impl Into<String>,
+        policy: BackgroundPolicy,
+        confirmation_token: Option<&str>,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::SetBackgroundSubagents,
+            background::set_background_subagents_params(policy, confirmation_token)?,
+        )
+    }
+
     /// A request for a known method, validated against the id and size limits
     /// before anything reaches the transport. The config methods are refused
     /// here: their params come only from [`Self::get_config`] and
@@ -960,9 +1031,10 @@ impl DesktopErrorInfo {
 wire_enum! {
     /// Every documented `error.code`. The config and `apply_profile` subsets
     /// are also [`ConfigErrorCode`] and [`ProfileApplyErrorCode`].
-    /// `changes_unavailable`, `session_unavailable` and `updates_unavailable`
-    /// are answered by Gentle Shell `main` but missing from its specification's
-    /// list of codes; they are kept here because the server sends them.
+    /// `changes_unavailable`, `session_unavailable`, `updates_unavailable`,
+    /// `agent_definitions_unavailable` and `status_unavailable` are answered
+    /// by Gentle Shell but missing from its specification's list of codes;
+    /// they are kept here because the server sends them.
     DesktopErrorCode, "error.code" {
         InvalidRequest => "invalid_request",
         UnknownStore => "unknown_store",
@@ -989,6 +1061,12 @@ wire_enum! {
         ReviewModeBusy => "review_mode_busy",
         StatsUnavailable => "stats_unavailable",
         UpdatesUnavailable => "updates_unavailable",
+        AgentDefinitionsUnavailable => "agent_definitions_unavailable",
+        StatusUnavailable => "status_unavailable",
+        BackgroundSubagentsBusy => "background_subagents_busy",
+        BackgroundSubagentsUnavailable => "background_subagents_unavailable",
+        AuthUnavailable => "auth_unavailable",
+        ReloadFailed => "reload_failed",
         NotFound => "not_found",
         InternalError => "internal_error",
     }
@@ -1002,7 +1080,10 @@ impl DesktopErrorCode {
     pub fn is_retryable(self) -> bool {
         matches!(
             self,
-            Self::SessionSwitching | Self::ReviewModeBusy | Self::ProfileApplyBusy
+            Self::SessionSwitching
+                | Self::ReviewModeBusy
+                | Self::ProfileApplyBusy
+                | Self::BackgroundSubagentsBusy
         )
     }
 }
@@ -1148,6 +1229,48 @@ impl DesktopResponse {
         UpdateStatus::from_data(self.data()?)
     }
 
+    /// The response to `list_agent_definitions`.
+    pub fn agent_definitions(&self) -> Result<AgentDefinitions, DesktopRpcError> {
+        AgentDefinitions::from_data(self.data()?)
+    }
+
+    /// The response to `get_status`.
+    pub fn status(&self) -> Result<ShellStatus, DesktopRpcError> {
+        ShellStatus::from_data(self.data()?)
+    }
+
+    /// The response to `get_background_subagents`.
+    pub fn background_subagents(&self) -> Result<BackgroundSubagents, DesktopRpcError> {
+        BackgroundSubagents::from_data(self.data()?)
+    }
+
+    /// The response to `set_background_subagents`.
+    pub fn set_background_subagents(
+        &self,
+    ) -> Result<SetBackgroundSubagentsResult, DesktopRpcError> {
+        SetBackgroundSubagentsResult::from_data(self.data()?)
+    }
+
+    /// The response to `get_profile_binding`.
+    pub fn profile_binding(&self) -> Result<ProfileBinding, DesktopRpcError> {
+        ProfileBinding::from_data(self.data()?)
+    }
+
+    /// The response to `clear_profile_binding`.
+    pub fn clear_profile_binding(&self) -> Result<ClearProfileBindingResult, DesktopRpcError> {
+        ClearProfileBindingResult::from_data(self.data()?)
+    }
+
+    /// The response to `get_auth_status`.
+    pub fn auth_status(&self) -> Result<AuthStatus, DesktopRpcError> {
+        AuthStatus::from_data(self.data()?)
+    }
+
+    /// The response to `reload_credentials`.
+    pub fn reload_credentials(&self) -> Result<ReloadCredentials, DesktopRpcError> {
+        ReloadCredentials::from_data(self.data()?)
+    }
+
     fn data(&self) -> Result<&Value, DesktopRpcError> {
         self.result
             .as_ref()
@@ -1227,6 +1350,14 @@ impl DesktopEvent {
         expect_event(self, "review_mode_changed")?;
         ReviewModeChanged::from_data(&self.data)
     }
+
+    /// Decode the data of a `profile_binding_changed` event, verifying the
+    /// exact event name before the shape, exactly like
+    /// [`Self::agents_update`].
+    pub fn profile_binding_changed(&self) -> Result<ProfileBindingChanged, DesktopRpcError> {
+        expect_event(self, "profile_binding_changed")?;
+        ProfileBindingChanged::from_data(&self.data)
+    }
 }
 
 /// A record decoded from the Desktop widget.
@@ -1267,7 +1398,9 @@ impl Capabilities {
     /// gate for every method newer than a peer (Gentle Shell 4.8.0 offers
     /// none of `get_job_output`, `get_subagent_thread`, `list_sessions`,
     /// `switch_session`, `get_changes`, `get_change_diff`, `get_review_mode`,
-    /// `set_review_mode`, `get_usage_stats` or `get_update_status`).
+    /// `set_review_mode`, `get_usage_stats` or `get_update_status`, and 4.9.0
+    /// none of `list_agent_definitions`, `get_profile_binding` or
+    /// `clear_profile_binding`).
     pub fn require(&self, method: DesktopMethod) -> Result<(), DesktopRpcError> {
         if self.supports(method) {
             Ok(())
@@ -1681,7 +1814,10 @@ impl DesktopAgentUsage {
 /// One projected subagent entry. Only these fields exist on the wire: identity,
 /// the agent name, the status word, the routed model plus its launch-layer
 /// source and the fallback it moved away from, the thinking level, the closed
-/// step label, and the bounded usage window.
+/// step label, the in-run progress (turns finished, tool calls started, the
+/// tool running now) and the bounded usage window. The progress fields are
+/// `None` from an owner that predates them (Gentle Shell before 5.0.0);
+/// `active_tool` is also `None` while no tool runs or the task is not active.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DesktopAgent {
     pub id: String,
@@ -1692,6 +1828,9 @@ pub struct DesktopAgent {
     pub fallback_from: Option<String>,
     pub thinking: Option<String>,
     pub last_step: DesktopAgentStep,
+    pub turns: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub active_tool: Option<String>,
     pub usage: DesktopAgentUsage,
 }
 
@@ -1712,6 +1851,9 @@ impl DesktopAgent {
             fallback_from: text_field(data, "fallbackFrom")?,
             thinking: text_field(data, "thinking")?,
             last_step: last_step_field(data, "lastStep")?,
+            turns: optional_u64_field(data, "turns")?,
+            tool_calls: optional_u64_field(data, "toolCalls")?,
+            active_tool: text_field(data, "activeTool")?,
             usage: DesktopAgentUsage::from_data(field_object(data, "usage")?)?,
         })
     }
@@ -2415,8 +2557,10 @@ impl DesignCanvasEvent {
     }
 }
 
-/// The six configuration stores the protocol names. A store is an
-/// identifier, never a path; anything else is refused.
+/// The nine configuration stores the protocol names. A store is an
+/// identifier, never a path; anything else is refused. Gentle Shell 4.9.0
+/// knows only the first six: it answers `unknown_store` for the settings
+/// stores (`persona`, `banner`, `notifications`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfigStore {
     Profiles,
@@ -2425,17 +2569,23 @@ pub enum ConfigStore {
     Subagents,
     Pins,
     ManagedAssets,
+    Persona,
+    Banner,
+    Notifications,
 }
 
 impl ConfigStore {
     /// Every store the protocol speaks, in wire order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Profiles,
         Self::Models,
         Self::ProfileFallbacks,
         Self::Subagents,
         Self::Pins,
         Self::ManagedAssets,
+        Self::Persona,
+        Self::Banner,
+        Self::Notifications,
     ];
 
     /// The wire name of the store.
@@ -2447,14 +2597,21 @@ impl ConfigStore {
             Self::Subagents => "subagents",
             Self::Pins => "pins",
             Self::ManagedAssets => "managed_assets",
+            Self::Persona => "persona",
+            Self::Banner => "banner",
+            Self::Notifications => "notifications",
         }
     }
 
     /// The owner layers the store is assembled from.
     pub fn scope(self) -> ConfigScope {
         match self {
-            Self::Profiles | Self::ProfileFallbacks | Self::ManagedAssets => ConfigScope::Global,
-            Self::Models | Self::Subagents => ConfigScope::GlobalProject,
+            Self::Profiles
+            | Self::ProfileFallbacks
+            | Self::ManagedAssets
+            | Self::Banner
+            | Self::Notifications => ConfigScope::Global,
+            Self::Models | Self::Subagents | Self::Persona => ConfigScope::GlobalProject,
             Self::Pins => ConfigScope::LocalRepo,
         }
     }
@@ -2466,9 +2623,15 @@ impl ConfigStore {
     }
 
     /// The files a write to this store may replace; empty when read-only.
+    /// `persona`'s `global` target also covers the project file when that
+    /// one already exists.
     pub fn write_targets(self) -> &'static [ConfigWriteTarget] {
         match self {
-            Self::Profiles | Self::ProfileFallbacks => &[ConfigWriteTarget::Global],
+            Self::Profiles
+            | Self::ProfileFallbacks
+            | Self::Persona
+            | Self::Banner
+            | Self::Notifications => &[ConfigWriteTarget::Global],
             Self::Pins => &[ConfigWriteTarget::Local, ConfigWriteTarget::Repo],
             Self::Models | Self::Subagents | Self::ManagedAssets => &[],
         }
@@ -2735,7 +2898,50 @@ impl ProfileFallbacksData {
     }
 }
 
-/// One `set_config` write. Only the three writable stores exist here, so a
+wire_enum! {
+    /// The persona a `persona` store holds (`{ mode }`).
+    PersonaMode, "mode" {
+        Gentleman => "gentleman",
+        Neutral => "neutral",
+    }
+}
+
+/// The complete `banner` store content, exactly `{ showRose, showTextLogo,
+/// color }`. Only the JSON object shape is checked here; the server keeps
+/// only those three settings and answers `invalid_data` for anything else.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BannerData(Value);
+
+impl BannerData {
+    pub fn new(data: Value) -> Result<Self, DesktopRpcError> {
+        store_document(&data, "banner")?;
+        Ok(Self(data))
+    }
+
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+}
+
+/// The complete `notifications` store content, as `get_config` returned it:
+/// the validated settings without `schema`, every file sound as the
+/// `"file"` marker (sent back where it was, it keeps that file). Only the
+/// JSON object shape is checked here; the server's owner validates the rest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NotificationsData(Value);
+
+impl NotificationsData {
+    pub fn new(data: Value) -> Result<Self, DesktopRpcError> {
+        store_document(&data, "notifications")?;
+        Ok(Self(data))
+    }
+
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+}
+
+/// One `set_config` write. Only the writable stores exist here, so a
 /// read-only store cannot be targeted through the typed API.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigWrite {
@@ -2749,6 +2955,13 @@ pub enum ConfigWrite {
         source: PinSource,
         profile: Option<String>,
     },
+    /// Set the persona as `/gentle:persona` does: the global file, plus the
+    /// project file only when it already exists.
+    Persona(PersonaMode),
+    /// Replace the whole `banner` store.
+    Banner(BannerData),
+    /// Replace the whole `notifications` store.
+    Notifications(NotificationsData),
 }
 
 impl ConfigWrite {
@@ -2774,14 +2987,21 @@ impl ConfigWrite {
             Self::Profiles(_) => ConfigStore::Profiles,
             Self::ProfileFallbacks(_) => ConfigStore::ProfileFallbacks,
             Self::Pin { .. } => ConfigStore::Pins,
+            Self::Persona(_) => ConfigStore::Persona,
+            Self::Banner(_) => ConfigStore::Banner,
+            Self::Notifications(_) => ConfigStore::Notifications,
         }
     }
 
     /// The target whose `writeRevision` must be sent as `expectedRevision`.
     pub fn write_target(&self) -> ConfigWriteTarget {
         match self {
-            Self::Profiles(_) | Self::ProfileFallbacks(_) => ConfigWriteTarget::Global,
             Self::Pin { source, .. } => source.write_target(),
+            Self::Profiles(_)
+            | Self::ProfileFallbacks(_)
+            | Self::Persona(_)
+            | Self::Banner(_)
+            | Self::Notifications(_) => ConfigWriteTarget::Global,
         }
     }
 }
@@ -2810,6 +3030,9 @@ fn set_config_params(
             }
             json!({ "source": source.as_str(), "profile": profile })
         }
+        ConfigWrite::Persona(mode) => json!({ "mode": mode.as_str() }),
+        ConfigWrite::Banner(data) => data.as_value().clone(),
+        ConfigWrite::Notifications(data) => data.as_value().clone(),
     };
     Ok(json!({
         "store": write.store().as_str(),
@@ -3718,6 +3941,19 @@ impl DesktopSession {
         )
     }
 
+    /// Issue `set_background_subagents` with `{ policy }` and, when resending
+    /// an approved confirmation, its `confirmationToken`.
+    pub fn issue_set_background_subagents(
+        &mut self,
+        policy: BackgroundPolicy,
+        confirmation_token: Option<&str>,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::SetBackgroundSubagents,
+            background::set_background_subagents_params(policy, confirmation_token)?,
+        )
+    }
+
     /// A new request with a fresh id; `params` is built by the typed callers
     /// above, never from app-supplied JSON.
     fn issue_with(
@@ -3983,7 +4219,7 @@ pub enum DesktopRpcError {
     InvalidLastStep(String),
     /// A design canvas `transition` outside the closed vocabulary.
     InvalidDesignTransition(String),
-    /// A config store identifier outside the six documented stores.
+    /// A config store identifier outside the nine documented stores.
     UnknownConfigStore(String),
     /// A config `scope` outside the closed vocabulary.
     InvalidConfigScope(String),

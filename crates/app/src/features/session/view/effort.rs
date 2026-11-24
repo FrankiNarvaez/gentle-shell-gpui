@@ -13,13 +13,14 @@ use crate::features::session::SessionView;
 use crate::shared::ui;
 
 impl SessionView {
-    /// The effort (thinking level) control: the level and a pixel meter in
-    /// the composer bar. It opens a card with a slider in Gentle Shell's rose
-    /// gradient, one stop per level the model accepts; click, drag or pick a
-    /// label below it.
+    /// The effort (thinking level) control: the level's icon and name in
+    /// the composer bar (the name drops only in a tiny pane, where the
+    /// tooltip still says it). It opens a card with a slider in Gentle
+    /// Shell's rose gradient, one stop per level the model accepts; click,
+    /// drag or pick a label below it.
     pub(super) fn render_effort_picker(
         &self,
-        narrow: bool,
+        tiny: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let levels = self.models.thinking_levels.clone();
@@ -39,9 +40,8 @@ impl SessionView {
             .xsmall()
             .text_color(ui::muted())
             .icon(Icon::new(effort_icon(&current)))
-            .tooltip("Effort: how long the model thinks")
-            .when(!narrow, |b| b.label(current.clone()))
-            .child(effort_meter(index, levels.len()));
+            .tooltip(format!("Effort: {current}. How long the model thinks"))
+            .when(!tiny, |b| b.label(current.clone()));
         Popover::new("effort-popover")
             .anchor(Anchor::BottomLeft)
             .trigger(trigger)
@@ -226,25 +226,6 @@ fn effort_short(level: &str) -> &str {
 fn effort_deep() -> Hsla {
     let petal = ui::petal();
     hsla(petal.h, petal.s * 0.7, petal.l * 0.32, 1.)
-}
-
-/// The trigger's pixel meter: one rising bar per level above the lowest,
-/// lit up to the current one.
-fn effort_meter(index: usize, count: usize) -> Div {
-    h_flex()
-        .items_end()
-        .gap(px(2.))
-        .ml_0p5()
-        .children((1..count).map(|i| {
-            div()
-                .w(rems(3. / 16.))
-                .h(rems((3. + 2. * i as f32) / 16.))
-                .bg(if i <= index {
-                    ui::petal()
-                } else {
-                    ui::faint().opacity(0.35)
-                })
-        }))
 }
 
 /// Each level's mark, from resting to all-out.

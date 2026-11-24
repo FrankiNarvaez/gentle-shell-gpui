@@ -15,8 +15,9 @@ const PAGES: &str = "\
 
 You run inside the Gentle Shell desktop app, where the user watches what you open.
 
-- Web pages (a dev server, a preview, docs): run `gentle-open <url>`; the page opens in the app's \
-browser. Never use `open`, `xdg-open`, `start` or launch a browser yourself.
+- Web pages (a dev server, a preview, docs): run `gentle-open <url>`; the page opens where the user \
+chose (the app's browser unless they picked their own). Never use `open`, `xdg-open`, `start` or \
+launch a browser yourself.
 - To use a page yourself (check a UI, fill a form, read what it shows), drive it in the app with \
 `gentle-browser` (or the `browser` tool when you have it): `gentle-browser open <url> --name app`, \
 then `snapshot app` (an outline with refs like e12), `click app e12`, `fill app e5 \"text\"`, \

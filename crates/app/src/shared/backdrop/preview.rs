@@ -61,7 +61,7 @@ pub fn render(theme: &Theme) -> Option<Look> {
         .image
         .as_ref()
         .filter(|_| !backdrop.effects.is_empty())
-        .and_then(|image| Picture::decode(&image.bytes))
+        .and_then(|image| Picture::decode(&image.bytes, 0.))
         .map(|picture| Effects::new(picture, &backdrop.effects));
     let mut report = format!(
         "Theme: {}\nScene: {name}\nRendered: {}\n",
@@ -334,7 +334,7 @@ fn effects_strip(theme: &Theme) -> Option<Vec<u8>> {
         return None;
     }
     let image = backdrop.image.as_ref()?;
-    let mut effects = Effects::new(Picture::decode(&image.bytes)?, &backdrop.effects);
+    let mut effects = Effects::new(Picture::decode(&image.bytes, 0.)?, &backdrop.effects);
     let mut rows = String::new();
     let mut width = 0f32;
     for (n, effect) in backdrop.effects.iter().enumerate() {

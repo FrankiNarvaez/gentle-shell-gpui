@@ -159,6 +159,50 @@ impl StatusEntry {
     }
 }
 
+/// The Changes tab's groups, in the order it lists them: what the next
+/// commit takes first, then edits to tracked files, then new files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeGroup {
+    Staged,
+    /// Tracked files' worktree edits and conflicts.
+    Unstaged,
+    Untracked,
+}
+
+impl ChangeGroup {
+    /// The badge `entry` shows in this group; `None` when it isn't in it.
+    /// A file with staged and unstaged edits is in both groups.
+    pub fn badge(self, entry: &StatusEntry) -> Option<char> {
+        match (self, entry.kind) {
+            (ChangeGroup::Staged, _) => entry.staged(),
+            (ChangeGroup::Unstaged, EntryKind::Untracked) => None,
+            (ChangeGroup::Unstaged, _) => entry.unstaged(),
+            (ChangeGroup::Untracked, EntryKind::Untracked) => Some('?'),
+            (ChangeGroup::Untracked, _) => None,
+        }
+    }
+}
+
+/// The non-empty groups in display order, each with its entries as
+/// `(index into entries, badge)` in status order.
+pub fn change_groups(entries: &[StatusEntry]) -> Vec<(ChangeGroup, Vec<(usize, char)>)> {
+    [
+        ChangeGroup::Staged,
+        ChangeGroup::Unstaged,
+        ChangeGroup::Untracked,
+    ]
+    .into_iter()
+    .filter_map(|group| {
+        let members: Vec<(usize, char)> = entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, entry)| group.badge(entry).map(|badge| (i, badge)))
+            .collect();
+        (!members.is_empty()).then_some((group, members))
+    })
+    .collect()
+}
+
 fn badge(code: char) -> Option<char> {
     match code {
         '.' | ' ' => None,
@@ -360,6 +404,64 @@ mod tests {
         );
         assert_eq!(tree.entries[4].orig.as_deref(), Some("src/old name.rs"));
         assert_eq!(tree.entries[5].kind, EntryKind::Conflict);
+    }
+
+    #[test]
+    fn change_groups_staged_then_unstaged_then_untracked() {
+        let tree = parse_status_v2(concat!(
+            "1 .M N... 100644 100644 100644 aaaa bbbb src/main.rs\0",
+            "1 MM N... 100644 100644 100644 aaaa bbbb docs/both.md\0",
+            "1 A. N... 000000 100644 100644 0000 cccc new.txt\0",
+            "u UU N... 100644 100644 100644 100644 aaaa bbbb cccc conflict.rs\0",
+            "? notes/todo.md\0",
+            "? loose.txt\0",
+        ));
+        let named: Vec<(ChangeGroup, Vec<(&str, char)>)> = change_groups(&tree.entries)
+            .into_iter()
+            .map(|(group, members)| {
+                let members = members
+                    .into_iter()
+                    .map(|(i, badge)| (tree.entries[i].path.as_str(), badge))
+                    .collect();
+                (group, members)
+            })
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                (
+                    ChangeGroup::Staged,
+                    vec![("docs/both.md", 'M'), ("new.txt", 'A')]
+                ),
+                (
+                    ChangeGroup::Unstaged,
+                    vec![
+                        ("src/main.rs", 'M'),
+                        ("docs/both.md", 'M'),
+                        ("conflict.rs", 'U')
+                    ]
+                ),
+                (
+                    ChangeGroup::Untracked,
+                    vec![("notes/todo.md", '?'), ("loose.txt", '?')]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn change_groups_leave_out_empty_groups() {
+        assert!(change_groups(&[]).is_empty());
+        let tree = parse_status_v2("? a.txt\0");
+        assert_eq!(
+            change_groups(&tree.entries),
+            vec![(ChangeGroup::Untracked, vec![(0, '?')])]
+        );
+        let tree = parse_status_v2("1 M. N... 100644 100644 100644 aaaa bbbb a.rs\0");
+        assert_eq!(
+            change_groups(&tree.entries),
+            vec![(ChangeGroup::Staged, vec![(0, 'M')])]
+        );
     }
 
     #[test]
