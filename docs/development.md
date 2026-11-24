@@ -50,17 +50,20 @@ cargo build --profile dist -p gentle-shell-gpui   # as in a release
 
 ### CLI
 
-`crates/app/src/cli.rs`: `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT]`.
+`crates/app/src/cli.rs`: `gentle-shell-gpui [FOLDER] [--cwd] [-p|--prompt TEXT]`.
 
 | Argument | Effect |
 | --- | --- |
 | `FOLDER` | Selects (or creates) the workspace with that root. Ignored if it is not a directory. Without a folder, the last workspace is restored. |
+| `--cwd` | Without `FOLDER`, opens the folder the app was launched in (`cli::launch_dir`) as a workspace instead of restoring the last one. It is what `gsd` passes; a plain launch (Start menu, Finder, Dock) never uses its launch folder this way. A `FOLDER` that doesn't exist is ignored without falling back to the launch folder. |
 | `-p TEXT`, `--prompt TEXT` | Opens a new agent tab and, once the backend starts, runs the text as if it had been typed in the composer (`SessionView::run_text` in `features/session/submit.rs`). |
 | `-p "!cmd"` | Runs `cmd` as a shell command in that tab; `-p "!!cmd"` keeps it out of the context (Pi convention). |
 | `--diagnostics` | Records resource diagnostics for this run, like `GENTLE_SHELL_GPUI_DIAGNOSTICS=1` (see [Diagnostics](#diagnostics)). |
 | `--diagnostics-report [FILE]` | Prints the ranking of a recording (the newest one without `FILE`) and exits. |
 
 `-p` is useful during development to bring the app to a specific state without typing into it.
+
+`gsd` (`crates/app/src/platform/gsd.rs`) is the user's command for this: a generated shim that runs `<app> --cwd "$@"` in the background (`start "" "<app>" --cwd %*` in a `.cmd` on Windows) and returns to the prompt. Unlike the agents' shims it lives on the user's own PATH, and only when they ask: the Windows installer ships `{app}\bin\gsd.cmd` and adds `{app}\bin` to `HKCU\Environment\Path` (removed on uninstall); ⌘K → Install `gsd` command writes `~/.local/bin/gsd` (macOS, Linux) or `<app data dir>\bin\gsd.cmd` plus that folder on the user PATH (Windows, read and written as the raw `REG_EXPAND_SZ` value so `%VAR%` entries survive). A marker line makes a `gsd` file the app's own: startup refreshes only that one (the executable moves on update), and the install refuses to overwrite anyone else's. An isolated copy (`GENTLE_SHELL_GPUI_DATA_DIR`) never refreshes it.
 
 ### Single instance
 

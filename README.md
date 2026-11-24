@@ -124,6 +124,23 @@ Each project's badge shows its initials or an icon you choose, in a color from t
 
 ---
 
+### `gsd` and the folder explorer (⌘O) — Open any folder, fast
+
+`gsd` in a terminal opens the folder you're in as a workspace, like `gs` opens Gentle Shell there; `gsd <folder>` opens that folder. In the app, ⌘O (Ctrl+O elsewhere) opens an explorer in the style of [oil.nvim](https://github.com/stevearc/oil.nvim) to pick a folder from the keyboard and open Gentle Shell in it.
+
+<details>
+<summary><kbd>More</kbd> <strong>The <code>gsd</code> command and the explorer's keys</strong></summary>
+
+<br>
+
+With the app already running, `gsd` switches the window to that workspace (creating it, with an agent tab) instead of starting a second app, and returns to your prompt at once. The Windows installer puts `gsd` on your user PATH (the uninstaller takes it off); elsewhere, or for a build from source, ⌘K → **Install `gsd` command** writes it to `~/.local/bin` (macOS, Linux) or adds it to your user PATH (Windows). On Windows `gsd` is a `.cmd`: it runs from cmd and PowerShell, not Git Bash. Launching the app itself (Start menu, Finder, Dock) still restores the last workspace.
+
+The explorer starts at the focused pane's folder and lists one folder at a time, folders first, git repositories marked `repo`: ↵ or → enters a folder (↵ on a file opens it), `-`, ← or ⌫ goes to the parent and selects the folder you came from, `~` goes home, and typing filters (start with `.` for dotfiles). Click a segment of the path to jump there. ⌘↵ (Ctrl+↵ elsewhere) opens the selected folder (or the one shown, when a file is selected) as a workspace with an agent tab, the same as `gsd <folder>`; **Open Gentle Shell here** opens the folder shown; ⌥↵ (Alt+↵) also opens a terminal tab there. A folder that already has a workspace switches to it, however it was reached (symlink, `..`, drive-letter case). It is also in ⌘K and the workspace switcher as **Browse folders**.
+
+</details>
+
+---
+
 ### Terminal panes — Your login shell, in a real PTY
 
 Your login shell in a real PTY (alacritty_terminal) with the Gentleman colors; ⌘⇧T opens a terminal tab.
@@ -706,7 +723,7 @@ On first launch, or whenever something required is missing, a setup screen check
 Download the asset for your system from [Releases](https://github.com/Gentleman-Programming/gentle-shell-gpui/releases) (names under [Packages and releases](#packages-and-releases)).
 
 - **macOS:** open `gentle-shell-gpui-<version>-macos-aarch64.dmg` (Apple silicon) or `…-macos-x86_64.dmg` (Intel) and drag **Gentle Shell** onto **Applications**. The app is ad-hoc signed, not notarized, so the first launch is blocked: right-click the app → **Open** → **Open**, or allow it in System Settings → Privacy & Security → **Open Anyway**. From a terminal, `xattr -dr com.apple.quarantine /Applications/"Gentle Shell.app"` does the same. Later versions install from inside the app ([Updating the app](#updating-the-app)).
-- **Windows:** run `gentle-shell-gpui-<version>-windows-x86_64-setup.exe`. It installs for your user only (no admin rights) into `%LOCALAPPDATA%\Programs\Gentle Shell`, adds Gentle Shell to the Start menu (and the desktop if you tick it) and to Apps → Installed apps for uninstalling; installing a newer setup over it upgrades in place. SmartScreen may warn about an unknown publisher: **More info** → **Run anyway**. The `…-windows-x86_64.zip` holds the bare exe (the in-app updater uses it). The in-app browser uses the Microsoft Edge WebView2 Runtime, which Windows 11 and updated Windows 10 already have.
+- **Windows:** run `gentle-shell-gpui-<version>-windows-x86_64-setup.exe`. It installs for your user only (no admin rights) into `%LOCALAPPDATA%\Programs\Gentle Shell`, adds Gentle Shell to the Start menu (and the desktop if you tick it) and to Apps → Installed apps for uninstalling, and puts the `gsd` command on your user PATH; installing a newer setup over it upgrades in place. SmartScreen may warn about an unknown publisher: **More info** → **Run anyway**. The `…-windows-x86_64.zip` holds the bare exe (the in-app updater uses it). The in-app browser uses the Microsoft Edge WebView2 Runtime, which Windows 11 and updated Windows 10 already have.
 - **Linux:** extract the tarball and run `gentle-shell-gpui-<version>/gentle-shell-gpui`. Copy the `.desktop` file to `~/.local/share/applications/` (and fix its `Exec=` path) to get a launcher entry. The app links WebKitGTK 4.1 for its in-app browser: on Debian or Ubuntu (22.04 or newer) `sudo apt install libwebkit2gtk-4.1-0` if it isn't installed yet.
 
 ### From source (no release installed)

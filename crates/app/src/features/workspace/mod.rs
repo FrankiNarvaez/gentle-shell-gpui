@@ -20,6 +20,7 @@ use gpui_kit::*;
 
 use crate::features::canvas::{CanvasEvent, CanvasView};
 use crate::features::docs::{DocsEvent, DocsView};
+use crate::features::explorer::{ExplorerEvent, ExplorerView};
 use crate::features::memory::{MemoryEvent, MemoryView};
 use crate::features::notices::{self, Notices};
 use crate::features::onboarding::{OnboardingEvent, OnboardingView, Probe};
@@ -92,6 +93,7 @@ actions!(
         OpenPalette,
         OpenWorkspaces,
         OpenSettings,
+        OpenExplorer,
         CloseOverlay,
         Quit
     ]
@@ -112,6 +114,7 @@ enum Overlay {
     Providers(Entity<ProvidersView>),
     Sessions(Entity<SessionsView>),
     Palette(Entity<PaletteView>),
+    Explorer(Entity<ExplorerView>),
     Usage(Entity<UsageView>),
     Memory(Entity<MemoryView>),
     Docs(Entity<DocsView>),
@@ -625,11 +628,7 @@ impl Workspace {
             device,
         } = request;
         if let Some(folder) = folder {
-            let index = match self.spaces.iter().position(|s| s.root == folder) {
-                Some(index) => index,
-                None => self.push_space(None, folder),
-            };
-            self.switch_workspace(index, window, cx);
+            self.show_folder(folder, window, cx);
         }
         if let Some(prompt) = prompt {
             let root = self.space().root.clone();
