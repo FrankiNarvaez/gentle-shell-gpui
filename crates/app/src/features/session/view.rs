@@ -2186,7 +2186,7 @@ struct BubbleText {
 
 impl BubbleText {
     fn new(text: &str) -> Self {
-        let markdown = gentle_core::markdown::sent_message(text);
+        let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(text));
         let lines = line_count(&markdown);
         let folded = (lines > USER_LINES + USER_SLACK).then(|| {
             let (head, _) = head_slice(&markdown, lines, USER_LINES);

@@ -284,9 +284,9 @@ impl SessionView {
         .detach();
     }
 
-    /// The composer's paste hook: clipboard images and copied image files
-    /// become attachments, and so does long text ([`Self::paste_text`]);
-    /// anything else pastes as text.
+    /// The composer's paste hook: clipboard images and copied files become
+    /// attachments (a copied folder is refused, as when dropped), and so does
+    /// long text ([`Self::paste_text`]); anything else pastes as text.
     pub(super) fn paste_clipboard(
         &mut self,
         item: &ClipboardItem,
@@ -303,10 +303,6 @@ impl SessionView {
                 }
                 _ => {}
             }
-        }
-        // Copied files that are not images paste as their names.
-        if !paths.iter().any(|p| attachments::is_image_file(p)) {
-            paths.clear();
         }
         if images.is_empty() && paths.is_empty() {
             return item

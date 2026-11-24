@@ -120,8 +120,8 @@ pub fn load_path(path: &Path) -> Result<Loaded, Rejection> {
 }
 
 /// Whether a path is an image, judged by its first bytes rather than its
-/// extension (a misnamed `shot.pnmg` still attaches; a pasted non-image
-/// stays text, and a dropped or picked one attaches as a file).
+/// extension (a misnamed `shot.pnmg` still attaches as an image; a
+/// non-image attaches as a file).
 pub fn is_image_file(path: &Path) -> bool {
     use std::io::Read as _;
     let mut head = [0u8; 12];
@@ -297,14 +297,38 @@ pub fn needs_lead(before: Option<char>) -> bool {
 /// `[` and the name: where a paste's token starts.
 const OPEN: &str = "[Pasted text";
 
+/// Where an image token starts in messages sent before images left the
+/// composer.
+const IMAGE_OPEN: &str = "[Image";
+
 /// Every paste token in `text`, spelled `[Pasted text #N]` or
 /// `[Pasted text#N]`: byte range and number.
 pub fn find_tokens(text: &str) -> Vec<(Range<usize>, usize)> {
+    find_named(text, OPEN)
+}
+
+/// A sent message's text with each old `[Image #N]` token shown as `🖼 #N`:
+/// sessions from before images left the composer still carry them.
+pub fn chip_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for (range, number) in find_named(text, IMAGE_OPEN) {
+        out.push_str(&text[last..range.start]);
+        out.push_str(&format!("🖼 #{number}"));
+        last = range.end;
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
+/// Every token opened by `open` (`[` and its name), spelled `{open} #N]` or
+/// `{open}#N]`: byte range and number.
+fn find_named(text: &str, open: &str) -> Vec<(Range<usize>, usize)> {
     let mut found = Vec::new();
     let mut from = 0;
-    while let Some(offset) = text[from..].find(OPEN) {
+    while let Some(offset) = text[from..].find(open) {
         let start = from + offset;
-        let mut rest = &text[start + OPEN.len()..];
+        let mut rest = &text[start + open.len()..];
         rest = rest.strip_prefix(' ').unwrap_or(rest);
         let parsed = rest.strip_prefix('#').and_then(|rest| {
             let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
@@ -317,7 +341,7 @@ pub fn find_tokens(text: &str) -> Vec<(Range<usize>, usize)> {
                 found.push((start..end, number));
                 from = end;
             }
-            None => from = start + OPEN.len(),
+            None => from = start + open.len(),
         }
     }
     found
@@ -790,6 +814,15 @@ mod tests {
                 ("[Pasted text #4]", 4)
             ]
         );
+    }
+
+    /// S7: messages sent before images left the composer keep their
+    /// `[Image #N]` text; the conversation still shows them as chips.
+    #[test]
+    fn history_shows_old_image_tokens_as_chips() {
+        let text = chip_text("see [Image #1] and [Image#2], not [Image #] or [Pasted text #1]");
+        assert_eq!(text, "see 🖼 #1 and 🖼 #2, not [Image #] or [Pasted text #1]");
+        assert_eq!(chip_text("no images"), "no images");
     }
 
     #[test]

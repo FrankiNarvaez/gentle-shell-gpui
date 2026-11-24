@@ -712,6 +712,13 @@ fn user_bubble_backslash_hard_break_copy(cx: &mut TestAppContext) {
     assert_user_bubble_copy(cx, "one\\\ntwo", "one\ntwo", Some(1.), 1.);
 }
 
+/// S7: a message sent before images left the composer still carries
+/// `[Image #N]`; its bubble shows the chip, as it did then.
+#[gpui::test]
+fn user_bubble_shows_old_image_tokens_as_chips(cx: &mut TestAppContext) {
+    assert_user_bubble_copy(cx, "see [Image #1]", "see 🖼 #1", None, 1.);
+}
+
 /// Attaching an image types nothing into the composer, so the strip above it
 /// is the only list of what will be sent; removing one from the strip leaves
 /// the rest, in the strip's own order.
@@ -740,6 +747,40 @@ fn images_attach_without_text_and_the_strip_is_what_is_sent(cx: &mut TestAppCont
         view.attachments.iter().map(|a| a.key).collect()
     });
     assert_eq!(sent, vec![second_key], "the strip's images, in its order");
+}
+
+/// S1: a copied file that is not an image pastes as a file attachment, like
+/// a dropped one, and types nothing into the composer.
+#[gpui::test]
+fn pasting_a_copied_file_attaches_it(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let dir = std::env::temp_dir().join(format!("gs-paste-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("report.pdf");
+    std::fs::write(&report, b"%PDF-1.7\n").unwrap();
+    let item = gpui_kit::ClipboardItem {
+        entries: vec![gpui_kit::ClipboardEntry::ExternalPaths(
+            gpui_kit::ExternalPaths(vec![report.clone()].into()),
+        )],
+    };
+
+    let handled = view.update_in(cx, |view, window, cx| {
+        view.paste_clipboard(&item, window, cx)
+    });
+    cx.run_until_parked();
+
+    assert!(handled, "the paste is taken as an attachment");
+    let files: Vec<_> = view.read_with(cx, |view, _| {
+        view.files.iter().map(|file| file.path.clone()).collect()
+    });
+    assert_eq!(files, vec![report]);
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string()),
+        "",
+        "pasting a file types nothing"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// ↑ recalls a sent prompt while an image waits: only the text changes, so

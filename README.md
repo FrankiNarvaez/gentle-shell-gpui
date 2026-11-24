@@ -279,16 +279,16 @@ Click the context percentage to compact now or turn auto-compaction on or off. F
 
 ---
 
-### Attachments — Images and long pastes
+### Attachments — Files, images and long pastes
 
-Attach images with 📎, by pasting (screenshots or copied image files) or by dropping them on the composer. PNG, JPEG, GIF and WebP go as they are; BMP and TIFF (what Windows' Snipping Tool and Print Screen copy) are converted to PNG.
+Attach files and images with 📎, by pasting (screenshots or copied files) or by dropping them on the composer. Images go to the agent with the prompt: PNG, JPEG, GIF and WebP as they are; BMP and TIFF (what Windows' Snipping Tool and Print Screen copy) are converted to PNG. Any other file goes by path, and the agent reads it with its own tools. Folders are refused.
 
 <details>
-<summary><kbd>More</kbd> <strong>Formats, tokens and paste chips</strong></summary>
+<summary><kbd>More</kbd> <strong>Formats, file cards and paste chips</strong></summary>
 
 <br>
 
-Each image becomes an `[Image #N]` token and a thumbnail, and the agent receives the images with the prompt. Models without image input and `!cmd` shell commands refuse image attachments with a warning. A long paste (6 lines or more, or 800 characters or more) doesn't flood the composer: it becomes a 📄 `#N` chip where it was pasted and a card showing the start of the text, `#N` and its line count. Remove the card or delete the chip to drop it; the agent receives the full text in its place. In the conversation, a long message you sent shows its first lines and "N more lines" to unfold it.
+Attaching types nothing into the composer: each image waits as a numbered thumbnail (`#1`, `#2`… in the order they are sent, so you can write "in image 2") and each file as a card with its name and size; remove either with its ×. Images over 20 MB are refused. Files are not uploaded: the prompt names them after your text (`Attached files:` and one path per line), relative to the agent's folder when inside it and absolute otherwise. Models without image input refuse images, and `!cmd` shell commands refuse any attachment, with a warning. Messages sent before this change still show their `[Image #N]` as 🖼 `#N`. A long paste (6 lines or more, or 800 characters or more) doesn't flood the composer: it becomes a 📄 `#N` chip where it was pasted and a card showing the start of the text, `#N` and its line count. Remove the card or delete the chip to drop it; the agent receives the full text in its place. In the conversation, a long message you sent shows its first lines and "N more lines" to unfold it.
 
 </details>
 
