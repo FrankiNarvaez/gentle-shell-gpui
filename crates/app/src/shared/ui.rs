@@ -1244,6 +1244,41 @@ pub fn orbit(color: Hsla, radius: Rems) -> Div {
         .child(frames_every(SLOW_FRAME))
 }
 
+/// A five-second orbit with a pause on each side, for compaction in progress.
+#[track_caller]
+pub(crate) fn paused_orbit(color: Hsla, radius: Rems) -> Div {
+    let t = live_phase(5.);
+    let ease = |x: f32| x * x * (3. - 2. * x);
+    let phase = if t < 0.2 {
+        0.
+    } else if t < 0.55 {
+        0.5 * ease((t - 0.2) / 0.35)
+    } else if t < 0.75 {
+        0.5
+    } else {
+        0.5 + 0.5 * ease((t - 0.75) / 0.25)
+    };
+    div()
+        .size_full()
+        .child(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, cx| {
+                    let radius = radius.to_pixels(window.rem_size());
+                    paint_orbit(
+                        bounds,
+                        radius,
+                        if cx.reduce_motion() { 0. } else { phase },
+                        color,
+                        window,
+                    );
+                },
+            )
+            .size_full(),
+        )
+        .child(frames_every(SLOW_FRAME))
+}
+
 /// [`orbit`]'s streak: its head `phase` of the way round the border, the
 /// tail drawn as pieces of rising opacity.
 fn paint_orbit(

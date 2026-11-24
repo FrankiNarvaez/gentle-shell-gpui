@@ -109,6 +109,7 @@ impl SessionView {
                 cx.entity(),
                 self.usage.context_details_open,
                 self.usage.context_ring_hovered,
+                compacting,
                 cx,
             );
         chip_popover(options, move || {
@@ -516,8 +517,23 @@ impl SessionView {
             div()
                 .id("context-ring")
                 .debug_selector(|| "context-ring".into())
+                .relative()
                 .flex_shrink_0()
                 .child(self.render_context_control(cx))
+                .when(self.usage.compacting, |ring| {
+                    ring.child(
+                        self.live_slots
+                            .slot("context-compaction-orbit", || {
+                                ui::paused_orbit(ui::info(), rems(99.)).into_any_element()
+                            })
+                            .debug_selector(|| "context-compaction-orbit".into())
+                            .absolute()
+                            .top(px(-2.))
+                            .left(px(-2.))
+                            .right(px(-2.))
+                            .bottom(px(-2.)),
+                    )
+                })
         });
         let action = div()
             .relative()

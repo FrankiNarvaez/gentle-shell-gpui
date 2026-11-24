@@ -1015,16 +1015,53 @@ fn context_ring_advice_updates_at_boundaries_and_keeps_controls(cx: &mut TestApp
 fn context_ring_replaces_legacy_context_meter(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     view.update(cx, |view, cx| {
-        view.usage.compacting = true;
         view.usage.context_percent = Some(95.0);
         cx.notify();
     });
     assert!(!drawn(cx, "legacy-context-chip"));
     assert!(!drawn(cx, "context-percent"));
     assert!(!drawn(cx, "context-window"));
-    click(cx, "context-ring");
-    assert!(drawn(cx, "context-compact-control"));
-    assert!(drawn(cx, "context-auto-compaction"));
+    for end in [
+        json!({"type": "compaction_end"}),
+        json!({"type": "compaction_end", "errorMessage": "failed"}),
+    ] {
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        view.update_in(cx, |view, window, cx| {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Event(json!({"type": "compaction_start"}))],
+                window,
+                cx,
+            );
+        });
+        assert!(!drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-compaction-orbit"));
+        click(cx, "context-ring");
+        cx.simulate_keystrokes("enter");
+        assert!(!drawn(cx, "context-compact-control"));
+        let at = cx.debug_bounds("context-ring").unwrap().center();
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
+        view.update_in(cx, |view, window, cx| {
+            view.handle_batch(vec![pi_rpc::Incoming::Event(end)], window, cx);
+        });
+        assert!(!drawn(cx, "context-compaction-orbit"));
+        cx.simulate_mouse_move(
+            gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+            None,
+            Modifiers::none(),
+        );
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(drawn(cx, "context-ring-overview-hint"));
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-auto-compaction"));
+        click(cx, "context-ring");
+    }
 }
 
 struct SizedSession {

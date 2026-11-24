@@ -62,6 +62,7 @@ impl SessionView {
             }
             Incoming::Exited(code) => {
                 self.backend.status = BackendStatus::Exited(code);
+                self.usage.compacting = false;
                 self.transcript.interrupt();
                 self.extension.dialogs.clear();
                 // Nothing the dead backend said or numbered applies any more.
@@ -81,7 +82,11 @@ impl SessionView {
         }
         match event["type"].as_str() {
             Some("queue_update") => self.activity.queued = queued_count(event),
-            Some("compaction_start") => self.usage.compacting = true,
+            Some("compaction_start") => {
+                self.usage.compacting = true;
+                self.usage.context_details_open = false;
+                self.usage.context_ring_hovered = false;
+            }
             Some("compaction_end") => {
                 self.usage.compacting = false;
                 self.usage.context_revision = self.usage.context_revision.wrapping_add(1);

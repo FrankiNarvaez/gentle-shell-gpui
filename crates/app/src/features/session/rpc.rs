@@ -1036,6 +1036,9 @@ impl SessionView {
             return;
         }
         self.usage.compacting = true;
+        self.usage.context_details_open = false;
+        self.usage.context_ring_hovered = false;
+        cx.notify();
         let mut command = json!({"type": "compact"});
         if let Some(instructions) = instructions {
             command["customInstructions"] = instructions.into();

@@ -5,7 +5,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as _};
 use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -683,7 +683,14 @@ pub(super) struct ChipPopoverOptions {
     count: SharedString,
     action: Option<ChipHeaderAction>,
     mono: bool,
-    ring: Option<(f32, ButtonCustomVariant, Entity<SessionView>, bool, bool)>,
+    ring: Option<(
+        f32,
+        ButtonCustomVariant,
+        Entity<SessionView>,
+        bool,
+        bool,
+        bool,
+    )>,
 }
 
 impl ChipPopoverOptions {
@@ -730,6 +737,7 @@ impl ChipPopoverOptions {
         session: Entity<SessionView>,
         open: bool,
         hovered: bool,
+        compacting: bool,
         cx: &App,
     ) -> Self {
         self.ring = Some((
@@ -738,6 +746,7 @@ impl ChipPopoverOptions {
             session,
             open,
             hovered,
+            compacting,
         ));
         self
     }
@@ -769,8 +778,8 @@ pub(super) fn chip_popover(
     } = options;
     let ring_session = ring
         .as_ref()
-        .map(|(_, _, session, _, _)| session.downgrade());
-    let trigger = if let Some((percent, style, session, open, hovered)) = ring {
+        .map(|(_, _, session, open, _, compacting)| (session.downgrade(), *open && !compacting));
+    let trigger = if let Some((percent, style, session, open, hovered, compacting)) = ring {
         let hover_session = session.downgrade();
         Button::new("context-ring-trigger")
             .custom(style)
@@ -781,11 +790,13 @@ pub(super) fn chip_popover(
             .items_center()
             .justify_center()
             .rounded_full()
-            .cursor_pointer()
+            .disabled(compacting)
+            .when(!compacting, |button| button.cursor_pointer())
             .on_hover(move |hovered, _, cx| {
                 let _ = hover_session.update(cx, |session, cx| {
-                    if session.usage.context_ring_hovered != *hovered {
-                        session.usage.context_ring_hovered = *hovered;
+                    let hovered = *hovered && !session.usage.compacting;
+                    if session.usage.context_ring_hovered != hovered {
+                        session.usage.context_ring_hovered = hovered;
                         cx.notify();
                     }
                 });
@@ -793,7 +804,7 @@ pub(super) fn chip_popover(
             .child(
                 div()
                     .id("context-ring")
-                    .when(!open, |d| {
+                    .when(!open && !compacting, |d| {
                         d.tooltip(move |window, cx| {
                             let session = session.clone();
                             let overview = cx.new(|cx| {
@@ -803,7 +814,7 @@ pub(super) fn chip_popover(
                             Tooltip::element(move |_, _| overview.clone()).build(window, cx)
                         })
                     })
-                    .child(context_ring(percent, color, hovered)),
+                    .child(context_ring(percent, color, hovered && !compacting)),
             )
     } else {
         Button::new(SharedString::from(format!("{id}-chip")))
@@ -819,10 +830,10 @@ pub(super) fn chip_popover(
         .trigger(trigger)
         .w(rems(360. / 16.))
         .appearance(false)
-        .when_some(ring_session, |popover, session| {
-            popover.on_open_change(move |open, _, cx| {
+        .when_some(ring_session, |popover, (session, open)| {
+            popover.open(open).on_open_change(move |open, _, cx| {
                 let _ = session.update(cx, |session, cx| {
-                    session.usage.context_details_open = *open;
+                    session.usage.context_details_open = *open && !session.usage.compacting;
                     cx.notify();
                 });
             })
