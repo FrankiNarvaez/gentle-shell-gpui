@@ -57,6 +57,9 @@ pub struct SavedWorkspace {
     /// The workspace's badge as the person chose it.
     #[serde(default, skip_serializing_if = "Badge::is_default")]
     pub badge: Badge,
+    /// Older layouts show all workspaces expanded by default.
+    #[serde(default = "shown")]
+    pub sidebar_expanded: bool,
 }
 
 /// How a workspace's badge looks: an icon in place of its initials, and a
@@ -277,6 +280,16 @@ pub struct SavedState {
     /// Older workspaces.json files keep the familiar horizontal layout.
     #[serde(default)]
     pub tab_layout: TabLayout,
+    /// Whether the vertical navigator uses its narrow icon rail.
+    #[serde(default)]
+    pub sidebar_compact: bool,
+    /// Expanded navigator width, in logical pixels at 100% UI scale.
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
+}
+
+fn default_sidebar_width() -> f32 {
+    260.
 }
 
 fn shown() -> bool {
@@ -291,6 +304,8 @@ impl Default for SavedState {
             workspaces: Vec::new(),
             sidebar: true,
             tab_layout: TabLayout::Horizontal,
+            sidebar_compact: false,
+            sidebar_width: default_sidebar_width(),
         }
     }
 }

@@ -10,12 +10,38 @@ fn platform_select_modifier(event: &ClickEvent, cx: &App) -> bool {
 }
 
 impl Workspace {
-    pub(super) fn toggle_tab_layout(&mut self, cx: &mut Context<Self>) {
-        let next = match self.tab_layout {
-            TabLayout::Horizontal => TabLayout::Vertical,
-            TabLayout::Vertical => TabLayout::Horizontal,
-        };
-        self.set_tab_layout(next, cx);
+    /// The main navigator stays on the left; toggle only its width.
+    pub(super) fn toggle_sidebar_compact(&mut self, cx: &mut Context<Self>) {
+        self.cancel_workspace_rename_state(cx);
+        if self.tab_layout == TabLayout::Horizontal {
+            self.tab_layout = TabLayout::Vertical;
+            self.sidebar_compact = false;
+        } else {
+            self.sidebar_compact = !self.sidebar_compact;
+        }
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
+    pub(super) fn tab_sidebar_width(&self) -> f32 {
+        if self.sidebar_compact {
+            COMPACT_SIDEBAR_WIDTH
+        } else {
+            self.sidebar_width
+        }
+    }
+
+    /// Resize only the expanded navigator, keeping its width while compact.
+    pub(super) fn resize_tab_sidebar(&mut self, width: f32, cx: &mut Context<Self>) {
+        if self.tab_layout != TabLayout::Vertical || self.sidebar_compact || !width.is_finite() {
+            return;
+        }
+        let width = width.round().clamp(MIN_TAB_SIDEBAR_WIDTH, MAX_TAB_SIDEBAR_WIDTH);
+        if self.sidebar_width != width {
+            self.sidebar_width = width;
+            self.schedule_save(cx);
+            cx.notify();
+        }
     }
 
     /// All presentation controls share one idempotent, persisted state change.
@@ -57,6 +83,35 @@ impl Workspace {
                         .update(cx, |this, cx| this.set_tab_layout(TabLayout::Vertical, cx));
                 }),
         )
+    }
+
+    /// Move the existing tab, including all its live pane entities, without
+    /// closing it or changing the agents' working directories.
+    pub(super) fn move_tab_to_workspace(
+        &mut self,
+        id: usize,
+        to: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(from) = self
+            .spaces
+            .iter()
+            .position(|s| s.tabs.iter().any(|t| t.id == id))
+        else {
+            return;
+        };
+        if from == to || to >= self.spaces.len() {
+            return;
+        }
+        self.finish_tab_rename(true, window, cx);
+        let Some(index) = transfer_tab(&mut self.spaces, from, to, id) else {
+            return;
+        };
+        self.clear_tab_selection(cx);
+        self.spaces[to].sidebar_expanded = true;
+        self.spaces[to].active = index;
+        self.switch_workspace(to, window, cx);
     }
 
     /// Keep the selected tab stable when rows move, and pins ahead of other
@@ -658,6 +713,24 @@ fn pruned_selection(
     })
 }
 
+/// Transfer ownership of a tab, preserving its identity and pinned order.
+fn transfer_tab(spaces: &mut [Space], from: usize, to: usize, id: usize) -> Option<usize> {
+    if from == to || from >= spaces.len() || to >= spaces.len() {
+        return None;
+    }
+    let index = spaces[from].tabs.iter().position(|tab| tab.id == id)?;
+    let tab = spaces[from].tabs.remove(index);
+    after_removal(&mut spaces[from], index);
+    let target = &mut spaces[to];
+    let insert = if tab.pinned {
+        target.tabs.iter().take_while(|tab| tab.pinned).count()
+    } else {
+        target.tabs.len()
+    };
+    reorder_keeping_active(target, |tabs| tabs.insert(insert, tab));
+    Some(insert)
+}
+
 /// Keep the selected tab after removal, or select its neighbour if it closed.
 pub(super) fn after_removal(space: &mut Space, index: usize) {
     let active = space.active - usize::from(index < space.active);
@@ -694,6 +767,27 @@ mod tests {
 
     fn ids(tabs: &[Tab]) -> Vec<usize> {
         tabs.iter().map(|t| t.id).collect()
+    }
+
+    #[test]
+    fn transfer_preserves_identity_pin_and_source_selection() {
+        let mut spaces = [
+            Space::new("a".into(), PathBuf::from("/a")),
+            Space::new("b".into(), PathBuf::from("/b")),
+        ];
+        spaces[0].tabs = vec![unbuilt(1, true), unbuilt(2, false)];
+        spaces[0].active = 1;
+        spaces[1].tabs = vec![unbuilt(3, true), unbuilt(4, false)];
+        spaces[1].active = 1;
+        assert_eq!(super::transfer_tab(&mut spaces, 0, 1, 1), Some(1));
+        assert_eq!(ids(&spaces[0].tabs), [2]);
+        assert_eq!(spaces[0].active, 0);
+        assert_eq!(ids(&spaces[1].tabs), [3, 1, 4]);
+        assert_eq!(spaces[1].tabs[spaces[1].active].id, 4);
+        assert!(spaces[1].tabs[1].pinned);
+        assert_eq!(super::transfer_tab(&mut spaces, 0, 1, 2), Some(3));
+        assert!(spaces[0].tabs.is_empty());
+        assert_eq!(spaces[0].active, 0);
     }
 
     #[test]
@@ -886,7 +980,8 @@ mod tests {
                         sidebar: None,
                         sidebar_visible: false,
                         tab_layout: TabLayout::Horizontal,
-                        sidebar_open_spaces: HashMap::new(),
+                        sidebar_compact: false,
+                        sidebar_width: super::super::SIDEBAR_WIDTH,
                         badge_picker: None,
                         open_menu: None,
                         workspace_rename: None,
@@ -914,6 +1009,49 @@ mod tests {
                     workspace.update(cx, |workspace, cx| body(workspace, window, cx));
                 })
                 .unwrap();
+        });
+    }
+
+    #[gpui::test]
+    fn empty_workspace_can_open_and_close_first_tab(cx: &mut TestAppContext) {
+        with_workspace(
+            cx,
+            vec![space_with("A", &[]), space_with("B", &[])],
+            0,
+            |ws, window, cx| {
+                ws.switch_workspace(1, window, cx);
+                assert!(ws.space().tabs.is_empty());
+                ws.open_workspace_tab(1, PaneKind::Terminal, window, cx);
+                assert_eq!(ws.space().tabs.len(), 1);
+                let pane = ws.focused_pane().unwrap();
+                assert!(ws.panes.contains_key(&pane));
+                ws.switch_workspace(0, window, cx);
+                assert!(ws.space().tabs.is_empty());
+                assert!(ws.panes.contains_key(&pane));
+                ws.switch_workspace(1, window, cx);
+                assert_eq!(ws.focused_pane(), Some(pane));
+                ws.close_tab_now(0, window, cx);
+                assert!(ws.space().tabs.is_empty());
+                assert!(!ws.panes.contains_key(&pane));
+            },
+        );
+    }
+
+    #[gpui::test]
+    fn sidebar_width_survives_compact_toggle_and_respects_limits(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
+            ws.toggle_sidebar_compact(cx);
+            ws.resize_tab_sidebar(345., cx);
+            assert_eq!(ws.tab_sidebar_width(), 345.);
+            ws.toggle_sidebar_compact(cx);
+            assert_eq!(ws.tab_sidebar_width(), 48.);
+            ws.resize_tab_sidebar(420., cx);
+            ws.toggle_sidebar_compact(cx);
+            assert_eq!(ws.tab_sidebar_width(), 345.);
+            ws.resize_tab_sidebar(10., cx);
+            assert_eq!(ws.tab_sidebar_width(), 180.);
+            ws.resize_tab_sidebar(900., cx);
+            assert_eq!(ws.tab_sidebar_width(), 600.);
         });
     }
 

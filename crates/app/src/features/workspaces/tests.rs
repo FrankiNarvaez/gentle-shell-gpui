@@ -41,6 +41,7 @@ fn sample() -> SavedState {
                 active_tab: 0,
                 last_active: 10,
                 badge: Badge::default(),
+                sidebar_expanded: true,
             },
             SavedWorkspace {
                 name: "project".into(),
@@ -62,6 +63,7 @@ fn sample() -> SavedState {
                 }],
                 active_tab: 0,
                 last_active: 20,
+                sidebar_expanded: false,
                 badge: Badge {
                     icon: Some(BadgeIcon::Rocket),
                     color: Some(BadgeColor::Teal),
@@ -70,6 +72,8 @@ fn sample() -> SavedState {
         ],
         sidebar: false,
         tab_layout: TabLayout::Vertical,
+        sidebar_compact: true,
+        sidebar_width: 340.,
     }
 }
 
@@ -106,7 +110,10 @@ fn json_round_trip() {
     assert_eq!(minimal.current, 0);
     // A file from before the sidebar was saved keeps it showing.
     assert!(minimal.sidebar);
+    assert!(minimal.workspaces[0].sidebar_expanded);
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
+    assert!(!minimal.sidebar_compact);
+    assert_eq!(minimal.sidebar_width, 260.);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
 

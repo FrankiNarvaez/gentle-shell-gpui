@@ -100,6 +100,9 @@ actions!(
 );
 
 pub const SIDEBAR_WIDTH: f32 = 260.;
+const COMPACT_SIDEBAR_WIDTH: f32 = 48.;
+const MIN_TAB_SIDEBAR_WIDTH: f32 = 180.;
+const MAX_TAB_SIDEBAR_WIDTH: f32 = 600.;
 
 /// What the window tells whoever embeds things in it (the sidebar's owner).
 pub enum WorkspaceEvent {
@@ -279,6 +282,8 @@ struct Space {
     active: usize,
     /// The badge's chosen icon and color.
     badge: Badge,
+    /// Whether this workspace's sessions are visible in the sidebar.
+    sidebar_expanded: bool,
 }
 
 impl Space {
@@ -290,9 +295,14 @@ impl Space {
             tabs: Vec::new(),
             active: 0,
             badge: Badge::default(),
+            sidebar_expanded: true,
         }
     }
 }
+
+/// Dragged by the right edge of the expanded workspace navigator.
+#[derive(Clone)]
+struct SidebarResizeDrag;
 
 /// Dragged by a divider: which split it resizes.
 #[derive(Clone)]
@@ -385,9 +395,8 @@ pub struct Workspace {
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     tab_layout: TabLayout,
-    /// Workspaces opened or closed by hand in the sidebar, by name; one not
-    /// listed is open while it is the shown one.
-    sidebar_open_spaces: HashMap<String, bool>,
+    sidebar_compact: bool,
+    sidebar_width: f32,
     /// The workspace whose badge picker is open, and where it opened.
     badge_picker: Option<(usize, Point<Pixels>)>,
     /// A right-click context menu owned by the workspace so its open state
@@ -466,6 +475,7 @@ impl Workspace {
                     tabs: Vec::new(),
                     active: 0,
                     badge: w.badge,
+                    sidebar_expanded: w.sidebar_expanded,
                 }
             })
             .collect();
@@ -530,7 +540,10 @@ impl Workspace {
             sidebar: None,
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
-            sidebar_open_spaces: HashMap::new(),
+            sidebar_compact: saved.sidebar_compact,
+            sidebar_width: saved
+                .sidebar_width
+                .clamp(MIN_TAB_SIDEBAR_WIDTH, MAX_TAB_SIDEBAR_WIDTH),
             badge_picker: None,
             open_menu: None,
             workspace_rename: None,
@@ -591,7 +604,6 @@ impl Workspace {
             let root = this.space().root.clone();
             this.open_tab(PaneKind::Agent, root, Some(prompt), None, window, cx);
         } else {
-            this.ensure_open(target, window, cx);
             let active = this.space().active;
             this.activate(active, window, cx);
         }
