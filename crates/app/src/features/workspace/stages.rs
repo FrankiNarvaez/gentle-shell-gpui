@@ -976,6 +976,8 @@ mod tests {
                     sidebar: None,
                     sidebar_visible: false,
                     tab_layout: TabLayout::Horizontal,
+                    tabs_sidebar_motion: Default::default(),
+                    files_sidebar_motion: Default::default(),
                     tabs_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                     files_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                     sidebar_open_spaces: HashMap::new(),

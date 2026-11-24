@@ -5,6 +5,127 @@ use super::*;
 /// The title bar's height; overlay screens open below it.
 pub(super) const TITLE_BAR_HEIGHT: f32 = 36.;
 
+/// Clip a full-size panel as it slides toward the window edge, so its
+/// controls never reflow at intermediate widths.
+fn sidebar_clip(side: Side, width: f32, content: impl IntoElement) -> Div {
+    div().size_full().relative().overflow_hidden().child(
+        div()
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .when(matches!(side, Side::Tabs), |d| d.right_0())
+            .when(matches!(side, Side::Files), |d| d.left_0())
+            .w(rems(width / 16.))
+            .rounded_xl()
+            .bg(ui::panel())
+            .border_1()
+            .border_color(gpui_kit::transparent_black())
+            .overflow_hidden()
+            .child(content),
+    )
+}
+
+impl Workspace {
+    fn sidebar_handle(&self, side: Side, cx: &mut Context<Self>) -> impl IntoElement {
+        let (id, revision) = match side {
+            Side::Tabs => ("tabs-resize-handle", self.tabs_sidebar_motion.revision),
+            Side::Files => ("files-resize-handle", self.files_sidebar_motion.revision),
+        };
+        ui::resize_handle(id)
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .when(matches!(side, Side::Tabs), |d| d.right(rems(-6. / 16.)))
+            .when(matches!(side, Side::Files), |d| d.left(rems(-6. / 16.)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_drag(
+                SidebarDrag::new(side, cx.entity_id(), revision),
+                |_, _, _, cx| cx.new(|_| Invisible),
+            )
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                if event.click_count() == 2 {
+                    let width = match side {
+                        Side::Tabs => &mut this.tabs_sidebar_width,
+                        Side::Files => &mut this.files_sidebar_width,
+                    };
+                    *width = gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH;
+                    this.schedule_save(cx);
+                    cx.notify();
+                }
+            }))
+            .tooltip(|window, cx| {
+                Tooltip::new("Drag to resize · double-click to reset").build(window, cx)
+            })
+    }
+
+    fn resize_sidebar(
+        &mut self,
+        event: &DragMoveEvent<SidebarDrag>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gentle_core::workspaces::SidebarDrag::{Collapse, Reopen, Width};
+
+        // The row survives the handle unmounting. GPUI dispatches moves to
+        // this row with the same payload until mouse-up clears the active drag.
+        let drag = event.drag(cx);
+        if drag.owner != cx.entity_id() {
+            return;
+        }
+        let scale = f32::from(window.rem_size()) / 16.;
+        let x = event.event.position.x;
+        let (distance, open, width, revision) = match drag.side {
+            Side::Tabs => (
+                x - event.bounds.left(),
+                self.tab_layout == TabLayout::Vertical,
+                &mut self.tabs_sidebar_width,
+                self.tabs_sidebar_motion.revision,
+            ),
+            Side::Files if self.sidebar.is_some() => (
+                event.bounds.right() - x,
+                self.sidebar_visible,
+                &mut self.files_sidebar_width,
+                self.files_sidebar_motion.revision,
+            ),
+            Side::Files => return,
+        };
+        // Manual toggles take precedence over any in-flight gesture.
+        if drag.revision.get() != revision {
+            return;
+        }
+        // The row's horizontal padding is 6 px at 100% interface scale.
+        let pointer = f32::from(distance) / scale - 6.;
+        let window_width = f32::from(window.viewport_size().width) / scale;
+        let side = drag.side;
+        let action = drag
+            .gesture
+            .borrow_mut()
+            .update(pointer, window_width, open);
+        if matches!(action, Some(Collapse | Reopen)) {
+            drag.revision.set(revision + 1);
+        }
+        match action {
+            Some(Width(w)) if *width != w => {
+                *width = w;
+                self.schedule_save(cx);
+                cx.notify();
+            }
+            Some(Collapse | Reopen) => match side {
+                Side::Tabs => self.set_tab_layout(
+                    if open {
+                        TabLayout::Horizontal
+                    } else {
+                        TabLayout::Vertical
+                    },
+                    cx,
+                ),
+                Side::Files => self.toggle_sidebar(cx),
+            },
+            _ => {}
+        }
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::shared::diagnostics::render("Workspace");
@@ -20,11 +141,20 @@ impl Render for Workspace {
         {
             tab.state.set_focused(inside);
         }
-        let files_sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
         let has_files_sidebar = self.sidebar.is_some();
         let vertical_tabs = self.tab_layout == TabLayout::Vertical;
         let window_px_at_100 =
             f32::from(window.viewport_size().width) / (f32::from(window.rem_size()) / 16.);
+        let now = std::time::Instant::now();
+        let tabs_moving = self.tabs_sidebar_motion.advance(now, cx.reduce_motion());
+        let files_moving = self.files_sidebar_motion.advance(now, cx.reduce_motion());
+        if tabs_moving || (files_moving && has_files_sidebar) {
+            ui::request_animation_frame(window);
+        }
+        let (tabs_width, tabs_fraction) = self.sidebar_geometry(Side::Tabs, window_px_at_100, now);
+        let (files_width, files_fraction) =
+            self.sidebar_geometry(Side::Files, window_px_at_100, now);
+        let files_sidebar = self.sidebar.clone().filter(|_| files_fraction > 0.);
         // Native web views would cover a screen or a dialog opened over
         // them, and swallow the pointer while a pane is dragged over them;
         // device cards stop capturing while covered.
@@ -270,69 +400,17 @@ impl Render for Workspace {
                     .pb_1p5()
                     .gap_1p5()
                     .on_drag_move(cx.listener(
-                        move |this, event: &DragMoveEvent<SidebarDrag>, window, cx| {
-                            let bounds = event.bounds;
-                            let position = event.event.position;
-                            // Pointer distance from the sidebar's outer edge, in px
-                            // at 100 %: the row's `px_1p5` padding is 6 of those.
-                            let scale = f32::from(window.rem_size()) / 16.;
-                            match event.drag(cx).0 {
-                                Side::Tabs if this.tab_layout == TabLayout::Vertical => {
-                                    let pointer =
-                                        (f32::from(position.x) - f32::from(bounds.left())) / scale
-                                            - 6.;
-                                    match gentle_core::workspaces::drag_sidebar_width(
-                                        pointer,
-                                        window_px_at_100,
-                                    ) {
-                                        gentle_core::workspaces::SidebarDrag::Width(w)
-                                            if w != this.tabs_sidebar_width =>
-                                        {
-                                            this.tabs_sidebar_width = w;
-                                            this.schedule_save(cx);
-                                            cx.notify();
-                                        }
-                                        gentle_core::workspaces::SidebarDrag::Width(_) => {}
-                                        gentle_core::workspaces::SidebarDrag::Collapse => {
-                                            this.set_tab_layout(TabLayout::Horizontal, cx);
-                                        }
-                                    }
-                                }
-                                Side::Files if this.sidebar_visible && this.sidebar.is_some() => {
-                                    let pointer =
-                                        (f32::from(bounds.right()) - f32::from(position.x)) / scale
-                                            - 6.;
-                                    match gentle_core::workspaces::drag_sidebar_width(
-                                        pointer,
-                                        window_px_at_100,
-                                    ) {
-                                        gentle_core::workspaces::SidebarDrag::Width(w)
-                                            if w != this.files_sidebar_width =>
-                                        {
-                                            this.files_sidebar_width = w;
-                                            this.schedule_save(cx);
-                                            cx.notify();
-                                        }
-                                        gentle_core::workspaces::SidebarDrag::Width(_) => {}
-                                        gentle_core::workspaces::SidebarDrag::Collapse => {
-                                            this.toggle_sidebar(cx);
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
+                        |this, event: &DragMoveEvent<SidebarDrag>, window, cx| {
+                            this.resize_sidebar(event, window, cx);
                         },
                     ))
                     // The vertical tab navigator remains independent of the Files panel.
-                    .when(vertical_tabs, |row| {
-                        let width = gentle_core::workspaces::shown_sidebar_width(
-                            self.tabs_sidebar_width,
-                            window_px_at_100,
-                        );
+                    .when(tabs_fraction > 0., |row| {
                         row.child(
                             div()
                                 .id("vertical-tab-panel")
-                                .w(rems(width / 16.))
+                                .w(rems(tabs_width * tabs_fraction / 16.))
+                                .mr(rems(-6. * (1. - tabs_fraction) / 16.))
                                 .flex_none()
                                 .h_full()
                                 .relative()
@@ -343,42 +421,14 @@ impl Render for Workspace {
                                         this.open_empty_area_menu(event.position, window, cx);
                                     }),
                                 )
-                                .child(ui::appear(
-                                    "tabs-sidebar-in",
-                                    div()
-                                        .size_full()
-                                        .rounded_xl()
-                                        .bg(ui::panel())
-                                        .border_1()
-                                        .border_color(gpui_kit::transparent_black())
-                                        .overflow_hidden()
-                                        .child(self.render_tab_sidebar(cx)),
+                                .child(sidebar_clip(
+                                    Side::Tabs,
+                                    tabs_width,
+                                    self.render_tab_sidebar(cx),
                                 ))
-                                .child(
-                                    ui::resize_handle("tabs-resize-handle")
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .right(rems(-6. / 16.))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .on_drag(SidebarDrag(Side::Tabs), |_, _, _, cx| {
-                                            cx.new(|_| Invisible)
-                                        })
-                                        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                            if event.click_count() == 2 {
-                                                this.tabs_sidebar_width =
-                                                    gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH;
-                                                this.schedule_save(cx);
-                                                cx.notify();
-                                            }
-                                        }))
-                                        .tooltip(move |window, cx| {
-                                            Tooltip::new("Drag to resize · double-click to reset")
-                                                .build(window, cx)
-                                        }),
-                                ),
+                                .when(vertical_tabs && !tabs_moving, |column| {
+                                    column.child(self.sidebar_handle(Side::Tabs, cx))
+                                }),
                         )
                     })
                     .child(
@@ -395,55 +445,22 @@ impl Render for Workspace {
                     .when(devices_docked, |row| row.child(self.devices.clone()))
                     // Ctrl/Cmd+B toggles only the right Files/Changes/Branches sidebar.
                     .when_some(files_sidebar, |row, view| {
-                        let width = gentle_core::workspaces::shown_sidebar_width(
-                            self.files_sidebar_width,
-                            window_px_at_100,
-                        );
                         row.child(
                             div()
-                                .w(rems(width / 16.))
+                                .id("files-sidebar-panel")
+                                .w(rems(files_width * files_fraction / 16.))
+                                .ml(rems(-6. * (1. - files_fraction) / 16.))
                                 .flex_none()
                                 .h_full()
                                 .relative()
-                                .child(ui::appear(
-                                    "files-sidebar-in",
-                                    div()
-                                        .size_full()
-                                        .rounded_xl()
-                                        .bg(ui::panel())
-                                        .border_1()
-                                        .border_color(gpui_kit::transparent_black())
-                                        .overflow_hidden()
-                                        .child(
-                                            view.cached(StyleRefinement::default().size_full())
-                                                .into_any_element(),
-                                        ),
+                                .child(sidebar_clip(
+                                    Side::Files,
+                                    files_width,
+                                    view.cached(StyleRefinement::default().size_full()),
                                 ))
-                                .child(
-                                    ui::resize_handle("files-resize-handle")
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .left(rems(-6. / 16.))
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .on_drag(SidebarDrag(Side::Files), |_, _, _, cx| {
-                                            cx.new(|_| Invisible)
-                                        })
-                                        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                            if event.click_count() == 2 {
-                                                this.files_sidebar_width =
-                                                    gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH;
-                                                this.schedule_save(cx);
-                                                cx.notify();
-                                            }
-                                        }))
-                                        .tooltip(move |window, cx| {
-                                            Tooltip::new("Drag to resize · double-click to reset")
-                                                .build(window, cx)
-                                        }),
-                                ),
+                                .when(self.sidebar_visible && !files_moving, |column| {
+                                    column.child(self.sidebar_handle(Side::Files, cx))
+                                }),
                         )
                     }),
             )

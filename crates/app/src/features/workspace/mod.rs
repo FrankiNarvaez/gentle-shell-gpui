@@ -55,6 +55,7 @@ mod overlays;
 mod panes;
 mod persistence;
 mod render;
+mod sidebar_motion;
 mod sidebars;
 mod spaces;
 mod stages;
@@ -300,7 +301,7 @@ struct DividerDrag {
 }
 
 /// Which sidebar a drag handle is resizing.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 enum Side {
     Tabs,
     Files,
@@ -308,7 +309,23 @@ enum Side {
 
 /// Dragged by a sidebar's inner edge.
 #[derive(Clone)]
-struct SidebarDrag(Side);
+struct SidebarDrag {
+    side: Side,
+    owner: gpui::EntityId,
+    revision: std::cell::Cell<u64>,
+    gesture: std::cell::RefCell<gentle_core::workspaces::SidebarGesture>,
+}
+
+impl SidebarDrag {
+    fn new(side: Side, owner: gpui::EntityId, revision: u64) -> Self {
+        Self {
+            side,
+            owner,
+            revision: std::cell::Cell::new(revision),
+            gesture: Default::default(),
+        }
+    }
+}
 
 /// Dragged by a pane's grip pill: dropped near another pane's edge it moves
 /// to that side, in the middle the two swap.
@@ -393,6 +410,8 @@ pub struct Workspace {
     web_shown: std::collections::HashSet<PaneId>,
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
+    tabs_sidebar_motion: sidebar_motion::SidebarMotion,
+    files_sidebar_motion: sidebar_motion::SidebarMotion,
     tab_layout: TabLayout,
     /// Width of the vertical tabs sidebar (px at 100 % interface size).
     tabs_sidebar_width: f32,
@@ -542,6 +561,8 @@ impl Workspace {
             web_shown: Default::default(),
             sidebar: None,
             sidebar_visible: saved.sidebar,
+            tabs_sidebar_motion: Default::default(),
+            files_sidebar_motion: Default::default(),
             tab_layout: saved.tab_layout,
             tabs_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
                 saved.tabs_sidebar_width,

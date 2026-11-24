@@ -231,6 +231,8 @@ pub enum SidebarDrag {
     Width(f32),
     /// Dragged past the collapse point: the sidebar hides.
     Collapse,
+    /// The same held drag moved back to the minimum usable width.
+    Reopen,
 }
 
 /// Dragging a sidebar's edge to `pointer`, its distance from the sidebar's
@@ -243,9 +245,86 @@ pub fn drag_sidebar_width(pointer: f32, window: f32) -> SidebarDrag {
     }
 }
 
+/// State owned by the active drag, not by the sidebar.
+#[derive(Clone, Default)]
+pub struct SidebarGesture {
+    collapsed: bool,
+}
+
+impl SidebarGesture {
+    pub fn update(&mut self, pointer: f32, window: f32, visible: bool) -> Option<SidebarDrag> {
+        if visible {
+            let action = drag_sidebar_width(pointer, window);
+            self.collapsed = action == SidebarDrag::Collapse;
+            Some(action)
+        } else if self.collapsed && pointer >= SIDEBAR_MIN_WIDTH {
+            self.collapsed = false;
+            Some(SidebarDrag::Reopen)
+        } else {
+            None
+        }
+    }
+}
+
+/// A reversible ease-out-quint visibility transition, independent of layout width.
+#[derive(Clone, Copy)]
+pub struct SidebarSlide {
+    from: f32,
+    to: f32,
+}
+
+impl SidebarSlide {
+    pub const SECONDS: f32 = 0.22;
+
+    pub fn new(from: f32, opening: bool) -> Self {
+        Self {
+            from,
+            to: if opening { 1. } else { 0. },
+        }
+    }
+
+    pub fn fraction(self, elapsed: f32) -> f32 {
+        let t = (elapsed / Self::SECONDS).clamp(0., 1.);
+        if t == 0. {
+            return self.from;
+        }
+        if t == 1. {
+            return self.to;
+        }
+        self.to + (self.from - self.to) * (1. - t).powi(5)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidebar_slide_reverses_from_its_current_width_and_lands_exactly() {
+        let closing = SidebarSlide::new(1., false);
+        assert_eq!(closing.fraction(0.), 1.);
+        let midway = closing.fraction(0.03);
+        assert!(midway > 0. && midway < 1.);
+        let opening = SidebarSlide::new(midway, true);
+        assert_eq!(opening.fraction(0.), midway);
+        assert!(opening.fraction(0.06) > midway);
+        assert_eq!(opening.fraction(0.22), 1.);
+        assert_eq!(closing.fraction(0.22), 0.);
+    }
+
+    #[test]
+    fn sidebar_drag_reopens_only_a_collapse_in_the_same_gesture() {
+        let mut held = SidebarGesture::default();
+        assert_eq!(held.update(139., 1000., true), Some(SidebarDrag::Collapse));
+        assert_eq!(held.update(140., 1000., false), None);
+        assert_eq!(held.update(199., 1000., false), None);
+        assert_eq!(SidebarGesture::default().update(240., 1000., false), None);
+        assert_eq!(held.update(200., 1000., false), Some(SidebarDrag::Reopen));
+        assert_eq!(
+            held.update(450., 1000., true),
+            Some(SidebarDrag::Width(400.))
+        );
+    }
 
     #[test]
     fn a_saved_sidebar_width_stays_between_the_minimum_and_the_maximum() {

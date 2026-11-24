@@ -87,24 +87,15 @@ impl Workspace {
         // and split-size calculations aligned with the actual rendered width.
         let window_px =
             f32::from(window.viewport_size().width) / (f32::from(window.rem_size()) / 16.);
-        let left = if self.tab_layout == TabLayout::Vertical {
-            rem(gentle_core::workspaces::shown_sidebar_width(
-                self.tabs_sidebar_width,
-                window_px,
-            )) + 6.
-        } else {
-            0.
+        let now = std::time::Instant::now();
+        let occupied = |side| {
+            let (width, fraction) = self.sidebar_geometry(side, window_px, now);
+            rem((width + 6.) * fraction)
         };
-        let right = if self.sidebar_visible && self.sidebar.is_some() {
-            rem(gentle_core::workspaces::shown_sidebar_width(
-                self.files_sidebar_width,
-                window_px,
-            )) + 6.
-        } else {
-            0.
-        };
-        let w = (f32::from(viewport.width) - 12. - left - right).max(0.);
-        let h = f32::from(viewport.height) - rem(super::render::TITLE_BAR_HEIGHT) - 6.;
+        let w =
+            (f32::from(viewport.width) - rem(12.) - occupied(Side::Tabs) - occupied(Side::Files))
+                .max(0.);
+        let h = f32::from(viewport.height) - rem(super::render::TITLE_BAR_HEIGHT + 6.);
         let mut out = Vec::new();
         if let Some(tree) = self.tab().and_then(|t| t.built_tree()) {
             leaf_sizes(tree, w, h, &mut out);
