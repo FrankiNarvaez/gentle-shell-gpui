@@ -55,12 +55,14 @@ Esc closes the screen that is open; with none open, in an agent pane, it interru
 | `v` / `s` | Split right / split down |
 | `x` | Close pane |
 | `u` | Reopen the last closed pane or tab |
-| `c` / `t` | New agent tab / new terminal tab |
+| `c` / `t` / `Shift+c` | New agent tab / new terminal tab / new canvas tab |
 | `n` / `p` | Next / previous tab |
 | `1` … `9` | Go to tab N (9 = last tab) |
 | `f` / `g` | Focus Files / focus Git changes |
 | `i` | Focus the composer |
 | `b` | Toggle the Files sidebar |
+| `w` | Browse tabs in the sidebar (all workspaces; Enter opens, Esc returns) |
+| `Shift+w` | Switch workspace… |
 | `a` | Create workspace (choose the folder in the explorer) |
 | `Shift+d` | Delete workspace… |
 | `:` | Command palette |
