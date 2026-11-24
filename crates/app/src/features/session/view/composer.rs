@@ -190,6 +190,7 @@ impl SessionView {
                                 "Compact now"
                             })
                             .loading(compacting)
+                            .when(!compacting && ready, |button| button.cursor_pointer())
                             .disabled(compacting || !ready)
                             .on_click(move |_, _, cx| {
                                 let _ = compact.update(cx, |this, cx| this.compact(None, cx));
