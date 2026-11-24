@@ -89,6 +89,9 @@ pub struct Setup {
     /// The image's bytes and its effects, decoded and prepared on the
     /// scene's thread.
     pub effects: Option<(Arc<gpui_kit::Image>, Vec<super::model::Effect>)>,
+    /// The Blur slider (0–1): the effects work on the picture blurred as
+    /// the window shows it.
+    pub blur: f32,
 }
 
 impl Scene {
@@ -265,7 +268,7 @@ impl Engine {
 fn run(shared: &Shared, setup: Setup) -> Result<(), String> {
     let engine = Engine::new(&setup.code, &setup.colors, setup.cell)?;
     let mut effects = setup.effects.as_ref().and_then(|(image, effects)| {
-        let picture = super::effects::Picture::decode(&image.bytes)?;
+        let picture = super::effects::Picture::decode(&image.bytes, setup.blur)?;
         Some(super::effects::Effects::new(picture, effects))
     });
     let mut time = 0f64;

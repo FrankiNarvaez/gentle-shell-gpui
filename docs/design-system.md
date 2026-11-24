@@ -21,7 +21,7 @@ These principles come from the current code. They are not aspirations.
 ```text
 themes/*.json (Pi theme format)
   → themes::parse_pi_theme   → Theme (opaque colors 0xRRGGBB)
-  → ui::Palette::new(theme, clear)   → roles with alpha, based on transparency
+  → ui::Palette::new(theme, glass)   → roles with alpha (Transparency, Opacity) and AA-safe text colors
   → ACTIVE (global RwLock in themes.rs)
   → ui::fg(), ui::surface()…  (read via themes::palette(|p| …), no cx)
   → ui::apply_theme(cx)       → gpui-component colors (buttons, inputs, lists, menus)
@@ -29,7 +29,7 @@ themes/*.json (Pi theme format)
 
 - **Catalog** (`themes::load_catalog`): first the Gentle Shell themes embedded with `include_str!` from `crates/app/themes/` (`Gentleman-Cute`, `Gentleman-Sexy`, `Gentle`, `Studio`, `Studio Light`, `Clay`, `Clay Light`); themes installed in `<gentle-pi>/themes/` replace them by name. Then the user's themes in `<agent dir>/themes/` (`Source::Pi`) and the app's own in `dirs::data_dir()/gentle-shell-gpui/themes/` (`Source::App`), then the example app themes in `crates/app/themes/examples/`, and finally the popular schemes in `SCHEMES`. Names are unique; the first one wins.
 - **Initial theme** (`themes::pick_default`): the one saved in `dirs::data_dir()/gentle-shell-gpui/settings.json` (key `theme`), otherwise the `theme` from Pi's `settings.json`, otherwise `DEFAULT_THEME` (`"Gentleman-Cute"`).
-- **Live changes**: `themes::select(index, cx)`, `themes::set_transparency(clear, persist, cx)` and `themes::set_interface_size(percent, cx)` reinstall the palette or the size, call `ui::apply_theme` and refresh all windows. Because tokens are read on every render, no view stores colors.
+- **Live changes**: `themes::select(index, cx)`, `themes::set_glass(glass, persist, cx)` and `themes::set_interface_size(percent, cx)` reinstall the palette or the size, call `ui::apply_theme` and refresh all windows. Because tokens are read on every render, no view stores colors.
 - **Hot reload** (`themes::watch_user_themes`): every 2 s a background task compares the file names, sizes and modification times of Pi's and the app's theme folders (files only: the app's `previews/` and `examples/` folders don't count); on a change it re-reads them and `replace_user_themes` swaps them in, keeping the active theme by name (re-applying it if its file changed).
 - **Backdrops** (`Theme::background`, `shared/backdrop/`): only app themes may have a `background` key (`scene`, `sceneCode`, `image`, `sky`, `speed`, `cell`, `dim`, `veil`; see `backdrop/model.rs` and `crates/app/themes/GUIDE.md`), because Pi's theme schema has `additionalProperties: false` and would reject the file. `backdrop::layer` draws it first in the workspace root, so every pane draws over it and the glass shows it at the window's transparency: the sky as stacked two-stop gradients, the image as a covering `img`, then the scene. A scene runs on its own thread in QuickJS (`backdrop/scene.rs`) with the kit in `backdrop/kit.js`; each frame leaves numeric drawing commands, plus the x, y pairs its paths point into, which the painter turns into quads, glyphs (`paint_glyph`, shaped once per character) and paths (`PathBuilder`, filled with a color or a linear gradient, or stroked), all inside one `paint_layer` so thousands of overlapping shapes skip GPUI's bounds tree. The kit's transforms (`save`, `translate`, `rotate`, `scale`) are applied in JavaScript, so the painter only ever sees window coordinates: a turned rect or ellipse arrives as a path, and a curve is flattened as finely as the scale it's drawn at. Glows are stacked faint discs (GPUI has no radial gradient, and no blend modes). The `veil` calms the middle of the window toward the theme's background. Pacing: the scene thread keeps its script under 8% of one core (`CPU_SHARE`: 24 fps when a frame costs ≤ 3 ms, down to 8 fps), and the window redraws at the scene's own interval (`ui::request_frame_in`); only while the window is focused and motion isn't reduced, otherwise one still frame per size. The person's **Scene motion** (`backdrop::Motion`, `backdropMotion` in the app's settings file) caps it: Smooth, Calm (12 fps), Still. Scenes are not design tokens: they are the theme's own art, like pixel art, so their colors are free.
 - **Pixel art in scenes** (`kit.js`: `pixels(rows, palette)` and `g.pixels(art, x, y, size, alpha, flip)`): sprites written as rows of characters, each row's runs of one color precomputed as one rect, drawn snapped to whole pixels so 8-bit scenes stay crisp and cheap (a few hundred rects per frame).
@@ -75,20 +75,44 @@ All are argument-less functions in `crate::shared::ui` that return `Hsla`.
 | `raised()` | `raised` | User messages, selected row, active option of `segmented`. |
 | `well()` | barely tinted background | Sunken: code, outputs, text fields, `segmented` frame. |
 | `border()` | background tinted 20 %, alpha 0.69 (dark) / 0.8 (light) | Card borders and thin lines in screens. |
-| `border_strong()` | `border`, opaque | Fields, keys, frame of screens and islands, vertical separators. |
+| `border_strong()` | `border`, opaque | Keys, frame of screens and islands, vertical separators. |
+| `input()` | `border`, nudged to 3:1 | Text fields (`ui::field`, the Kit's `Input` border). |
 | `screen_bg()` | background tinted 5.5 %, opaque | Full screens and palette. |
 | `popover_bg()` | background tinted 6.5 %, opaque | Islands, menus, floating cards. |
 | `backdrop()` | black, alpha 0.44 (dark) / 0.25 (light) | Veil behind screens (`scrim`) and shadow color of `island`. |
 
 "Tinted" is `mix(bg, mix(fg, accent, 0.6), amount)`: the background leaned toward the text with a touch of the accent. `Palette` also has fields without a public function (`window_bg`, `accent_deep`, `on_accent`, `danger_hover`, `danger_active`, `selection`, `scrollbar_hover`) that only `apply_theme` uses.
 
-### Transparency
+### Transparency, Blur and Opacity
 
-`Palette::new(theme, clear)` receives the window transparency (`clear`, 0 = most solid glass, 1 = clearest; default `DEFAULT_TRANSPARENCY = 0.6`, or `0.15` on Linux, where the compositor usually doesn't blur behind the window and a sharp desktop would show through; adjustable with the Settings slider). Each glass surface lowers its alpha from a solid value down to a floor that keeps text readable (`fade(solid, floor)`); for example `panel` goes from 0.93 to 0.16 and `surface` from 0.94 to 0.4. `popover_bg` and `screen_bg` do not change.
+Configuration › Appearance › Theme has three sliders, 0–100 % each, saved as `transparency`, `blur` and `opacity` (0–1) in the app's `settings.json` (`themes::Glass`, `read_glass`/`write_glass`; a missing key takes its default, so an older file keeps its transparency). Dragging applies live; the file is written on release.
 
-**OLED themes** (`Theme::oled`, today only *OLED Black*) ignore transparency: `window_bg`, `panel`, `well` and `screen` are opaque `#000000` so an OLED panel turns those pixels off, and cards, menus and user messages are opaque layers just above black. Don't add tints or glows that would light large areas in that theme.
+- **Transparency** (default `DEFAULT_TRANSPARENCY = 0.6`, or `0.15` on Linux, where the compositor usually doesn't blur behind the window and a sharp desktop would show through): how much the desktop or the theme's backdrop shows through. `Palette::new(theme, glass)` fades each glass role from a solid alpha toward a floor (`fade(solid, floor)`): `window_bg` 0.9 → 0.3, `panel` 0.93 → 0.16, `surface` 0.94 → 0.4, `well` 0.92 → 0.45. The chrome (the window's ground: title bar, the gaps between panes) follows it fully. `popover_bg` and `screen_bg` do not change.
+- **Opacity** (default 0.2): how solid the **text areas** are — `panel` (panes, sidebars, the conversation, terminals), and on it `surface` (composer, cards), `surface_hover`, `raised` (selected rows, user messages) and `well` (code, diffs, the editor). Each starts from the transparency's fade, is held at its **AA floor** (below), and Opacity takes it from there (0) to opaque (1): `alpha = low + (1 − low) × opacity` with `low = max(fade, floor)`. No dead zone: every step of the slider changes something.
+- **Blur** (default 0): softens the theme's own backdrop, not the desktop (the window keeps GPUI's `Blurred` background as it was; no private APIs). A picture is blurred for real (`backdrop::blurred_picture`): GPUI has no blur shader, so the decoded frames are shrunk and blurred once on a background thread (`gentle_core::glass::PictureBlur`: sigma up to 2 % of the picture's longer side, at least half size so a GIF's blurred copy adds at most a quarter of its frames' memory; in 5 % steps, `blur_percent`), drawn instead of the sharp picture once ready, and dropped from the atlas (`drop_image`) when the strength or the theme changes. Picture effects work on the same blurred picture. An animated scene is redrawn every frame, so it is faded toward the theme's background instead (`scene_fade`, up to 50 %): no per-frame CPU blur. Themes without a picture or scene have nothing to blur; the slider is disabled with a note.
 
-**Solid themes** (`Theme::solid`, set with `"solid": true` in the theme file — today *Studio*, *Studio Light*, *Clay* and *Clay Light*) ignore transparency the same way, but in the theme's own colors: every glass role (`window_bg`, `panel`, `well`, `screen`, cards, user messages, borders) renders opaque at any transparency, so the whole palette is the same whatever the slider says. Text, accents and the floating layers (`popover_bg`, `screen_bg`) are unchanged.
+### Contrast (WCAG AA)
+
+Every theme — built-in, installed, the user's own — reads at **WCAG AA** at any slider position, over the worst backdrop: a pure black and a pure white desktop (or theme picture). A blur only averages what is behind, so a uniform white window stays white; the guarantee doesn't lean on blur. The math is `gentle_core::contrast` (relative luminance, contrast ratio, compositing on sRGB channels, `min_alpha`, `readable`).
+
+| Role | Target | Why |
+| --- | --- | --- |
+| `fg`, `muted`, `accent` (links) | 4.5:1 (`AA_TEXT`) | Body text. |
+| `faint` (hints, timestamps, placeholders), `info`, `success`, `warning`, `danger` (status icons, dots, counts) | 3:1 (`AA_UI`) | De-emphasized text and status marks that sit next to a label or icon. |
+| `input` (input borders, `c.input`), focus (`ring` = `accent`) | 3:1 | The boundary of a control. |
+| `on_accent` on `accent` | 4.5:1 | Labels of accent buttons. |
+| `border`, `border_strong`, `selection`, dividers, scrollbars | — | Decorative: separation comes from space and surface changes. |
+
+Two corrections in `Palette::new`, in this order:
+
+1. **Ink**: each color above is nudged toward white or black, whichever gets there with less, by the least amount, until it meets its target on every backing text sits on (`popover`, `screen`, and `panel`, `surface`, `surface_hover`, `raised`, `well` at `INK_COVERAGE = 0.92` over black and white). Colors that already read are untouched, so most themes keep their own `fg`; dim `muted`/`faint` picks are what usually move. 0.92 is a balance: lower keeps more glass but recolors more (at 0.85 Solarized's blue and Gruvbox's orange turned pale), 1 only fixes colors that fail on the theme's own background but leaves panes nearly opaque.
+2. **Floor**: each text area's alpha never goes below the least that keeps all of those colors at their targets over black and white (`min_alpha`, through what is below it: `window_bg` over the desktop, or, in a theme with a backdrop, the backdrop itself, which is drawn over `window_bg`; then `panel` for cards and wells).
+
+The chrome (title bar, gaps) is not held: it follows Transparency, so the title bar's own text is outside the guarantee. `ui::tests::every_builtin_theme_meets_aa_over_any_backdrop` checks every built-in theme at the defaults and at both ends of Transparency.
+
+**OLED themes** (`Theme::oled`, today only *OLED Black*) ignore transparency and opacity: `window_bg`, `panel`, `well` and `screen` are opaque `#000000` so an OLED panel turns those pixels off, and cards, menus and user messages are opaque layers just above black. Don't add tints or glows that would light large areas in that theme.
+
+**Solid themes** (`Theme::solid`, set with `"solid": true` in the theme file — today *Studio*, *Studio Light*, *Clay* and *Clay Light*) ignore Transparency and Opacity the same way, but in the theme's own colors: every glass role (`window_bg`, `panel`, `well`, `screen`, cards, user messages, borders) renders opaque, so the whole palette is the same whatever the sliders say. The floating layers (`popover_bg`, `screen_bg`) are unchanged; text colors still get the AA nudge, against the opaque backings.
 
 ### gpui-component
 

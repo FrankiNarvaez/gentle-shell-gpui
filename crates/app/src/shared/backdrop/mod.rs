@@ -134,6 +134,18 @@ pub fn scene_error(theme: &str) -> Option<String> {
 struct Slot {
     running: Option<(Arc<str>, String, Scene)>,
     patches: Option<(usize, Vec<Arc<RenderImage>>)>,
+    blurred: Option<Blurred>,
+}
+
+/// The theme's picture blurred at the Blur slider's strength: made on a
+/// background thread once per picture and strength, and dropped from
+/// GPUI's atlas when either changes.
+struct Blurred {
+    /// The picture's id and the strength in whole percent.
+    key: (u64, u32),
+    /// `None` while it is being made; the sharp picture shows meanwhile.
+    image: Option<Arc<RenderImage>>,
+    _making: Task<()>,
 }
 
 /// How much a theme's scene moves, the person's choice in Configuration ›
@@ -283,6 +295,22 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
 
     // Kept while the layer renders, so the scene stops with the window or the theme.
     let slot = window.use_keyed_state("theme-backdrop", cx, |_, _| Slot::default());
+    let blur = cx.global::<Themes>().glass.blur;
+    let blurred = blurred_picture(&backdrop, blur, &slot, window, cx);
+    // A scene is redrawn every frame: it is faded toward the background
+    // instead of blurred (no CPU blur per frame).
+    let fade = if backdrop.scene.is_some() {
+        gentle_core::glass::scene_fade(blur)
+    } else {
+        0.
+    };
+    // Effects move the picture's own pixels: they start from the same
+    // blurred picture, so a new strength restarts them.
+    let effects_blur = if backdrop.effects.is_empty() {
+        0
+    } else {
+        gentle_core::glass::blur_percent(blur)
+    };
     // A camera or effects move the image on the scene's clock, so they run
     // a scene that draws nothing when the theme has none.
     let natural = backdrop.image.as_ref().and(backdrop.image_size);
@@ -293,7 +321,7 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         .or_else(|| backdrop.moves().then(|| STILL.clone()));
     let scene = code.as_ref().map(|code| {
         let key = format!(
-            "{}|{}|{}|{:?}|{:?}|{:?}",
+            "{}|{}|{}|{:?}|{:?}|{:?}|{effects_blur}",
             model::scene_colors(&theme),
             backdrop.cell,
             backdrop.speed,
@@ -319,6 +347,7 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                         .clone()
                         .filter(|_| !backdrop.effects.is_empty())
                         .map(|image| (image, backdrop.effects.clone())),
+                    blur: effects_blur as f32 / 100.,
                 });
                 slot.running = Some((code.clone(), key, started));
             }
@@ -357,9 +386,13 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         );
     }
     if let Some(image) = backdrop.image.clone().filter(|_| framed_image.is_none()) {
+        let source = match blurred.clone() {
+            Some(blurred) => ImageSource::Render(blurred),
+            None => ImageSource::Image(image),
+        };
         layer = layer
             .child(
-                img(ImageSource::Image(image))
+                img(source)
                     .absolute()
                     .inset_0()
                     .size_full()
@@ -391,7 +424,8 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                         };
                         ui::request_frame_in(delay, window, cx);
                     }
-                    let image = framed_image?.use_render_image(window, cx)?;
+                    let sharp = framed_image?.use_render_image(window, cx)?;
+                    let image = blurred.unwrap_or(sharp);
                     let (index, next) = gif_frame(&image);
                     if let Some(next) = next.filter(|_| moving) {
                         ui::request_frame_in(next, window, cx);
@@ -430,6 +464,11 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
                             paint_frame(&frame.commands, &frame.points, bounds.origin, window, cx)
                         });
                     }
+                    if fade > 0. {
+                        window.paint_layer(bounds, |window| {
+                            window.paint_quad(fill(bounds, color(f64::from(bg), f64::from(fade))))
+                        });
+                    }
                     if veil > 0. {
                         window.paint_layer(bounds, |window| paint_veil(bg, veil, bounds, window));
                     }
@@ -440,6 +479,97 @@ pub fn layer(window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         );
     }
     Some(layer.into_any_element())
+}
+
+/// The theme's picture blurred at `blur` (0–1), once it is ready; `None`
+/// while it is sharp or still being made (the sharp picture shows). The
+/// copy is made on a background thread from the frames GPUI already
+/// decoded; a copy for another picture or strength leaves the atlas.
+fn blurred_picture(
+    backdrop: &Backdrop,
+    blur: f32,
+    slot: &Entity<Slot>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Arc<RenderImage>> {
+    let percent = gentle_core::glass::blur_percent(blur);
+    let key = backdrop
+        .image
+        .as_ref()
+        .filter(|_| percent > 0)
+        .map(|image| (image.id(), percent));
+    let existing = slot.update(cx, |slot, _| match &slot.blurred {
+        Some(blurred) if Some(blurred.key) == key => Ok(blurred.image.clone()),
+        _ => Err(slot.blurred.take().and_then(|b| b.image)),
+    });
+    match existing {
+        Ok(image) => return image,
+        Err(Some(stale)) => {
+            let _ = window.drop_image(stale);
+        }
+        Err(None) => {}
+    }
+    let key = key?;
+    // GPUI decodes the picture (and caches it); until then, try next frame.
+    let sharp = backdrop.image.clone()?.use_render_image(window, cx)?;
+    let strength = percent as f32 / 100.;
+    let making = cx
+        .background_executor()
+        .spawn(async move { blur_frames(&sharp, strength) });
+    let weak = slot.downgrade();
+    let task = window.spawn(cx, async move |cx| {
+        let Some(image) = making.await else {
+            return;
+        };
+        let _ = weak.update(cx, |slot, _| {
+            if let Some(blurred) = slot.blurred.as_mut().filter(|b| b.key == key) {
+                blurred.image = Some(Arc::new(image));
+            }
+        });
+        let _ = cx.update(|window, _| window.refresh());
+    });
+    slot.update(cx, |slot, _| {
+        slot.blurred = Some(Blurred {
+            key,
+            image: None,
+            _making: task,
+        })
+    });
+    None
+}
+
+/// Every frame of `sharp` (one for a still, all of a GIF's), blurred.
+fn blur_frames(sharp: &RenderImage, blur: f32) -> Option<RenderImage> {
+    let frames = (0..sharp.frame_count())
+        .map(|i| {
+            let size = sharp.size(i);
+            let buffer = image::RgbaImage::from_raw(
+                size.width.0 as u32,
+                size.height.0 as u32,
+                sharp.as_bytes(i)?.to_vec(),
+            )?;
+            // BGRA in, BGRA out: the blur treats every channel alike.
+            Some(image::Frame::from_parts(
+                soften(buffer, blur),
+                0,
+                0,
+                sharp.delay(i),
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(RenderImage::new(frames))
+}
+
+/// `picture` blurred at `blur` (0–1) as `gentle_core::glass::PictureBlur`
+/// plans it: shrunk, then blurred; unchanged at 0.
+fn soften(picture: image::RgbaImage, blur: f32) -> image::RgbaImage {
+    let (width, height) = picture.dimensions();
+    let Some(plan) = gentle_core::glass::PictureBlur::new(blur, width, height) else {
+        return picture;
+    };
+    let (w, h) = plan.size(width, height);
+    let small = image::imageops::resize(&picture, w, h, image::imageops::FilterType::Triangle);
+    image::imageops::fast_blur(&small, plan.sigma)
 }
 
 /// An empty scene: it runs the camera and effects over an image when the
