@@ -132,7 +132,7 @@ pub use sessions::{
 };
 pub use stats::{
     StatsRange, StatsScope, UsageStats, UsageStatsDay, UsageStatsModel, UsageStatsProject,
-    UsageStatsTotals, UsageStatsTruncated,
+    UsageStatsProvider, UsageStatsTotals, UsageStatsTruncated,
 };
 pub use updates::{
     PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PackagesUpdate, PiUpdate,

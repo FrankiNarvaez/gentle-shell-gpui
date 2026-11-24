@@ -23,8 +23,8 @@ use pi_rpc::desktop_rpc::{
     SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
     StatsRange, StatsScope, SubagentThread, SwitchSessionResult, ThreadItem, UpdateState,
     UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel,
-    UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload,
-    decode_widget,
+    UsageStatsProvider, UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow,
+    WIDGET_KEY, decode_payload, decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -5958,19 +5958,23 @@ fn usage_stats_decode_the_spec_answer_and_its_truncation_flags() {
             share: 0.512,
         }
     );
+    // A Shell older than 5.0.0: no cost per day, no byProvider.
     assert_eq!(
         stats.by_day[2],
         UsageStatsDay {
             day: "2026-10-09".into(),
-            tokens: 1365
+            tokens: 1365,
+            cost: None,
         }
     );
+    assert_eq!(stats.by_provider, None);
     assert_eq!(stats.by_project.as_ref().unwrap()[1].name, "beta");
     assert_eq!(
         stats.truncated,
         UsageStatsTruncated {
             by_model: false,
             by_day: false,
+            by_provider: None,
             by_project: Some(false)
         }
     );
@@ -5999,6 +6003,41 @@ fn usage_stats_decode_the_spec_answer_and_its_truncation_flags() {
 
 fn zero_totals() -> Value {
     json!({ "sessions": 0, "messages": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 0, "cost": 0 })
+}
+
+#[test]
+fn usage_stats_decode_the_cost_per_day_and_providers_of_5_0() {
+    let stats = ok_response(json!({
+        "range": "30d",
+        "scope": "all",
+        "totals": { "sessions": 3, "messages": 4, "inputTokens": 1310, "outputTokens": 155, "cacheReadTokens": 1000, "cacheWriteTokens": 200, "totalTokens": 2665, "cost": 1.76 },
+        "byModel": [
+            { "model": "claude-opus-5-5", "messages": 2, "tokens": 1365, "cost": 0.51, "share": 0.512 },
+            { "model": "gpt-5.5", "messages": 2, "tokens": 1300, "cost": 1.25, "share": 0.488 }
+        ],
+        "byDay": [{ "day": "2026-09-20", "tokens": 1000, "cost": 1 }, { "day": "2026-10-08", "tokens": 300, "cost": 0.25 }, { "day": "2026-10-09", "tokens": 1365, "cost": 0.51 }],
+        "byProvider": [{ "provider": "anthropic", "messages": 4, "tokens": 2665, "cost": 1.76, "share": 1 }],
+        "byProject": [
+            { "name": "alpha", "sessions": 2, "messages": 3, "tokens": 2365, "cost": 1.51 },
+            { "name": "beta", "sessions": 1, "messages": 1, "tokens": 300, "cost": 0.25 }
+        ],
+        "truncated": { "byModel": false, "byDay": false, "byProvider": false, "byProject": false }
+    }))
+    .usage_stats()
+    .unwrap();
+    assert_eq!(stats.by_day[0].cost, Some(1.0));
+    assert_eq!(stats.by_day[1].cost, Some(0.25));
+    assert_eq!(
+        stats.by_provider.unwrap(),
+        [UsageStatsProvider {
+            provider: "anthropic".into(),
+            messages: 4,
+            tokens: 2665,
+            cost: 1.76,
+            share: 1.0,
+        }]
+    );
+    assert_eq!(stats.truncated.by_provider, Some(false));
 }
 
 // --- get_update_status ----------------------------------------------------
