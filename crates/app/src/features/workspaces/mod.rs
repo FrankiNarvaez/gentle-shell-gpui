@@ -283,6 +283,13 @@ pub struct SavedState {
     /// Whether the vertical navigator uses its narrow icon rail.
     #[serde(default)]
     pub sidebar_compact: bool,
+    /// Expanded navigator width, in logical pixels at 100% UI scale.
+    #[serde(default = "default_sidebar_width")]
+    pub sidebar_width: f32,
+}
+
+fn default_sidebar_width() -> f32 {
+    260.
 }
 
 fn shown() -> bool {
@@ -298,6 +305,7 @@ impl Default for SavedState {
             sidebar: true,
             tab_layout: TabLayout::Horizontal,
             sidebar_compact: false,
+            sidebar_width: default_sidebar_width(),
         }
     }
 }

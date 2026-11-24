@@ -99,6 +99,8 @@ actions!(
 
 pub const SIDEBAR_WIDTH: f32 = 260.;
 const COMPACT_SIDEBAR_WIDTH: f32 = 48.;
+const MIN_TAB_SIDEBAR_WIDTH: f32 = 180.;
+const MAX_TAB_SIDEBAR_WIDTH: f32 = 600.;
 
 /// What the window tells whoever embeds things in it (the sidebar's owner).
 pub enum WorkspaceEvent {
@@ -295,6 +297,10 @@ impl Space {
     }
 }
 
+/// Dragged by the right edge of the expanded workspace navigator.
+#[derive(Clone)]
+struct SidebarResizeDrag;
+
 /// Dragged by a divider: which split it resizes.
 #[derive(Clone)]
 struct DividerDrag {
@@ -387,6 +393,7 @@ pub struct Workspace {
     sidebar_visible: bool,
     tab_layout: TabLayout,
     sidebar_compact: bool,
+    sidebar_width: f32,
     /// The workspace whose badge picker is open, and where it opened.
     badge_picker: Option<(usize, Point<Pixels>)>,
     /// A right-click context menu owned by the workspace so its open state
@@ -521,6 +528,9 @@ impl Workspace {
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
             sidebar_compact: saved.sidebar_compact,
+            sidebar_width: saved
+                .sidebar_width
+                .clamp(MIN_TAB_SIDEBAR_WIDTH, MAX_TAB_SIDEBAR_WIDTH),
             badge_picker: None,
             open_menu: None,
             workspace_rename: None,

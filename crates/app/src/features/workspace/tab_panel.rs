@@ -27,7 +27,20 @@ impl Workspace {
         if self.sidebar_compact {
             COMPACT_SIDEBAR_WIDTH
         } else {
-            SIDEBAR_WIDTH
+            self.sidebar_width
+        }
+    }
+
+    /// Resize only the expanded navigator, keeping its width while compact.
+    pub(super) fn resize_tab_sidebar(&mut self, width: f32, cx: &mut Context<Self>) {
+        if self.tab_layout != TabLayout::Vertical || self.sidebar_compact || !width.is_finite() {
+            return;
+        }
+        let width = width.round().clamp(MIN_TAB_SIDEBAR_WIDTH, MAX_TAB_SIDEBAR_WIDTH);
+        if self.sidebar_width != width {
+            self.sidebar_width = width;
+            self.schedule_save(cx);
+            cx.notify();
         }
     }
 
@@ -968,6 +981,7 @@ mod tests {
                         sidebar_visible: false,
                         tab_layout: TabLayout::Horizontal,
                         sidebar_compact: false,
+                        sidebar_width: super::super::SIDEBAR_WIDTH,
                         badge_picker: None,
                         open_menu: None,
                         workspace_rename: None,
@@ -1018,6 +1032,24 @@ mod tests {
                 assert!(!ws.panes.contains_key(&pane));
             },
         );
+    }
+
+    #[gpui::test]
+    fn sidebar_width_survives_compact_toggle_and_respects_limits(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
+            ws.toggle_sidebar_compact(cx);
+            ws.resize_tab_sidebar(345., cx);
+            assert_eq!(ws.tab_sidebar_width(), 345.);
+            ws.toggle_sidebar_compact(cx);
+            assert_eq!(ws.tab_sidebar_width(), 48.);
+            ws.resize_tab_sidebar(420., cx);
+            ws.toggle_sidebar_compact(cx);
+            assert_eq!(ws.tab_sidebar_width(), 345.);
+            ws.resize_tab_sidebar(10., cx);
+            assert_eq!(ws.tab_sidebar_width(), 180.);
+            ws.resize_tab_sidebar(900., cx);
+            assert_eq!(ws.tab_sidebar_width(), 600.);
+        });
     }
 
     fn sorted(ids: Vec<usize>) -> Vec<usize> {

@@ -110,6 +110,7 @@ impl Workspace {
             sidebar: self.sidebar_visible,
             tab_layout: self.tab_layout,
             sidebar_compact: self.sidebar_compact,
+            sidebar_width: self.sidebar_width,
         }
     }
 

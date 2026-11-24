@@ -257,11 +257,24 @@ impl Render for Workspace {
                     .px_1p5()
                     .pb_1p5()
                     .gap_1p5()
+                    .on_drag_move(cx.listener(
+                        |this, event: &DragMoveEvent<SidebarResizeDrag>, window, cx| {
+                            // Measure against the stable columns container, not
+                            // the moving handle. Convert physical layout pixels
+                            // into the sidebar's rem-based width.
+                            let scale = f32::from(window.rem_size()) / 16.;
+                            let width = f32::from(event.event.position.x - event.bounds.left())
+                                / scale
+                                - 6.;
+                            this.resize_tab_sidebar(width, cx);
+                        },
+                    ))
                     // The vertical tab navigator remains independent of the Files panel.
                     .when(vertical_tabs, |row| {
                         row.child(
                             div()
                                 .id("vertical-tab-panel")
+                                .relative()
                                 .w(rems(self.tab_sidebar_width() / 16.))
                                 .flex_none()
                                 .h_full()
@@ -282,7 +295,37 @@ impl Render for Workspace {
                                         .border_color(gpui_kit::transparent_black())
                                         .overflow_hidden()
                                         .child(self.render_tab_sidebar(cx)),
-                                )),
+                                ))
+                                .when(!self.sidebar_compact, |panel| {
+                                    panel.child(
+                                        div()
+                                            .id("resize-workspace-sidebar")
+                                            .group("resize-workspace-sidebar")
+                                            .absolute()
+                                            .top_0()
+                                            .bottom_0()
+                                            .right(px(-4.))
+                                            .w(px(8.))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .cursor_col_resize()
+                                            .on_drag(SidebarResizeDrag, |_, _, _, cx| {
+                                                cx.new(|_| Invisible)
+                                            })
+                                            .child(
+                                                div()
+                                                    .w(px(2.))
+                                                    .h(px(40.))
+                                                    .rounded_full()
+                                                    .bg(ui::border_strong())
+                                                    .opacity(0.0)
+                                                    .group_hover("resize-workspace-sidebar", |d| {
+                                                        d.opacity(1.0).bg(ui::petal())
+                                                    }),
+                                            ),
+                                    )
+                                }),
                         )
                     })
                     .child(

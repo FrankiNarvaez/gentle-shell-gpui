@@ -337,6 +337,7 @@ mod tests {
                     sidebar_visible: false,
                     tab_layout: TabLayout::Horizontal,
                     sidebar_compact: false,
+                    sidebar_width: crate::features::workspace::SIDEBAR_WIDTH,
                     badge_picker: None,
                     open_menu: None,
                     workspace_rename: None,
