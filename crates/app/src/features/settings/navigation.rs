@@ -72,7 +72,7 @@ impl SettingsPage {
             Self::Appearance => "Theme and window appearance",
             Self::Agents => "Agent behavior and background work",
             Self::Models => "Model and profile defaults",
-            Self::Devices => "Connected development devices",
+            Self::Devices => "Development devices and the browser",
             Self::Integrations => "Companions and external tools",
             Self::Notifications => "Alerts and notification preferences",
             Self::Updates => "Application and tool updates",
@@ -99,10 +99,10 @@ impl SettingsPage {
     fn keywords(self) -> &'static str {
         match self {
             Self::General => {
-                "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report backend wsl linux distro remote vm orbstack lima docker container where agents run"
+                "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report backend wsl linux distro remote vm orbstack lima docker container where agents run status doctor dev binary assets routing"
             }
             Self::Appearance => {
-                "theme color dark light import share transparency window opacity interface zoom size font fonts family typeface nerd monospace code scene motion background animated library terminal banner rose text tabs vertical horizontal placement sidebar typing kisses hearts particles composer input style card bar prompt pill soft"
+                "theme color dark light import share transparency window opacity blur glass contrast readable readability accessibility interface zoom size font fonts family typeface nerd monospace code scene motion background picture animated library terminal banner rose text tabs vertical horizontal placement sidebar typing kisses hearts particles composer input style card bar prompt pill soft"
             }
             Self::Agents => {
                 "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked"
@@ -111,7 +111,7 @@ impl SettingsPage {
                 "model models provider providers thinking effort profile profiles routing default scoped sign-ins authentication claude bridge pro max code manage"
             }
             Self::Devices => {
-                "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access"
+                "devices device discovery phone android emulator ios simulator switches node ffmpeg sdk agent access browser browsers web page pages link links url open external default system safari chrome chromium canary arc dia firefox zen librewolf brave edge opera vivaldi orion inside app"
             }
             Self::Integrations => {
                 "mcp servers maestro ui testing music gentle stream player instruments soundfont external tools integrations"
@@ -395,6 +395,9 @@ mod tests {
             assert!(SettingsPage::Appearance.matches_query(term));
         }
         assert!(SettingsPage::Appearance.matches_query("window transparency"));
+        for term in ["blur", "opacity", "contrast"] {
+            assert!(SettingsPage::Appearance.matches_query(term));
+        }
         assert!(SettingsPage::Appearance.matches_query("THEME"));
         assert!(SettingsPage::Models.matches_query("claude bridge"));
         assert!(SettingsPage::Extensions.matches_query("install npm"));
@@ -406,5 +409,15 @@ mod tests {
                 .iter()
                 .all(|page| page.matches_query("  "))
         );
+    }
+
+    #[test]
+    fn the_browser_choice_is_found_under_devices_first() {
+        for query in ["browser", "open pages", "firefox", "inside app", "safari"] {
+            let first = SettingsPage::ALL
+                .into_iter()
+                .find(|page| page.matches_query(query));
+            assert_eq!(first, Some(SettingsPage::Devices), "{query:?}");
+        }
     }
 }

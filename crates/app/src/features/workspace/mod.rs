@@ -428,6 +428,16 @@ pub struct Workspace {
     /// the rest wait in the title bar's instance tray.
     stages: Vec<Stage>,
     next_stage: u64,
+    /// Pages agents opened in the browser outside the app, so one a tool
+    /// keeps printing opens there once.
+    opened_outside: std::collections::HashSet<String>,
+    /// The docked browser column's divider is being dragged: where the
+    /// pointer went down (x), the column's width then, and the room it
+    /// shares with the conversation.
+    browser_dock_drag: Option<(f32, f32, f32)>,
+    /// The conversation's width as last laid out, and the docked browser
+    /// column's as last drawn: together, the room the column may take from.
+    browser_dock_room: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
     /// The welcome screen, kept while its "Sign in" shows Providers so closing
     /// Providers returns to it.
     resume_welcome: Option<Entity<WelcomeView>>,
@@ -502,7 +512,7 @@ impl Workspace {
             // Keep a multi-stage grid filling the window as it resizes. A
             // lone card keeps whatever size the user gave it.
             cx.observe_window_bounds(window, |this, window, cx| {
-                if this.shown_stages() >= 2 {
+                if this.floating_stages(cx) >= 2 {
                     this.tile_stages(window, cx);
                 }
             }),
@@ -552,6 +562,9 @@ impl Workspace {
             surge_runs: 0,
             stages: Vec::new(),
             next_stage: 1,
+            opened_outside: Default::default(),
+            browser_dock_drag: None,
+            browser_dock_room: Default::default(),
             resume_welcome: None,
             drop_hint: None,
             closed: Vec::new(),
@@ -602,7 +615,7 @@ impl Workspace {
             this.activate(active, window, cx);
         }
         if let Some(url) = url {
-            this.open_web(url, None, false, window, cx);
+            this.open_agent_page(url, None, false, window, cx);
         }
         this.space_mut().last_active = workspaces::now();
         this.schedule_save(cx);
@@ -654,7 +667,7 @@ impl Workspace {
             self.open_tab(PaneKind::Agent, root, Some(prompt), None, window, cx);
         }
         if let Some(url) = url {
-            self.open_web(url, None, false, window, cx);
+            self.open_agent_page(url, None, false, window, cx);
         }
         if let Some(args) = device {
             self.device_request(&args, cx);

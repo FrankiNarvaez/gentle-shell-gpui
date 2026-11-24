@@ -93,7 +93,10 @@ impl Workspace {
             PaletteAction::Sessions => self.open_sessions(window, cx),
             PaletteAction::Profiles => self.open_profiles(window, cx),
             PaletteAction::Usage => self.open_usage(window, cx),
-            PaletteAction::Memory => self.open_memory(window, cx),
+            PaletteAction::Memory => {
+                let cwd = self.active_cwd(cx);
+                self.open_memory(cwd, Default::default(), window, cx)
+            }
             PaletteAction::Docs => self.open_docs(window, cx),
             PaletteAction::History => {
                 let cwd = self.active_cwd(cx);
@@ -549,9 +552,16 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn open_memory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let cwd = self.active_cwd(cx);
-        let view = cx.new(|cx| MemoryView::new(cwd, window, cx));
+    /// The Memory screen for `cwd`'s project, or on `target`'s project and
+    /// memory (a session's Engram status).
+    pub(super) fn open_memory(
+        &mut self,
+        cwd: PathBuf,
+        target: gentle_core::engram::MemoryTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| MemoryView::new(cwd, target, window, cx));
         let subscription = cx.subscribe_in(
             &view,
             window,
@@ -596,7 +606,7 @@ impl Workspace {
                 }
                 ProvidersEvent::Changed => {
                     for tab in this.sessions() {
-                        tab.update(cx, |session, cx| session.reload_models(window, cx));
+                        tab.update(cx, |session, cx| session.reload_credentials(window, cx));
                     }
                 }
                 ProvidersEvent::Terminal(cwd, command) => {

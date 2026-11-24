@@ -20,7 +20,7 @@ use gpui_kit::{
     SharedString, Stateful, Styled, Window, canvas, div, ease_out_quint, point, px, rems, rgb,
 };
 
-use crate::shared::themes::{self, Theme, mix};
+use crate::shared::themes::{self, Glass, Theme, mix};
 
 // ── Palette ────────────────────────────────────────────────────────────────
 
@@ -38,6 +38,9 @@ pub struct Palette {
     pub well: Hsla,
     pub border: Hsla,
     pub border_strong: Hsla,
+    /// Input borders: the strong border, made to meet 3:1 (WCAG AA for
+    /// the boundary of a control) where the theme's own is softer.
+    pub input: Hsla,
     pub fg: Hsla,
     pub muted: Hsla,
     pub faint: Hsla,
@@ -79,103 +82,199 @@ fn with_hue(hex: u32, degrees: f32) -> Hsla {
 }
 
 impl Palette {
-    /// `clear` is the window transparency, 0 (the most solid glass) to 1;
-    /// each glass role fades from its solid alpha toward a floor that still
-    /// keeps text readable over a busy desktop.
-    pub fn new(t: &Theme, clear: f32) -> Self {
-        let clear = clear.clamp(0., 1.);
+    /// The theme's roles under `glass` (the Appearance sliders).
+    ///
+    /// Transparency fades the chrome (the window's ground: title bar, the
+    /// gaps between panes) from its solid alpha toward a floor. The text
+    /// areas (panes, sidebars, cards, code and terminal wells, selected
+    /// rows) start from that same fade and are then held readable: never
+    /// clearer than the alpha at which every text color still meets WCAG AA
+    /// over a pure black *and* a pure white backdrop (whatever the desktop
+    /// or the theme's picture shows lies between them, and a blur only
+    /// averages it), and Opacity takes them from there (0) to opaque (1).
+    ///
+    /// Text colors are nudged first (toward white or black, whichever is
+    /// the smaller change, by the least amount) wherever the theme's own
+    /// pick would fall short on its backings at [`INK_COVERAGE`], so the
+    /// floor never has to make a pane opaque.
+    pub fn new(t: &Theme, glass: Glass) -> Self {
+        use gentle_core::contrast::{AA_TEXT, AA_UI, Rgb, WORST_BACKDROPS, min_alpha, readable};
+
+        let clear = glass.transparency.clamp(0., 1.);
+        let opacity = glass.opacity.clamp(0., 1.);
         let fade = |solid: f32, floor: f32| solid - (solid - floor) * clear;
-        let solid = |hex| color(hex, 1.);
+        let opaque = t.solid || t.oled;
         // Cards lean toward the text color with a hint of the accent.
         let tint = mix(t.fg, t.accent, 0.6);
-        let glass = |amount: f32, alpha: f32| color(mix(t.bg, tint, amount), alpha);
+        let tinted = |amount: f32| mix(t.bg, tint, amount);
         let accent_deep = mix(t.accent, t.bg, 0.2);
-        let palette = Self {
-            light: t.light,
-            window_bg: color(
-                mix(t.bg, t.fg, 0.03),
-                fade(if t.light { 0.92 } else { 0.9 }, 0.3),
-            ),
-            panel: glass(0.045, fade(0.93, 0.16)),
-            surface: glass(0.09, fade(0.94, 0.4)),
-            surface_hover: glass(0.15, fade(0.96, 0.55)),
-            raised: color(t.raised, fade(0.96, 0.7)),
-            well: if t.light {
-                color(mix(t.bg, t.fg, 0.035), fade(0.92, 0.45))
+
+        // Each glass role's color, before alpha. OLED: every large surface
+        // is true black (blur or a tint would light pixels that should be
+        // off); cards and menus sit just above black so they read as layers.
+        let black = |other: u32| if t.oled { 0x000000 } else { other };
+        let window_c = black(mix(t.bg, t.fg, 0.03));
+        let panel_c = black(tinted(0.045));
+        let surface_c = if t.oled {
+            mix(t.bg, t.raised, 0.5)
+        } else {
+            tinted(0.09)
+        };
+        let hover_c = if t.oled { t.raised } else { tinted(0.15) };
+        let raised_c = t.raised;
+        let well_c = black(if t.light {
+            mix(t.bg, t.fg, 0.035)
+        } else {
+            tinted(0.02)
+        });
+        let popover_c = if t.oled {
+            mix(t.bg, t.raised, 0.4)
+        } else {
+            tinted(0.065)
+        };
+        let screen_c = black(tinted(0.055));
+
+        // Text colors, made to read on every backing text sits on. Glass
+        // backings are taken at `INK_COVERAGE` over the worst backdrops, so
+        // the theme's text keeps some glass under it, not just a wall.
+        let worst = WORST_BACKDROPS.map(Rgb::hex);
+        let coverage = if opaque { 1. } else { INK_COVERAGE };
+        let mut backings: Vec<Rgb> = [popover_c, screen_c].map(Rgb::hex).to_vec();
+        for c in [panel_c, surface_c, hover_c, raised_c, well_c] {
+            backings.extend(worst.map(|under| Rgb::hex(c).over(coverage, under)));
+        }
+        let ink = |hex: u32, target: f64| readable(Rgb::hex(hex), &backings, target).to_hex();
+        let fg = ink(t.fg, AA_TEXT);
+        let muted = ink(t.muted, AA_TEXT);
+        let accent = ink(t.accent, AA_TEXT);
+        let faint = ink(t.faint, AA_UI);
+        let info = ink(t.info, AA_UI);
+        let success = ink(t.success, AA_UI);
+        let danger = ink(t.danger, AA_UI);
+        let warning = ink(t.warning, AA_UI);
+        let input = ink(t.border, AA_UI);
+        let on_accent = readable(
+            Rgb::hex(if t.light {
+                0xffffff
             } else {
-                glass(0.02, fade(0.92, 0.45))
+                mix(t.bg, t.accent, 0.08)
+            }),
+            &[Rgb::hex(accent)],
+            AA_TEXT,
+        )
+        .to_hex();
+
+        // What each text area needs to read, over what is below it.
+        let needs = [
+            (fg, AA_TEXT),
+            (muted, AA_TEXT),
+            (accent, AA_TEXT),
+            (faint, AA_UI),
+            (info, AA_UI),
+            (success, AA_UI),
+            (danger, AA_UI),
+            (warning, AA_UI),
+            (input, AA_UI),
+        ]
+        .map(|(c, target)| (Rgb::hex(c), target));
+        let window_a = if opaque {
+            1.
+        } else {
+            fade(if t.light { 0.92 } else { 0.9 }, 0.3)
+        };
+        // A text area's alpha: the transparency's fade, held at the AA
+        // floor, then lifted toward opaque by Opacity.
+        let text_alpha = |c: u32, faded: f32, below: &[Rgb]| -> f32 {
+            if opaque {
+                return 1.;
+            }
+            let floor = min_alpha(Rgb::hex(c), below, &needs) as f32;
+            let low = faded.max(floor);
+            low + (1. - low) * opacity
+        };
+        // A pane sits on the window's ground over the desktop; a theme's
+        // backdrop (sky, picture, scene) is drawn over that ground, so there
+        // the pane sits right on whatever the backdrop shows.
+        let under_window = if t.background.is_some() {
+            worst
+        } else {
+            worst.map(|d| Rgb::hex(window_c).over(f64::from(window_a), d))
+        };
+        let panel_a = text_alpha(panel_c, fade(0.93, 0.16), &under_window);
+        // Cards, wells and rows sit on a pane.
+        let under_panel = under_window.map(|b| Rgb::hex(panel_c).over(f64::from(panel_a), b));
+        let surface_a = text_alpha(surface_c, fade(0.94, 0.4), &under_panel);
+        let hover_a = text_alpha(hover_c, fade(0.96, 0.55), &under_panel);
+        let raised_a = text_alpha(raised_c, fade(0.96, 0.7), &under_panel);
+        let well_a = text_alpha(well_c, fade(0.92, 0.45), &under_panel);
+
+        let solid = |hex| color(hex, 1.);
+        Self {
+            light: t.light,
+            window_bg: color(window_c, window_a),
+            panel: color(panel_c, panel_a),
+            surface: color(surface_c, surface_a),
+            surface_hover: color(hover_c, hover_a),
+            raised: color(raised_c, raised_a),
+            well: color(well_c, well_a),
+            border: if t.oled {
+                solid(mix(t.bg, t.border, 0.6))
+            } else {
+                color(
+                    tinted(0.2),
+                    if t.solid {
+                        1.
+                    } else if t.light {
+                        0.8
+                    } else {
+                        0.69
+                    },
+                )
             },
-            border: glass(0.2, if t.light { 0.8 } else { 0.69 }),
             border_strong: solid(t.border),
-            fg: solid(t.fg),
-            muted: solid(t.muted),
-            faint: solid(t.faint),
-            accent: solid(t.accent),
+            input: solid(input),
+            fg: solid(fg),
+            muted: solid(muted),
+            faint: solid(faint),
+            accent: solid(accent),
             accent_active: solid(t.accent_active),
             accent_deep: solid(accent_deep),
-            on_accent: if t.light {
-                solid(0xffffff)
-            } else {
-                solid(mix(t.bg, t.accent, 0.08))
-            },
+            on_accent: solid(on_accent),
             champagne: solid(t.heading),
-            info: solid(t.info),
-            success: solid(t.success),
-            danger: solid(t.danger),
-            danger_hover: solid(mix(t.danger, 0xffffff, 0.2)),
-            danger_active: solid(mix(t.danger, 0x000000, 0.1)),
-            warning: solid(t.warning),
-            purple: with_hue(t.info, 275.),
-            teal: with_hue(t.info, 172.),
+            info: solid(info),
+            success: solid(success),
+            danger: solid(danger),
+            danger_hover: solid(mix(danger, 0xffffff, 0.2)),
+            danger_active: solid(mix(danger, 0x000000, 0.1)),
+            warning: solid(warning),
+            purple: with_hue(info, 275.),
+            teal: with_hue(info, 172.),
             selection: color(mix(t.selection, accent_deep, 0.5), 0.6),
             // Menus, the palette and screens float over content: solid, whatever
             // the transparency, so the conversation behind never bleeds through.
-            popover: glass(0.065, 1.),
-            screen: glass(0.055, 1.),
+            popover: solid(popover_c),
+            screen: solid(screen_c),
             scrollbar_hover: solid(mix(t.border, t.fg, 0.2)),
-            backdrop: color(0x000000, if t.light { 0.25 } else { 0.44 }),
-        };
-        if t.solid {
-            // Solid themes: the same derived colors, but every glass surface
-            // is opaque whatever the transparency — the glass without the
-            // glass, in the theme's own palette instead of OLED's black.
-            return Self {
-                window_bg: color(mix(t.bg, t.fg, 0.03), 1.),
-                panel: glass(0.045, 1.),
-                surface: glass(0.09, 1.),
-                surface_hover: glass(0.15, 1.),
-                raised: solid(t.raised),
-                well: if t.light {
-                    color(mix(t.bg, t.fg, 0.035), 1.)
+            backdrop: color(
+                0x000000,
+                if t.oled {
+                    0.75
+                } else if t.light {
+                    0.25
                 } else {
-                    glass(0.02, 1.)
+                    0.44
                 },
-                border: glass(0.2, 1.),
-                ..palette
-            };
-        }
-        if !t.oled {
-            return palette;
-        }
-        // OLED: every large surface is true black and opaque whatever the
-        // transparency (blur or a tint would light pixels that should be off).
-        // Cards and menus sit just above black so they still read as layers.
-        let black = solid(0x000000);
-        Self {
-            window_bg: black,
-            panel: black,
-            surface: solid(mix(t.bg, t.raised, 0.5)),
-            surface_hover: solid(t.raised),
-            raised: solid(t.raised),
-            well: black,
-            border: solid(mix(t.bg, t.border, 0.6)),
-            popover: solid(mix(t.bg, t.raised, 0.4)),
-            screen: black,
-            backdrop: color(0x000000, 0.75),
-            ..palette
+            ),
         }
     }
 }
+
+/// How much of a glass text area the ink is made to read over (with the
+/// worst backdrop showing through the rest). A balance: lower keeps more
+/// glass but recolors more of a theme (0.85 turned Solarized's blue and
+/// Gruvbox's orange pale); 1 only fixes colors that fail on the theme's
+/// own background but leaves the panes nearly opaque.
+pub const INK_COVERAGE: f64 = 0.92;
 
 /// Panes, sidebars and screens.
 pub fn panel() -> Hsla {
@@ -201,6 +300,10 @@ pub fn border() -> Hsla {
 }
 pub fn border_strong() -> Hsla {
     themes::palette(|p| p.border_strong)
+}
+/// Borders of text fields: at least 3:1 against what is around them.
+pub fn input() -> Hsla {
+    themes::palette(|p| p.input)
 }
 pub fn fg() -> Hsla {
     themes::palette(|p| p.fg)
@@ -397,7 +500,7 @@ pub fn apply_theme(cx: &mut App) {
         c.background = p.window_bg;
         c.foreground = p.fg;
         c.border = p.border;
-        c.input = p.border_strong;
+        c.input = p.input;
         c.ring = p.accent;
         c.caret = p.accent_active;
         c.selection = p.selection;
@@ -682,7 +785,7 @@ pub fn field() -> Div {
         .rounded_lg()
         .bg(well())
         .border_1()
-        .border_color(border_strong())
+        .border_color(input())
 }
 
 /// The todo island's floating card: solid, a soft outline, a deep shadow and
@@ -1315,15 +1418,24 @@ mod tests {
         assert_eq!(tail("a", 5), ("a".to_string(), 0));
     }
 
+    /// The glass at `transparency`, Opacity 0 (the clearest it gets).
+    fn clear_at(transparency: f32) -> Glass {
+        Glass {
+            transparency,
+            blur: 0.,
+            opacity: 0.,
+        }
+    }
+
     #[test]
     fn palette_follows_the_theme() {
         let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
         let find = |name: &str| catalog.iter().find(|t| t.name == name).unwrap();
-        let cute = Palette::new(find("Gentleman-Cute"), 0.);
+        let cute = Palette::new(find("Gentleman-Cute"), clear_at(0.));
         assert!(!cute.light);
         assert_eq!(cute.fg, Hsla::from(rgb(0xf6eff3)));
         assert_eq!(cute.border_strong, Hsla::from(rgb(0x563040)));
-        let latte = Palette::new(find("Catppuccin Latte"), 0.);
+        let latte = Palette::new(find("Catppuccin Latte"), clear_at(0.));
         assert!(latte.light);
         assert!(latte.fg.l < latte.window_bg.l);
     }
@@ -1332,7 +1444,10 @@ mod tests {
     fn transparency_fades_glass_but_not_text_or_modals() {
         let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
         let cute = catalog.iter().find(|t| t.name == "Gentleman-Cute").unwrap();
-        let (solid, clear) = (Palette::new(cute, 0.), Palette::new(cute, 1.));
+        let (solid, clear) = (
+            Palette::new(cute, clear_at(0.)),
+            Palette::new(cute, clear_at(1.)),
+        );
         for (a, b) in [
             (solid.window_bg, clear.window_bg),
             (solid.panel, clear.panel),
@@ -1346,7 +1461,136 @@ mod tests {
         assert_eq!(clear.popover.a, 1.);
         assert_eq!(clear.screen.a, 1.);
         // Out-of-range values clamp instead of going negative.
-        assert_eq!(Palette::new(cute, 3.), clear);
+        assert_eq!(Palette::new(cute, clear_at(3.)), clear);
+    }
+
+    #[test]
+    fn chrome_follows_transparency_and_text_areas_hold_their_floor() {
+        let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
+        let cute = catalog.iter().find(|t| t.name == "Gentleman-Cute").unwrap();
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        let fade = |solid: f32, floor: f32, clear: f32| solid - (solid - floor) * clear;
+        // The chrome is the transparency's fade, nothing else.
+        let p = Palette::new(cute, clear_at(0.6));
+        assert!(close(p.window_bg.a, fade(0.9, 0.3, 0.6)));
+        assert!(close(p.border.a, 0.69));
+        // Text areas never go clearer than the fade, nor than their floor:
+        // fully transparent, the pane still keeps most of its glass.
+        let clear = Palette::new(cute, clear_at(1.));
+        assert!(clear.panel.a >= fade(0.93, 0.16, 1.));
+        assert!(clear.panel.a > clear.window_bg.a, "{:?}", clear.panel);
+        // Opacity lifts them from that floor to opaque, step by step.
+        let mut last = 0.;
+        for opacity in [0., 0.25, 0.5, 0.75, 1.] {
+            let p = Palette::new(
+                cute,
+                Glass {
+                    opacity,
+                    ..clear_at(1.)
+                },
+            );
+            assert!(p.panel.a > last, "opacity {opacity}: {:?}", p.panel);
+            last = p.panel.a;
+            // The chrome doesn't follow Opacity.
+            assert_eq!(p.window_bg, clear.window_bg);
+        }
+        assert_eq!(last, 1.);
+        // Blur is the backdrop's business: the palette doesn't change.
+        let blurred = Glass {
+            blur: 1.,
+            ..clear_at(0.6)
+        };
+        assert_eq!(Palette::new(cute, blurred), p);
+    }
+
+    /// Every text and UI color of `p` against every backing it sits on, as
+    /// composited over `backdrop`: `(role, ratio, target)`.
+    fn contrasts(p: &Palette, backdrop: u32, pictured: bool) -> Vec<(&'static str, f64, f64)> {
+        use gentle_core::contrast::{AA_TEXT, AA_UI, Rgb, ratio};
+        let split = |c: Hsla| {
+            let c = gpui_kit::Rgba::from(c);
+            (Rgb([c.r, c.g, c.b].map(f64::from)), f64::from(c.a))
+        };
+        let over = |c: Hsla, below: Rgb| {
+            let (c, a) = split(c);
+            c.over(a, below)
+        };
+        // Panes sit on the window's ground, or right on a theme's backdrop;
+        // cards, wells and rows on a pane.
+        let ground = if pictured {
+            Rgb::hex(backdrop)
+        } else {
+            over(p.window_bg, Rgb::hex(backdrop))
+        };
+        let pane = over(p.panel, ground);
+        let mut backings = vec![pane, split(p.popover).0, split(p.screen).0];
+        for role in [p.surface, p.surface_hover, p.raised, p.well] {
+            backings.push(over(role, pane));
+        }
+        let roles = [
+            ("fg", p.fg, AA_TEXT),
+            ("muted", p.muted, AA_TEXT),
+            ("accent", p.accent, AA_TEXT),
+            ("faint", p.faint, AA_UI),
+            ("info", p.info, AA_UI),
+            ("success", p.success, AA_UI),
+            ("danger", p.danger, AA_UI),
+            ("warning", p.warning, AA_UI),
+            ("input", p.input, AA_UI),
+        ];
+        let mut out: Vec<_> = roles
+            .iter()
+            .map(|&(name, c, target)| {
+                let worst = backings
+                    .iter()
+                    .map(|&b| ratio(split(c).0, b))
+                    .fold(f64::INFINITY, f64::min);
+                (name, worst, target)
+            })
+            .collect();
+        // Labels on accent buttons.
+        out.push((
+            "on_accent",
+            ratio(split(p.on_accent).0, split(p.accent).0),
+            AA_TEXT,
+        ));
+        out
+    }
+
+    #[test]
+    fn every_builtin_theme_meets_aa_over_any_backdrop() {
+        // Text (fg, muted, links in the accent) at 4.5:1; faint hints,
+        // status colors and input borders at 3:1; over a black and a white
+        // backdrop (the desktop or the theme's picture lies between them),
+        // at the defaults and at the clearest the sliders allow.
+        let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
+        let mut failures = Vec::new();
+        for theme in &catalog {
+            for glass in [Glass::DEFAULT, clear_at(1.), clear_at(0.)] {
+                let p = Palette::new(theme, glass);
+                for backdrop in gentle_core::contrast::WORST_BACKDROPS {
+                    let pictured = theme.background.is_some();
+                    for (role, ratio, target) in contrasts(&p, backdrop, pictured) {
+                        if ratio < target {
+                            failures.push(format!(
+                                "{} {role} {ratio:.2} < {target} over #{backdrop:06x} at {glass:?}",
+                                theme.name
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn ink_that_already_reads_is_left_alone() {
+        // Gentleman-Cute's own text colors read on their glass: no nudge.
+        let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
+        let cute = catalog.iter().find(|t| t.name == "Gentleman-Cute").unwrap();
+        let p = Palette::new(cute, Glass::DEFAULT);
+        assert_eq!(p.fg, Hsla::from(rgb(cute.fg)));
     }
 
     #[test]
@@ -1356,7 +1600,7 @@ mod tests {
         // until the user moves the slider the desktop must not read through.
         let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
         let cute = catalog.iter().find(|t| t.name == "Gentleman-Cute").unwrap();
-        let p = Palette::new(cute, crate::shared::themes::DEFAULT_TRANSPARENCY);
+        let p = Palette::new(cute, Glass::DEFAULT);
         for surface in [p.window_bg, p.panel, p.surface] {
             assert!(
                 surface.a >= 0.8,
@@ -1384,7 +1628,7 @@ mod tests {
         assert!(theme.solid);
         let raised = Hsla::from(rgb(0x2a2a2e));
         for clear in [0., 0.6, 1.] {
-            let p = Palette::new(&theme, clear);
+            let p = Palette::new(&theme, clear_at(clear));
             for surface in [p.window_bg, p.panel, p.surface, p.well, p.screen, p.popover] {
                 assert_eq!(surface.a, 1., "at transparency {clear}");
             }
@@ -1393,23 +1637,15 @@ mod tests {
             assert!(p.panel != Hsla::from(rgb(0x000000)));
         }
         // Nothing left fades: the whole palette is the same at any setting.
-        assert_eq!(Palette::new(&theme, 0.), Palette::new(&theme, 1.));
-    }
-
-    #[test]
-    fn non_solid_theme_keeps_its_glass() {
-        let catalog = crate::shared::themes::load_catalog(Vec::new(), Vec::new());
-        let cute = catalog.iter().find(|t| t.name == "Gentleman-Cute").unwrap();
-        assert!(!cute.solid);
-        // Pinned glass values, as they were before `solid` existed.
-        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
-        let p = Palette::new(cute, 0.6);
-        assert!(close(p.window_bg.a, 0.9 - (0.9 - 0.3) * 0.6));
-        assert!(close(p.panel.a, 0.93 - (0.93 - 0.16) * 0.6));
-        assert!(close(p.surface.a, 0.94 - (0.94 - 0.4) * 0.6));
-        assert!(close(p.well.a, 0.92 - (0.92 - 0.45) * 0.6));
-        assert!(close(p.raised.a, 0.96 - (0.96 - 0.7) * 0.6));
-        assert!(close(p.border.a, 0.69));
+        let all = Glass {
+            transparency: 1.,
+            blur: 1.,
+            opacity: 1.,
+        };
+        assert_eq!(
+            Palette::new(&theme, clear_at(0.)),
+            Palette::new(&theme, all)
+        );
     }
 
     #[test]
@@ -1421,7 +1657,7 @@ mod tests {
             .unwrap();
         let black = Hsla::from(rgb(0x000000));
         for clear in [0., 0.6, 1.] {
-            let p = Palette::new(oled, clear);
+            let p = Palette::new(oled, clear_at(clear));
             for surface in [p.window_bg, p.panel, p.well, p.screen] {
                 assert_eq!(surface, black, "at transparency {clear}");
             }

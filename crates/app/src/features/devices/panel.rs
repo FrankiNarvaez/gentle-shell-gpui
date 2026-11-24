@@ -15,7 +15,7 @@ use gpui_kit::*;
 
 use super::{Hub, HubStatus, hub};
 use crate::features::browser::WebSurface;
-use crate::shared::floating::{self, CardState, DragKind};
+use crate::shared::floating::{self, CardState, DragKind, Mode};
 use crate::shared::ui;
 
 /// The docked column's width; a phone fits with its controls.
@@ -35,12 +35,6 @@ const FLOAT_FRAME: floating::Frame = floating::Frame {
     w: 400.,
     h: 760.,
 };
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Mode {
-    Docked,
-    Floating,
-}
 
 pub enum DevicePanelEvent {
     /// Shown, hidden or moved between docked and floating: the window lays

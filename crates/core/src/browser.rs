@@ -414,6 +414,61 @@ fn fnv(bytes: &[u8], seed: u64) -> u64 {
     hash
 }
 
+// ── How browser cards open ──────────────────────────────────────────────────
+
+/// Key of the app's `settings.json` for [`CardLayout`].
+pub const LAYOUT_KEY: &str = "browserCard";
+
+/// How the app's browser cards open, as the user last left them: docked as
+/// a column at the window's right or floating, the docked column's width
+/// and a floating card's size (logical px). The window keeps them inside
+/// itself when it lays the cards out.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CardLayout {
+    pub docked: bool,
+    pub dock_width: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+impl Default for CardLayout {
+    fn default() -> Self {
+        Self {
+            docked: false,
+            dock_width: 480.,
+            width: 560.,
+            height: 380.,
+        }
+    }
+}
+
+impl CardLayout {
+    /// The saved layout; a missing, broken or nonsensical size (not a
+    /// positive number) takes its default.
+    pub fn from_json(value: &Value) -> Self {
+        let saved: Self = serde_json::from_value(value.clone()).unwrap_or_default();
+        let fallback = Self::default();
+        let size = |value: f32, default: f32| {
+            if value.is_finite() && value > 0. {
+                value
+            } else {
+                default
+            }
+        };
+        Self {
+            docked: saved.docked,
+            dock_width: size(saved.dock_width, fallback.dock_width),
+            width: size(saved.width, fallback.width),
+            height: size(saved.height, fallback.height),
+        }
+    }
+
+    pub fn to_json(self) -> Value {
+        serde_json::to_value(self).unwrap_or(Value::Null)
+    }
+}
+
 // ── The command line ────────────────────────────────────────────────────────
 
 pub const USAGE: &str = "\
@@ -557,6 +612,33 @@ mod tests {
 
     fn args(line: &str) -> Vec<String> {
         line.split(' ').map(str::to_string).collect()
+    }
+
+    #[test]
+    fn card_layout_round_trips_and_repairs_what_it_cannot_use() {
+        let layout = CardLayout {
+            docked: true,
+            dock_width: 620.,
+            width: 900.,
+            height: 500.,
+        };
+        assert_eq!(CardLayout::from_json(&layout.to_json()), layout);
+        assert_eq!(
+            layout.to_json(),
+            json!({"docked": true, "dockWidth": 620.0, "width": 900.0, "height": 500.0})
+        );
+        // Missing keys and broken sizes take the defaults; the rest stays.
+        let partial = CardLayout::from_json(&json!({"docked": true, "width": -4, "height": 0}));
+        assert!(partial.docked);
+        assert_eq!(
+            (partial.dock_width, partial.width, partial.height),
+            (480., 560., 380.)
+        );
+        assert_eq!(
+            CardLayout::from_json(&json!("nonsense")),
+            CardLayout::default()
+        );
+        assert!(!CardLayout::default().docked);
     }
 
     #[test]

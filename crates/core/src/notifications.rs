@@ -134,11 +134,20 @@ fn unsafe_path(path: &str) -> bool {
     percents.windows(2).any(|w| w[1] > w[0] + 1)
 }
 
-/// `isNotificationSound`: syntax only, no stat.
-fn valid_sound(value: &Value, windows: bool) -> bool {
+/// What Gentle Shell's Desktop `notifications` store sends in place of a
+/// `file:` sound, so no path crosses the wire; sent back where it was, it
+/// keeps that file.
+pub const FILE_MARKER: &str = "file";
+
+/// `isNotificationSound`: syntax only, no stat. `marker` also accepts the
+/// Desktop store's [`FILE_MARKER`].
+fn valid_sound(value: &Value, windows: bool, marker: bool) -> bool {
     let Some(sound) = value.as_str() else {
         return value.is_null();
     };
+    if marker && sound == FILE_MARKER {
+        return true;
+    }
     if let Some(id) = sound.strip_prefix("builtin:") {
         return BUILTINS.contains(&id);
     }
@@ -163,7 +172,10 @@ fn valid_sound(value: &Value, windows: bool) -> bool {
 /// `parseNotificationSettingsFile`: the whole file, or `None` when Gentle
 /// Shell would reject it. The preset is never merged in.
 pub fn parse(raw: &str, windows: bool) -> Option<Value> {
-    let value: Value = serde_json::from_str(raw).ok()?;
+    validate(serde_json::from_str(raw).ok()?, windows, false)
+}
+
+fn validate(value: Value, windows: bool, marker: bool) -> Option<Value> {
     let root = value.as_object()?;
     if root.get("schema").and_then(Value::as_str) != Some(SCHEMA)
         || !keys_match(root, &["schema", "enabled", "audio"])
@@ -184,7 +196,9 @@ pub fn parse(raw: &str, windows: bool) -> Option<Value> {
     let events = audio["events"].as_object()?;
     events
         .iter()
-        .all(|(event, sound)| EVENTS.contains(&event.as_str()) && valid_sound(sound, windows))
+        .all(|(event, sound)| {
+            EVENTS.contains(&event.as_str()) && valid_sound(sound, windows, marker)
+        })
         .then_some(value)
 }
 
@@ -218,6 +232,30 @@ impl Policy {
                 (FileState::Missing, default_file())
             }
             Err(_) => (FileState::Unreadable, default_file()),
+        };
+        Self { file, state, value }
+    }
+
+    /// The policy Gentle Shell's Desktop `notifications` store reported:
+    /// `store` is its status (`Valid` for `ok`, `Missing`, `Invalid`) and
+    /// `value` its settings without `schema`, file sounds as the marker. A
+    /// value Gentle Shell would not have sent reads as `Invalid`, like a
+    /// rejected file. `sound` then answers the marker for a file sound: this
+    /// shows the switches, it never plays (playing needs the file's path).
+    pub fn from_store(file: PathBuf, store: FileState, value: Option<&Value>) -> Self {
+        let validated = match (store, value) {
+            (FileState::Valid, Some(Value::Object(settings))) => {
+                let mut with_schema = Map::new();
+                with_schema.insert("schema".into(), SCHEMA.into());
+                with_schema.extend(settings.clone());
+                validate(Value::Object(with_schema), cfg!(windows), true)
+            }
+            _ => None,
+        };
+        let (state, value) = match (store, validated) {
+            (FileState::Valid, Some(value)) => (FileState::Valid, value),
+            (FileState::Missing, _) => (FileState::Missing, default_file()),
+            _ => (FileState::Invalid, default_file()),
         };
         Self { file, state, value }
     }
@@ -268,6 +306,17 @@ impl Policy {
         }
         value
     }
+
+    /// The Desktop `notifications` store after `change`: [`Self::changed`]
+    /// without `schema`, the content `set_config` takes. A file sound stays
+    /// the marker, which keeps that file.
+    pub fn store_data(&self, change: Change) -> Value {
+        let mut value = self.changed(change);
+        if let Some(object) = value.as_object_mut() {
+            object.remove("schema");
+        }
+        value
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -292,6 +341,64 @@ mod tests {
 
     fn policy_of(raw: &str) -> Policy {
         Policy::from_read(PathBuf::from("n.json"), Ok(raw.to_string()))
+    }
+
+    /// The doc's `notifications` read: no `schema`, a file sound as the
+    /// marker. It shows as valid, and a change keeps the marker in place.
+    #[test]
+    fn the_desktop_store_reads_and_writes_without_paths() {
+        let read = json!({
+            "enabled": true,
+            "audio": {
+                "backend": "auto",
+                "minimumIntervalMs": 1000,
+                "coalesceWindowMs": 300,
+                "events": { "agent.completed": "file", "agent.attention": "builtin:attention" }
+            }
+        });
+        let policy = Policy::from_store(PathBuf::from("n.json"), FileState::Valid, Some(&read));
+        assert_eq!(policy.state, FileState::Valid);
+        assert!(policy.enabled());
+        assert_eq!(policy.sound(Alert::TurnEnded), Some(FILE_MARKER));
+        assert!(policy.sound(Alert::ContextHigh).is_none());
+
+        let off = policy.store_data(Change::Enabled(false));
+        assert!(off.get("schema").is_none());
+        assert_eq!(off["enabled"], false);
+        assert_eq!(off["audio"]["events"]["agent.completed"], FILE_MARKER);
+        // Turned back on, the file sound stays the marker: Gentle Shell
+        // keeps the file it already had.
+        let kept = policy.store_data(Change::Event(Alert::TurnEnded, true));
+        assert_eq!(kept["audio"]["events"]["agent.completed"], FILE_MARKER);
+        let context = policy.store_data(Change::Event(Alert::ContextHigh, true));
+        assert_eq!(
+            context["audio"]["events"]["context.high"],
+            "builtin:attention"
+        );
+
+        // A marker is never valid in the file itself.
+        let file = json!({ "schema": SCHEMA, "enabled": true, "audio": read["audio"] });
+        assert_eq!(parse(&file.to_string(), false), None);
+    }
+
+    #[test]
+    fn missing_and_invalid_stores_read_as_the_preset() {
+        let missing = Policy::from_store(PathBuf::from("n.json"), FileState::Missing, None);
+        assert_eq!(missing.state, FileState::Missing);
+        assert_eq!(missing.value, default_file());
+        let created = missing.store_data(Change::Enabled(true));
+        let mut expected = default_file();
+        expected["enabled"] = true.into();
+        expected.as_object_mut().unwrap().remove("schema");
+        assert_eq!(created, expected);
+
+        let invalid = Policy::from_store(PathBuf::from("n.json"), FileState::Invalid, None);
+        assert_eq!(invalid.state, FileState::Invalid);
+        // An `ok` answer Gentle Shell would never send is not trusted.
+        let odd = json!({ "enabled": "yes", "audio": {} });
+        let odd = Policy::from_store(PathBuf::from("n.json"), FileState::Valid, Some(&odd));
+        assert_eq!(odd.state, FileState::Invalid);
+        assert!(!odd.enabled());
     }
 
     fn file_with(enabled: bool, events: Value) -> String {
@@ -381,12 +488,12 @@ mod tests {
 
     #[test]
     fn windows_paths_need_a_drive() {
-        assert!(valid_sound(&json!("file:C:\\Sounds\\a.wav"), true));
-        assert!(valid_sound(&json!("file:d:/a.wav"), true));
-        assert!(!valid_sound(&json!("file:/a.wav"), true));
-        assert!(!valid_sound(&json!("file:C:a.wav"), true));
-        assert!(!valid_sound(&json!("file:C:\\a:b.wav"), true));
-        assert!(!valid_sound(&json!("file://a.wav"), false));
+        assert!(valid_sound(&json!("file:C:\\Sounds\\a.wav"), true, false));
+        assert!(valid_sound(&json!("file:d:/a.wav"), true, false));
+        assert!(!valid_sound(&json!("file:/a.wav"), true, false));
+        assert!(!valid_sound(&json!("file:C:a.wav"), true, false));
+        assert!(!valid_sound(&json!("file:C:\\a:b.wav"), true, false));
+        assert!(!valid_sound(&json!("file://a.wav"), false, false));
     }
 
     #[test]

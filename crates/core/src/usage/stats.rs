@@ -147,6 +147,16 @@ pub struct DayStats {
     pub cost: f64,
 }
 
+/// One provider's share of the range, as Gentle Shell 5.0.0 aggregates it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderStats {
+    pub provider: String,
+    pub messages: usize,
+    pub tokens: u64,
+    pub cost: f64,
+    pub share: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StatsSummary {
     pub totals: TokenTotals,
@@ -155,6 +165,9 @@ pub struct StatsSummary {
     pub active_days: usize,
     pub models: Vec<ModelStats>,
     pub projects: Vec<ProjectStats>,
+    /// Per provider, only when Gentle Shell's own aggregation reports it
+    /// (5.0.0 on); `None` for the file scan and older Shells.
+    pub providers: Option<Vec<ProviderStats>>,
     /// The last 30 local days, oldest first, regardless of the range.
     pub daily: Vec<DayStats>,
 }
@@ -264,6 +277,7 @@ pub fn aggregate_stats(
         active_days: active.len(),
         models,
         projects,
+        providers: None,
         daily,
     }
 }
@@ -301,11 +315,11 @@ pub fn parse_day_key(key: &str) -> Option<i64> {
     Some(super::time::days_from_civil(year, month, day))
 }
 
-/// The chart of an answer already aggregated per day (`(day, tokens)` rows):
-/// `days` local days ending `today`, oldest first, zero where the answer has
-/// no row and rows outside the window ignored. Such an answer carries no
-/// per-day cost, so costs stay zero.
-pub fn chart_from_days(rows: &[(i64, u64)], today: i64, days: i64) -> Vec<DayStats> {
+/// The chart of an answer already aggregated per day (`(day, tokens, cost)`
+/// rows): `days` local days ending `today`, oldest first, zero where the
+/// answer has no row and rows outside the window ignored. An answer without
+/// a cost per day (a Shell older than 5.0.0) passes zero.
+pub fn chart_from_days(rows: &[(i64, u64, f64)], today: i64, days: i64) -> Vec<DayStats> {
     let start = today - (days - 1);
     let mut chart: Vec<DayStats> = (start..=today)
         .map(|day| DayStats {
@@ -314,9 +328,11 @@ pub fn chart_from_days(rows: &[(i64, u64)], today: i64, days: i64) -> Vec<DaySta
             cost: 0.0,
         })
         .collect();
-    for &(day, tokens) in rows {
+    for &(day, tokens, cost) in rows {
         if (start..=today).contains(&day) {
-            chart[(day - start) as usize].tokens += tokens;
+            let slot = &mut chart[(day - start) as usize];
+            slot.tokens += tokens;
+            slot.cost += cost;
         }
     }
     chart
@@ -357,14 +373,20 @@ mod tests {
     #[test]
     fn charts_fill_the_window_from_rows() {
         let today = days_from_civil(2026, 10, 9);
-        let rows = [(today - 40, 5), (today - 2, 300), (today, 1365)];
+        let rows = [
+            (today - 40, 5, 9.0),
+            (today - 2, 300, 0.25),
+            (today, 1365, 0.0),
+        ];
         let chart = chart_from_days(&rows, today, 7);
         assert_eq!(chart.len(), 7);
         assert_eq!(chart.first().unwrap().day, today - 6);
         assert_eq!(chart[4].tokens, 300);
         assert_eq!(chart[6].tokens, 1365);
         assert_eq!(chart.iter().map(|d| d.tokens).sum::<u64>(), 1665);
-        assert!(chart.iter().all(|d| d.cost == 0.0));
+        // Costs follow their day; the one outside the window is ignored.
+        assert_eq!(chart[4].cost, 0.25);
+        assert_eq!(chart.iter().map(|d| d.cost).sum::<f64>(), 0.25);
     }
 
     #[test]
