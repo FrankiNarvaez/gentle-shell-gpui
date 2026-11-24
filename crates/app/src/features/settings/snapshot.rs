@@ -75,6 +75,18 @@ pub fn npm_name(source: &str) -> Option<&str> {
     })
 }
 
+/// `pink · rose on · text on`: a `banner.json` (or Gentle Shell's `banner`
+/// store) in words, defaults where a setting is missing.
+pub(super) fn describe_banner(banner: &Value) -> String {
+    let on_off = |value: &Value| if *value == false { "off" } else { "on" };
+    format!(
+        "{} · rose {} · text {}",
+        banner["color"].as_str().unwrap_or("pink"),
+        on_off(&banner["showRose"]),
+        on_off(&banner["showTextLogo"]),
+    )
+}
+
 /// Everything readable without running anything but `--version`.
 pub fn read_snapshot(agent: &Path, config: &Path, cwd: &Path) -> Snapshot {
     let settings = read_json(&agent.join("settings.json")).unwrap_or(Value::Null);
@@ -121,18 +133,7 @@ pub fn read_snapshot(agent: &Path, config: &Path, cwd: &Path) -> Snapshot {
             .ok()
             .as_deref(),
     );
-    let banner = read_json(&config.join("banner.json")).map(|b| {
-        format!(
-            "{} · rose {} · text {}",
-            b["color"].as_str().unwrap_or("pink"),
-            if b["showRose"] == false { "off" } else { "on" },
-            if b["showTextLogo"] == false {
-                "off"
-            } else {
-                "on"
-            }
-        )
-    });
+    let banner = read_json(&config.join("banner.json")).map(|b| describe_banner(&b));
     Snapshot {
         home_mode: String::new(),
         agent: agent.to_path_buf(),

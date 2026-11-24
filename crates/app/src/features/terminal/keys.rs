@@ -186,9 +186,15 @@ pub(crate) fn key_to_bytes(ks: &Keystroke, app_cursor: bool) -> Option<Vec<u8>> 
     Some(c.to_string().into_bytes())
 }
 
+/// Whether this keystroke sends the shell an interrupt (ETX, Ctrl+C) and
+/// nothing else: the key a double press of closes an idle pane.
+pub(crate) fn is_interrupt(ks: &Keystroke) -> bool {
+    key_to_bytes(ks, false).as_deref() == Some(&[0x03])
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_text_input, key_to_bytes};
+    use super::{is_interrupt, is_text_input, key_to_bytes};
     use gpui_kit::{Keystroke, Modifiers};
 
     fn ks(key: &str, key_char: Option<&str>, mods: Modifiers) -> Keystroke {
@@ -221,6 +227,24 @@ mod tests {
     }
     fn bytes(k: &Keystroke) -> Vec<u8> {
         key_to_bytes(k, false).expect("mapped")
+    }
+
+    #[test]
+    fn only_a_bare_ctrl_c_interrupts() {
+        assert!(is_interrupt(&ks("c", None, ctrl())));
+        let meta = Modifiers {
+            control: true,
+            alt: true,
+            ..Default::default()
+        };
+        assert!(!is_interrupt(&ks("c", None, meta)));
+        let cmd = Modifiers {
+            platform: true,
+            ..Default::default()
+        };
+        assert!(!is_interrupt(&ks("c", None, cmd)));
+        assert!(!is_interrupt(&ks("d", None, ctrl())));
+        assert!(!is_interrupt(&ks("c", Some("c"), none())));
     }
 
     #[test]

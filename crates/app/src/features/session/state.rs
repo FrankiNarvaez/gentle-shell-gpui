@@ -361,7 +361,7 @@ pub(in crate::features::session) mod desktop {
         design: design::Design,
         /// The config stores the Profiles screen reads and writes.
         config: config::Config,
-        /// One-shot reads (sessions, stats, update status, orchestrator default).
+        /// The screens' one-shot reads and the model pickers' default.
         reads: reads::Reads,
         /// A refresh is owed when capability negotiation or an earlier read finishes.
         model_default_requested: bool,
@@ -558,7 +558,14 @@ pub(in crate::features::session) mod desktop {
                     | Some(DesktopMethod::SetReviewMode)
                     | Some(DesktopMethod::GetUsageStats)
                     | Some(DesktopMethod::GetUpdateStatus)
-                    | Some(DesktopMethod::ListAgentDefinitions) => Applied::default(),
+                    | Some(DesktopMethod::ListAgentDefinitions)
+                    | Some(DesktopMethod::GetStatus)
+                    | Some(DesktopMethod::GetBackgroundSubagents)
+                    | Some(DesktopMethod::SetBackgroundSubagents)
+                    | Some(DesktopMethod::GetProfileBinding)
+                    | Some(DesktopMethod::ClearProfileBinding)
+                    | Some(DesktopMethod::GetAuthStatus)
+                    | Some(DesktopMethod::ReloadCredentials) => Applied::default(),
                     None => Applied::default(),
                 },
                 Ok(Some(DesktopRecord::Event(event))) => {
@@ -882,6 +889,20 @@ pub(in crate::features::session) mod desktop {
             profile: Option<String>,
         ) {
             self.config.set_session_profile(profile);
+        }
+
+        /// Whether this backend clears the session binding itself
+        /// (`clear_profile_binding`). Until the probe says so, or on a
+        /// channel that stopped, it does not.
+        pub(in crate::features::session) fn binding_clear_supported(&self) -> bool {
+            self.step != Step::Unavailable && self.config.offers_clear_binding()
+        }
+
+        /// Queue a `clear_profile_binding`; [`Self::config_pump`] sends it.
+        pub(in crate::features::session) fn config_clear_binding(
+            &mut self,
+        ) -> Result<ConfigTicket, ConfigFailure> {
+            self.config.clear_binding()
         }
 
         /// Send the next queued config request once the probe has landed, no
@@ -3180,6 +3201,14 @@ pub(in crate::features::session) mod desktop {
     ///
     /// The slice never retries a write and never touches a file: a
     /// `revision_conflict` is reported to the screen, which re-reads.
+    ///
+    /// When the peer advertises `get_profile_binding` (Gentle Shell 5.0.0),
+    /// the session's profile binding is Gentle Shell's own answer: read once
+    /// the probe lands, taken from `profile_binding_changed`, and read again
+    /// after anything that can move a `follow`/`live` binding (a `pins` or
+    /// `profiles` change, an apply, lost events). An older peer keeps what
+    /// this channel saw `apply_profile` bind. `clear_profile_binding` is
+    /// queued here too: it takes Gentle Shell's profile apply slot.
     pub(in crate::features::session) mod config {
         use std::collections::VecDeque;
 
@@ -3187,7 +3216,7 @@ pub(in crate::features::session) mod desktop {
         use pi_rpc::desktop_rpc::{
             ApplyProfileOutcome, Capabilities, ConfigStore, ConfigWrite, DesktopEvent,
             DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError, DesktopSession,
-            ProfileApplyMode,
+            ProfileApplyMode, ProfileBinding,
         };
 
         use super::Send;
@@ -3199,6 +3228,13 @@ pub(in crate::features::session) mod desktop {
         pub(in crate::features::session) const CONFIG_CHANGED: &str = "config_changed";
         /// The wire name of the profile apply event this slice applies.
         pub(in crate::features::session) const PROFILE_APPLIED: &str = "profile_applied";
+        /// The wire name of the binding change event this slice applies.
+        pub(in crate::features::session) const PROFILE_BINDING_CHANGED: &str =
+            "profile_binding_changed";
+
+        /// The ticket of the slice's own binding reads: screens' tickets
+        /// start at 1, and nobody takes an outcome for this one.
+        const OWN_READ: ConfigTicket = 0;
 
         /// The stores an `apply_profile` may have written (the profile claim,
         /// a re-pinned clone, materialized routing and agent files): the
@@ -3272,6 +3308,9 @@ pub(in crate::features::session) mod desktop {
             Get(ConfigStore),
             Set(ConfigWrite, String),
             Apply(ProfileApply),
+            /// `get_profile_binding`, for the slice itself.
+            Binding,
+            ClearBinding,
         }
 
         #[derive(Debug, Default)]
@@ -3289,10 +3328,13 @@ pub(in crate::features::session) mod desktop {
             changes: Vec<ConfigChange>,
             /// The profile Gentle Shell said it bound to this session: an
             /// `apply_profile` in `session` mode answered `applied`, or its
-            /// `profile_applied` event. The Desktop RPC offers no read of the
-            /// binding, so this is what this channel saw; it goes with the
-            /// session (a new or resumed one, or a replaced backend).
+            /// `profile_applied` event. Only for a peer without
+            /// `get_profile_binding`; it goes with the session (a new or
+            /// resumed one, or a replaced backend).
             session_profile: Option<String>,
+            /// Gentle Shell's own answer, on a peer with
+            /// `get_profile_binding`; `None` until the first read lands.
+            binding: Option<ProfileBinding>,
         }
 
         impl Config {
@@ -3302,6 +3344,7 @@ pub(in crate::features::session) mod desktop {
                 capabilities: Capabilities,
             ) {
                 self.capabilities = Some(capabilities);
+                self.want_binding();
             }
 
             /// Whether the peer offers both config methods; `None` until the
@@ -3349,9 +3392,44 @@ pub(in crate::features::session) mod desktop {
                 Ok(self.enqueue(Op::Apply(request)))
             }
 
-            /// The profile this session is bound to, as far as this channel saw.
+            /// The profile this session is bound to: Gentle Shell's explicit
+            /// binding where it answers `get_profile_binding`, else what this
+            /// channel saw `apply_profile` bind.
             pub(in crate::features::session) fn session_profile(&self) -> Option<&str> {
+                if self.offers(DesktopMethod::GetProfileBinding) {
+                    return self.binding.as_ref()?.explicit_profile();
+                }
                 self.session_profile.as_deref()
+            }
+
+            /// Whether the peer clears the binding itself
+            /// (`clear_profile_binding`) instead of the prompt-text command.
+            pub(in crate::features::session) fn offers_clear_binding(&self) -> bool {
+                self.offers(DesktopMethod::ClearProfileBinding)
+            }
+
+            /// Queue a `clear_profile_binding`; the answer is the ticket's
+            /// [`ConfigOutcome::Cleared`].
+            pub(in crate::features::session) fn clear_binding(
+                &mut self,
+            ) -> Result<ConfigTicket, ConfigFailure> {
+                self.check(DesktopMethod::ClearProfileBinding)?;
+                Ok(self.enqueue(Op::ClearBinding))
+            }
+
+            fn offers(&self, method: DesktopMethod) -> bool {
+                self.capabilities
+                    .as_ref()
+                    .is_some_and(|capabilities| capabilities.supports(method))
+            }
+
+            /// Read the binding again, once, where the peer offers the read.
+            fn want_binding(&mut self) {
+                if self.offers(DesktopMethod::GetProfileBinding)
+                    && !self.queue.iter().any(|(_, op)| matches!(op, Op::Binding))
+                {
+                    self.queue.push_back((OWN_READ, Op::Binding));
+                }
             }
 
             /// Record a binding made (or cleared) outside `apply_profile`: an
@@ -3398,6 +3476,8 @@ pub(in crate::features::session) mod desktop {
                             apply.mode,
                             apply.confirmation.as_deref(),
                         ),
+                        Op::Binding => session.issue(DesktopMethod::GetProfileBinding),
+                        Op::ClearBinding => session.issue(DesktopMethod::ClearProfileBinding),
                     };
                     match request {
                         Ok(request) => {
@@ -3453,7 +3533,9 @@ pub(in crate::features::session) mod desktop {
                         Some(
                             method @ (DesktopMethod::GetConfig
                             | DesktopMethod::SetConfig
-                            | DesktopMethod::ApplyProfile),
+                            | DesktopMethod::ApplyProfile
+                            | DesktopMethod::GetProfileBinding
+                            | DesktopMethod::ClearProfileBinding),
                         ) => self.apply_response(method, response),
                         _ => Applied::default(),
                     },
@@ -3493,6 +3575,7 @@ pub(in crate::features::session) mod desktop {
                 self.drop_queued();
                 self.changes.clear();
                 self.session_profile = None;
+                self.binding = None;
                 self.generation += 1;
             }
 
@@ -3507,6 +3590,7 @@ pub(in crate::features::session) mod desktop {
             /// Events were lost somewhere on the shared channel: any store may
             /// have changed without its `config_changed`.
             pub(in crate::features::session) fn rearm(&mut self) {
+                self.want_binding();
                 if self.offers_config() != Some(true) {
                     return;
                 }
@@ -3532,7 +3616,9 @@ pub(in crate::features::session) mod desktop {
             }
 
             fn answer(&mut self, ticket: ConfigTicket, outcome: ConfigOutcome) {
-                self.outcomes.push((ticket, outcome));
+                if ticket != OWN_READ {
+                    self.outcomes.push((ticket, outcome));
+                }
             }
 
             /// Drop the request in flight and answer its ticket. The
@@ -3553,19 +3639,33 @@ pub(in crate::features::session) mod desktop {
                 let Some(ticket) = self.in_flight.take() else {
                     return Applied::default();
                 };
+                if method == DesktopMethod::GetProfileBinding {
+                    // A failed read keeps the last answer; the next change
+                    // or event reads it again.
+                    if let Ok(binding) = response.profile_binding() {
+                        self.binding = Some(binding);
+                    }
+                    return Applied::default();
+                }
                 let decoded = match method {
                     DesktopMethod::GetConfig => response.config().map(ConfigOutcome::Read),
                     DesktopMethod::ApplyProfile => {
                         response.apply_profile().map(ConfigOutcome::Applied)
                     }
+                    DesktopMethod::ClearProfileBinding => {
+                        response.clear_profile_binding().map(ConfigOutcome::Cleared)
+                    }
                     _ => response.set_config().map(ConfigOutcome::Written),
                 };
                 let (outcome, reported) = match decoded {
                     Ok(outcome) => (outcome, None),
-                    // An advertised apply the server then refused is said by
-                    // the screen; it never means the direct-file path.
+                    // An advertised apply (or clear) the server then refused
+                    // is said by the screen; it never means the direct-file
+                    // path.
                     Err(DesktopRpcError::RemoteError(info))
-                        if method == DesktopMethod::ApplyProfile =>
+                        if method == DesktopMethod::ApplyProfile
+                            || (method == DesktopMethod::ClearProfileBinding
+                                && info.code != "unsupported_method") =>
                     {
                         let failure = match info.profile_apply_error() {
                             Some(code) => ConfigFailure::ApplyRefused {
@@ -3607,11 +3707,17 @@ pub(in crate::features::session) mod desktop {
                 {
                     self.session_profile = Some(result.profile.clone());
                 }
+                if let ConfigOutcome::Cleared(result) = &outcome {
+                    self.binding = Some(result.binding.clone());
+                }
                 let profile_applied = matches!(
                     &outcome,
                     ConfigOutcome::Applied(result)
                         if matches!(result.outcome, ApplyProfileOutcome::Applied(_))
                 );
+                if profile_applied {
+                    self.want_binding();
+                }
                 self.answer(ticket, outcome);
                 Applied {
                     report: reported,
@@ -3633,6 +3739,11 @@ pub(in crate::features::session) mod desktop {
                 match event.event.as_str() {
                     CONFIG_CHANGED => match event.config_changed() {
                         Ok(changed) => {
+                            if matches!(changed.store, ConfigStore::Pins | ConfigStore::Profiles) {
+                                // A `follow` or `live` binding resolves
+                                // through these without a binding write.
+                                self.want_binding();
+                            }
                             self.changes.push(ConfigChange {
                                 store: changed.store,
                                 revision: Some(changed.revision),
@@ -3657,6 +3768,14 @@ pub(in crate::features::session) mod desktop {
                                     self.changes.push(change);
                                 }
                             }
+                            self.want_binding();
+                            Applied::default()
+                        }
+                        Err(error) => report(Report::Failure(error)),
+                    },
+                    PROFILE_BINDING_CHANGED => match event.profile_binding_changed() {
+                        Ok(changed) => {
+                            self.binding = Some(changed.binding);
                             Applied::default()
                         }
                         Err(error) => report(Report::Failure(error)),
@@ -3681,6 +3800,8 @@ pub(in crate::features::session) mod desktop {
                 Some(DesktopMethod::GetConfig)
                     | Some(DesktopMethod::SetConfig)
                     | Some(DesktopMethod::ApplyProfile)
+                    | Some(DesktopMethod::GetProfileBinding)
+                    | Some(DesktopMethod::ClearProfileBinding)
             )
         }
     }
@@ -7348,5 +7469,155 @@ mod tests {
             "data": {"profile": "fast", "mode": "session", "source": "desktop"},
         }))));
         assert_eq!(desktop.session_profile(), Some("fast"));
+    }
+
+    /// A Gentle Shell 5.0.0 tab: the binding read, clear and event.
+    fn binding_ready() -> Desktop {
+        config_probed(
+            1,
+            &[
+                "get_config",
+                "set_config",
+                "apply_profile",
+                "get_profile_binding",
+                "clear_profile_binding",
+            ],
+            &[
+                "config_changed",
+                "profile_applied",
+                "profile_binding_changed",
+            ],
+        )
+    }
+
+    /// Send the next queued config request, which must be `method`, and
+    /// answer it with `data`.
+    fn answer_config(desktop: &mut Desktop, method: DesktopMethod, data: Value) {
+        let pumped = desktop.config_pump();
+        assert_eq!(pumped.sends.len(), 1, "one request at a time");
+        assert_eq!(pumped.sends[0].request.method(), method);
+        assert_eq!(params(&pumped.sends[0]), json!({}));
+        let id = pumped.sends[0].request.request_id().to_string();
+        let _ = desktop.config_apply(&desktop_widget(config_response_lines(&id, data)));
+    }
+
+    fn binding_event(seq: u64, data: Value) -> pi_rpc::UiRequest {
+        desktop_widget(record(json!({
+            "schema": SCHEMA, "kind": "event", "seq": seq,
+            "event": "profile_binding_changed", "data": data,
+        })))
+    }
+
+    #[test]
+    fn the_binding_is_gentle_shells_answer_where_it_is_offered() {
+        let mut desktop = binding_ready();
+        assert!(desktop.binding_clear_supported());
+        // Read once the probe lands; nothing is known before it answers.
+        assert_eq!(desktop.session_profile(), None);
+        answer_config(
+            &mut desktop,
+            DesktopMethod::GetProfileBinding,
+            json!({"kind": "explicit", "profile": "fast", "origin": "session"}),
+        );
+        assert_eq!(desktop.session_profile(), Some("fast"));
+        assert!(
+            desktop.take_config_outcomes().is_empty(),
+            "the slice's own read"
+        );
+
+        // A profile inherited from a layer is not this session's binding.
+        let _ = desktop.config_apply(&binding_event(
+            2,
+            json!({"kind": "inherited", "profile": "team", "origin": "repo", "source": "external"}),
+        ));
+        assert_eq!(desktop.session_profile(), None);
+        let _ = desktop.config_apply(&binding_event(
+            3,
+            json!({"kind": "explicit", "profile": "deep", "origin": "session", "source": "external"}),
+        ));
+        assert_eq!(desktop.session_profile(), Some("deep"));
+        assert!(
+            desktop.config_pump().sends.is_empty(),
+            "the event needs no read"
+        );
+
+        // A pin change can move a `follow` binding: it is read again.
+        let _ = desktop.config_apply(&desktop_widget(config_changed_lines(
+            4,
+            "config_changed",
+            "pins",
+            "sha256:p2",
+        )));
+        answer_config(
+            &mut desktop,
+            DesktopMethod::GetProfileBinding,
+            json!({"kind": "follow", "profile": "team", "origin": "local"}),
+        );
+        assert_eq!(desktop.session_profile(), None);
+
+        // A local record never overrides what Gentle Shell says.
+        desktop.set_session_profile(Some("stale".into()));
+        assert_eq!(desktop.session_profile(), None);
+
+        desktop.reset();
+        assert_eq!(desktop.session_profile(), None);
+    }
+
+    #[test]
+    fn clearing_the_binding_goes_to_gentle_shell_and_answers_its_ticket() {
+        let mut desktop = binding_ready();
+        answer_config(
+            &mut desktop,
+            DesktopMethod::GetProfileBinding,
+            json!({"kind": "explicit", "profile": "fast", "origin": "session"}),
+        );
+        let ticket = desktop.config_clear_binding().unwrap();
+        answer_config(
+            &mut desktop,
+            DesktopMethod::ClearProfileBinding,
+            json!({"status": "cleared", "changed": true,
+                   "binding": {"kind": "inherited", "profile": null, "origin": null}}),
+        );
+        assert_eq!(desktop.session_profile(), None);
+        let outcomes = desktop.take_config_outcomes();
+        let [(answered, ConfigOutcome::Cleared(result))] = &outcomes[..] else {
+            panic!("one cleared outcome, got {outcomes:?}")
+        };
+        assert_eq!(*answered, ticket);
+        assert!(result.changed);
+
+        // Busy is Gentle Shell's refusal, said by the screen.
+        let ticket = desktop.config_clear_binding().unwrap();
+        let pumped = desktop.config_pump();
+        let id = pumped.sends[0].request.request_id().to_string();
+        let applied = desktop.config_apply(&desktop_widget(config_error_lines(
+            &id,
+            "profile_apply_busy",
+        )));
+        assert!(applied.report.is_none());
+        assert!(matches!(
+            &desktop.take_config_outcomes()[..],
+            [(t, ConfigOutcome::Failed(ConfigFailure::ApplyRefused { .. }))] if *t == ticket
+        ));
+    }
+
+    #[test]
+    fn an_older_shell_keeps_the_binding_this_channel_saw() {
+        // Gentle Shell 4.9.0: no binding read, no clear, no event.
+        let mut desktop = apply_ready();
+        assert!(!desktop.binding_clear_supported());
+        assert_eq!(
+            desktop.config_clear_binding(),
+            Err(ConfigFailure::Unsupported)
+        );
+        assert!(desktop.config_pump().sends.is_empty(), "nothing is read");
+        desktop.set_session_profile(Some("deep".into()));
+        assert_eq!(desktop.session_profile(), Some("deep"));
+        // An event it never advertised is ignored.
+        let _ = desktop.config_apply(&binding_event(
+            2,
+            json!({"kind": "explicit", "profile": "fast", "origin": "session", "source": "external"}),
+        ));
+        assert_eq!(desktop.session_profile(), Some("deep"));
     }
 }

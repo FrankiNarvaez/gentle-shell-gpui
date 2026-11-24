@@ -173,6 +173,28 @@ pub(super) fn local_pin_write(
     Ok((write, pinned))
 }
 
+/// "Publish to repo" over Desktop RPC: the `repo` layer (the committed
+/// `.pi/gentle-ai/profile.json` declaration) is cleared when it already
+/// declares `name`, else declares it — the toggle `/gentle:profiles publish`
+/// makes, written by name with `set_config`. The flag says which.
+pub(super) fn repo_pin_write(
+    status: Option<&PinStatus>,
+    name: &str,
+) -> Result<(ConfigWrite, bool), String> {
+    let Some(status) = status else {
+        return Err(
+            "This folder is not inside a Git worktree, so nothing was published.".to_string(),
+        );
+    };
+    let declared = status.repo == PinRead::Valid(name.to_string());
+    let write = if declared {
+        ConfigWrite::clear_pin(PinSource::Repo)
+    } else {
+        ConfigWrite::pin(PinSource::Repo, name)
+    };
+    Ok((write, declared))
+}
+
 /// A rename follows the clone pin over Desktop RPC; the committed
 /// declaration is only reported, like the direct-file path.
 pub(super) fn renamed_pin_write(

@@ -535,7 +535,7 @@ impl SessionView {
             )
             .when(
                 self.models.current.as_ref().is_some_and(|m| m.reasoning),
-                |this| this.child(self.render_effort_picker(narrow, cx)),
+                |this| this.child(self.render_effort_picker(collapse, cx)),
             )
             // The plan-limits chip keeps its width; the model picker before
             // it is the one that shrinks in a narrow pane.

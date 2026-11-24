@@ -3,14 +3,15 @@
 //! the agent owns writes through `mem_save` / `mem_update`.
 //!
 //! `client` talks HTTP to Engram, `view` renders; the protocol model and
-//! decoding live in `gentle_core::engram`.
+//! decoding live in `gentle_core::engram`. Opened from a session's Engram
+//! status it starts on that project and memory ([`MemoryTarget`]).
 
 mod client;
 mod view;
 
 use std::path::PathBuf;
 
-use gentle_core::engram::Observation;
+use gentle_core::engram::{MemoryTarget, Observation};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
@@ -25,6 +26,9 @@ pub struct MemoryView {
     query: Entity<InputState>,
     items: Vec<Observation>,
     selected: Option<i64>,
+    /// The memory the screen was opened on, until the first load shows it.
+    focus: Option<i64>,
+    list_scroll: ScrollHandle,
     error: Option<String>,
     loading: bool,
     _load: Task<()>,
@@ -34,7 +38,13 @@ pub struct MemoryView {
 impl EventEmitter<MemoryEvent> for MemoryView {}
 
 impl MemoryView {
-    pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// `target`: start on that project's memories, with that memory selected.
+    pub fn new(
+        cwd: PathBuf,
+        target: MemoryTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search memory (Enter)"));
         let subscription = cx.subscribe_in(&query, window, |this, _, event: &InputEvent, _, cx| {
             if let InputEvent::PressEnter { .. } = event {
@@ -43,11 +53,13 @@ impl MemoryView {
         });
         let mut this = Self {
             cwd,
-            project: None,
+            project: target.project,
             all_projects: false,
             query,
             items: Vec::new(),
-            selected: None,
+            selected: target.observation,
+            focus: target.observation,
+            list_scroll: ScrollHandle::new(),
             error: None,
             loading: false,
             _load: Task::ready(()),
@@ -62,6 +74,7 @@ impl MemoryView {
         let known = self.project.clone();
         let all = self.all_projects;
         let query = self.query.read(cx).value().to_string();
+        let focus = self.focus.take();
         self.loading = true;
         self._load = cx.spawn(async move |this, cx| {
             let result = cx
@@ -76,6 +89,17 @@ impl MemoryView {
                         // rather than falling back to every project's.
                         (false, None) => Ok(Vec::new()),
                     };
+                    // The memory the screen opened on shows even when the
+                    // page (the 60 latest) doesn't hold it.
+                    let items = items.map(|mut items| {
+                        if let Some(id) = focus
+                            && !items.iter().any(|o| o.id == id)
+                            && let Some(observation) = client::observation(id)
+                        {
+                            items.insert(0, observation);
+                        }
+                        items
+                    });
                     (project, items)
                 })
                 .await;
@@ -92,6 +116,12 @@ impl MemoryView {
                             this.selected = items.first().map(|o| o.id);
                         }
                         this.items = items;
+                        if let Some(index) = focus
+                            .filter(|id| this.selected == Some(*id))
+                            .and_then(|id| this.items.iter().position(|o| o.id == id))
+                        {
+                            this.list_scroll.scroll_to_item(index);
+                        }
                     }
                     Err(error) => {
                         this.error = Some(error);

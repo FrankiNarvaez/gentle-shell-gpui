@@ -14,9 +14,10 @@ mod routing;
 mod store;
 
 pub use agents::{
-    AgentEntry, AgentSource, assignment_names, entry_from_model_profile, model_profile_for,
-    parse_agent_name, read_frontmatter_routing, unmatched_notes, update_frontmatter_routing,
-    with_omitted_cleared,
+    AgentEntry, AgentSource, CORE_AGENTS, assignment_names, assignment_names_of,
+    entry_from_model_profile, model_profile_for, order_agent_names, parse_agent_name,
+    read_frontmatter_routing, reported_assignment_names, unmatched_notes,
+    update_frontmatter_routing, with_omitted_cleared,
 };
 pub use pins::{PinEval, PinRead, PinStatus, evaluate_pin, parse_pin, pin_notes, serialize_pin};
 pub use routing::{

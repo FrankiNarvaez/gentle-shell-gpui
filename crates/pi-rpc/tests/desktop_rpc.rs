@@ -3,28 +3,33 @@
 //! adapter only builds the outer prompt and decodes the widget records.
 
 use pi_rpc::desktop_rpc::{
-    ActivityState, ApplyProfileOutcome, ApplyProfileResult, Capabilities, ChangeDiff, ChangeRoot,
-    ChangeSource, ChangeStatus, ChangedFile, Changes, CommandSource, ConfigChangeOrigin,
-    ConfigChanged, ConfigErrorCode, ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState,
-    ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState,
-    DesignCanvas, DesignCanvasEvent, DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep,
-    DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod,
-    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff,
-    JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
-    MAX_SESSIONS_LIMIT, PROMPT_COMMAND, PackageKind, PackageScope, PackageUpdate,
-    PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
-    PermissionModeState, PiUpdate, PinSource, ProfileApplied, ProfileApplyErrorCode,
-    ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData, ProfileNote, ProfileNoteLevel,
-    ProfilesData, ProviderUsage, RateLimitEvent, RateLimitSource, ReviewConfirmation,
-    ReviewEffective, ReviewMode, ReviewScope, ReviewScopes, ReviewSetting, ReviewSource, SCHEMA,
-    SessionActivity, SessionChangedFile, SessionChanges, SessionChangesSummary, SessionCommand,
-    SessionEntry, SessionJobs, SessionList, SessionPermission, SessionProject, SessionSection,
-    SessionTodo, SessionTodoItem, SessionTodoProgress, SessionWorktree, SessionsScope,
-    SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
-    StatsRange, StatsScope, SubagentThread, SwitchSessionResult, ThreadItem, UpdateState,
-    UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel,
-    UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload,
-    decode_widget,
+    ActivityState, AgentDefinition, AgentDefinitionScope, ApplyProfileOutcome, ApplyProfileResult,
+    AuthSource, AuthType, BackgroundCapability, BackgroundConfirmation, BackgroundPolicy,
+    BackgroundSource, BackgroundSubagents, BannerData, Capabilities, ChangeDiff, ChangeRoot,
+    ChangeSource, ChangeStatus, ChangedFile, Changes, ClearBindingStatus,
+    ClearProfileBindingResult, CommandSource, ConfigChangeOrigin, ConfigChanged, ConfigErrorCode,
+    ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus, ConfigStore,
+    ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent,
+    DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep, DesktopAgentUsage,
+    DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord,
+    DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, DevBinary, DevBinaryState,
+    Handoff, JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
+    MAX_SESSIONS_LIMIT, ModelConfigPresence, NotificationsData, OrchestratorStatus, PROMPT_COMMAND,
+    PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PendingQuestionKind,
+    PermissionMode, PermissionModeChanged, PermissionModeState, PersonaMode, PiUpdate, PinSource,
+    PolicyFile, ProfileApplied, ProfileApplyErrorCode, ProfileApplyMode, ProfileBinding,
+    ProfileBindingChanged, ProfileBindingKind, ProfileBindingOrigin, ProfileConfirmation,
+    ProfileFallbacksData, ProfileNote, ProfileNoteLevel, ProfilesData, ProviderAuth, ProviderUsage,
+    RateLimitEvent, RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope,
+    ReviewScopes, ReviewSetting, ReviewSource, RoutingState, SCHEMA, SessionActivity,
+    SessionChangedFile, SessionChanges, SessionChangesSummary, SessionCommand, SessionEntry,
+    SessionJobs, SessionList, SessionPermission, SessionProject, SessionSection, SessionTodo,
+    SessionTodoItem, SessionTodoProgress, SessionWorktree, SessionsScope,
+    SetBackgroundSubagentsOutcome, SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome,
+    ShellChannel, ShellUpdate, StatsRange, StatsScope, StatusSeverity, SubagentThread,
+    SwitchSessionResult, ThreadItem, UpdateState, UsageLimit, UsageLimitScope, UsageRefresh,
+    UsageResetAt, UsageStatsDay, UsageStatsModel, UsageStatsProvider, UsageStatsTotals,
+    UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload, decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -1263,6 +1268,9 @@ fn full_agent() -> DesktopAgent {
         fallback_from: Some("anthropic/claude-opus-4".into()),
         thinking: Some("high".into()),
         last_step: DesktopAgentStep::Answered,
+        turns: None,
+        tool_calls: None,
+        active_tool: None,
         usage: DesktopAgentUsage {
             total: 15234,
             cost: 0.0421,
@@ -3044,6 +3052,19 @@ fn config_stores_are_a_closed_vocabulary_with_their_documented_shape() {
             ConfigScope::Global,
             true,
         ),
+        (
+            ConfigStore::Persona,
+            "persona",
+            ConfigScope::GlobalProject,
+            false,
+        ),
+        (ConfigStore::Banner, "banner", ConfigScope::Global, false),
+        (
+            ConfigStore::Notifications,
+            "notifications",
+            ConfigScope::Global,
+            false,
+        ),
     ];
     assert_eq!(ConfigStore::ALL.len(), expected.len());
     for (store, (want, name, scope, read_only)) in ConfigStore::ALL.into_iter().zip(expected) {
@@ -3340,6 +3361,178 @@ fn get_config_decodes_a_writable_store_with_its_write_targets() {
         Some("sha256:8f2a")
     );
     assert_eq!(state.write_revision(ConfigWriteTarget::Local), None);
+}
+
+/// The settings stores (Gentle Shell 5.0.0), with the documented content:
+/// `persona` is the mode in effect, `banner` its three settings and
+/// `notifications` the settings without `schema`, a file sound as `"file"`.
+#[test]
+fn get_config_decodes_the_settings_stores() {
+    let persona = config_response(json!({
+        "store": "persona",
+        "scope": "global+project",
+        "readOnly": false,
+        "status": "ok",
+        "revision": "sha256:41aa",
+        "value": { "mode": "neutral" },
+        "layers": [
+            { "source": "global", "status": "ok" },
+            { "source": "project", "status": "missing" }
+        ],
+        "writeTargets": [{ "target": "global", "status": "ok", "writeRevision": "sha256:4b01" }],
+    }))
+    .config()
+    .unwrap();
+    assert_eq!(persona.store, ConfigStore::Persona);
+    assert_eq!(persona.value, Some(json!({ "mode": "neutral" })));
+    assert_eq!(
+        persona.write_revision(ConfigWriteTarget::Global),
+        Some("sha256:4b01")
+    );
+
+    let banner = config_response(json!({
+        "store": "banner",
+        "scope": "global",
+        "readOnly": false,
+        "status": "missing",
+        "revision": "sha256:9c02",
+        "layers": [{ "source": "global", "status": "missing" }],
+        "writeTargets": [{ "target": "global", "status": "missing", "writeRevision": "sha256:9c03" }],
+    }))
+    .config()
+    .unwrap();
+    assert_eq!(
+        (banner.store, banner.status, banner.value),
+        (ConfigStore::Banner, ConfigStatus::Missing, None)
+    );
+
+    let value = json!({
+        "enabled": true,
+        "audio": {
+            "backend": "auto",
+            "minimumIntervalMs": 1000,
+            "coalesceWindowMs": 300,
+            "events": { "agent.completed": "file", "agent.attention": "builtin:attention" }
+        }
+    });
+    let notifications = config_response(json!({
+        "store": "notifications",
+        "scope": "global",
+        "readOnly": false,
+        "status": "ok",
+        "revision": "sha256:d317",
+        "value": value,
+        "layers": [{ "source": "global", "status": "ok" }],
+        "writeTargets": [{ "target": "global", "status": "ok", "writeRevision": "sha256:d318" }],
+    }))
+    .config()
+    .unwrap();
+    assert_eq!(notifications.value, Some(value));
+
+    // The settings stores are writable: a read-only claim is refused.
+    assert!(
+        config_response(json!({
+            "store": "banner",
+            "scope": "global",
+            "readOnly": true,
+            "status": "missing",
+            "revision": "sha256:9c02",
+            "layers": [{ "source": "global", "status": "missing" }],
+        }))
+        .config()
+        .is_err()
+    );
+}
+
+#[test]
+fn set_config_writes_the_settings_stores_through_their_global_target() {
+    let persona = DesktopRequest::set_config(
+        "desktop-3",
+        ConfigWrite::Persona(PersonaMode::Neutral),
+        "r1",
+    )
+    .unwrap();
+    assert_eq!(
+        persona.payload(),
+        request_payload(
+            "desktop-3",
+            "set_config",
+            json!({ "store": "persona", "data": { "mode": "neutral" }, "expectedRevision": "r1" }),
+        )
+    );
+
+    let banner_data = json!({ "showRose": false, "showTextLogo": true, "color": "cyan" });
+    let banner = ConfigWrite::Banner(BannerData::new(banner_data.clone()).unwrap());
+    assert_eq!(
+        (banner.store(), banner.write_target()),
+        (ConfigStore::Banner, ConfigWriteTarget::Global)
+    );
+    assert_eq!(
+        DesktopRequest::set_config("desktop-4", banner, "r2")
+            .unwrap()
+            .payload(),
+        request_payload(
+            "desktop-4",
+            "set_config",
+            json!({ "store": "banner", "data": banner_data, "expectedRevision": "r2" }),
+        )
+    );
+
+    // The `"file"` marker goes back exactly as read: it keeps that file.
+    let settings = json!({
+        "enabled": false,
+        "audio": { "backend": "auto", "minimumIntervalMs": 1000, "coalesceWindowMs": 300,
+                   "events": { "agent.completed": "file" } }
+    });
+    let write = ConfigWrite::Notifications(NotificationsData::new(settings.clone()).unwrap());
+    assert_eq!(write.store(), ConfigStore::Notifications);
+    assert_eq!(
+        DesktopRequest::set_config("desktop-5", write, "r3")
+            .unwrap()
+            .payload(),
+        request_payload(
+            "desktop-5",
+            "set_config",
+            json!({ "store": "notifications", "data": settings, "expectedRevision": "r3" }),
+        )
+    );
+    assert!(matches!(
+        NotificationsData::new(json!([])),
+        Err(DesktopRpcError::InvalidConfigData(_))
+    ));
+    assert_eq!(
+        "gentleman".parse::<PersonaMode>().unwrap(),
+        PersonaMode::Gentleman
+    );
+    assert!("pirate".parse::<PersonaMode>().is_err());
+}
+
+#[test]
+fn config_changed_decodes_a_settings_store_change() {
+    let external = config_event(
+        3,
+        "config_changed",
+        json!({ "store": "notifications", "scope": "global", "revision": "sha256:5f1d",
+                "status": "ok", "source": "external" }),
+    )
+    .config_changed()
+    .unwrap();
+    assert_eq!(external.store, ConfigStore::Notifications);
+    assert_eq!(
+        external.origin,
+        ConfigChangeOrigin::External {
+            status: ConfigStatus::Ok
+        }
+    );
+    let desktop = config_event(
+        4,
+        "config_changed",
+        json!({ "store": "persona", "scope": "global+project", "writeTarget": "global",
+                "revision": "sha256:1c80", "writeRevision": "sha256:c4b0", "source": "desktop" }),
+    )
+    .config_changed()
+    .unwrap();
+    assert_eq!(desktop.store, ConfigStore::Persona);
 }
 
 #[test]
@@ -4623,9 +4816,9 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
 // --- Gentle Shell main additions: jobs output, subagent thread, sessions,
 // --- changes, review mode, usage stats, update status, session sections ---
 
-/// The methods known to this client in capability order: Gentle Shell
-/// `main` (0336985), plus the agent definitions read from Gentle Shell 5.0.0.
-const MAIN_METHODS: [&str; 25] = [
+/// The `capabilities` methods of Gentle Shell 5.0.0, as the spec and a live
+/// backend list them.
+const MAIN_METHODS: [&str; 32] = [
     "capabilities",
     "get_snapshot",
     "get_config",
@@ -4651,8 +4844,15 @@ const MAIN_METHODS: [&str; 25] = [
     "get_usage_stats",
     "get_update_status",
     "list_agent_definitions",
+    "get_status",
+    "get_background_subagents",
+    "set_background_subagents",
+    "get_profile_binding",
+    "clear_profile_binding",
+    "get_auth_status",
+    "reload_credentials",
 ];
-const MAIN_EVENTS: [&str; 9] = [
+const MAIN_EVENTS: [&str; 10] = [
     "config_changed",
     "permission_mode_changed",
     "rate_limit",
@@ -4661,6 +4861,7 @@ const MAIN_EVENTS: [&str; 9] = [
     "profile_applied",
     "agents_update",
     "review_mode_changed",
+    "profile_binding_changed",
     "session_snapshot",
 ];
 /// The `capabilities` of an installed Gentle Shell 4.8.0, captured live.
@@ -4689,7 +4890,7 @@ const RELEASE_4_8_EVENTS: [&str; 7] = [
     "profile_applied",
     "agents_update",
 ];
-const NEW_METHODS: [DesktopMethod; 11] = [
+const NEW_METHODS: [DesktopMethod; 18] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -4701,6 +4902,13 @@ const NEW_METHODS: [DesktopMethod; 11] = [
     DesktopMethod::GetUsageStats,
     DesktopMethod::GetUpdateStatus,
     DesktopMethod::ListAgentDefinitions,
+    DesktopMethod::GetStatus,
+    DesktopMethod::GetBackgroundSubagents,
+    DesktopMethod::SetBackgroundSubagents,
+    DesktopMethod::GetProfileBinding,
+    DesktopMethod::ClearProfileBinding,
+    DesktopMethod::GetAuthStatus,
+    DesktopMethod::ReloadCredentials,
 ];
 
 fn capabilities_of(methods: &[&str], events: &[&str]) -> Capabilities {
@@ -4775,6 +4983,7 @@ fn capabilities_gate_the_new_methods_and_events_per_backend() {
         }
     }
     assert!(!release.emits("session_snapshot") && !release.emits("review_mode_changed"));
+    assert!(!release.emits("profile_binding_changed"));
     // 4.8.0 ignores `sections` instead of refusing it, so the gate is the
     // feed event, not the method.
     assert!(release.supports(DesktopMethod::GetSnapshot));
@@ -4785,77 +4994,67 @@ fn capabilities_gate_the_new_methods_and_events_per_backend() {
     );
 
     // Without the feed seam the server omits `session_snapshot`.
-    let without_feed = capabilities_of(&MAIN_METHODS, &MAIN_EVENTS[..8]);
+    let without_feed = capabilities_of(&MAIN_METHODS, &MAIN_EVENTS[..9]);
     assert!(!without_feed.supports_session_sections());
 }
 
 #[test]
-fn list_agent_definitions_sends_empty_params() {
-    let mut session = DesktopSession::new();
-    let request = session.issue(DesktopMethod::ListAgentDefinitions).unwrap();
-    assert_eq!(
-        request.payload(),
-        payload(request.request_id(), "list_agent_definitions", "{}")
-    );
-}
-
-#[test]
-fn list_agent_definitions_extracts_only_the_set_orchestrator_model() {
-    let response = ok_response(json!({
-        "agents": [],
-        "truncated": false,
-        "problems": {"invalid": 0, "notices": 0},
-        "subagentDefaults": {"model": "other/subagent", "thinking": null, "mode": "auto"},
-        "defaultOrchestrator": {
-            "status": "set", "model": "openrouter/anthropic/claude", "thinking": "low",
-            "extra": true
-        },
-        "futureField": []
+fn default_orchestrator_route_is_only_a_set_model() {
+    let answer = |orchestrator: Value| {
+        json!({
+            "agents": [], "truncated": false, "problems": { "invalid": 0, "notices": 0 },
+            "subagentDefaults": { "model": "other/subagent", "thinking": null, "mode": "task" },
+            "defaultOrchestrator": orchestrator
+        })
+    };
+    // Unknown fields are tolerated, and a model id may itself contain a slash.
+    let mut extended = answer(json!({
+        "status": "set", "model": "openrouter/anthropic/claude", "thinking": "low", "extra": true
     }));
+    extended["futureField"] = json!([]);
+    let definitions = ok_response(extended).agent_definitions().unwrap();
     assert_eq!(
-        response.default_orchestrator_model().unwrap(),
-        Some("openrouter/anthropic/claude")
+        definitions.default_orchestrator.route(),
+        Some(("openrouter/anthropic/claude", Some("low")))
     );
-}
 
-#[test]
-fn list_agent_definitions_does_not_infer_a_default_from_unusable_data() {
+    // A set status without a model, or a model under another status, names none;
+    // the subagent default never stands in for it.
     for orchestrator in [
-        json!({"status": "unset", "model": null, "thinking": null}),
-        json!({"status": "missing", "model": null, "thinking": null}),
-        json!({"status": "invalid", "model": null, "thinking": null}),
         json!({"status": "set", "model": null, "thinking": "low"}),
-        json!({"status": "set", "model": 42}),
         json!({"status": "set"}),
-        json!({"status": "SET", "model": "provider/id"}),
+        json!({"status": "set", "model": ""}),
         json!({"status": "unset", "model": "provider/id"}),
-        json!({"model": "provider/id"}),
-        json!(["set", "provider/id"]),
-        Value::Null,
     ] {
-        let response = ok_response(json!({"defaultOrchestrator": orchestrator}));
+        let definitions = ok_response(answer(orchestrator.clone()))
+            .agent_definitions()
+            .unwrap();
         assert_eq!(
-            response.default_orchestrator_model().unwrap(),
+            definitions.default_orchestrator.route(),
             None,
             "{orchestrator}"
         );
     }
-    for model in ["", "id", "provider/", "/id", " /id", "provider/ "] {
-        let response = ok_response(json!({
-            "defaultOrchestrator": {"status": "set", "model": model}
-        }));
-        assert_eq!(
-            response.default_orchestrator_model().unwrap(),
-            None,
-            "{model:?}"
+
+    // Malformed answers fail to decode instead of yielding a default.
+    for orchestrator in [
+        json!({"status": "SET", "model": "provider/id"}),
+        json!({"status": "set", "model": 42}),
+        json!({"model": "provider/id"}),
+        Value::Null,
+    ] {
+        assert!(
+            ok_response(answer(orchestrator.clone()))
+                .agent_definitions()
+                .is_err(),
+            "{orchestrator}"
         );
     }
     for data in [
         json!({"subagentDefaults": {"model": "other/subagent"}}),
         json!([]),
     ] {
-        let response = ok_response(data);
-        assert_eq!(response.default_orchestrator_model().unwrap(), None);
+        assert!(ok_response(data).agent_definitions().is_err());
     }
 }
 
@@ -4867,6 +5066,7 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
         DesktopMethod::SwitchSession,
         DesktopMethod::GetChangeDiff,
         DesktopMethod::SetReviewMode,
+        DesktopMethod::SetBackgroundSubagents,
     ] {
         assert_eq!(
             DesktopRequest::new("desktop-1", method, json!({})),
@@ -4886,6 +5086,10 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
         DesktopMethod::GetReviewMode,
         DesktopMethod::GetUsageStats,
         DesktopMethod::GetUpdateStatus,
+        DesktopMethod::GetStatus,
+        DesktopMethod::GetBackgroundSubagents,
+        DesktopMethod::GetAuthStatus,
+        DesktopMethod::ReloadCredentials,
     ] {
         let mut session = DesktopSession::new();
         let request = session.issue(method).unwrap();
@@ -4893,6 +5097,206 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
             request.payload(),
             payload("desktop-1", method.as_str(), "{}")
         );
+    }
+}
+
+// --- get_background_subagents and set_background_subagents ----------------
+
+/// The doc's `get_background_subagents` answer.
+fn background_state() -> Value {
+    json!({ "effective": "off", "source": "default", "malformed": false,
+            "projectFile": "absent", "globalFile": "absent", "capability": "ready" })
+}
+
+#[test]
+fn get_background_subagents_decodes_the_policy_without_paths() {
+    let state = ok_response(background_state())
+        .background_subagents()
+        .unwrap();
+    assert_eq!(
+        state,
+        BackgroundSubagents {
+            effective: BackgroundPolicy::Off,
+            source: BackgroundSource::Default,
+            malformed: false,
+            project_file: PolicyFile::Absent,
+            global_file: PolicyFile::Absent,
+            capability: BackgroundCapability::Ready,
+        }
+    );
+    let mut project = background_state();
+    project["source"] = json!("project");
+    project["effective"] = json!("on");
+    project["projectFile"] = json!("present");
+    let project = ok_response(project).background_subagents().unwrap();
+    assert_eq!(
+        (project.effective, project.source, project.project_file),
+        (
+            BackgroundPolicy::On,
+            BackgroundSource::Project,
+            PolicyFile::Present
+        )
+    );
+    let mut odd = background_state();
+    odd["source"] = json!("project_file");
+    assert!(ok_response(odd).background_subagents().is_err());
+}
+
+#[test]
+fn set_background_subagents_takes_two_calls_and_never_a_scope() {
+    let ask =
+        DesktopRequest::set_background_subagents("desktop-7", BackgroundPolicy::On, None).unwrap();
+    assert_eq!(
+        ask.payload(),
+        payload(
+            "desktop-7",
+            "set_background_subagents",
+            r#"{"policy":"on"}"#
+        )
+    );
+    let mut session = DesktopSession::new();
+    let resend = session
+        .issue_set_background_subagents(BackgroundPolicy::Off, Some("t1"))
+        .unwrap();
+    assert_eq!(
+        resend.payload(),
+        payload(
+            "desktop-1",
+            "set_background_subagents",
+            r#"{"policy":"off","confirmationToken":"t1"}"#
+        )
+    );
+    for token in ["", &"x".repeat(129)] {
+        assert_eq!(
+            DesktopRequest::set_background_subagents("d", BackgroundPolicy::On, Some(token)),
+            Err(DesktopRpcError::InvalidConfirmationToken)
+        );
+    }
+
+    let asked = ok_response(json!({
+        "status": "confirmation_required",
+        "policy": "on",
+        "state": background_state(),
+        "confirmation": {
+            "title": "Turn background subagents on machine-wide?",
+            "message": "Background subagents are currently off (decided by the built-in default).",
+            "token": "9b2e"
+        }
+    }))
+    .set_background_subagents()
+    .unwrap();
+    assert_eq!(asked.policy, BackgroundPolicy::On);
+    assert_eq!(
+        asked.outcome,
+        SetBackgroundSubagentsOutcome::ConfirmationRequired(BackgroundConfirmation {
+            title: "Turn background subagents on machine-wide?".into(),
+            message: "Background subagents are currently off (decided by the built-in default)."
+                .into(),
+            token: "9b2e".into(),
+        })
+    );
+
+    let mut on = background_state();
+    on["effective"] = json!("on");
+    on["source"] = json!("global");
+    on["globalFile"] = json!("present");
+    let applied =
+        ok_response(json!({ "status": "applied", "policy": "on", "changed": true, "state": on }))
+            .set_background_subagents()
+            .unwrap();
+    assert_eq!(
+        applied.outcome,
+        SetBackgroundSubagentsOutcome::Applied { changed: true }
+    );
+    assert_eq!(applied.state.effective, BackgroundPolicy::On);
+    assert!(
+        ok_response(json!({ "status": "written", "policy": "on", "state": background_state() }))
+            .set_background_subagents()
+            .is_err()
+    );
+    assert!(DesktopErrorCode::BackgroundSubagentsBusy.is_retryable());
+    assert_eq!(
+        "background_subagents_unavailable".parse::<DesktopErrorCode>(),
+        Ok(DesktopErrorCode::BackgroundSubagentsUnavailable)
+    );
+}
+
+// --- get_auth_status and reload_credentials -------------------------------
+
+/// The doc's `get_auth_status` providers: one signed in, one without
+/// credentials.
+fn auth_providers() -> Value {
+    json!([
+        { "provider": "anthropic", "displayName": "Anthropic", "configured": true, "type": "oauth", "source": "stored" },
+        { "provider": "openai-codex", "displayName": "OpenAI Codex", "configured": false, "type": null, "source": null }
+    ])
+}
+
+#[test]
+fn get_auth_status_reports_status_never_a_value() {
+    let status = ok_response(json!({ "providers": auth_providers(), "truncated": false }))
+        .auth_status()
+        .unwrap();
+    assert_eq!(
+        status.providers[0],
+        ProviderAuth {
+            provider: "anthropic".into(),
+            display_name: "Anthropic".into(),
+            configured: true,
+            kind: Some(AuthType::OAuth),
+            source: Some(AuthSource::Stored),
+        }
+    );
+    assert_eq!(
+        status
+            .configured()
+            .map(|entry| entry.provider.as_str())
+            .collect::<Vec<_>>(),
+        ["anthropic"]
+    );
+    assert!(!status.truncated);
+    // A key from `models.json`, and one whose source Gentle Shell does not name.
+    let other = ok_response(json!({ "providers": [
+        { "provider": "groq", "displayName": "Groq", "configured": true, "type": "api_key", "source": "models_json" },
+        { "provider": "xai", "displayName": "xAI", "configured": true, "type": "api_key", "source": null }
+    ], "truncated": true }))
+    .auth_status()
+    .unwrap();
+    assert_eq!(other.providers[0].kind, Some(AuthType::ApiKey));
+    assert!(other.truncated);
+    // Credentials without a kind, or a kind without credentials, are refused.
+    for odd in [
+        json!({ "provider": "a", "displayName": "A", "configured": true, "type": null, "source": "stored" }),
+        json!({ "provider": "a", "displayName": "A", "configured": false, "type": "oauth", "source": null }),
+        json!({ "provider": "a", "displayName": "A", "configured": true, "type": "token", "source": "stored" }),
+    ] {
+        assert!(
+            ok_response(json!({ "providers": [odd], "truncated": false }))
+                .auth_status()
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn reload_credentials_answers_the_refreshed_status() {
+    let mut session = DesktopSession::new();
+    let request = session.issue(DesktopMethod::ReloadCredentials).unwrap();
+    assert_eq!(
+        request.payload(),
+        payload("desktop-1", "reload_credentials", "{}")
+    );
+    let reloaded = ok_response(json!({
+        "reloaded": true, "aborted": false, "failedProviders": ["openai-codex"],
+        "providers": auth_providers(), "truncated": false
+    }))
+    .reload_credentials()
+    .unwrap();
+    assert!(reloaded.reloaded && !reloaded.aborted);
+    assert_eq!(reloaded.failed_providers, ["openai-codex"]);
+    assert_eq!(reloaded.status.providers.len(), 2);
+    for code in ["auth_unavailable", "reload_failed"] {
+        assert!(code.parse::<DesktopErrorCode>().is_ok(), "{code}");
     }
 }
 
@@ -6030,19 +6434,23 @@ fn usage_stats_decode_the_spec_answer_and_its_truncation_flags() {
             share: 0.512,
         }
     );
+    // A Shell older than 5.0.0: no cost per day, no byProvider.
     assert_eq!(
         stats.by_day[2],
         UsageStatsDay {
             day: "2026-10-09".into(),
-            tokens: 1365
+            tokens: 1365,
+            cost: None,
         }
     );
+    assert_eq!(stats.by_provider, None);
     assert_eq!(stats.by_project.as_ref().unwrap()[1].name, "beta");
     assert_eq!(
         stats.truncated,
         UsageStatsTruncated {
             by_model: false,
             by_day: false,
+            by_provider: None,
             by_project: Some(false)
         }
     );
@@ -6071,6 +6479,115 @@ fn usage_stats_decode_the_spec_answer_and_its_truncation_flags() {
 
 fn zero_totals() -> Value {
     json!({ "sessions": 0, "messages": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 0, "cost": 0 })
+}
+
+#[test]
+fn usage_stats_decode_the_cost_per_day_and_providers_of_5_0() {
+    let stats = ok_response(json!({
+        "range": "30d",
+        "scope": "all",
+        "totals": { "sessions": 3, "messages": 4, "inputTokens": 1310, "outputTokens": 155, "cacheReadTokens": 1000, "cacheWriteTokens": 200, "totalTokens": 2665, "cost": 1.76 },
+        "byModel": [
+            { "model": "claude-opus-5-5", "messages": 2, "tokens": 1365, "cost": 0.51, "share": 0.512 },
+            { "model": "gpt-5.5", "messages": 2, "tokens": 1300, "cost": 1.25, "share": 0.488 }
+        ],
+        "byDay": [{ "day": "2026-09-20", "tokens": 1000, "cost": 1 }, { "day": "2026-10-08", "tokens": 300, "cost": 0.25 }, { "day": "2026-10-09", "tokens": 1365, "cost": 0.51 }],
+        "byProvider": [{ "provider": "anthropic", "messages": 4, "tokens": 2665, "cost": 1.76, "share": 1 }],
+        "byProject": [
+            { "name": "alpha", "sessions": 2, "messages": 3, "tokens": 2365, "cost": 1.51 },
+            { "name": "beta", "sessions": 1, "messages": 1, "tokens": 300, "cost": 0.25 }
+        ],
+        "truncated": { "byModel": false, "byDay": false, "byProvider": false, "byProject": false }
+    }))
+    .usage_stats()
+    .unwrap();
+    assert_eq!(stats.by_day[0].cost, Some(1.0));
+    assert_eq!(stats.by_day[1].cost, Some(0.25));
+    assert_eq!(
+        stats.by_provider.unwrap(),
+        [UsageStatsProvider {
+            provider: "anthropic".into(),
+            messages: 4,
+            tokens: 2665,
+            cost: 1.76,
+            share: 1.0,
+        }]
+    );
+    assert_eq!(stats.truncated.by_provider, Some(false));
+}
+
+// --- get_status -----------------------------------------------------------
+
+#[test]
+fn status_requests_send_empty_params_and_decode_the_spec_answer() {
+    let mut session = DesktopSession::new();
+    assert_eq!(
+        session.issue(DesktopMethod::GetStatus).unwrap().payload(),
+        payload("desktop-1", "get_status", "{}")
+    );
+
+    let status = ok_response(json!({
+        "package": "active",
+        "odd": "active",
+        "persona": "gentleman",
+        "devBinary": { "state": "inactive", "sha256Prefix": null },
+        "assets": {
+            "delegation": { "stale": 0, "userOverrides": 1, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+        },
+        "modelConfig": { "global": "present", "routing": "valid" },
+        "severity": "info"
+    }))
+    .status()
+    .unwrap();
+    assert_eq!(status.persona, "gentleman");
+    assert_eq!(
+        status.dev_binary,
+        DevBinary {
+            state: DevBinaryState::Inactive,
+            sha256_prefix: None,
+        }
+    );
+    assert_eq!(status.assets.delegation.user_overrides, 1);
+    assert_eq!(
+        (status.model_config.global, status.model_config.routing),
+        (ModelConfigPresence::Present, RoutingState::Valid)
+    );
+    assert_eq!(status.severity, StatusSeverity::Info);
+
+    let warning = ok_response(json!({
+        "package": "active", "odd": "active", "persona": "neutral",
+        "devBinary": { "state": "active", "sha256Prefix": "0123456789abcdef" },
+        "assets": {
+            "delegation": { "stale": 2, "userOverrides": 0, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 1 }
+        },
+        "modelConfig": { "global": "missing", "routing": "invalid" },
+        "severity": "warning"
+    }))
+    .status()
+    .unwrap();
+    assert_eq!(warning.severity, StatusSeverity::Warning);
+    assert_eq!(
+        warning.dev_binary.sha256_prefix.as_deref(),
+        Some("0123456789abcdef")
+    );
+
+    // A value outside the documented vocabulary is refused, not misread.
+    let mut bad = json!({
+        "package": "active", "odd": "active", "persona": "gentleman",
+        "devBinary": { "state": "inactive", "sha256Prefix": null },
+        "assets": {
+            "delegation": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+        },
+        "modelConfig": { "global": "present", "routing": "valid" },
+        "severity": "error"
+    });
+    assert!(ok_response(bad.clone()).status().is_err());
+    bad["severity"] = json!("info");
+    bad["modelConfig"]["routing"] = json!("broken");
+    assert!(ok_response(bad).status().is_err());
 }
 
 // --- get_update_status ----------------------------------------------------
@@ -6208,6 +6725,12 @@ fn every_documented_error_code_is_typed() {
         "review_mode_busy",
         "stats_unavailable",
         "updates_unavailable",
+        "agent_definitions_unavailable",
+        "status_unavailable",
+        "background_subagents_busy",
+        "background_subagents_unavailable",
+        "auth_unavailable",
+        "reload_failed",
         "not_found",
         "internal_error",
     ];
@@ -6257,4 +6780,209 @@ fn every_documented_error_code_is_typed() {
     assert!(DesktopErrorCode::SessionSwitching.is_retryable());
     assert!(DesktopErrorCode::ReviewModeBusy.is_retryable());
     assert!(!DesktopErrorCode::NotFound.is_retryable());
+}
+
+// --- 5.0.0: subagent progress, agent definitions, profile binding ---------
+
+#[test]
+fn subagent_progress_decodes_when_present_and_stays_absent_from_older_owners() {
+    // The `agents_update` entry of the spec, with the 5.0.0 progress fields.
+    let mut data = agent_data();
+    data["status"] = json!("running");
+    data["lastStep"] = json!("running");
+    data["turns"] = json!(3);
+    data["toolCalls"] = json!(7);
+    data["activeTool"] = json!("read");
+    let agent = single_agent(data);
+    assert_eq!(agent.turns, Some(3));
+    assert_eq!(agent.tool_calls, Some(7));
+    assert_eq!(agent.active_tool.as_deref(), Some("read"));
+
+    // Gentle Shell 4.9.0 sends none of them.
+    let older = single_agent(agent_data());
+    assert_eq!(
+        (older.turns, older.tool_calls, older.active_tool),
+        (None, None, None)
+    );
+
+    // A negative count is malformed, never a guess.
+    let mut bad = agent_data();
+    bad["turns"] = json!(-1);
+    let refused = record_response(
+        decode_widget(&widget(&response_line(
+            "desktop-1",
+            json!({ "agents": [bad] }),
+        )))
+        .unwrap()
+        .unwrap(),
+    )
+    .list_subagents();
+    assert!(matches!(refused, Err(DesktopRpcError::MalformedPayload(_))));
+}
+
+#[test]
+fn agent_definitions_decode_the_spec_answer() {
+    let request =
+        DesktopRequest::new("desktop-90", DesktopMethod::ListAgentDefinitions, json!({})).unwrap();
+    assert_eq!(
+        request.payload(),
+        payload("desktop-90", "list_agent_definitions", "{}")
+    );
+    let definitions = ok_response(json!({
+        "agents": [
+            { "name": "explore", "description": "Global explorer.", "scope": "global", "model": "openai-codex/gpt-5.6-terra", "thinking": "high", "mode": null, "tools": ["read", "grep"], "toolsTruncated": false },
+            { "name": "worker", "description": "Project worker.", "scope": "project", "model": null, "thinking": null, "mode": "background", "tools": [], "toolsTruncated": false }
+        ],
+        "truncated": false,
+        "problems": { "invalid": 1, "notices": 0 },
+        "subagentDefaults": { "model": "anthropic/claude-luna", "thinking": null, "mode": "background" },
+        "defaultOrchestrator": { "status": "set", "model": "openai-codex/gpt-5.6-terra", "thinking": "medium" }
+    }))
+    .agent_definitions()
+    .unwrap();
+    assert_eq!(
+        definitions.agents[0],
+        AgentDefinition {
+            name: "explore".into(),
+            description: Some("Global explorer.".into()),
+            scope: AgentDefinitionScope::Global,
+            model: Some("openai-codex/gpt-5.6-terra".into()),
+            thinking: Some("high".into()),
+            mode: None,
+            tools: vec!["read".into(), "grep".into()],
+            tools_truncated: false,
+        }
+    );
+    assert_eq!(definitions.agents[1].scope, AgentDefinitionScope::Project);
+    assert_eq!(definitions.agents[1].mode.as_deref(), Some("background"));
+    assert!(!definitions.truncated);
+    assert_eq!(definitions.problems.invalid, 1);
+    assert_eq!(definitions.subagent_defaults.mode, "background");
+    assert_eq!(
+        definitions.default_orchestrator.route(),
+        Some(("openai-codex/gpt-5.6-terra", Some("medium")))
+    );
+
+    // Without a named orchestrator there is no route, whatever else is sent.
+    for status in ["unset", "missing", "invalid"] {
+        let orchestrator = ok_response(json!({
+            "agents": [], "truncated": false, "problems": { "invalid": 0, "notices": 0 },
+            "subagentDefaults": { "model": null, "thinking": null, "mode": "task" },
+            "defaultOrchestrator": { "status": status }
+        }))
+        .agent_definitions()
+        .unwrap()
+        .default_orchestrator;
+        assert_eq!(orchestrator.route(), None, "{status}");
+    }
+    assert_eq!(
+        "set".parse::<OrchestratorStatus>(),
+        Ok(OrchestratorStatus::Set)
+    );
+
+    let refused = record_response(
+        decode_widget(&widget(&error_line(
+            "desktop-90",
+            "agent_definitions_unavailable",
+            "Agent definitions are unavailable",
+        )))
+        .unwrap()
+        .unwrap(),
+    );
+    assert_eq!(
+        refused.error().and_then(DesktopErrorInfo::kind),
+        Some(DesktopErrorCode::AgentDefinitionsUnavailable)
+    );
+}
+
+#[test]
+fn profile_binding_reads_clears_and_changes_decode_the_spec_shapes() {
+    for (method, name) in [
+        (DesktopMethod::GetProfileBinding, "get_profile_binding"),
+        (DesktopMethod::ClearProfileBinding, "clear_profile_binding"),
+    ] {
+        assert_eq!(
+            DesktopRequest::new("desktop-91", method, json!({}))
+                .unwrap()
+                .payload(),
+            payload("desktop-91", name, "{}")
+        );
+    }
+
+    let binding =
+        ok_response(json!({ "kind": "explicit", "profile": "fast", "origin": "session" }))
+            .profile_binding()
+            .unwrap();
+    assert_eq!(
+        binding,
+        ProfileBinding {
+            kind: ProfileBindingKind::Explicit,
+            profile: Some("fast".into()),
+            origin: Some(ProfileBindingOrigin::Session),
+        }
+    );
+    assert_eq!(binding.explicit_profile(), Some("fast"));
+
+    // An inherited or layered profile is not one a clear would undo.
+    let inherited =
+        ok_response(json!({ "kind": "inherited", "profile": "team", "origin": "repo" }))
+            .profile_binding()
+            .unwrap();
+    assert_eq!(inherited.explicit_profile(), None);
+
+    let cleared = ok_response(json!({
+        "status": "cleared", "changed": true,
+        "binding": { "kind": "inherited", "profile": null, "origin": null }
+    }))
+    .clear_profile_binding()
+    .unwrap();
+    assert_eq!(
+        cleared,
+        ClearProfileBindingResult {
+            status: ClearBindingStatus::Cleared,
+            changed: true,
+            binding: ProfileBinding {
+                kind: ProfileBindingKind::Inherited,
+                profile: None,
+                origin: None,
+            },
+        }
+    );
+    assert_eq!(
+        ok_response(json!({
+            "status": "not_cleared", "changed": false,
+            "binding": { "kind": "explicit", "profile": "fast", "origin": "session" }
+        }))
+        .clear_profile_binding()
+        .unwrap()
+        .status,
+        ClearBindingStatus::NotCleared
+    );
+
+    let changed = some_event(
+        4,
+        "profile_binding_changed",
+        json!({ "kind": "explicit", "profile": "fast", "origin": "session", "source": "external" }),
+    );
+    assert_eq!(
+        changed.profile_binding_changed().unwrap(),
+        ProfileBindingChanged {
+            binding: binding.clone(),
+            source: ChangeSource::External,
+        }
+    );
+    // The exact event name is checked before the shape.
+    let foreign = some_event(
+        5,
+        "profile_applied",
+        json!({ "kind": "explicit", "profile": "fast", "origin": "session", "source": "desktop" }),
+    );
+    assert!(foreign.profile_binding_changed().is_err());
+
+    // A kind outside the documented set is refused, never misread.
+    assert!(
+        ok_response(json!({ "kind": "pinned", "profile": "fast", "origin": "session" }))
+            .profile_binding()
+            .is_err()
+    );
 }

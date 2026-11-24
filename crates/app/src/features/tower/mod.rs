@@ -1,14 +1,23 @@
 //! Gentle Tower in a tab. Gentle Shell's Tower is a local web app that draws
 //! every open session as a floor of its project's building (tasks, talk,
 //! artifacts, Engram, cost, permissions). The tab runs `gentle-shell tower
-//! --no-open` while it exists and shows the page it serves in the app's web
-//! view; the app's own agents already publish their floors. `/gentle:tower`
-//! opens this tab instead of the system browser.
+//! --no-open --json` while it exists and shows the page it serves in the
+//! app's web view; the app's own agents already publish their floors.
+//! `/gentle:tower` opens this tab instead of the system browser.
+//!
+//! `--json` (Gentle Shell 5.0.0 on) prints one `gentle-shell.tower/v1` line
+//! with the URL. Support is detected by trying it: an older Shell refuses the
+//! flag as an unknown argument before starting anything, and the tab then
+//! runs it again without the flag and reads the `Gentle Tower: <url>` text,
+//! as before. The refusal is remembered until the app quits, so an older
+//! Shell costs that one extra start once.
 
 use std::io::{BufRead as _, BufReader, Read as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use gentle_core::tower::{ready_url, refused_json_flag};
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::{Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -17,8 +26,9 @@ use gpui_kit::*;
 use crate::features::browser::WebSurface;
 use crate::shared::ui;
 
-/// What the server prints once it listens: `Gentle Tower: <url>`.
-const READY: &str = "Gentle Tower: ";
+/// A Shell refused `tower --json` (older than 5.0.0): later starts in this
+/// run go straight to the text output.
+static JSON_REFUSED: AtomicBool = AtomicBool::new(false);
 
 enum State {
     Starting,
@@ -85,19 +95,38 @@ fn drain(pipe: impl std::io::Read + Send + 'static) {
 }
 
 /// Starts the server for `cwd` and waits for its URL (blocking: run off the
-/// main thread). Where the folder's agents run in a backend, the server
+/// main thread): with `--json` unless a Shell refused it before, and again
+/// without it when this one refuses it.
+fn start(cwd: PathBuf) -> Result<(Server, String), String> {
+    if !JSON_REFUSED.load(Ordering::Relaxed) {
+        match serve(&cwd, true) {
+            Err(why) if refused_json_flag(&why) => JSON_REFUSED.store(true, Ordering::Relaxed),
+            served => return served,
+        }
+    }
+    serve(&cwd, false)
+}
+
+/// Runs `gentle-shell tower --no-open` (with `--json` when `json`) until it
+/// prints its URL. Where the folder's agents run in a backend, the server
 /// runs there, tied to the same input inside it (stopping the local
 /// `wsl.exe` or `docker` wouldn't stop it); its page is reached through
 /// the backend's forwarded localhost.
-fn start(cwd: PathBuf) -> Result<(Server, String), String> {
-    let mut command = match crate::features::backend::in_folder(
-        &cwd,
-        &["sh", "-c", TIED, "sh", "gentle-shell", "tower", "--no-open"],
-    ) {
+fn serve(cwd: &Path, json: bool) -> Result<(Server, String), String> {
+    let args: &[&str] = if json {
+        &["tower", "--no-open", "--json"]
+    } else {
+        &["tower", "--no-open"]
+    };
+    let in_backend: Vec<&str> = ["sh", "-c", TIED, "sh", "gentle-shell"]
+        .into_iter()
+        .chain(args.iter().copied())
+        .collect();
+    let mut command = match crate::features::backend::in_folder(cwd, &in_backend) {
         Some(command) => command,
         None => {
-            let spec = pi_rpc::resolve_backend(&cwd).map_err(|e| format!("{e:#}"))?;
-            tied_to_stdin(spec.launcher_command(["tower", "--no-open"]))
+            let spec = pi_rpc::resolve_backend(cwd).map_err(|e| format!("{e:#}"))?;
+            tied_to_stdin(spec.launcher_command(args.iter().copied()))
         }
     };
     let mut child = command
@@ -111,8 +140,7 @@ fn start(cwd: PathBuf) -> Result<(Server, String), String> {
     let mut stderr = child.stderr.take().ok_or("no error output")?;
     let mut line = String::new();
     while matches!(stdout.read_line(&mut line), Ok(n) if n > 0) {
-        if let Some(url) = line.trim().strip_prefix(READY) {
-            let url = url.trim().to_string();
+        if let Some(url) = ready_url(&line) {
             drain(stdout);
             drain(stderr);
             return Ok((Server { child, stdin }, url));

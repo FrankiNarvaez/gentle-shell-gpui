@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use gentle_core::canvas::{self, Fill, Kind, P, Rect, Shape, Style, freehand, geom};
+use gentle_core::canvas::{self, Fill, Kind, P, Pen, Rect, Shape, Style, freehand, geom};
 use gpui_kit::*;
 
 use crate::shared::ui;
@@ -197,6 +197,57 @@ pub(super) fn ink_path(
     let mut b = fill_builder();
     smooth_loop(&mut b, &outline);
     b.build().ok()
+}
+
+/// The pen previews' squiggle box (page units) and its size (index into
+/// `canvas::SIZES`).
+const PREVIEW_W: f32 = 80.;
+const PREVIEW_H: f32 = 26.;
+const PREVIEW_SIZE: u8 = 2;
+
+thread_local! {
+    /// Each pen's preview, tessellated once.
+    static PEN_PREVIEWS: [Option<Path<Pixels>>; 3] = Pen::ALL.map(pen_preview_path);
+}
+
+/// One wave drawn slow at its ends and fast in the middle, as a hand
+/// would, so the pen's speed-driven width shows.
+fn pen_preview_path(pen: Pen) -> Option<Path<Pixels>> {
+    const N: usize = 24;
+    let points: Vec<P> = (0..N)
+        .map(|i| {
+            let t = i as f32 / (N - 1) as f32;
+            let s = (1. - (t * std::f32::consts::PI).cos()) / 2.;
+            [
+                8. + s * (PREVIEW_W - 16.),
+                PREVIEW_H / 2. - (s * std::f32::consts::TAU).sin() * (PREVIEW_H / 2. - 7.),
+            ]
+        })
+        .collect();
+    let style = Style {
+        pen,
+        size: PREVIEW_SIZE,
+        ..Style::default()
+    };
+    ink_path(&points, &style, false, true)
+}
+
+/// `pen`'s preview fitted into `bounds`, drawn the way its strokes are.
+pub(super) fn pen_preview(pen: Pen, color: Hsla, bounds: Bounds<Pixels>, window: &mut Window) {
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let k = (w / PREVIEW_W).min(h / PREVIEW_H);
+    let at = Affine {
+        sx: k,
+        sy: k,
+        tx: (w - PREVIEW_W * k) / 2.,
+        ty: (h - PREVIEW_H * k) / 2.,
+    };
+    let i = Pen::ALL.iter().position(|p| *p == pen).unwrap_or(0);
+    PEN_PREVIEWS.with(|paths| {
+        if let Some(path) = &paths[i] {
+            window.paint_path(at.place(path, bounds.origin), color);
+        }
+    });
 }
 
 fn hatch_path(poly: &[P], width: f32) -> Option<Path<Pixels>> {
