@@ -693,7 +693,7 @@ The canvas is detected from the Gentle Desktop `design_canvas` events and seed (
 
 ### Keymap file (`shared/keymap.rs`, `gentle_core::keymap`)
 
-`<data>/gentle-shell-gpui/keymap.json` holds the user's shortcuts and the leader key. It is the app's file (not Pi's) and optional: without it the defaults apply and nothing is reported. The palette's **Open keymap file** creates it from a template (the current leader and an empty `bindings` array) if missing, never overwrites an existing one, and opens it in the file viewer; **Reload keymap** applies it without restarting (it clears the keymap, restores the bindings other code registered, such as text inputs, and binds the defaults and then the file again). The palette's shortcut hints read the live keymap, so they show the user's bindings.
+`<data>/gentle-shell-gpui/keymap.json` holds the user's shortcuts and the leader key. It is the app's file (not Pi's) and optional: without it the defaults apply and nothing is reported. **Configuration → Appearance → Keyboard** shows the resolved path. Its **Open keymap file** and **Reload keymap** buttons also appear as commands in the palette. **Open keymap file** creates it from a template (the current leader and an empty `bindings` array) if missing, never overwrites an existing one, and opens it in the file viewer; **Reload keymap** applies it without restarting (it clears the keymap, restores the bindings other code registered, such as text inputs, and binds the defaults and then the file again). The palette's shortcut hints read the live keymap, so they show the user's bindings.
 
 ```json
 { "leader": "ctrl-space",

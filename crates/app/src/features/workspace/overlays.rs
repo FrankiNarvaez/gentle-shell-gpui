@@ -106,7 +106,12 @@ impl Workspace {
         use gentle_core::transcript::NoticeLevel;
         let leader = crate::shared::keymap::load().leader;
         match crate::shared::keymap::ensure(&leader) {
-            Ok(path) => self.open_file(path, window, cx),
+            Ok(path) => {
+                if matches!(&self.overlay, Some((Overlay::Settings(_), _))) {
+                    self.close_overlay(window, cx);
+                }
+                self.open_file(path, window, cx);
+            }
             Err(e) => self.keymap_notice(NoticeLevel::Error, &[e], cx),
         }
     }
@@ -476,6 +481,8 @@ impl Workspace {
                 SettingsEvent::Close => this.close_overlay(window, cx),
                 SettingsEvent::TabLayoutChanged(layout) => this.set_tab_layout(*layout, cx),
                 SettingsEvent::OpenProfiles => this.open_profiles(window, cx),
+                SettingsEvent::OpenKeymap => this.open_keymap_file(window, cx),
+                SettingsEvent::ReloadKeymap => this.reload_keymap(cx),
                 SettingsEvent::Changed => {
                     for tab in this.sessions() {
                         tab.update(cx, |session, cx| session.reload_models(window, cx));
