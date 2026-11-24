@@ -899,6 +899,31 @@ fn context_ring_empty_stats_response(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn context_ring_shows_model_window_without_context_feed(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.models.current = super::state::ModelInfo::parse(&json!({
+            "id": "legacy-model", "contextWindow": 200000
+        }));
+        view.apply_stats(Ok(json!({"contextUsage": {"percent": 25.0}})), cx);
+        cx.notify();
+    });
+    let at = cx
+        .debug_bounds("context-ring")
+        .expect("ring drawn")
+        .center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-25%"));
+    assert!(drawn(cx, "context-ring-overview-window-200k"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-context-window-200k"));
+    assert!(drawn(cx, "context-ring-usage-25%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-50k"));
+}
+
+#[gpui::test]
 fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     view.update(cx, |view, cx| {

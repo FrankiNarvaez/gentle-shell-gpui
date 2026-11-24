@@ -54,6 +54,17 @@ impl SessionView {
         })
     }
 
+    /// Prefer the session feed's window, falling back to the current model.
+    pub(super) fn context_window(&self) -> Option<u64> {
+        self.usage.context_window.or_else(|| {
+            self.models
+                .current
+                .as_ref()
+                .map(|model| model.context_window)
+                .filter(|window| *window > 0)
+        })
+    }
+
     fn render_context_control(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let compacting = self.usage.compacting;
         let auto = self.usage.auto_compaction;
@@ -83,7 +94,7 @@ impl SessionView {
             (
                 "context-window",
                 "Context window",
-                self.usage.context_window.map(format_tokens),
+                self.context_window().map(format_tokens),
             ),
             (
                 "usage",

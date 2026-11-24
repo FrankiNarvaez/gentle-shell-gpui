@@ -911,8 +911,10 @@ impl Render for ContextOverview {
             || percent_label.clone(),
             |tokens| format!("{prefix}{} ({percent_label})", format_tokens(tokens)),
         );
-        let window_label = usage
-            .context_window
+        let window_label = self
+            .session
+            .read(cx)
+            .context_window()
             .map_or_else(|| "–".to_string(), format_tokens);
         let percent_selector = format!("context-ring-overview-{usage_label}");
         let window_selector = format!("context-ring-overview-window-{window_label}");
