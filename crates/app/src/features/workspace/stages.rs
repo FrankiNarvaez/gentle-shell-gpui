@@ -11,7 +11,7 @@ use crate::features::browser::{
 };
 use crate::shared::floating;
 use gentle_core::browser::CardLayout;
-use gentle_core::web_browsers::AgentPages;
+use gentle_core::web::same_page;
 use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::{ActiveTheme as _, Selectable};
 
@@ -72,9 +72,19 @@ fn address(url: &str) -> String {
 impl Workspace {
     // ── Opening ─────────────────────────────────────────────────────────────
 
+    /// The card already showing `url` ([`same_page`]), whoever opened it:
+    /// one page never gets two cards.
+    fn stage_for(&self, url: &str, cx: &App) -> Option<(u64, Entity<BrowserPanel>)> {
+        self.stages
+            .iter()
+            .find(|stage| same_page(stage.panel.read(cx).url(), url))
+            .map(|stage| (stage.id, stage.panel.clone()))
+    }
+
     /// Show a page in its own card. `reveal` is false for pages an agent
     /// opened (a dev server's URL, `gentle-open`): those wait in the tray. A
-    /// page that is already open reuses its card.
+    /// page that is already open (the design canvas too) reuses its card;
+    /// a web page reloads.
     pub(super) fn open_web(
         &mut self,
         url: String,
@@ -83,12 +93,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let existing = self.stages.iter().find_map(|stage| {
-            let panel = stage.panel.read(cx);
-            (!panel.is_design() && panel.url() == url).then(|| (stage.id, stage.panel.clone()))
-        });
-        if let Some((id, entity)) = existing {
-            entity.update(cx, |panel, cx| panel.navigate(url, None, cx));
+        if let Some((id, entity)) = self.stage_for(&url, cx) {
+            if !entity.read(cx).is_design() {
+                entity.update(cx, |panel, cx| panel.navigate(url, None, cx));
+            }
             if reveal {
                 self.set_stage_shown(id, true, window, cx);
             }
@@ -111,7 +119,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if external::agent_pages(cx) == AgentPages::Browser {
+        if external::agent_pages(cx).outside() {
             self.open_outside(url, once, cx);
         } else {
             self.open_web(url, origin, false, window, cx);
@@ -156,11 +164,17 @@ impl Workspace {
             }
             CanvasNotice::Open { url, .. } => {
                 let label = Some("Design canvas".to_string());
-                match self.stages.iter().find_map(|stage| design(stage, cx)) {
+                // The design card, or a card already showing the canvas's
+                // page (`gentle-open` of its URL), which becomes the design
+                // card.
+                let card = self
+                    .stages
+                    .iter()
+                    .find_map(|stage| design(stage, cx))
+                    .or_else(|| self.stage_for(&url, cx).map(|(_, panel)| panel));
+                match card {
                     Some(entity) => entity.update(cx, |panel, cx| panel.navigate(url, label, cx)),
-                    None if external::agent_pages(cx) == AgentPages::Browser => {
-                        self.open_outside(url, true, cx)
-                    }
+                    None if external::agent_pages(cx).outside() => self.open_outside(url, true, cx),
                     None => {
                         let panel = cx.new(|cx| BrowserPanel::new(url, label, cx));
                         self.add_stage(panel, Some(origin), false, window, cx);
@@ -308,20 +322,43 @@ impl Workspace {
                 }
                 let profile = profile.as_deref().map(Profile::parse);
                 let found = name.as_deref().and_then(|name| self.find_stage(name, cx));
-                let (id, panel) = match found {
-                    Some((id, panel)) => {
+                // No page by that name, but one already shows the URL (the
+                // design canvas, a `gentle-open` page): the agent takes that
+                // card instead of opening a second one on the same page.
+                let same = match (&found, &url) {
+                    (None, Some(url)) => self.stage_for(url, cx),
+                    _ => None,
+                };
+                let (id, panel) = match (found, same) {
+                    (Some((id, panel)), _) => {
                         panel.update(cx, |panel, cx| {
                             if let Some(profile) = profile {
                                 panel.set_profile(profile, cx);
                             }
                             panel.set_driven(true, cx);
-                            if let Some(url) = url {
+                            if let Some(url) = url
+                                && !same_page(panel.url(), &url)
+                            {
                                 panel.navigate(url, None, cx);
                             }
                         });
                         (id, panel)
                     }
-                    None => {
+                    (None, Some((id, panel))) => {
+                        panel.update(cx, |panel, cx| {
+                            // A card another agent named keeps its name;
+                            // the answer's `tab` says which it is.
+                            if panel.name().is_none() {
+                                panel.set_name(name.clone(), cx);
+                            }
+                            if let Some(profile) = profile {
+                                panel.set_profile(profile, cx);
+                            }
+                            panel.set_driven(true, cx);
+                        });
+                        (id, panel)
+                    }
+                    (None, None) => {
                         let Some(url) = url else {
                             let _ = reply.send(error("bad_op", "open needs a URL for a new page"));
                             return;
@@ -898,5 +935,132 @@ impl RenderOnce for TrayTrigger {
                     .line_height(relative(1.))
                     .child(self.count.to_string()),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use gpui_kit::component::input::InputState;
+    use gpui_kit::{App, AppContext as _, Entity, Task, TestAppContext, Window, WindowOptions};
+
+    use super::super::{DevicePanel, Invisible, Music, Notices, Space, Workspace};
+    use crate::features::browser::CanvasNotice;
+    use crate::features::workspaces::TabLayout;
+
+    const CANVAS: &str = "http://127.0.0.1:59156/fGw3aH90fb17vXLE/";
+
+    /// A bare workspace in a test window; pages open with "Open pages" never
+    /// chosen (settings.json without `agentPages`).
+    fn with_workspace(
+        cx: &mut TestAppContext,
+        test: impl FnOnce(&Entity<Workspace>, &mut Window, &mut App),
+    ) {
+        cx.update(gpui_kit::init);
+        let (handle, _) = cx
+            .update(|cx| {
+                gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| cx.new(|_| Invisible))
+            })
+            .unwrap();
+        cx.update(|cx| {
+            handle.update(cx, |_, window, cx| {
+                let root = std::env::temp_dir();
+                let workspace = cx.new(|cx| Workspace {
+                    spaces: vec![Space::new("Pages".into(), root)],
+                    current: 0,
+                    panes: HashMap::new(),
+                    next_id: 1,
+                    overlay: None,
+                    web_shown: Default::default(),
+                    sidebar: None,
+                    sidebar_visible: false,
+                    tab_layout: TabLayout::Horizontal,
+                    sidebar_open_spaces: HashMap::new(),
+                    badge_picker: None,
+                    open_menu: None,
+                    workspace_rename: None,
+                    tab_selection: None,
+                    tab_search: cx.new(|cx| InputState::new(window, cx)),
+                    save_task: Some(Task::ready(())),
+                    _title_poll: Task::ready(()),
+                    _lifecycle: Vec::new(),
+                    notices: cx.new(|_| Notices::default()),
+                    renaming: None,
+                    surge: None,
+                    surge_runs: 0,
+                    _surge_end: None,
+                    stages: Vec::new(),
+                    next_stage: 1,
+                    opened_outside: Default::default(),
+                    browser_dock_drag: None,
+                    browser_dock_room: Default::default(),
+                    resume_welcome: None,
+                    drop_hint: None,
+                    closed: Vec::new(),
+                    music: cx.new(|cx| Music::new(window, cx)),
+                    devices: cx.new(DevicePanel::new),
+                });
+                test(&workspace, window, cx);
+            })
+        })
+        .unwrap();
+    }
+
+    fn canvas_opened(workspace: &Entity<Workspace>, window: &mut Window, cx: &mut App) {
+        let notice = CanvasNotice::Open {
+            url: CANVAS.into(),
+            refreshed: false,
+        };
+        workspace.update(cx, |w, cx| w.show_design_canvas(notice, 1, window, cx));
+    }
+
+    fn gentle_open(workspace: &Entity<Workspace>, url: &str, window: &mut Window, cx: &mut App) {
+        workspace.update(cx, |w, cx| {
+            w.open_agent_page(url.into(), Some(1), false, window, cx)
+        });
+    }
+
+    fn browser_open(workspace: &Entity<Workspace>, window: &mut Window, cx: &mut App) {
+        let (reply, _answer) = std::sync::mpsc::channel();
+        let op = serde_json::json!({"op": "open", "url": CANVAS, "name": "gentle-design"});
+        workspace.update(cx, |w, cx| w.browser_request(op, reply, window, cx));
+    }
+
+    /// What the agent in the bug report did: the design tool opened the
+    /// canvas, then it ran `gentle-open` on its URL twice and `gentle-browser
+    /// open --name gentle-design` on it. One card, the design one, which the
+    /// agent now drives; nothing went outside the app.
+    #[gpui::test]
+    fn one_card_per_page_whoever_opens_it(cx: &mut TestAppContext) {
+        with_workspace(cx, |workspace, window, cx| {
+            canvas_opened(workspace, window, cx);
+            gentle_open(workspace, CANVAS, window, cx);
+            gentle_open(workspace, CANVAS.trim_end_matches('/'), window, cx);
+            browser_open(workspace, window, cx);
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.stages.len(), 1);
+            let panel = workspace.stages[0].panel.read(cx);
+            assert!(panel.is_design());
+            assert!(panel.is_driven());
+            assert_eq!(panel.name(), Some("gentle-design"));
+            assert!(workspace.opened_outside.is_empty());
+        });
+    }
+
+    /// The other order: `gentle-open` first, then the canvas notice. The
+    /// card becomes the design card instead of getting a twin.
+    #[gpui::test]
+    fn the_canvas_takes_the_card_already_on_its_page(cx: &mut TestAppContext) {
+        with_workspace(cx, |workspace, window, cx| {
+            gentle_open(workspace, CANVAS, window, cx);
+            canvas_opened(workspace, window, cx);
+            gentle_open(workspace, "http://localhost:3000/", window, cx);
+            let workspace = workspace.read(cx);
+            assert_eq!(workspace.stages.len(), 2);
+            assert!(workspace.stages[0].panel.read(cx).is_design());
+            assert!(!workspace.stages[1].panel.read(cx).is_design());
+            assert!(workspace.opened_outside.is_empty());
+        });
     }
 }

@@ -34,9 +34,7 @@ fn save(key: &str, value: serde_json::Value, what: &str) {
 /// Read the saved choices.
 pub fn init(cx: &mut App) {
     cx.set_global(External {
-        pages: read(PAGES_KEY)
-            .map(|value| AgentPages::from_json(&value))
-            .unwrap_or_default(),
+        pages: AgentPages::from_setting(read(PAGES_KEY).as_ref()),
         browser: read(BROWSER_KEY).and_then(|value| web_browsers::choice(&value)),
     });
 }

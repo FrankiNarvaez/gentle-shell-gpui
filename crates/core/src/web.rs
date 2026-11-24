@@ -73,9 +73,56 @@ pub fn loopback_url(text: &str) -> Option<String> {
     .then_some(url)
 }
 
+/// Whether two URLs show the same page, so one browser card serves both: the
+/// same scheme, host and port (any letter case) and the same path, query and
+/// fragment, a trailing `/` aside.
+pub fn same_page(a: &str, b: &str) -> bool {
+    fn key(url: &str) -> (String, &str) {
+        let url = url.trim().trim_end_matches('/');
+        let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+        let at = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+        let (host, tail) = rest.split_at(at);
+        (
+            format!(
+                "{}://{}",
+                scheme.to_ascii_lowercase(),
+                host.to_ascii_lowercase()
+            ),
+            tail,
+        )
+    }
+    key(a) == key(b)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{http_url, loopback_url};
+    use super::{http_url, loopback_url, same_page};
+
+    #[test]
+    fn one_page_whatever_the_trailing_slash_or_host_case() {
+        let canvas = "http://127.0.0.1:59156/fGw3aH90/";
+        assert!(same_page(canvas, "http://127.0.0.1:59156/fGw3aH90"));
+        assert!(same_page("HTTP://LocalHost:3000/", "http://localhost:3000"));
+        assert!(same_page(
+            "http://localhost:3000/a?b=1",
+            "http://localhost:3000/a?b=1"
+        ));
+        // Another token, port, path or query is another page.
+        assert!(!same_page(canvas, "http://127.0.0.1:59156/other/"));
+        assert!(!same_page(canvas, "http://127.0.0.1:59157/fGw3aH90/"));
+        assert!(!same_page(
+            "http://localhost:3000/a",
+            "http://localhost:3000/A"
+        ));
+        assert!(!same_page(
+            "http://localhost:3000/a?b=1",
+            "http://localhost:3000/a?b=2"
+        ));
+        assert!(!same_page(
+            "http://localhost:3000/",
+            "https://localhost:3000/"
+        ));
+    }
 
     #[test]
     fn finds_a_dev_server_url_in_log_lines() {

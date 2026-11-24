@@ -56,6 +56,17 @@ impl AgentPages {
         }
     }
 
+    /// The choice from the settings file's [`PAGES_KEY`], when it has one:
+    /// without it (never chosen) pages stay in the app.
+    pub fn from_setting(saved: Option<&Value>) -> AgentPages {
+        saved.map_or(AgentPages::InApp, AgentPages::from_json)
+    }
+
+    /// Whether pages agents open go to a browser outside the app.
+    pub fn outside(self) -> bool {
+        self == AgentPages::Browser
+    }
+
     pub fn to_json(self) -> Value {
         Value::from(self.id())
     }
@@ -345,6 +356,12 @@ mod tests {
         );
         assert_eq!(AgentPages::from_json(&json!("tab")), AgentPages::InApp);
         assert_eq!(AgentPages::from_json(&Value::Null), AgentPages::InApp);
+        // Never chosen, or saved by something else: inside the app, and
+        // nothing opens outside.
+        assert_eq!(AgentPages::from_setting(None), AgentPages::InApp);
+        assert!(!AgentPages::from_setting(None).outside());
+        assert!(!AgentPages::from_setting(Some(&json!(true))).outside());
+        assert!(AgentPages::from_setting(Some(&json!("browser"))).outside());
         assert_eq!(AgentPages::InApp.label(), "Inside the app");
         assert_eq!(AgentPages::Browser.label(), "In my browser");
     }
