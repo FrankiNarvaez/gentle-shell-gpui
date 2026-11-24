@@ -19,11 +19,25 @@ pub const HELP: &str = "Usage: gsd workspace <command>\n\
 pub enum Command {
     List,
     Current,
-    Create { name: String, root: PathBuf },
-    Switch { name: String },
-    Rename { name: String, new_name: String },
-    SetRoot { name: String, root: PathBuf },
-    Remove { name: String, force: bool },
+    Create {
+        name: String,
+        root: PathBuf,
+    },
+    Switch {
+        name: String,
+    },
+    Rename {
+        name: String,
+        new_name: String,
+    },
+    SetRoot {
+        name: String,
+        root: PathBuf,
+    },
+    Remove {
+        name: String,
+        force: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,13 +71,54 @@ pub fn parse(args: &[String]) -> Result<Parsed, String> {
         ["list", "--json"] => (Command::List, true),
         ["current"] => (Command::Current, false),
         ["current", "--json"] => (Command::Current, true),
-        ["create", name] => (Command::Create { name: name.to_string(), root: ".".into() }, false),
-        ["create", name, root] => (Command::Create { name: name.to_string(), root: PathBuf::from(*root) }, false),
-        ["switch", name] => (Command::Switch { name: name.to_string() }, false),
-        ["rename", name, new_name] => (Command::Rename { name: name.to_string(), new_name: new_name.to_string() }, false),
-        ["set-root", name, root] => (Command::SetRoot { name: name.to_string(), root: PathBuf::from(*root) }, false),
-        ["remove", name] => (Command::Remove { name: name.to_string(), force: false }, false),
-        ["remove", name, "--force"] => (Command::Remove { name: name.to_string(), force: true }, false),
+        ["create", name] => (
+            Command::Create {
+                name: name.to_string(),
+                root: ".".into(),
+            },
+            false,
+        ),
+        ["create", name, root] => (
+            Command::Create {
+                name: name.to_string(),
+                root: PathBuf::from(*root),
+            },
+            false,
+        ),
+        ["switch", name] => (
+            Command::Switch {
+                name: name.to_string(),
+            },
+            false,
+        ),
+        ["rename", name, new_name] => (
+            Command::Rename {
+                name: name.to_string(),
+                new_name: new_name.to_string(),
+            },
+            false,
+        ),
+        ["set-root", name, root] => (
+            Command::SetRoot {
+                name: name.to_string(),
+                root: PathBuf::from(*root),
+            },
+            false,
+        ),
+        ["remove", name] => (
+            Command::Remove {
+                name: name.to_string(),
+                force: false,
+            },
+            false,
+        ),
+        ["remove", name, "--force"] => (
+            Command::Remove {
+                name: name.to_string(),
+                force: true,
+            },
+            false,
+        ),
         _ => return Err("Invalid workspace command. Run gsd workspace --help.".into()),
     };
     Ok(Parsed::Run { command, json })
@@ -74,7 +129,10 @@ pub fn valid_name(name: &str) -> bool {
 }
 
 pub fn select(infos: Vec<WorkspaceInfo>, current_only: bool) -> Reply {
-    let infos: Vec<_> = infos.into_iter().filter(|info| !current_only || info.active).collect();
+    let infos: Vec<_> = infos
+        .into_iter()
+        .filter(|info| !current_only || info.active)
+        .collect();
     if current_only && infos.is_empty() {
         return Err("No current workspace".into());
     }
@@ -91,18 +149,39 @@ mod tests {
 
     #[test]
     fn parses_paths_and_json() {
-        assert_eq!(parse_words(&["create", "my project", "folder with spaces"]).unwrap(),
-            Parsed::Run { command: Command::Create { name: "my project".into(), root: "folder with spaces".into() }, json: false });
-        assert_eq!(parse_words(&["list", "--json"]).unwrap(),
-            Parsed::Run { command: Command::List, json: true });
+        assert_eq!(
+            parse_words(&["create", "my project", "folder with spaces"]).unwrap(),
+            Parsed::Run {
+                command: Command::Create {
+                    name: "my project".into(),
+                    root: "folder with spaces".into(),
+                },
+                json: false,
+            }
+        );
+        assert_eq!(
+            parse_words(&["list", "--json"]).unwrap(),
+            Parsed::Run {
+                command: Command::List,
+                json: true,
+            }
+        );
         assert!(parse_words(&["switch"]).is_err());
         assert!(parse_words(&["list", "--typo"]).is_err());
     }
 
     #[test]
     fn remove_requires_explicit_confirmation() {
-        assert_eq!(parse_words(&["remove", "demo"]).unwrap(),
-            Parsed::Run { command: Command::Remove { name: "demo".into(), force: false }, json: false });
+        assert_eq!(
+            parse_words(&["remove", "demo"]).unwrap(),
+            Parsed::Run {
+                command: Command::Remove {
+                    name: "demo".into(),
+                    force: false,
+                },
+                json: false,
+            }
+        );
         assert!(!valid_name(" "));
         assert!(!valid_name("bad\nname"));
         assert!(valid_name("proyecto español"));
@@ -110,9 +189,39 @@ mod tests {
 
     #[test]
     fn protocol_round_trip() {
-        let command = Command::SetRoot { name: "demo".into(), root: "/project".into() };
-        assert_eq!(serde_json::from_str::<Command>(&serde_json::to_string(&command).unwrap()).unwrap(), command);
+        let command = Command::SetRoot {
+            name: "demo".into(),
+            root: "/project".into(),
+        };
+        assert_eq!(
+            serde_json::from_str::<Command>(&serde_json::to_string(&command).unwrap()).unwrap(),
+            command
+        );
         let reply: Reply = Err("not found".into());
-        assert_eq!(serde_json::from_str::<Reply>(&serde_json::to_string(&reply).unwrap()).unwrap(), reply);
+        assert_eq!(
+            serde_json::from_str::<Reply>(&serde_json::to_string(&reply).unwrap()).unwrap(),
+            reply
+        );
+    }
+
+    #[test]
+    fn current_selects_only_active_workspace() {
+        let active = WorkspaceInfo {
+            name: "active".into(),
+            root: "/active".into(),
+            active: true,
+            tabs: 2,
+        };
+        let inactive = WorkspaceInfo {
+            name: "inactive".into(),
+            root: "/inactive".into(),
+            active: false,
+            tabs: 1,
+        };
+        assert_eq!(
+            select(vec![inactive.clone(), active.clone()], true),
+            Ok(Output::Workspaces(vec![active]))
+        );
+        assert!(select(vec![inactive], true).is_err());
     }
 }

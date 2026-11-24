@@ -4,7 +4,9 @@
 //! the single-instance server switches its window to that workspace.
 //!
 //! The command is a generated shim that runs this executable with `--cwd`
-//! and returns to the prompt at once. Unlike the agents' shims it goes on
+//! and returns to the prompt at once for normal launches. Workspace commands
+//! run synchronously so their output and exit status reach the calling shell.
+//! Unlike the agents' shims it goes on
 //! the user's own PATH, but only when they ask (palette → Install `gsd`
 //! command) or through the Windows installer, which ships its own copy.
 
@@ -169,6 +171,7 @@ mod tests {
         let body = std::fs::read_to_string(&path).unwrap();
         assert_eq!(body, shim_body(exe));
         assert!(body.contains("--cwd") && body.contains("Gentle Shell"));
+        assert!(body.contains("workspace") && body.contains("exit /b") == cfg!(windows));
         assert!(is_ours(&path));
 
         // Someone else's `gsd` is never taken for ours.

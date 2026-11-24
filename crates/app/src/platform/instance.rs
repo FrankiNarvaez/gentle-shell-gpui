@@ -10,8 +10,8 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 use gentle_core::workspace_commands::{Command as WorkspaceCommand, Reply as WorkspaceReply};
+use serde::{Deserialize, Serialize};
 
 /// What a second launch asks the running app to do.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -155,27 +155,47 @@ pub fn browser(op: &serde_json::Value, timeout: Duration) -> Result<serde_json::
 
 /// None means no connection was made; an error after connecting must not be retried.
 pub fn workspace(command: &WorkspaceCommand) -> Result<Option<WorkspaceReply>, String> {
-    let Some(path) = record_path() else { return Ok(None) };
+    let Some(path) = record_path() else {
+        return Ok(None);
+    };
     workspace_at(&path, command)
 }
 
 fn workspace_at(path: &Path, command: &WorkspaceCommand) -> Result<Option<WorkspaceReply>, String> {
-    let Some(record) = record(path) else { return Ok(None) };
+    let Some(record) = record(path) else {
+        return Ok(None);
+    };
     let addr = SocketAddr::from(([127, 0, 0, 1], record.port));
     let mut stream = match TcpStream::connect_timeout(&addr, Duration::from_millis(400)) {
         Ok(stream) => stream,
         Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => return Ok(None),
         Err(error) => return Err(format!("Could not reach Desktop: {error}")),
     };
-    stream.set_read_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
-    stream.set_write_timeout(Some(Duration::from_secs(2))).map_err(|e| e.to_string())?;
-    let message = Message { token: record.token, request: OpenRequest::default(), browser: None, workspace: Some(command.clone()) };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(|e| e.to_string())?;
+    let message = Message {
+        token: record.token,
+        request: OpenRequest::default(),
+        browser: None,
+        workspace: Some(command.clone()),
+    };
     let mut line = serde_json::to_vec(&message).map_err(|e| e.to_string())?;
     line.push(b'\n');
-    stream.write_all(&line).map_err(|e| format!("Request outcome unknown: {e}"))?;
+    stream
+        .write_all(&line)
+        .map_err(|e| format!("Request outcome unknown: {e}"))?;
     let mut reply = String::new();
-    BufReader::new(stream).read_line(&mut reply).map_err(|e| format!("Request outcome unknown: {e}"))?;
-    serde_json::from_str(&reply).map(Some).map_err(|_| "Desktop did not return a workspace reply; check its state and version before retrying.".into())
+    BufReader::new(stream)
+        .read_line(&mut reply)
+        .map_err(|e| format!("Request outcome unknown: {e}"))?;
+    serde_json::from_str(&reply).map(Some).map_err(|_| {
+        "Desktop did not return a workspace reply; check its state and version before retrying."
+            .into()
+    })
 }
 
 fn listen(path: &Path) -> std::io::Result<async_channel::Receiver<Incoming>> {
@@ -247,12 +267,17 @@ fn answer_workspace(
     tx: &async_channel::Sender<Incoming>,
 ) {
     let (reply, answer) = std::sync::mpsc::channel();
-    let result = if tx.send_blocking(Incoming::Workspace { command, reply }).is_err() {
+    let result = if tx
+        .send_blocking(Incoming::Workspace { command, reply })
+        .is_err()
+    {
         Err("The app is closing".into())
     } else {
-        answer.recv_timeout(Duration::from_secs(25)).unwrap_or_else(|_| {
-            Err("Request outcome unknown; check the workspace before retrying".into())
-        })
+        answer
+            .recv_timeout(Duration::from_secs(25))
+            .unwrap_or_else(|_| {
+                Err("Request outcome unknown; check the workspace before retrying".into())
+            })
     };
     if let Ok(mut line) = serde_json::to_vec(&result) {
         line.push(b'\n');
@@ -321,7 +346,10 @@ mod tests {
             }
             _ => panic!("expected workspace request"),
         }
-        assert_eq!(client.join().unwrap().unwrap(), Some(Ok(Output::Workspaces(Vec::new()))));
+        assert_eq!(
+            client.join().unwrap().unwrap(),
+            Some(Ok(Output::Workspaces(Vec::new())))
+        );
         std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
@@ -340,7 +368,9 @@ mod tests {
         assert!(forward(&path, &request), "a live primary accepts");
         match rx.recv_blocking().unwrap() {
             Incoming::Open(received) => assert_eq!(received, request),
-            Incoming::Browser { .. } | Incoming::Workspace { .. } => panic!("an open request arrives as Open"),
+            Incoming::Browser { .. } | Incoming::Workspace { .. } => {
+                panic!("an open request arrives as Open")
+            }
         }
 
         // A record pointing at a dead listener means "become primary".

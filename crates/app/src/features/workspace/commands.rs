@@ -66,22 +66,31 @@ impl Workspace {
     }
 
     fn workspace_infos(&self) -> Vec<WorkspaceInfo> {
-        self.spaces.iter().enumerate().map(|(index, space)| WorkspaceInfo {
-            name: space.name.clone(),
-            root: space.root.clone(),
-            active: self.current == index,
-            tabs: space.tabs.len(),
-        }).collect()
+        self.spaces
+            .iter()
+            .enumerate()
+            .map(|(index, space)| WorkspaceInfo {
+                name: space.name.clone(),
+                root: space.root.clone(),
+                active: self.current == index,
+                tabs: space.tabs.len(),
+            })
+            .collect()
     }
 
     fn workspace_index(&self, name: &str) -> Result<usize, String> {
-        self.spaces.iter().position(|space| space.name.eq_ignore_ascii_case(name))
+        self.spaces
+            .iter()
+            .position(|space| space.name.eq_ignore_ascii_case(name))
             .ok_or_else(|| format!("Workspace '{name}' not found"))
     }
 
     fn check_workspace_name(&self, name: &str, except: Option<usize>) -> Result<(), String> {
         if !protocol::valid_name(name) {
-            return Err("Workspace name must be non-empty, trimmed and contain no control characters".into());
+            return Err(
+                "Workspace name must be non-empty, trimmed and contain no control characters"
+                    .into(),
+            );
         }
         if self.spaces.iter().enumerate().any(|(index, space)| {
             Some(index) != except && space.name.eq_ignore_ascii_case(name)
@@ -94,7 +103,10 @@ impl Workspace {
 
 fn command_root(root: PathBuf) -> Result<PathBuf, String> {
     if !root.is_absolute() || !root.is_dir() {
-        return Err(format!("Not an existing absolute directory: {}", root.display()));
+        return Err(format!(
+            "Not an existing absolute directory: {}",
+            root.display()
+        ));
     }
     dunce::canonicalize(&root).map_err(|error| format!("Cannot open {}: {error}", root.display()))
 }
