@@ -336,6 +336,7 @@ mod tests {
                     sidebar: None,
                     sidebar_visible: false,
                     tab_layout: TabLayout::Horizontal,
+                    sidebar_compact: false,
                     badge_picker: None,
                     open_menu: None,
                     workspace_rename: None,

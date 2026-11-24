@@ -86,7 +86,7 @@ impl Workspace {
         // Vertical tabs and Files are separate columns. Keep pane hit-testing
         // and split-size calculations aligned with the actual rendered width.
         let left = if self.tab_layout == TabLayout::Vertical {
-            rem(SIDEBAR_WIDTH) + 6.
+            rem(self.tab_sidebar_width()) + 6.
         } else {
             0.
         };

@@ -10,12 +10,25 @@ fn platform_select_modifier(event: &ClickEvent, cx: &App) -> bool {
 }
 
 impl Workspace {
-    pub(super) fn toggle_tab_layout(&mut self, cx: &mut Context<Self>) {
-        let next = match self.tab_layout {
-            TabLayout::Horizontal => TabLayout::Vertical,
-            TabLayout::Vertical => TabLayout::Horizontal,
-        };
-        self.set_tab_layout(next, cx);
+    /// The main navigator stays on the left; toggle only its width.
+    pub(super) fn toggle_sidebar_compact(&mut self, cx: &mut Context<Self>) {
+        self.cancel_workspace_rename_state(cx);
+        if self.tab_layout == TabLayout::Horizontal {
+            self.tab_layout = TabLayout::Vertical;
+            self.sidebar_compact = false;
+        } else {
+            self.sidebar_compact = !self.sidebar_compact;
+        }
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
+    pub(super) fn tab_sidebar_width(&self) -> f32 {
+        if self.sidebar_compact {
+            COMPACT_SIDEBAR_WIDTH
+        } else {
+            SIDEBAR_WIDTH
+        }
     }
 
     /// All presentation controls share one idempotent, persisted state change.
@@ -954,6 +967,7 @@ mod tests {
                         sidebar: None,
                         sidebar_visible: false,
                         tab_layout: TabLayout::Horizontal,
+                        sidebar_compact: false,
                         badge_picker: None,
                         open_menu: None,
                         workspace_rename: None,

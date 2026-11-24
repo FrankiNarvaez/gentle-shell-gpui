@@ -280,6 +280,9 @@ pub struct SavedState {
     /// Older workspaces.json files keep the familiar horizontal layout.
     #[serde(default)]
     pub tab_layout: TabLayout,
+    /// Whether the vertical navigator uses its narrow icon rail.
+    #[serde(default)]
+    pub sidebar_compact: bool,
 }
 
 fn shown() -> bool {
@@ -294,6 +297,7 @@ impl Default for SavedState {
             workspaces: Vec::new(),
             sidebar: true,
             tab_layout: TabLayout::Horizontal,
+            sidebar_compact: false,
         }
     }
 }

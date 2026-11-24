@@ -84,18 +84,16 @@ impl Workspace {
             .children(actions)
     }
 
-    /// New tab, and the way back to the title bar.
+    /// New tab, and the control to collapse the workspace navigator.
     pub(super) fn header_actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         vec![
             self.new_tab_button("sidebar-new-tab", None, cx),
-            Button::new("sidebar-horizontal")
+            Button::new("sidebar-collapse")
                 .ghost()
                 .xsmall()
                 .icon(Icon::new(IconName::PanelLeftClose))
-                .tooltip("Move tabs to the title bar")
-                .on_click(
-                    cx.listener(|this, _, _, cx| this.set_tab_layout(TabLayout::Horizontal, cx)),
-                )
+                .tooltip("Collapse workspace sidebar")
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_sidebar_compact(cx)))
                 .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
                 .into_any_element(),
         ]

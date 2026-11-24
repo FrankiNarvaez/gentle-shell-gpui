@@ -72,6 +72,7 @@ fn sample() -> SavedState {
         ],
         sidebar: false,
         tab_layout: TabLayout::Vertical,
+        sidebar_compact: true,
     }
 }
 
@@ -110,6 +111,7 @@ fn json_round_trip() {
     assert!(minimal.sidebar);
     assert!(minimal.workspaces[0].sidebar_expanded);
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
+    assert!(!minimal.sidebar_compact);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
 

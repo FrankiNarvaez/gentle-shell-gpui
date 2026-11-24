@@ -193,21 +193,21 @@ impl Render for Workspace {
                                             ))
                                     })
                                     .child(
-                                        Button::new("toggle-tab-layout")
+                                        Button::new("toggle-tab-sidebar")
                                             .ghost()
                                             .xsmall()
-                                            .icon(Icon::new(if vertical_tabs {
-                                                IconName::PanelLeft
+                                            .icon(Icon::new(if vertical_tabs && !self.sidebar_compact {
+                                                IconName::PanelLeftClose
                                             } else {
-                                                IconName::List
+                                                IconName::PanelLeftOpen
                                             }))
-                                            .tooltip(if vertical_tabs {
-                                                "Use horizontal tabs"
+                                            .tooltip(if vertical_tabs && !self.sidebar_compact {
+                                                "Collapse workspace sidebar"
                                             } else {
-                                                "Show tabs in the sidebar"
+                                                "Expand workspace sidebar"
                                             })
                                             .on_click(cx.listener(|this, _, _, cx| {
-                                                this.toggle_tab_layout(cx)
+                                                this.toggle_sidebar_compact(cx)
                                             })),
                                     )
                                     .child(
@@ -262,7 +262,7 @@ impl Render for Workspace {
                         row.child(
                             div()
                                 .id("vertical-tab-panel")
-                                .w(rems(SIDEBAR_WIDTH / 16.))
+                                .w(rems(self.tab_sidebar_width() / 16.))
                                 .flex_none()
                                 .h_full()
                                 .on_mouse_down(

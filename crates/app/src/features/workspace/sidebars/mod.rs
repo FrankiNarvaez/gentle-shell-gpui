@@ -8,6 +8,7 @@ use super::view::new_tab_menu;
 use super::*;
 
 mod accordion;
+mod compact;
 mod parts;
 
 /// One tab as the sidebar draws it.
@@ -133,7 +134,11 @@ pub(super) fn saved_title(pane: &SavedPane) -> SharedString {
 impl Workspace {
     /// The left sidebar's content.
     pub(super) fn render_tab_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        self.render_accordion_sidebar(cx)
+        if self.sidebar_compact {
+            self.render_compact_sidebar(cx)
+        } else {
+            self.render_accordion_sidebar(cx)
+        }
     }
 
     pub(super) fn sidebar_spaces(&self) -> Vec<SpaceEntry> {
