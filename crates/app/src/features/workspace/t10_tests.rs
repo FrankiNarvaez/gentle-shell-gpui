@@ -1,28 +1,37 @@
 use super::t8_verifier::{active, category, fixture};
 use gpui_kit::TestAppContext;
 
-use super::Category;
+use super::{Category, PaneKind, PaneTree, SavedPane, SavedTab, Tab, TabState};
+
+fn saved_terminal_tab(id: usize, cwd: std::path::PathBuf) -> Tab {
+    Tab {
+        id,
+        pinned: false,
+        state: TabState::Unbuilt(SavedTab {
+            layout: PaneTree::Leaf(SavedPane {
+                kind: PaneKind::Terminal,
+                cwd,
+                path: None,
+                session: None,
+            }),
+            pinned: false,
+            focused: 0,
+        }),
+    }
+}
 
 #[gpui::test]
-fn t10_create_workspace_picker_opens_and_names_after_folder(cx: &mut TestAppContext) {
-    let (host, cx, root, _trace) = fixture(cx, "create-folder", false);
-    let palette_key = if cfg!(target_os = "macos") {
-        "cmd-k"
-    } else {
-        "ctrl-k"
-    };
-    let new_folder = root.join("Gamma");
-    std::fs::create_dir(&new_folder).unwrap();
+fn t10_create_workspace_names_after_folder(cx: &mut TestAppContext) {
+    let (host, cx, root, _trace) = fixture(cx, "create-name", false);
+    let gamma = root.join("Gamma");
+    std::fs::create_dir(&gamma).unwrap();
 
-    cx.simulate_keystrokes(palette_key);
-    assert_eq!(category(&host, cx), Some(Category::All));
-    cx.simulate_input("Create workspace");
-    cx.simulate_keystrokes("enter");
-    assert!(cx.did_prompt_for_paths());
-    cx.simulate_path_prompt_response(|o| {
-        assert!(!o.files && o.directories && !o.multiple);
-        assert_eq!(o.prompt.as_deref(), Some("Create workspace"));
-        Some(vec![new_folder.clone()])
+    cx.update(|window, cx| {
+        host.update(cx, |w, cx| {
+            let index = w.push_space(None, gamma.clone());
+            w.spaces[index].tabs = vec![saved_terminal_tab(31, gamma.clone())];
+            w.switch_workspace(index, window, cx);
+        });
     });
     cx.run_until_parked();
 
@@ -30,7 +39,7 @@ fn t10_create_workspace_picker_opens_and_names_after_folder(cx: &mut TestAppCont
         host.read(cx)
             .spaces
             .iter()
-            .find(|s| s.root == new_folder)
+            .find(|s| s.root == gamma)
             .map(|s| s.name.clone())
     });
     assert_eq!(created, Some("Gamma".into()));
@@ -50,7 +59,11 @@ fn t10_create_workspace_cancel_creates_nothing(cx: &mut TestAppContext) {
     cx.simulate_input("Create workspace");
     cx.simulate_keystrokes("enter");
     assert!(cx.did_prompt_for_paths());
-    cx.simulate_path_prompt_response(|_| None);
+    cx.simulate_path_prompt_response(|o| {
+        assert!(!o.files && o.directories && !o.multiple);
+        assert_eq!(o.prompt.as_deref(), Some("Create workspace"));
+        None
+    });
     cx.run_until_parked();
 
     assert_eq!(cx.update(|_, cx| host.read(cx).spaces.len()), 2);
