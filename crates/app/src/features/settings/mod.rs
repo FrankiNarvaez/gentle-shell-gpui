@@ -210,18 +210,45 @@ impl SettingsView {
     fn session_changed(&mut self, cx: &mut Context<Self>) {
         self.update_status_changed(cx);
         self.shell_config_changed(cx);
+        self.background_changed(cx);
+    }
+
+    /// Show what the active tab's Gentle Shell reported over what the files
+    /// said; whatever it does not serve keeps the files' read.
+    fn adopt_shell(&mut self, cx: &mut Context<Self>) {
+        if let Some(snapshot) = self.snapshot.as_mut() {
+            if let Some(state) = self
+                .shell_config
+                .state(pi_rpc::desktop_rpc::ConfigStore::Persona)
+            {
+                snapshot.persona = shell_config::persona_of(state);
+            }
+            if let Some(state) = self
+                .shell_config
+                .state(pi_rpc::desktop_rpc::ConfigStore::Banner)
+            {
+                snapshot.banner = state.value.as_ref().map(snapshot::describe_banner);
+            }
+            if let Some(state) = &self.background.shell {
+                let project_file = snapshot.background_subagents.project_file.clone();
+                snapshot.background_subagents =
+                    background::BackgroundPolicy::from_shell(state, project_file);
+            }
+        }
+        cx.notify();
     }
 
     /// Prefer update information from the active agent's Desktop RPC.
     /// Fall back to the existing launcher/registry path when unavailable.
-    /// The settings stores are asked of it too; the files fill in whatever
-    /// it does not serve.
+    /// The settings stores and the background-subagents policy are asked of
+    /// it too; the files fill in whatever it does not serve.
     fn reload_with(&mut self, refresh_updates: bool, cx: &mut Context<Self>) {
         let shell_updates = self.ask_update_status(refresh_updates, cx);
         if !shell_updates {
             self.shell_updates.status = None;
         }
         self.ask_shell_config(cx);
+        self.ask_background(cx);
         let cwd = self.cwd.clone();
         self._load = cx.spawn(async move |this, cx| {
             let snapshot = cx

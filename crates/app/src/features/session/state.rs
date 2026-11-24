@@ -547,7 +547,9 @@ pub(in crate::features::session) mod desktop {
                     | Some(DesktopMethod::GetReviewMode)
                     | Some(DesktopMethod::SetReviewMode)
                     | Some(DesktopMethod::GetUsageStats)
-                    | Some(DesktopMethod::GetUpdateStatus) => Applied::default(),
+                    | Some(DesktopMethod::GetUpdateStatus)
+                    | Some(DesktopMethod::GetBackgroundSubagents)
+                    | Some(DesktopMethod::SetBackgroundSubagents) => Applied::default(),
                     None => Applied::default(),
                 },
                 Ok(Some(DesktopRecord::Event(event))) => {

@@ -1,9 +1,11 @@
 //! The one-shot reads window screens make of a tab's Gentle Shell over the
 //! Desktop channel: the Sessions browser (`list_sessions`, `switch_session`),
-//! Usage › Local stats (`get_usage_stats`) and Configuration's update status
-//! (`get_update_status`). Each method is used only when `capabilities`
-//! advertises it; otherwise the screen keeps its own path (session files, the
-//! stats file scan, the npm registry) and nothing is sent.
+//! Usage › Local stats (`get_usage_stats`), Configuration's update status
+//! (`get_update_status`) and background-subagents policy
+//! (`get_background_subagents`, `set_background_subagents`). Each method is
+//! used only when `capabilities` advertises it; otherwise the screen keeps
+//! its own path (session files, the stats file scan, the npm registry, the
+//! policy files and `/gentle:background-subagents`) and nothing is sent.
 //!
 //! Requests wait for the shared slot in a queue, like the config stores; each
 //! is answered once, as an outcome for its ticket that the screen takes.
@@ -15,8 +17,9 @@ use std::collections::VecDeque;
 
 use pi_rpc::UiRequest;
 use pi_rpc::desktop_rpc::{
-    Capabilities, DesktopErrorCode, DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError,
-    DesktopSession, ListSessionsQuery, SessionList, SessionsScope, StatsRange, StatsScope,
+    BackgroundPolicy, BackgroundSubagents, Capabilities, DesktopErrorCode, DesktopMethod,
+    DesktopRecord, DesktopResponse, DesktopRpcError, DesktopSession, ListSessionsQuery,
+    SessionList, SessionsScope, SetBackgroundSubagentsResult, StatsRange, StatsScope,
     SwitchSessionResult, UpdateStatus, UsageStats,
 };
 
@@ -63,6 +66,14 @@ pub(crate) enum ReadRequest {
     UpdateStatus {
         refresh: bool,
     },
+    /// The background-subagents policy as this session's project resolves it.
+    BackgroundSubagents,
+    /// Write the machine-wide policy: without a token the Shell answers the
+    /// confirmation to show; with the token of an approved one it writes.
+    SetBackgroundSubagents {
+        policy: BackgroundPolicy,
+        confirmation_token: Option<String>,
+    },
 }
 
 impl ReadRequest {
@@ -72,6 +83,8 @@ impl ReadRequest {
             Self::SwitchSession { .. } => DesktopMethod::SwitchSession,
             Self::UsageStats { .. } => DesktopMethod::GetUsageStats,
             Self::UpdateStatus { .. } => DesktopMethod::GetUpdateStatus,
+            Self::BackgroundSubagents => DesktopMethod::GetBackgroundSubagents,
+            Self::SetBackgroundSubagents { .. } => DesktopMethod::SetBackgroundSubagents,
         }
     }
 
@@ -88,6 +101,11 @@ impl ReadRequest {
             Self::UpdateStatus { refresh } => {
                 session.issue_get_update_status(refresh.then_some(true))
             }
+            Self::BackgroundSubagents => session.issue(DesktopMethod::GetBackgroundSubagents),
+            Self::SetBackgroundSubagents {
+                policy,
+                confirmation_token,
+            } => session.issue_set_background_subagents(*policy, confirmation_token.as_deref()),
         }
     }
 }
@@ -144,6 +162,8 @@ pub(crate) enum ReadOutcome {
     Switched(SwitchSessionResult),
     UsageStats(UsageStats),
     UpdateStatus(UpdateStatus),
+    BackgroundSubagents(BackgroundSubagents),
+    BackgroundSubagentsSet(SetBackgroundSubagentsResult),
     Failed(ReadFailure),
 }
 
@@ -349,6 +369,12 @@ impl Reads {
             ReadRequest::UpdateStatus { .. } => {
                 response.update_status().map(ReadOutcome::UpdateStatus)
             }
+            ReadRequest::BackgroundSubagents => response
+                .background_subagents()
+                .map(ReadOutcome::BackgroundSubagents),
+            ReadRequest::SetBackgroundSubagents { .. } => response
+                .set_background_subagents()
+                .map(ReadOutcome::BackgroundSubagentsSet),
         };
         let outcome = match decoded {
             Ok(outcome) => outcome,
@@ -393,6 +419,8 @@ pub(in crate::features::session) fn is_read(method: DesktopMethod) -> bool {
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::GetBackgroundSubagents
+            | DesktopMethod::SetBackgroundSubagents
     )
 }
 
@@ -408,8 +436,8 @@ mod live;
 #[cfg(test)]
 mod tests {
     use pi_rpc::desktop_rpc::{
-        DesktopErrorCode, DesktopMethod, ListSessionsQuery, PROMPT_COMMAND, SCHEMA, SessionsScope,
-        StatsRange, StatsScope, WIDGET_KEY,
+        BackgroundPolicy, DesktopErrorCode, DesktopMethod, ListSessionsQuery, PROMPT_COMMAND,
+        SCHEMA, SessionsScope, SetBackgroundSubagentsOutcome, StatsRange, StatsScope, WIDGET_KEY,
     };
     use pi_rpc::{UiMethod, UiRequest};
     use serde_json::{Value, json};
@@ -715,5 +743,89 @@ mod tests {
         let (_, payload) = sent(&desktop.reads_pump().sends);
         assert_eq!(payload["method"], "get_update_status");
         assert!(desktop.reads_take(ticket).is_none());
+    }
+
+    /// Gentle Shell 5.0.0 advertises the background-subagents methods: the
+    /// policy is read, and a change takes the two calls, the token only in
+    /// the second. 4.9.0 does not: the screen keeps the files and the
+    /// command, and nothing is sent.
+    #[test]
+    fn background_subagents_are_read_and_changed_in_two_calls() {
+        let mut old = main_shell();
+        assert_eq!(
+            old.reads_support(DesktopMethod::GetBackgroundSubagents),
+            ReadSupport::Legacy
+        );
+        assert_eq!(
+            old.reads_enqueue(ReadRequest::BackgroundSubagents),
+            Err(ReadFailure::NotOffered)
+        );
+
+        let mut methods = RELEASE_METHODS.to_vec();
+        methods.extend(["get_background_subagents", "set_background_subagents"]);
+        let mut desktop = probed(&methods);
+        let state = json!({ "effective": "off", "source": "default", "malformed": false,
+                            "projectFile": "absent", "globalFile": "absent", "capability": "ready" });
+        let read = desktop
+            .reads_enqueue(ReadRequest::BackgroundSubagents)
+            .unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(
+            (payload["method"].as_str(), &payload["params"]),
+            (Some("get_background_subagents"), &json!({}))
+        );
+        let _ = desktop.reads_apply(&ok(&id, state.clone()));
+        let Some(ReadOutcome::BackgroundSubagents(policy)) = desktop.reads_take(read) else {
+            panic!("the policy");
+        };
+        assert_eq!(policy.effective, BackgroundPolicy::Off);
+
+        let ask = desktop
+            .reads_enqueue(ReadRequest::SetBackgroundSubagents {
+                policy: BackgroundPolicy::On,
+                confirmation_token: None,
+            })
+            .unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(payload["params"], json!({ "policy": "on" }));
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({ "status": "confirmation_required", "policy": "on", "state": state,
+                    "confirmation": { "title": "Turn background subagents on machine-wide?",
+                                      "message": "…", "token": "t1" } }),
+        ));
+        let Some(ReadOutcome::BackgroundSubagentsSet(asked)) = desktop.reads_take(ask) else {
+            panic!("the confirmation");
+        };
+        let SetBackgroundSubagentsOutcome::ConfirmationRequired(confirmation) = asked.outcome
+        else {
+            panic!("nothing written without a token");
+        };
+        let confirm = desktop
+            .reads_enqueue(ReadRequest::SetBackgroundSubagents {
+                policy: BackgroundPolicy::On,
+                confirmation_token: Some(confirmation.token),
+            })
+            .unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(
+            payload["params"],
+            json!({ "policy": "on", "confirmationToken": "t1" })
+        );
+        let mut on = state;
+        on["effective"] = json!("on");
+        on["source"] = json!("global");
+        on["globalFile"] = json!("present");
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({ "status": "applied", "policy": "on", "changed": true, "state": on }),
+        ));
+        let Some(ReadOutcome::BackgroundSubagentsSet(applied)) = desktop.reads_take(confirm) else {
+            panic!("applied");
+        };
+        assert_eq!(
+            applied.outcome,
+            SetBackgroundSubagentsOutcome::Applied { changed: true }
+        );
     }
 }

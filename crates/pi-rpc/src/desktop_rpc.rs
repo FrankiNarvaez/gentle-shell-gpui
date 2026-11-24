@@ -101,6 +101,7 @@ macro_rules! wire_enum {
     };
 }
 
+mod background;
 mod changes;
 mod output;
 mod review;
@@ -109,6 +110,10 @@ mod sessions;
 mod stats;
 mod updates;
 
+pub use background::{
+    BackgroundCapability, BackgroundConfirmation, BackgroundPolicy, BackgroundSource,
+    BackgroundSubagents, PolicyFile, SetBackgroundSubagentsOutcome, SetBackgroundSubagentsResult,
+};
 pub use changes::{ChangeDiff, ChangeRoot, ChangeStatus, ChangedFile, Changes};
 pub use output::{JobOutput, SubagentThread, ThreadItem};
 pub use review::{
@@ -179,13 +184,15 @@ pub enum DesktopMethod {
     SetReviewMode,
     GetUsageStats,
     GetUpdateStatus,
+    GetBackgroundSubagents,
+    SetBackgroundSubagents,
 }
 
 impl DesktopMethod {
     /// Every method this client knows, in the order `capabilities` lists
     /// them on Gentle Shell `main`. Which ones a peer offers is only what its
     /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 26] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -210,6 +217,8 @@ impl DesktopMethod {
         Self::SetReviewMode,
         Self::GetUsageStats,
         Self::GetUpdateStatus,
+        Self::GetBackgroundSubagents,
+        Self::SetBackgroundSubagents,
     ];
 
     /// The wire name of the method.
@@ -239,15 +248,17 @@ impl DesktopMethod {
             Self::SetReviewMode => "set_review_mode",
             Self::GetUsageStats => "get_usage_stats",
             Self::GetUpdateStatus => "get_update_status",
+            Self::GetBackgroundSubagents => "get_background_subagents",
+            Self::SetBackgroundSubagents => "set_background_subagents",
         }
     }
 
     /// Whether the method's params can only be built by its typed
     /// constructor: the config methods name a store, never a path,
     /// `apply_profile` takes exactly its documented keys, and the methods with
-    /// a required param (an id, a root and path, a review change) would only
-    /// be refused by the server with `{}`, so the generic `params` path is
-    /// closed to them.
+    /// a required param (an id, a root and path, a review or
+    /// background-subagents change) would only be refused by the server with
+    /// `{}`, so the generic `params` path is closed to them.
     fn requires_typed_params(self) -> bool {
         matches!(
             self,
@@ -259,6 +270,7 @@ impl DesktopMethod {
                 | Self::SwitchSession
                 | Self::GetChangeDiff
                 | Self::SetReviewMode
+                | Self::SetBackgroundSubagents
         )
     }
 
@@ -289,6 +301,8 @@ impl DesktopMethod {
             "set_review_mode" => Ok(Self::SetReviewMode),
             "get_usage_stats" => Ok(Self::GetUsageStats),
             "get_update_status" => Ok(Self::GetUpdateStatus),
+            "get_background_subagents" => Ok(Self::GetBackgroundSubagents),
+            "set_background_subagents" => Ok(Self::SetBackgroundSubagents),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
         }
     }
@@ -854,6 +868,22 @@ impl DesktopRequest {
         )
     }
 
+    /// The `set_background_subagents` request: `{ policy }`, plus
+    /// `confirmationToken` when resending the token of a
+    /// `confirmation_required` answer the human approved. A token outside
+    /// 1–128 characters is refused before sending.
+    pub fn set_background_subagents(
+        request_id: impl Into<String>,
+        policy: BackgroundPolicy,
+        confirmation_token: Option<&str>,
+    ) -> Result<Self, DesktopRpcError> {
+        Self::build(
+            request_id,
+            DesktopMethod::SetBackgroundSubagents,
+            background::set_background_subagents_params(policy, confirmation_token)?,
+        )
+    }
+
     /// A request for a known method, validated against the id and size limits
     /// before anything reaches the transport. The config methods are refused
     /// here: their params come only from [`Self::get_config`] and
@@ -989,6 +1019,8 @@ wire_enum! {
         ReviewModeBusy => "review_mode_busy",
         StatsUnavailable => "stats_unavailable",
         UpdatesUnavailable => "updates_unavailable",
+        BackgroundSubagentsBusy => "background_subagents_busy",
+        BackgroundSubagentsUnavailable => "background_subagents_unavailable",
         NotFound => "not_found",
         InternalError => "internal_error",
     }
@@ -1002,7 +1034,10 @@ impl DesktopErrorCode {
     pub fn is_retryable(self) -> bool {
         matches!(
             self,
-            Self::SessionSwitching | Self::ReviewModeBusy | Self::ProfileApplyBusy
+            Self::SessionSwitching
+                | Self::ReviewModeBusy
+                | Self::ProfileApplyBusy
+                | Self::BackgroundSubagentsBusy
         )
     }
 }
@@ -1146,6 +1181,18 @@ impl DesktopResponse {
     /// The response to `get_update_status`.
     pub fn update_status(&self) -> Result<UpdateStatus, DesktopRpcError> {
         UpdateStatus::from_data(self.data()?)
+    }
+
+    /// The response to `get_background_subagents`.
+    pub fn background_subagents(&self) -> Result<BackgroundSubagents, DesktopRpcError> {
+        BackgroundSubagents::from_data(self.data()?)
+    }
+
+    /// The response to `set_background_subagents`.
+    pub fn set_background_subagents(
+        &self,
+    ) -> Result<SetBackgroundSubagentsResult, DesktopRpcError> {
+        SetBackgroundSubagentsResult::from_data(self.data()?)
     }
 
     fn data(&self) -> Result<&Value, DesktopRpcError> {
@@ -3796,6 +3843,19 @@ impl DesktopSession {
         self.issue_with(
             DesktopMethod::GetUpdateStatus,
             update_status_params(refresh),
+        )
+    }
+
+    /// Issue `set_background_subagents` with `{ policy }` and, when resending
+    /// an approved confirmation, its `confirmationToken`.
+    pub fn issue_set_background_subagents(
+        &mut self,
+        policy: BackgroundPolicy,
+        confirmation_token: Option<&str>,
+    ) -> Result<DesktopRequest, DesktopRpcError> {
+        self.issue_with(
+            DesktopMethod::SetBackgroundSubagents,
+            background::set_background_subagents_params(policy, confirmation_token)?,
         )
     }
 

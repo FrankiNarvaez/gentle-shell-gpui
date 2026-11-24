@@ -3,28 +3,31 @@
 //! adapter only builds the outer prompt and decodes the widget records.
 
 use pi_rpc::desktop_rpc::{
-    ActivityState, ApplyProfileOutcome, ApplyProfileResult, BannerData, Capabilities, ChangeDiff,
-    ChangeRoot, ChangeSource, ChangeStatus, ChangedFile, Changes, CommandSource,
-    ConfigChangeOrigin, ConfigChanged, ConfigErrorCode, ConfigLayer, ConfigLayerSource,
-    ConfigScope, ConfigState, ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget,
-    ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent, DesignEntry, DesignTransition,
-    DesktopAgent, DesktopAgentStep, DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo,
-    DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord, DesktopRequest, DesktopResponse,
-    DesktopRpcError, DesktopSession, Handoff, JobExitCode, JobOutput, ListSessionsQuery,
-    MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT, NotificationsData, PROMPT_COMMAND,
-    PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PendingQuestionKind,
-    PermissionMode, PermissionModeChanged, PermissionModeState, PersonaMode, PiUpdate, PinSource,
-    ProfileApplied, ProfileApplyErrorCode, ProfileApplyMode, ProfileConfirmation,
-    ProfileFallbacksData, ProfileNote, ProfileNoteLevel, ProfilesData, ProviderUsage,
-    RateLimitEvent, RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope,
-    ReviewScopes, ReviewSetting, ReviewSource, SCHEMA, SessionActivity, SessionChangedFile,
-    SessionChanges, SessionChangesSummary, SessionCommand, SessionEntry, SessionJobs, SessionList,
+    ActivityState, ApplyProfileOutcome, ApplyProfileResult, BackgroundCapability,
+    BackgroundConfirmation, BackgroundPolicy, BackgroundSource, BackgroundSubagents, BannerData,
+    Capabilities, ChangeDiff, ChangeRoot, ChangeSource, ChangeStatus, ChangedFile, Changes,
+    CommandSource, ConfigChangeOrigin, ConfigChanged, ConfigErrorCode, ConfigLayer,
+    ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus, ConfigStore, ConfigWrite,
+    ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent, DesignEntry,
+    DesignTransition, DesktopAgent, DesktopAgentStep, DesktopAgentUsage, DesktopErrorCode,
+    DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord, DesktopRequest,
+    DesktopResponse, DesktopRpcError, DesktopSession, Handoff, JobExitCode, JobOutput,
+    ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT,
+    NotificationsData, PROMPT_COMMAND, PackageKind, PackageScope, PackageUpdate,
+    PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
+    PermissionModeState, PersonaMode, PiUpdate, PinSource, PolicyFile, ProfileApplied,
+    ProfileApplyErrorCode, ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData,
+    ProfileNote, ProfileNoteLevel, ProfilesData, ProviderUsage, RateLimitEvent, RateLimitSource,
+    ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope, ReviewScopes, ReviewSetting,
+    ReviewSource, SCHEMA, SessionActivity, SessionChangedFile, SessionChanges,
+    SessionChangesSummary, SessionCommand, SessionEntry, SessionJobs, SessionList,
     SessionPermission, SessionProject, SessionSection, SessionTodo, SessionTodoItem,
-    SessionTodoProgress, SessionWorktree, SessionsScope, SetConfigResult, SetPermissionModeResult,
-    SetReviewModeOutcome, ShellChannel, ShellUpdate, StatsRange, StatsScope, SubagentThread,
-    SwitchSessionResult, ThreadItem, UpdateState, UsageLimit, UsageLimitScope, UsageRefresh,
-    UsageResetAt, UsageStatsDay, UsageStatsModel, UsageStatsTotals, UsageStatsTruncated,
-    UsageStatus, UsageWindow, WIDGET_KEY, decode_payload, decode_widget,
+    SessionTodoProgress, SessionWorktree, SessionsScope, SetBackgroundSubagentsOutcome,
+    SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
+    StatsRange, StatsScope, SubagentThread, SwitchSessionResult, ThreadItem, UpdateState,
+    UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel,
+    UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload,
+    decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -4810,7 +4813,7 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
 
 /// The `capabilities` methods of Gentle Shell `main` (0336985), as the spec
 /// and a live backend list them.
-const MAIN_METHODS: [&str; 24] = [
+const MAIN_METHODS: [&str; 26] = [
     "capabilities",
     "get_snapshot",
     "get_config",
@@ -4835,6 +4838,8 @@ const MAIN_METHODS: [&str; 24] = [
     "set_review_mode",
     "get_usage_stats",
     "get_update_status",
+    "get_background_subagents",
+    "set_background_subagents",
 ];
 const MAIN_EVENTS: [&str; 9] = [
     "config_changed",
@@ -4873,7 +4878,7 @@ const RELEASE_4_8_EVENTS: [&str; 7] = [
     "profile_applied",
     "agents_update",
 ];
-const NEW_METHODS: [DesktopMethod; 10] = [
+const NEW_METHODS: [DesktopMethod; 12] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -4884,6 +4889,8 @@ const NEW_METHODS: [DesktopMethod; 10] = [
     DesktopMethod::SetReviewMode,
     DesktopMethod::GetUsageStats,
     DesktopMethod::GetUpdateStatus,
+    DesktopMethod::GetBackgroundSubagents,
+    DesktopMethod::SetBackgroundSubagents,
 ];
 
 fn capabilities_of(methods: &[&str], events: &[&str]) -> Capabilities {
@@ -4980,6 +4987,7 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
         DesktopMethod::SwitchSession,
         DesktopMethod::GetChangeDiff,
         DesktopMethod::SetReviewMode,
+        DesktopMethod::SetBackgroundSubagents,
     ] {
         assert_eq!(
             DesktopRequest::new("desktop-1", method, json!({})),
@@ -4999,6 +5007,7 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
         DesktopMethod::GetReviewMode,
         DesktopMethod::GetUsageStats,
         DesktopMethod::GetUpdateStatus,
+        DesktopMethod::GetBackgroundSubagents,
     ] {
         let mut session = DesktopSession::new();
         let request = session.issue(method).unwrap();
@@ -5007,6 +5016,127 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
             payload("desktop-1", method.as_str(), "{}")
         );
     }
+}
+
+// --- get_background_subagents and set_background_subagents ----------------
+
+/// The doc's `get_background_subagents` answer.
+fn background_state() -> Value {
+    json!({ "effective": "off", "source": "default", "malformed": false,
+            "projectFile": "absent", "globalFile": "absent", "capability": "ready" })
+}
+
+#[test]
+fn get_background_subagents_decodes_the_policy_without_paths() {
+    let state = ok_response(background_state())
+        .background_subagents()
+        .unwrap();
+    assert_eq!(
+        state,
+        BackgroundSubagents {
+            effective: BackgroundPolicy::Off,
+            source: BackgroundSource::Default,
+            malformed: false,
+            project_file: PolicyFile::Absent,
+            global_file: PolicyFile::Absent,
+            capability: BackgroundCapability::Ready,
+        }
+    );
+    let mut project = background_state();
+    project["source"] = json!("project");
+    project["effective"] = json!("on");
+    project["projectFile"] = json!("present");
+    let project = ok_response(project).background_subagents().unwrap();
+    assert_eq!(
+        (project.effective, project.source, project.project_file),
+        (
+            BackgroundPolicy::On,
+            BackgroundSource::Project,
+            PolicyFile::Present
+        )
+    );
+    let mut odd = background_state();
+    odd["source"] = json!("project_file");
+    assert!(ok_response(odd).background_subagents().is_err());
+}
+
+#[test]
+fn set_background_subagents_takes_two_calls_and_never_a_scope() {
+    let ask =
+        DesktopRequest::set_background_subagents("desktop-7", BackgroundPolicy::On, None).unwrap();
+    assert_eq!(
+        ask.payload(),
+        payload(
+            "desktop-7",
+            "set_background_subagents",
+            r#"{"policy":"on"}"#
+        )
+    );
+    let mut session = DesktopSession::new();
+    let resend = session
+        .issue_set_background_subagents(BackgroundPolicy::Off, Some("t1"))
+        .unwrap();
+    assert_eq!(
+        resend.payload(),
+        payload(
+            "desktop-1",
+            "set_background_subagents",
+            r#"{"policy":"off","confirmationToken":"t1"}"#
+        )
+    );
+    for token in ["", &"x".repeat(129)] {
+        assert_eq!(
+            DesktopRequest::set_background_subagents("d", BackgroundPolicy::On, Some(token)),
+            Err(DesktopRpcError::InvalidConfirmationToken)
+        );
+    }
+
+    let asked = ok_response(json!({
+        "status": "confirmation_required",
+        "policy": "on",
+        "state": background_state(),
+        "confirmation": {
+            "title": "Turn background subagents on machine-wide?",
+            "message": "Background subagents are currently off (decided by the built-in default).",
+            "token": "9b2e"
+        }
+    }))
+    .set_background_subagents()
+    .unwrap();
+    assert_eq!(asked.policy, BackgroundPolicy::On);
+    assert_eq!(
+        asked.outcome,
+        SetBackgroundSubagentsOutcome::ConfirmationRequired(BackgroundConfirmation {
+            title: "Turn background subagents on machine-wide?".into(),
+            message: "Background subagents are currently off (decided by the built-in default)."
+                .into(),
+            token: "9b2e".into(),
+        })
+    );
+
+    let mut on = background_state();
+    on["effective"] = json!("on");
+    on["source"] = json!("global");
+    on["globalFile"] = json!("present");
+    let applied =
+        ok_response(json!({ "status": "applied", "policy": "on", "changed": true, "state": on }))
+            .set_background_subagents()
+            .unwrap();
+    assert_eq!(
+        applied.outcome,
+        SetBackgroundSubagentsOutcome::Applied { changed: true }
+    );
+    assert_eq!(applied.state.effective, BackgroundPolicy::On);
+    assert!(
+        ok_response(json!({ "status": "written", "policy": "on", "state": background_state() }))
+            .set_background_subagents()
+            .is_err()
+    );
+    assert!(DesktopErrorCode::BackgroundSubagentsBusy.is_retryable());
+    assert_eq!(
+        "background_subagents_unavailable".parse::<DesktopErrorCode>(),
+        Ok(DesktopErrorCode::BackgroundSubagentsUnavailable)
+    );
 }
 
 // --- get_snapshot sections and session_snapshot ---------------------------
@@ -6321,6 +6451,8 @@ fn every_documented_error_code_is_typed() {
         "review_mode_busy",
         "stats_unavailable",
         "updates_unavailable",
+        "background_subagents_busy",
+        "background_subagents_unavailable",
         "not_found",
         "internal_error",
     ];

@@ -585,7 +585,9 @@ impl SessionView {
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {
+            | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::GetBackgroundSubagents
+            | DesktopMethod::SetBackgroundSubagents => {
                 let applied = self.desktop.reads_expire(generation);
                 self.apply_reads(applied, cx);
             }
@@ -652,7 +654,9 @@ impl SessionView {
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {
+            | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::GetBackgroundSubagents
+            | DesktopMethod::SetBackgroundSubagents => {
                 let applied = self.desktop.reads_outer(generation, handled);
                 self.apply_reads(applied, cx);
             }

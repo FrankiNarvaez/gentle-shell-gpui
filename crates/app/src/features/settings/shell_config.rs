@@ -278,19 +278,6 @@ impl SettingsView {
         }
     }
 
-    /// Show what Gentle Shell reported over what the files said.
-    pub(super) fn adopt_shell(&mut self, cx: &mut Context<Self>) {
-        if let Some(snapshot) = self.snapshot.as_mut() {
-            if let Some(state) = self.shell_config.state(ConfigStore::Persona) {
-                snapshot.persona = persona_of(state);
-            }
-            if let Some(state) = self.shell_config.state(ConfigStore::Banner) {
-                snapshot.banner = state.value.as_ref().map(super::snapshot::describe_banner);
-            }
-        }
-        cx.notify();
-    }
-
     /// The notification policy the section shows: Gentle Shell's when it
     /// serves the store, the file's otherwise.
     pub(super) fn notification_policy(&self) -> Policy {
