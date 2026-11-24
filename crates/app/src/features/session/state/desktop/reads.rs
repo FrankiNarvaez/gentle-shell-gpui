@@ -1,9 +1,16 @@
 //! The one-shot reads window screens make of a tab's Gentle Shell over the
 //! Desktop channel: the Sessions browser (`list_sessions`, `switch_session`),
-//! Usage › Local stats (`get_usage_stats`) and Configuration's update status
-//! (`get_update_status`). Each method is used only when `capabilities`
-//! advertises it; otherwise the screen keeps its own path (session files, the
-//! stats file scan, the npm registry) and nothing is sent.
+//! Usage › Local stats (`get_usage_stats`), Configuration's update status
+//! (`get_update_status`), the Profiles screen's agent list and Pi default
+//! orchestrator (`list_agent_definitions`), Gentle Shell's own status
+//! (`get_status`), background-subagents policy (`get_background_subagents`,
+//! `set_background_subagents`) and sign-ins (`get_auth_status`), and the
+//! tab's own credentials reload (`reload_credentials`). Each method is used
+//! only when `capabilities` advertises it; otherwise the caller keeps its own
+//! path (session files, the stats file scan, the npm registry, the agent
+//! files and Pi's `settings.json`, no status, the policy files and
+//! `/gentle:background-subagents`, `auth.json`, a tab restart) and nothing is
+//! sent.
 //!
 //! Requests wait for the shared slot in a queue, like the config stores; each
 //! is answered once, as an outcome for its ticket that the screen takes.
@@ -15,9 +22,11 @@ use std::collections::VecDeque;
 
 use pi_rpc::UiRequest;
 use pi_rpc::desktop_rpc::{
-    Capabilities, DesktopErrorCode, DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError,
-    DesktopSession, ListSessionsQuery, SessionList, SessionsScope, StatsRange, StatsScope,
-    SwitchSessionResult, UpdateStatus, UsageStats,
+    AgentDefinitions, AuthStatus, BackgroundPolicy, BackgroundSubagents, Capabilities,
+    DesktopErrorCode, DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError,
+    DesktopSession, ListSessionsQuery, ReloadCredentials, SessionList, SessionsScope,
+    SetBackgroundSubagentsResult, ShellStatus, StatsRange, StatsScope, SwitchSessionResult,
+    UpdateStatus, UsageStats,
 };
 
 use super::Send;
@@ -63,6 +72,22 @@ pub(crate) enum ReadRequest {
     UpdateStatus {
         refresh: bool,
     },
+    /// The agent definitions and Pi's default orchestrator.
+    AgentDefinitions,
+    /// The facts `/gentle:status` prints, with its severity.
+    Status,
+    /// The background-subagents policy as this session's project resolves it.
+    BackgroundSubagents,
+    /// Write the machine-wide policy: without a token the Shell answers the
+    /// confirmation to show; with the token of an approved one it writes.
+    SetBackgroundSubagents {
+        policy: BackgroundPolicy,
+        confirmation_token: Option<String>,
+    },
+    /// Which providers this session has credentials for (status only).
+    AuthStatus,
+    /// Make this session pick up credentials added or removed elsewhere.
+    ReloadCredentials,
 }
 
 impl ReadRequest {
@@ -72,6 +97,12 @@ impl ReadRequest {
             Self::SwitchSession { .. } => DesktopMethod::SwitchSession,
             Self::UsageStats { .. } => DesktopMethod::GetUsageStats,
             Self::UpdateStatus { .. } => DesktopMethod::GetUpdateStatus,
+            Self::AgentDefinitions => DesktopMethod::ListAgentDefinitions,
+            Self::Status => DesktopMethod::GetStatus,
+            Self::BackgroundSubagents => DesktopMethod::GetBackgroundSubagents,
+            Self::SetBackgroundSubagents { .. } => DesktopMethod::SetBackgroundSubagents,
+            Self::AuthStatus => DesktopMethod::GetAuthStatus,
+            Self::ReloadCredentials => DesktopMethod::ReloadCredentials,
         }
     }
 
@@ -88,6 +119,15 @@ impl ReadRequest {
             Self::UpdateStatus { refresh } => {
                 session.issue_get_update_status(refresh.then_some(true))
             }
+            Self::AgentDefinitions => session.issue(DesktopMethod::ListAgentDefinitions),
+            Self::Status => session.issue(DesktopMethod::GetStatus),
+            Self::BackgroundSubagents => session.issue(DesktopMethod::GetBackgroundSubagents),
+            Self::SetBackgroundSubagents {
+                policy,
+                confirmation_token,
+            } => session.issue_set_background_subagents(*policy, confirmation_token.as_deref()),
+            Self::AuthStatus => session.issue(DesktopMethod::GetAuthStatus),
+            Self::ReloadCredentials => session.issue(DesktopMethod::ReloadCredentials),
         }
     }
 }
@@ -144,6 +184,12 @@ pub(crate) enum ReadOutcome {
     Switched(SwitchSessionResult),
     UsageStats(UsageStats),
     UpdateStatus(UpdateStatus),
+    AgentDefinitions(AgentDefinitions),
+    Status(ShellStatus),
+    BackgroundSubagents(BackgroundSubagents),
+    BackgroundSubagentsSet(SetBackgroundSubagentsResult),
+    AuthStatus(AuthStatus),
+    CredentialsReloaded(ReloadCredentials),
     Failed(ReadFailure),
 }
 
@@ -349,6 +395,20 @@ impl Reads {
             ReadRequest::UpdateStatus { .. } => {
                 response.update_status().map(ReadOutcome::UpdateStatus)
             }
+            ReadRequest::AgentDefinitions => response
+                .agent_definitions()
+                .map(ReadOutcome::AgentDefinitions),
+            ReadRequest::Status => response.status().map(ReadOutcome::Status),
+            ReadRequest::BackgroundSubagents => response
+                .background_subagents()
+                .map(ReadOutcome::BackgroundSubagents),
+            ReadRequest::SetBackgroundSubagents { .. } => response
+                .set_background_subagents()
+                .map(ReadOutcome::BackgroundSubagentsSet),
+            ReadRequest::AuthStatus => response.auth_status().map(ReadOutcome::AuthStatus),
+            ReadRequest::ReloadCredentials => response
+                .reload_credentials()
+                .map(ReadOutcome::CredentialsReloaded),
         };
         let outcome = match decoded {
             Ok(outcome) => outcome,
@@ -393,6 +453,12 @@ pub(in crate::features::session) fn is_read(method: DesktopMethod) -> bool {
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions
+            | DesktopMethod::GetStatus
+            | DesktopMethod::GetBackgroundSubagents
+            | DesktopMethod::SetBackgroundSubagents
+            | DesktopMethod::GetAuthStatus
+            | DesktopMethod::ReloadCredentials
     )
 }
 
@@ -408,8 +474,8 @@ mod live;
 #[cfg(test)]
 mod tests {
     use pi_rpc::desktop_rpc::{
-        DesktopErrorCode, DesktopMethod, ListSessionsQuery, PROMPT_COMMAND, SCHEMA, SessionsScope,
-        StatsRange, StatsScope, WIDGET_KEY,
+        BackgroundPolicy, DesktopErrorCode, DesktopMethod, ListSessionsQuery, PROMPT_COMMAND,
+        SCHEMA, SessionsScope, SetBackgroundSubagentsOutcome, StatsRange, StatsScope, WIDGET_KEY,
     };
     use pi_rpc::{UiMethod, UiRequest};
     use serde_json::{Value, json};
@@ -487,6 +553,7 @@ mod tests {
             "switch_session",
             "get_usage_stats",
             "get_update_status",
+            "get_status",
         ]);
         probed(&methods)
     }
@@ -506,6 +573,7 @@ mod tests {
             DesktopMethod::SwitchSession,
             DesktopMethod::GetUsageStats,
             DesktopMethod::GetUpdateStatus,
+            DesktopMethod::GetStatus,
         ] {
             assert_eq!(desktop.reads_support(method), ReadSupport::Legacy);
         }
@@ -715,5 +783,208 @@ mod tests {
         let (_, payload) = sent(&desktop.reads_pump().sends);
         assert_eq!(payload["method"], "get_update_status");
         assert!(desktop.reads_take(ticket).is_none());
+    }
+
+    /// Gentle Shell 5.0.0 advertises the background-subagents methods: the
+    /// policy is read, and a change takes the two calls, the token only in
+    /// the second. 4.9.0 does not: the screen keeps the files and the
+    /// command, and nothing is sent.
+    #[test]
+    fn background_subagents_are_read_and_changed_in_two_calls() {
+        let mut old = main_shell();
+        assert_eq!(
+            old.reads_support(DesktopMethod::GetBackgroundSubagents),
+            ReadSupport::Legacy
+        );
+        assert_eq!(
+            old.reads_enqueue(ReadRequest::BackgroundSubagents),
+            Err(ReadFailure::NotOffered)
+        );
+
+        let mut methods = RELEASE_METHODS.to_vec();
+        methods.extend(["get_background_subagents", "set_background_subagents"]);
+        let mut desktop = probed(&methods);
+        let state = json!({ "effective": "off", "source": "default", "malformed": false,
+                            "projectFile": "absent", "globalFile": "absent", "capability": "ready" });
+        let read = desktop
+            .reads_enqueue(ReadRequest::BackgroundSubagents)
+            .unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(
+            (payload["method"].as_str(), &payload["params"]),
+            (Some("get_background_subagents"), &json!({}))
+        );
+        let _ = desktop.reads_apply(&ok(&id, state.clone()));
+        let Some(ReadOutcome::BackgroundSubagents(policy)) = desktop.reads_take(read) else {
+            panic!("the policy");
+        };
+        assert_eq!(policy.effective, BackgroundPolicy::Off);
+
+        let ask = desktop
+            .reads_enqueue(ReadRequest::SetBackgroundSubagents {
+                policy: BackgroundPolicy::On,
+                confirmation_token: None,
+            })
+            .unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(payload["params"], json!({ "policy": "on" }));
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({ "status": "confirmation_required", "policy": "on", "state": state,
+                    "confirmation": { "title": "Turn background subagents on machine-wide?",
+                                      "message": "…", "token": "t1" } }),
+        ));
+        let Some(ReadOutcome::BackgroundSubagentsSet(asked)) = desktop.reads_take(ask) else {
+            panic!("the confirmation");
+        };
+        let SetBackgroundSubagentsOutcome::ConfirmationRequired(confirmation) = asked.outcome
+        else {
+            panic!("nothing written without a token");
+        };
+        let confirm = desktop
+            .reads_enqueue(ReadRequest::SetBackgroundSubagents {
+                policy: BackgroundPolicy::On,
+                confirmation_token: Some(confirmation.token),
+            })
+            .unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(
+            payload["params"],
+            json!({ "policy": "on", "confirmationToken": "t1" })
+        );
+        let mut on = state;
+        on["effective"] = json!("on");
+        on["source"] = json!("global");
+        on["globalFile"] = json!("present");
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({ "status": "applied", "policy": "on", "changed": true, "state": on }),
+        ));
+        let Some(ReadOutcome::BackgroundSubagentsSet(applied)) = desktop.reads_take(confirm) else {
+            panic!("applied");
+        };
+        assert_eq!(
+            applied.outcome,
+            SetBackgroundSubagentsOutcome::Applied { changed: true }
+        );
+    }
+
+    #[test]
+    fn agent_definitions_are_asked_only_of_a_shell_that_offers_them() {
+        // Gentle Shell 4.9.0 (the reads of `main`, no definitions): the
+        // Profiles screen keeps reading the agent files.
+        let mut older = main_shell();
+        assert_eq!(
+            older.reads_support(DesktopMethod::ListAgentDefinitions),
+            ReadSupport::Legacy
+        );
+        assert_eq!(
+            older.reads_enqueue(ReadRequest::AgentDefinitions),
+            Err(ReadFailure::NotOffered)
+        );
+
+        let mut methods = RELEASE_METHODS.to_vec();
+        methods.push("list_agent_definitions");
+        let mut desktop = probed(&methods);
+        assert_eq!(
+            desktop.reads_support(DesktopMethod::ListAgentDefinitions),
+            ReadSupport::Rpc
+        );
+        let ticket = desktop
+            .reads_enqueue(ReadRequest::AgentDefinitions)
+            .unwrap();
+        let sends = desktop.reads_pump().sends;
+        let (id, payload) = sent(&sends);
+        assert_eq!(payload["method"], "list_agent_definitions");
+        assert_eq!(payload["params"], json!({}));
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({
+                "agents": [
+                    { "name": "explore", "description": "Global explorer.", "scope": "global", "model": "openai-codex/gpt-5.6-terra", "thinking": "high", "mode": null, "tools": ["read", "grep"], "toolsTruncated": false }
+                ],
+                "truncated": false,
+                "problems": { "invalid": 0, "notices": 0 },
+                "subagentDefaults": { "model": null, "thinking": null, "mode": "task" },
+                "defaultOrchestrator": { "status": "set", "model": "openai-codex/gpt-5.6-terra", "thinking": "medium" }
+            }),
+        ));
+        let Some(ReadOutcome::AgentDefinitions(definitions)) = desktop.reads_take(ticket) else {
+            panic!("the definitions answer the ticket")
+        };
+        assert_eq!(definitions.agents[0].name, "explore");
+
+        // A documented refusal is the screen's cue to read the files.
+        let ticket = desktop
+            .reads_enqueue(ReadRequest::AgentDefinitions)
+            .unwrap();
+        let (id, _) = sent(&desktop.reads_pump().sends);
+        let _ = desktop.reads_apply(&error(&id, "agent_definitions_unavailable"));
+        assert!(matches!(
+            desktop.reads_take(ticket),
+            Some(ReadOutcome::Failed(ReadFailure::Refused {
+                code: Some(DesktopErrorCode::AgentDefinitionsUnavailable),
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn status_is_read_only_from_a_shell_that_advertises_it() {
+        // A Shell with every other read but no `get_status` (4.9.0): the
+        // Configuration screen shows no status, and nothing is sent.
+        let mut methods = RELEASE_METHODS.to_vec();
+        methods.extend(["get_usage_stats", "get_update_status"]);
+        let mut older = probed(&methods);
+        assert_eq!(
+            older.reads_support(DesktopMethod::GetStatus),
+            ReadSupport::Legacy
+        );
+        assert_eq!(
+            older.reads_enqueue(ReadRequest::Status),
+            Err(ReadFailure::NotOffered)
+        );
+        assert!(older.session().pending().is_none());
+
+        let mut desktop = main_shell();
+        assert_eq!(
+            desktop.reads_support(DesktopMethod::GetStatus),
+            ReadSupport::Rpc
+        );
+        let ticket = desktop.reads_enqueue(ReadRequest::Status).unwrap();
+        let (id, payload) = sent(&desktop.reads_pump().sends);
+        assert_eq!(payload["method"], "get_status");
+        assert_eq!(payload["params"], json!({}));
+        let _ = desktop.reads_apply(&ok(
+            &id,
+            json!({
+                "package": "active", "odd": "active", "persona": "gentleman",
+                "devBinary": { "state": "inactive", "sha256Prefix": null },
+                "assets": {
+                    "delegation": { "stale": 0, "userOverrides": 1, "activeAgentOverrides": 0 },
+                    "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+                },
+                "modelConfig": { "global": "present", "routing": "valid" },
+                "severity": "info"
+            }),
+        ));
+        let Some(ReadOutcome::Status(status)) = desktop.reads_take(ticket) else {
+            panic!("expected the status");
+        };
+        assert_eq!(status.persona, "gentleman");
+
+        // `status_unavailable` is a refusal the screen shows nothing for.
+        let ticket = desktop.reads_enqueue(ReadRequest::Status).unwrap();
+        let (id, _) = sent(&desktop.reads_pump().sends);
+        let _ = desktop.reads_apply(&error(&id, "status_unavailable"));
+        assert_eq!(
+            desktop
+                .reads_take(ticket)
+                .and_then(|outcome| match outcome {
+                    ReadOutcome::Failed(failure) => failure.code(),
+                    _ => None,
+                }),
+            Some(DesktopErrorCode::StatusUnavailable)
+        );
     }
 }

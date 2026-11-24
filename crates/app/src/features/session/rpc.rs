@@ -33,8 +33,9 @@ use gentle_core::transcript::NoticeLevel;
 const DESKTOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The reads that may legitimately take longer: a listing or stats scan
-/// reads every session file in scope, a switch replaces the session, and an
-/// update refresh is bounded by the server's own 15-second deadline.
+/// reads every session file in scope, a switch replaces the session, an
+/// update refresh is bounded by the server's own 15-second deadline, and a
+/// status read audits every managed asset file.
 const DESKTOP_SLOW_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn desktop_timeout(method: DesktopMethod) -> Duration {
@@ -42,7 +43,8 @@ fn desktop_timeout(method: DesktopMethod) -> Duration {
         DesktopMethod::ListSessions
         | DesktopMethod::SwitchSession
         | DesktopMethod::GetUsageStats
-        | DesktopMethod::GetUpdateStatus => DESKTOP_SLOW_TIMEOUT,
+        | DesktopMethod::GetUpdateStatus
+        | DesktopMethod::GetStatus => DESKTOP_SLOW_TIMEOUT,
         _ => DESKTOP_TIMEOUT,
     }
 }
@@ -415,10 +417,11 @@ impl SessionView {
         Ok(ticket)
     }
 
-    /// The profile this session is bound to: what Gentle Shell's
-    /// `apply_profile` reported, or what the Profiles screen applied on an
-    /// older Shell. Forgotten with the session (new, resumed, or a replaced
-    /// backend).
+    /// The profile this session is bound to: Gentle Shell's own
+    /// `get_profile_binding` answer (an explicit binding) where it offers
+    /// that read; otherwise what its `apply_profile` reported, or what the
+    /// Profiles screen applied on an older Shell. Forgotten with the session
+    /// (new, resumed, or a replaced backend).
     pub(crate) fn session_profile(&self) -> Option<&str> {
         self.desktop.session_profile()
     }
@@ -427,6 +430,25 @@ impl SessionView {
     pub(crate) fn set_session_profile(&mut self, profile: Option<String>, cx: &mut Context<Self>) {
         self.desktop.set_session_profile(profile);
         cx.notify();
+    }
+
+    /// Whether this tab's Gentle Shell clears the session binding itself
+    /// (`clear_profile_binding`); otherwise the Profiles screen sends
+    /// `/gentle:profiles clear` as before.
+    pub(crate) fn binding_clear_supported(&self) -> bool {
+        matches!(self.backend.status, BackendStatus::Ready(_))
+            && self.desktop.binding_clear_supported()
+    }
+
+    /// Ask Gentle Shell to clear this session's binding; the answer arrives
+    /// as a [`ConfigOutcome::Cleared`] for the returned ticket.
+    pub(crate) fn clear_profile_binding(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<ConfigTicket, ConfigFailure> {
+        let ticket = self.desktop.config_clear_binding()?;
+        self.sync_config(cx);
+        Ok(ticket)
     }
 
     /// The answers to config tickets since the last call (the Profiles
@@ -593,7 +615,11 @@ impl SessionView {
                 let applied = self.desktop.design_expire(generation);
                 self.apply_design(applied, cx);
             }
-            DesktopMethod::GetConfig | DesktopMethod::SetConfig | DesktopMethod::ApplyProfile => {
+            DesktopMethod::GetConfig
+            | DesktopMethod::SetConfig
+            | DesktopMethod::ApplyProfile
+            | DesktopMethod::GetProfileBinding
+            | DesktopMethod::ClearProfileBinding => {
                 let applied = self.desktop.config_expire(generation);
                 self.apply_config(applied, cx);
             }
@@ -608,7 +634,13 @@ impl SessionView {
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {
+            | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions
+            | DesktopMethod::GetStatus
+            | DesktopMethod::GetBackgroundSubagents
+            | DesktopMethod::SetBackgroundSubagents
+            | DesktopMethod::GetAuthStatus
+            | DesktopMethod::ReloadCredentials => {
                 let applied = self.desktop.reads_expire(generation);
                 self.apply_reads(applied, cx);
             }
@@ -660,7 +692,11 @@ impl SessionView {
                 let applied = self.desktop.design_outer(generation, handled);
                 self.apply_design(applied, cx);
             }
-            DesktopMethod::GetConfig | DesktopMethod::SetConfig | DesktopMethod::ApplyProfile => {
+            DesktopMethod::GetConfig
+            | DesktopMethod::SetConfig
+            | DesktopMethod::ApplyProfile
+            | DesktopMethod::GetProfileBinding
+            | DesktopMethod::ClearProfileBinding => {
                 let applied = self.desktop.config_outer(generation, handled);
                 self.apply_config(applied, cx);
             }
@@ -675,7 +711,13 @@ impl SessionView {
             DesktopMethod::ListSessions
             | DesktopMethod::SwitchSession
             | DesktopMethod::GetUsageStats
-            | DesktopMethod::GetUpdateStatus => {
+            | DesktopMethod::GetUpdateStatus
+            | DesktopMethod::ListAgentDefinitions
+            | DesktopMethod::GetStatus
+            | DesktopMethod::GetBackgroundSubagents
+            | DesktopMethod::SetBackgroundSubagents
+            | DesktopMethod::GetAuthStatus
+            | DesktopMethod::ReloadCredentials => {
                 let applied = self.desktop.reads_outer(generation, handled);
                 self.apply_reads(applied, cx);
             }
@@ -726,16 +768,8 @@ impl SessionView {
         });
     }
 
-    pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
-        self.request(json!({"type": "get_state"}), cx, |this, result, _| {
-            if let Some(state) = this.report(result) {
-                this.models.current = ModelInfo::parse(&state["model"]);
-                this.models.thinking = state["thinkingLevel"].as_str().unwrap_or("off").to_string();
-                this.session_name = state["sessionName"].as_str().map(str::to_string);
-                this.session_file = state["sessionFile"].as_str().map(PathBuf::from);
-                this.usage.auto_compaction = state["autoCompactionEnabled"].as_bool();
-            }
-        });
+    /// Pi's models with usable credentials (`get_available_models`).
+    pub(super) fn refresh_models(&mut self, cx: &mut Context<Self>) {
         self.request(
             json!({"type": "get_available_models"}),
             cx,
@@ -752,6 +786,19 @@ impl SessionView {
                 }
             },
         );
+    }
+
+    pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
+        self.request(json!({"type": "get_state"}), cx, |this, result, _| {
+            if let Some(state) = this.report(result) {
+                this.models.current = ModelInfo::parse(&state["model"]);
+                this.models.thinking = state["thinkingLevel"].as_str().unwrap_or("off").to_string();
+                this.session_name = state["sessionName"].as_str().map(str::to_string);
+                this.session_file = state["sessionFile"].as_str().map(PathBuf::from);
+                this.usage.auto_compaction = state["autoCompactionEnabled"].as_bool();
+            }
+        });
+        self.refresh_models(cx);
         self.refresh_thinking_levels(cx);
         self.refresh_commands(cx);
         self.request(json!({"type": "get_messages"}), cx, |this, result, _| {

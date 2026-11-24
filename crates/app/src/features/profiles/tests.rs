@@ -5,14 +5,15 @@ use std::fs;
 use std::path::PathBuf;
 
 use gentle_core::profiles::{
-    AgentSource, PinRead, RouteEntry, Routing, assignment_names, bootstrap_profiles,
+    AgentSource, PinRead, PinStatus, RouteEntry, Routing, assignment_names, bootstrap_profiles,
     create_profile, evaluate_pin, serialize_profiles, update_frontmatter_routing,
 };
 use pi_rpc::desktop_rpc::{
-    ApplyProfileOutcome, ApplyProfileResult, ConfigErrorCode, ConfigLayer, ConfigLayerSource,
-    ConfigScope, ConfigState, ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget,
-    ConfigWriteTargetState, PinSource, ProfileApplyErrorCode, ProfileApplyMode,
-    ProfileConfirmation, ProfileNote, ProfileNoteLevel, SetConfigResult,
+    AgentDefinitions, ApplyProfileOutcome, ApplyProfileResult, ConfigErrorCode, ConfigLayer,
+    ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus, ConfigStore, ConfigWrite,
+    ConfigWriteTarget, ConfigWriteTargetState, DefaultOrchestrator, PinSource,
+    ProfileApplyErrorCode, ProfileApplyMode, ProfileConfirmation, ProfileNote, ProfileNoteLevel,
+    SetConfigResult,
 };
 use serde_json::{Value, json};
 
@@ -21,13 +22,16 @@ use super::apply::{
 };
 use super::env::{
     ApplyAnswer, ConfigChange, ConfigFailure, ConfigOutcome, ConfigPort, ConfigTicket, Env, Landed,
-    ProfileApply, Remote, SCREEN_STORES, discover_agents,
+    ProfileApply, Remote, SCREEN_STORES, discover_agents, uncovered_agents,
 };
 use super::files::{
     RpcLoad, StoreRead, fallbacks_write, files_job_start, follow_fallbacks, followed_fallbacks,
-    profiles_write, read_store, rpc_load, seed_profiles, unique_token, write_atomic,
+    orchestrator_route, profiles_write, read_store, reported_names, rpc_load, seed_profiles,
+    unique_token, write_atomic,
 };
-use super::pins::{local_pin_write, pin_status_at, renamed_pin_write, rpc_pin_status, write_pin};
+use super::pins::{
+    local_pin_write, pin_status_at, renamed_pin_write, repo_pin_write, rpc_pin_status, write_pin,
+};
 
 struct Scratch(PathBuf);
 
@@ -604,7 +608,7 @@ fn rpc_screen_reads_every_store_by_name() {
     let remote = opened(&mut port);
     let mut asked: Vec<ConfigStore> = port.gets.iter().map(|(_, store)| *store).collect();
     asked.sort_by_key(|store| store.as_str());
-    let mut every = ConfigStore::ALL.to_vec();
+    let mut every = SCREEN_STORES.to_vec();
     every.sort_by_key(|store| store.as_str());
     assert_eq!(asked, every, "each store once, by name");
     assert!(port.sets.is_empty(), "reading writes nothing");
@@ -1614,4 +1618,76 @@ fn a_write_refused_while_an_apply_runs_elsewhere_is_kept_for_a_retry() {
     let (_, write) = writes(&remote).into_iter().next().unwrap();
     remote.write(&mut port, write, "again").unwrap();
     assert_eq!(port.sets.last().unwrap().2, "sha256:g1");
+}
+
+#[test]
+fn reported_agents_join_only_the_roots_gentle_shell_does_not_read() {
+    let scratch = Scratch::new("reported-agents");
+    let agent = |name: &str| format!("---\nname: {name}\n---\n");
+    // Read by `list_agent_definitions`: never taken from the files here.
+    scratch.write("agent/agents/covered.md", &agent("covered"));
+    scratch.write(
+        "project/.pi/agents/project-covered.md",
+        &agent("project-covered"),
+    );
+    // Not read by it: `~/.agents` and `<cwd>/.agents`.
+    scratch.write("home/.agents/personal.md", &agent("personal"));
+    scratch.write("project/.agents/local.md", &agent("local"));
+    let env = scratch.env();
+    let uncovered: Vec<String> = uncovered_agents(&env)
+        .into_iter()
+        .map(|agent| agent.name)
+        .collect();
+    assert_eq!(uncovered, ["personal", "local"]);
+
+    let definitions: AgentDefinitions = serde_json::from_value(json!({
+        "agents": [
+            { "name": "covered", "description": null, "scope": "global", "model": null, "thinking": null, "mode": null, "tools": [], "toolsTruncated": false },
+            { "name": "project-covered", "description": null, "scope": "project", "model": null, "thinking": null, "mode": null, "tools": [], "toolsTruncated": false }
+        ],
+        "truncated": false,
+        "problems": { "invalid": 0, "notices": 0 },
+        "subagentDefaults": { "model": null, "thinking": null, "mode": "task" },
+        "defaultOrchestrator": { "status": "set", "model": "openai/gpt-5", "thinking": "high" }
+    }))
+    .unwrap();
+    let names = reported_names(&definitions, &uncovered_agents(&env));
+    // The same names the file discovery finds, from the Shell where it reads.
+    assert_eq!(names, assignment_names(&discover_agents(&env)));
+    assert!(names.iter().any(|name| name == "project-covered"));
+
+    // Pi's default as the file read would give it; nothing unless it is set.
+    assert_eq!(
+        orchestrator_route(&definitions.default_orchestrator),
+        Some(RouteEntry {
+            model: Some("openai/gpt-5".into()),
+            thinking: Some("high".into()),
+            tier: None,
+        })
+    );
+    let unset: DefaultOrchestrator =
+        serde_json::from_value(json!({ "status": "missing" })).unwrap();
+    assert_eq!(orchestrator_route(&unset), None);
+}
+
+#[test]
+fn publishing_toggles_the_repo_pin_layer_by_name() {
+    let status = |repo: PinRead| PinStatus {
+        local_path: PathBuf::from("<Git common dir>/gentle-ai/profile-pin.json"),
+        repo_path: PathBuf::from(".pi/gentle-ai/profile.json"),
+        local: PinRead::Missing,
+        repo,
+    };
+    let (write, declared) = repo_pin_write(Some(&status(PinRead::Missing)), "team").unwrap();
+    assert!(!declared);
+    assert_eq!(write, ConfigWrite::pin(PinSource::Repo, "team"));
+    assert_eq!(write.write_target(), ConfigWriteTarget::Repo);
+    let (write, declared) =
+        repo_pin_write(Some(&status(PinRead::Valid("team".into()))), "team").unwrap();
+    assert!(
+        declared,
+        "publishing the declared profile again unpublishes it"
+    );
+    assert_eq!(write, ConfigWrite::clear_pin(PinSource::Repo));
+    assert!(repo_pin_write(None, "team").is_err(), "outside a worktree");
 }

@@ -1,9 +1,10 @@
-//! Local stats tab: range toggle, totals, 30-day chart, model and project tables.
+//! Local stats tab: range toggle, totals, 30-day chart, model, provider and
+//! project tables.
 
 use std::path::Path;
 
 use gentle_core::transcript::format_tokens;
-use gentle_core::usage::stats::{DayStats, StatsRange, StatsSummary, format_cost};
+use gentle_core::usage::stats::{DayStats, ProviderStats, StatsRange, StatsSummary, format_cost};
 use gentle_core::usage::time::day_label;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -60,9 +61,12 @@ impl UsageView {
                     ));
                 }
             }
-            StatsSource::Shell { notes: shell } => notes.extend(shell.iter().cloned()),
+            StatsSource::Shell { notes: shell, .. } => notes.extend(shell.iter().cloned()),
         }
-        let day_cost = matches!(source, StatsSource::Files { .. });
+        let day_cost = match source {
+            StatsSource::Files { .. } => true,
+            StatsSource::Shell { day_cost, .. } => *day_cost,
+        };
         v_flex()
             .gap_4()
             .child(
@@ -84,6 +88,7 @@ impl UsageView {
             .child(Self::render_totals(summary))
             .child(self.render_chart(summary, day_cost, cx))
             .child(Self::render_models(summary))
+            .children(summary.providers.as_deref().map(Self::render_providers))
             .child(Self::render_projects(summary))
             .children(
                 notes
@@ -392,6 +397,48 @@ impl UsageView {
                             .child(Self::numeric(
                                 44.,
                                 format!("{}%", (model.share * 100.0).round() as i64),
+                            )),
+                    )
+                })),
+        )
+        .into_any_element()
+    }
+
+    /// Per provider; only Gentle Shell 5.0.0 on reports it (the file scan
+    /// and older Shells show the provider beside each model, or nothing).
+    fn render_providers(providers: &[ProviderStats]) -> AnyElement {
+        Self::table(
+            "Providers",
+            &[
+                ("Provider", 0.),
+                ("Messages", 64.),
+                ("Tokens", 64.),
+                ("Cost", 72.),
+                ("Share", 44.),
+            ],
+            providers.is_empty(),
+        )
+        .child(
+            v_flex()
+                .gap_0p5()
+                .children(providers.iter().enumerate().map(|(i, provider)| {
+                    ui::appear(
+                        ("usage-provider", i),
+                        Self::table_row()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_color(ui::fg())
+                                    .truncate()
+                                    .child(provider.provider.clone()),
+                            )
+                            .child(Self::numeric(64., provider.messages.to_string()))
+                            .child(Self::numeric(64., format_tokens(provider.tokens)))
+                            .child(Self::numeric(72., format_cost(provider.cost)))
+                            .child(Self::numeric(
+                                44.,
+                                format!("{}%", (provider.share * 100.0).round() as i64),
                             )),
                     )
                 })),

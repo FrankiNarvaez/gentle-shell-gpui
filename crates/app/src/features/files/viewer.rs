@@ -16,6 +16,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use gentle_core::preview::{self, Fit, Limits};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::diff::{
@@ -47,11 +48,8 @@ const POLL_UNFOCUSED: Duration = Duration::from_secs(5);
 const SAVED_FLASH: Duration = Duration::from_millis(1600);
 /// How long typing pauses before the Markdown preview catches up.
 const PREVIEW_DEBOUNCE: Duration = Duration::from_millis(150);
-
-/// Larger files show a notice instead of the editor.
-const MAX_PREVIEW: u64 = 2 * 1024 * 1024;
-/// Patches past this size are not rendered.
-const MAX_PATCH: usize = 4 * 1024 * 1024;
+/// The header's language chip for content too large for syntax colors.
+const PLAIN_NOTE: &str = "Plain text";
 
 enum Body {
     Loading,
@@ -61,6 +59,8 @@ enum Body {
         icon: IconName,
         title: SharedString,
         detail: SharedString,
+        /// Over a soft size limit: offers to load it anyway.
+        load_anyway: bool,
     },
 }
 
@@ -72,6 +72,8 @@ struct Meta {
     language: &'static str,
     /// Diff mode: status label, additions, deletions.
     change: Option<(&'static str, usize, usize)>,
+    /// Too large for syntax colors (see [`preview::colors`]).
+    plain: bool,
 }
 
 pub struct FileView {
@@ -79,6 +81,9 @@ pub struct FileView {
     /// Breadcrumb: muted prefix, bold leaf.
     crumbs: (String, String),
     diff: bool,
+    /// Where a diff comes from, to load it again past its size limit;
+    /// `None` in file mode.
+    patch: Option<PatchSource>,
     /// A commit's diff shows its short hash here; `None` is the work tree's.
     commit: Option<String>,
     body: Body,
@@ -96,6 +101,16 @@ pub struct FileView {
     /// Long diff lines wrap; `None` follows the mode (Split wraps, so the
     /// new side stays in view) until the header's wrap button picks.
     diff_wrap: Option<bool>,
+}
+
+/// What a diff pane runs git for.
+#[derive(Clone)]
+struct PatchSource {
+    root: PathBuf,
+    /// The path relative to `root`, with `/` separators.
+    rel: String,
+    /// A commit and its first parent; `None` for the work tree.
+    commit: Option<(String, Option<String>)>,
 }
 
 /// A diff pane's Split · Unified toggle, in header order.
@@ -192,105 +207,151 @@ impl FileView {
     /// Show `path` in an editor with syntax highlighting and line numbers.
     /// ⌘S saves it; outside writes reload a clean buffer and ask before
     /// replacing unsaved edits. Markdown opens in the mode last picked this
-    /// session, rendered until one is.
+    /// session, rendered until one is. A file over its soft size limit
+    /// shows a notice that loads it anyway, off the UI thread.
     pub fn open(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let focus = cx.focus_handle();
-        let crumbs = ui::split_path(&path);
-        let mut meta = Meta {
-            language: language(&path).1,
-            ..Meta::default()
-        };
-        // Stat before reading: a write in between shows up as a change.
-        let stamp = stamp_of(&path);
-        let mut markdown = None;
-        let (mut drawing, mut diagram_blocks) = (Vec::new(), 0);
-        let (body, edit) = match read_text(&path) {
-            Ok((text, size)) => {
-                meta.size = Some(size);
-                meta.lines = Some(line_count(&text));
-                let token = language(&path).0;
-                let diagrams = Arc::new(mermaid::Diagrams::default());
-                let preview = is_markdown(&path).then(|| {
-                    let prepared =
-                        diagrams.prepare(&text, mermaid::dark(cx), mermaid::ready_cli(cx).as_ref());
-                    (drawing, diagram_blocks) = (prepared.jobs, prepared.blocks);
-                    cx.new(|cx| TextViewState::markdown(&prepared.text, cx))
-                });
-                let editor = cx.new(|cx| {
-                    let state = EditorState::new(window, cx)
-                        .line_number(true)
-                        .soft_wrap(false);
-                    match token {
-                        Some(lang) => state.language(lang),
-                        None => state,
-                    }
-                    .default_value(text)
-                });
-                let edit = Editing {
-                    saved: editor.read(cx).text().clone(),
-                    dirty: stamp.is_none(),
-                    stamp,
-                    saving: false,
-                    just_saved: false,
-                    banner: None,
-                    _changes: cx.subscribe(&editor, |this, _, event: &InputEvent, cx| {
-                        if matches!(event, InputEvent::Change) {
-                            this.refresh_dirty(cx);
-                            this.schedule_preview(cx);
-                        }
-                    }),
-                    _poll: Self::watch(path.clone(), window, cx),
-                    _flash: Task::ready(()),
-                };
-                if let Some(preview) = preview {
-                    markdown = Some(Markdown {
-                        mode: MdMode::last(),
-                        preview,
-                        dir: path.parent().unwrap_or(Path::new("")).into(),
-                        images: Arc::default(),
-                        diagrams,
-                        mdx: path
-                            .extension()
-                            .is_some_and(|e| e.eq_ignore_ascii_case("mdx")),
-                        mirrored: None,
-                        restore: Rc::default(),
-                        measured_at: Rc::default(),
-                        _debounce: Task::ready(()),
-                        _scroll: cx.observe(&editor, |this, _, cx| this.mirror_scroll(cx)),
-                        _focus: cx.on_focus(&focus, window, |this, window, cx| {
-                            this.focus_body(window, cx)
-                        }),
-                        diagram_blocks,
-                        // The renderer installed (or failed): draw, or say why.
-                        _renderer: cx.observe_global::<mermaid::RendererState>(|this, cx| {
-                            this.sync_preview(cx);
-                            cx.notify();
-                        }),
-                    });
-                }
-                (Body::Code(editor), Some(edit))
-            }
-            Err(notice) => {
-                meta.size = notice.size;
-                (notice.into_body(), None)
-            }
-        };
         let mut this = Self {
+            crumbs: ui::split_path(&path),
+            meta: Meta {
+                language: language(&path).1,
+                ..Meta::default()
+            },
             path,
-            crumbs,
             diff: false,
+            patch: None,
             commit: None,
-            body,
-            meta,
-            edit,
-            markdown,
-            focus,
+            body: Body::Loading,
+            edit: None,
+            markdown: None,
+            focus: cx.focus_handle(),
             header_width: Rc::default(),
             diff_mode: DiffMode::Unified,
             diff_wrap: None,
         };
-        this.draw_diagrams(drawing, cx);
+        // Stat before reading: a write in between shows up as a change.
+        let stamp = stamp_of(&this.path);
+        match read_text(&this.path, false) {
+            Ok((text, size)) => this.show_text(text, size, stamp, false, window, cx),
+            Err(notice) => this.show_notice(notice),
+        }
         this
+    }
+
+    /// The file past its soft size limit: read off the UI thread, then shown.
+    fn load_file_anyway(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.body = Body::Loading;
+        let path = self.path.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let (stamp, read) = cx
+                .background_executor()
+                .spawn(async move { (stamp_of(&path), read_text(&path, true)) })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let focused = this.focus.contains_focused(window, cx);
+                match read {
+                    Ok((text, size)) => this.show_text(text, size, stamp, true, window, cx),
+                    Err(notice) => this.show_notice(notice),
+                }
+                this.refocus(focused, window, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Content replaced the notice while the pane had focus: give it to
+    /// what takes keys now (the editor or the diff).
+    fn refocus(&self, focused: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if focused {
+            let handle = self.focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+    }
+
+    fn show_notice(&mut self, notice: Notice) {
+        self.meta.size = notice.size.or(self.meta.size);
+        self.body = notice.into_body();
+    }
+
+    /// Put `text` (the file's `size` bytes, read at `stamp`) in the editor;
+    /// `asked` when the user loaded it past its soft size limit, so outside
+    /// writes are read past it too.
+    fn show_text(
+        &mut self,
+        text: String,
+        size: u64,
+        stamp: Option<Stamp>,
+        asked: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let path = self.path.clone();
+        // Too large for syntax colors: plain text, and Markdown as source.
+        let plain = !preview::colors(size);
+        self.meta.size = Some(size);
+        self.meta.plain = plain;
+        let token = language(&path).0.filter(|_| !plain);
+        let diagrams = Arc::new(mermaid::Diagrams::default());
+        let (mut drawing, mut diagram_blocks) = (Vec::new(), 0);
+        let preview = (!plain && is_markdown(&path)).then(|| {
+            let prepared =
+                diagrams.prepare(&text, mermaid::dark(cx), mermaid::ready_cli(cx).as_ref());
+            (drawing, diagram_blocks) = (prepared.jobs, prepared.blocks);
+            cx.new(|cx| TextViewState::markdown(&prepared.text, cx))
+        });
+        let editor = cx.new(|cx| {
+            let state = EditorState::new(window, cx)
+                .line_number(true)
+                .soft_wrap(false);
+            match token {
+                Some(lang) => state.language(lang),
+                None => state,
+            }
+            .default_value(text)
+        });
+        self.meta.lines = Some(rope_lines(editor.read(cx).text()));
+        self.edit = Some(Editing {
+            saved: editor.read(cx).text().clone(),
+            dirty: stamp.is_none(),
+            stamp,
+            saving: false,
+            just_saved: false,
+            banner: None,
+            _changes: cx.subscribe(&editor, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.refresh_dirty(cx);
+                    this.schedule_preview(cx);
+                }
+            }),
+            _poll: Self::watch(path.clone(), asked, window, cx),
+            _flash: Task::ready(()),
+        });
+        self.markdown = preview.map(|preview| Markdown {
+            mode: MdMode::last(),
+            preview,
+            dir: path.parent().unwrap_or(Path::new("")).into(),
+            images: Arc::default(),
+            diagrams,
+            mdx: path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("mdx")),
+            mirrored: None,
+            restore: Rc::default(),
+            measured_at: Rc::default(),
+            _debounce: Task::ready(()),
+            _scroll: cx.observe(&editor, |this, _, cx| this.mirror_scroll(cx)),
+            _focus: cx.on_focus(&self.focus, window, |this, window, cx| {
+                this.focus_body(window, cx)
+            }),
+            diagram_blocks,
+            // The renderer installed (or failed): draw, or say why.
+            _renderer: cx.observe_global::<mermaid::RendererState>(|this, cx| {
+                this.sync_preview(cx);
+                cx.notify();
+            }),
+        });
+        self.body = Body::Code(editor);
+        self.draw_diagrams(drawing, cx);
     }
 
     /// Bind ⌘S (Ctrl+S elsewhere) to saving the focused file pane.
@@ -344,24 +405,7 @@ impl FileView {
         let short = commit
             .as_ref()
             .map(|(hash, _)| hash.get(..7).unwrap_or(hash).to_string());
-        let job_root = root.clone();
-        let job_abs = abs.clone();
-        cx.spawn_in(window, async move |this, cx| {
-            let patch = cx
-                .background_executor()
-                .spawn(async move {
-                    match commit {
-                        Some((hash, parent)) => {
-                            load_commit_patch(&job_root, &job_abs, &hash, parent.as_deref())
-                        }
-                        None => load_patch(&job_root, &job_abs, &rel_text),
-                    }
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| this.install_patch(patch, cx));
-        })
-        .detach();
-        Self {
+        let mut this = Self {
             meta: Meta {
                 language: language(&abs).1,
                 size: std::fs::metadata(&abs).ok().map(|m| m.len()),
@@ -370,6 +414,11 @@ impl FileView {
             path: abs,
             crumbs,
             diff: true,
+            patch: Some(PatchSource {
+                root,
+                rel: rel_text,
+                commit,
+            }),
             commit: short,
             body: Body::Loading,
             edit: None,
@@ -378,7 +427,52 @@ impl FileView {
             header_width: Rc::default(),
             diff_mode: DiffMode::Unified,
             diff_wrap: None,
+        };
+        this.load_diff(false, window, cx);
+        this
+    }
+
+    /// Run git and parse its patch off the UI thread, then show it; `asked`
+    /// once the user chose to load it past its soft size limit.
+    fn load_diff(&mut self, asked: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(source) = self.patch.clone() else {
+            return;
+        };
+        let abs = self.path.clone();
+        self.body = Body::Loading;
+        cx.spawn_in(window, async move |this, cx| {
+            let loaded = cx
+                .background_executor()
+                .spawn(async move {
+                    let PatchSource { root, rel, commit } = source;
+                    let patch = match commit {
+                        Some((hash, parent)) => {
+                            load_commit_patch(&root, &abs, &hash, parent.as_deref(), asked)
+                        }
+                        None => load_patch(&root, &abs, &rel, asked),
+                    }?;
+                    Ok((parse_patch(&patch)?, patch.len() as u64))
+                })
+                .await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                let focused = this.focus.contains_focused(window, cx);
+                this.install_patch(loaded, cx);
+                if asked {
+                    this.refocus(focused, window, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Over a soft size limit, the notice's button: load it all the same.
+    fn load_anyway(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.diff {
+            self.load_diff(true, window, cx);
+        } else {
+            self.load_file_anyway(window, cx);
         }
+        cx.notify();
     }
 
     /// The tab title: the file name, marked for diffs and unsaved edits.
@@ -437,26 +531,35 @@ impl FileView {
         self.diff_wrap.unwrap_or(self.diff_mode == DiffMode::Split)
     }
 
-    fn install_patch(&mut self, patch: Result<String, Notice>, cx: &mut Context<Self>) {
-        self.body = match patch.and_then(|p| parse_patch(&p)) {
-            Ok(file) => {
+    /// Show a parsed patch of `size` bytes, without syntax colors when it's
+    /// too large for them, or the notice that took its place.
+    fn install_patch(&mut self, loaded: Result<(DiffFile, u64), Notice>, cx: &mut Context<Self>) {
+        match loaded {
+            Ok((file, size)) => {
                 self.meta.change = Some((
                     status_label(file.status()),
                     file.additions(),
                     file.deletions(),
                 ));
+                self.meta.plain = !preview::colors(size);
+                let file = if self.meta.plain {
+                    file.with_language("text")
+                } else {
+                    file
+                };
                 let mode = self.diff_mode;
-                Body::Diff(cx.new(|cx| DiffState::new([file], cx).with_mode(mode)))
+                self.body = Body::Diff(cx.new(|cx| DiffState::new([file], cx).with_mode(mode)));
             }
-            Err(notice) => notice.into_body(),
-        };
+            Err(notice) => self.show_notice(notice),
+        }
         cx.notify();
     }
 
     /// Check the file for outside writes while the window is in front: a
     /// cheap stat off the UI thread, and a read only when it changed. Panes
     /// without focus (maybe not even on screen) are checked less often.
-    fn watch(path: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
+    /// `asked` reads past the soft size limit, as the file was first loaded.
+    fn watch(path: PathBuf, asked: bool, window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
         cx.spawn_in(window, async move |this, cx| {
             let mut checked = Instant::now();
             loop {
@@ -496,7 +599,7 @@ impl FileView {
                 let job_path = path.clone();
                 let disk = cx
                     .background_executor()
-                    .spawn(async move { stamp.map(|_| read_text(&job_path)) })
+                    .spawn(async move { stamp.map(|_| read_text(&job_path, asked)) })
                     .await;
                 if this
                     .update_in(cx, |this, window, cx| {
@@ -891,7 +994,13 @@ impl FileView {
             }
             fit
         };
-        let show_language = fits(chars(self.meta.language) * 6. + 16.);
+        // Content too large for syntax colors says so in place of its language.
+        let chip_label = if self.meta.plain {
+            PLAIN_NOTE
+        } else {
+            self.meta.language
+        };
+        let show_language = fits(chars(chip_label) * 6. + 16.);
         let show_change = self.meta.change.is_some_and(|(status, added, removed)| {
             let counts = format!("+{added} −{removed}");
             fits(chars(&counts) * 7. + chars(status) * 6. + 24.)
@@ -982,8 +1091,22 @@ impl FileView {
                         .child(facts),
                 )
             })
-            .when(show_language, |d| {
+            .when(show_language && !self.meta.plain, |d| {
                 d.child(ui::chip(self.meta.language, ui::info()).flex_none())
+            })
+            .when(show_language && self.meta.plain, |d| {
+                d.child(
+                    ui::chip(PLAIN_NOTE, ui::muted())
+                        .id("file-view-plain")
+                        .flex_none()
+                        .tooltip(|window, cx| {
+                            ui::tooltip(format!(
+                                "Syntax colors are off for content over {}",
+                                human_size(preview::COLOR_LIMIT)
+                            ))
+                            .build(window, cx)
+                        }),
+                )
             })
             .when_some(mode, |d, mode| {
                 let view = cx.entity().downgrade();
@@ -1245,6 +1368,7 @@ impl Render for FileView {
                 icon,
                 title,
                 detail,
+                load_anyway,
             } => v_flex()
                 .size_full()
                 .items_center()
@@ -1272,7 +1396,20 @@ impl Render for FileView {
                                 .text_color(ui::muted())
                                 .text_center()
                                 .child(detail.clone()),
-                        ),
+                        )
+                        .when(*load_anyway, |d| {
+                            d.child(
+                                div().mt_1().child(
+                                    Button::new("file-view-load-anyway")
+                                        .small()
+                                        .outline()
+                                        .label("Load anyway")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.load_anyway(window, cx)
+                                        })),
+                                ),
+                            )
+                        }),
                 ))
                 .into_any_element(),
         };
@@ -1298,6 +1435,8 @@ struct Notice {
     title: &'static str,
     detail: String,
     size: Option<u64>,
+    /// Over a soft size limit: the notice offers to load it anyway.
+    load_anyway: bool,
 }
 
 impl Notice {
@@ -1307,6 +1446,31 @@ impl Notice {
             title,
             detail: detail.into(),
             size: None,
+            load_anyway: false,
+        }
+    }
+
+    /// Content of `size` bytes didn't load: over `limits`' soft one (the
+    /// `kind` limit: preview, diff) it can still be asked for; over the hard
+    /// one it can't.
+    fn too_large(title: &'static str, kind: &str, size: u64, limits: Limits, fit: Fit) -> Self {
+        let ask = fit == Fit::Ask;
+        let detail = if ask {
+            format!(
+                "{} is over the {} {kind} limit.",
+                human_size(size),
+                human_size(limits.soft)
+            )
+        } else {
+            format!(
+                "{} is over {}, the most the app loads.",
+                human_size(size),
+                human_size(limits.hard)
+            )
+        };
+        Self {
+            load_anyway: ask,
+            ..Self::new(IconName::TriangleAlert, title, detail)
         }
     }
 
@@ -1315,12 +1479,14 @@ impl Notice {
             icon: self.icon,
             title: self.title.into(),
             detail: self.detail.into(),
+            load_anyway: self.load_anyway,
         }
     }
 }
 
-/// The file as text with its size, or the reason it cannot be previewed.
-fn read_text(path: &Path) -> Result<(String, u64), Notice> {
+/// The file as text with its size, or the reason it cannot be previewed;
+/// `asked` reads it past its soft size limit.
+fn read_text(path: &Path, asked: bool) -> Result<(String, u64), Notice> {
     let unreadable = |e: std::io::Error| {
         Notice::new(IconName::CircleAlert, "Can't read this file", e.to_string())
     };
@@ -1332,17 +1498,16 @@ fn read_text(path: &Path) -> Result<(String, u64), Notice> {
             path.display().to_string(),
         ));
     }
-    if meta.len() > MAX_PREVIEW {
+    let fit = preview::FILE.fit(meta.len(), asked);
+    if fit != Fit::Load {
         return Err(Notice {
             size: Some(meta.len()),
-            ..Notice::new(
-                IconName::TriangleAlert,
+            ..Notice::too_large(
                 "Too large to preview",
-                format!(
-                    "{} is over the {} preview limit.",
-                    human_size(meta.len()),
-                    human_size(MAX_PREVIEW)
-                ),
+                "preview",
+                meta.len(),
+                preview::FILE,
+                fit,
             )
         });
     }
@@ -1369,11 +1534,8 @@ fn looks_binary(bytes: &[u8]) -> bool {
     bytes[..bytes.len().min(8192)].contains(&0)
 }
 
-fn line_count(text: &str) -> usize {
-    text.lines().count().max(usize::from(!text.is_empty()))
-}
-
-/// `line_count` of a buffer, without materializing it.
+/// Lines in a buffer, as the header counts them: a trailing newline doesn't
+/// start another.
 fn rope_lines(text: &Rope) -> usize {
     match text.len() {
         0 => 0,
@@ -1671,13 +1833,28 @@ fn atomic_write(
     result
 }
 
+/// A diff of `size` bytes loads, or the notice that takes its place.
+fn patch_fits(size: u64, asked: bool) -> Result<(), Notice> {
+    match preview::PATCH.fit(size, asked) {
+        Fit::Load => Ok(()),
+        fit => Err(Notice::too_large(
+            "Diff too large",
+            "diff",
+            size,
+            preview::PATCH,
+            fit,
+        )),
+    }
+}
+
 /// What `commit` changed in one file, against `parent` (the empty tree for a
-/// root commit).
+/// root commit); `asked` loads it past the soft size limit.
 fn load_commit_patch(
     root: &Path,
     abs: &Path,
     commit: &str,
     parent: Option<&str>,
+    asked: bool,
 ) -> Result<String, Notice> {
     let target = crate::features::backend::there(root, abs);
     let mut args = match parent {
@@ -1692,19 +1869,14 @@ fn load_commit_patch(
             commit.get(..7).unwrap_or(commit).to_string(),
         ));
     };
-    if patch.len() > MAX_PATCH {
-        return Err(Notice::new(
-            IconName::TriangleAlert,
-            "Diff too large",
-            human_size(patch.len() as u64),
-        ));
-    }
+    patch_fits(patch.len() as u64, asked)?;
     Ok(patch)
 }
 
 /// The unified diff for one file: staged and unstaged changes against HEAD,
-/// or the whole file as added when it is untracked.
-fn load_patch(root: &Path, abs: &Path, rel: &str) -> Result<String, Notice> {
+/// or the whole file as added when it is untracked; `asked` loads it past
+/// the soft size limit.
+fn load_patch(root: &Path, abs: &Path, rel: &str, asked: bool) -> Result<String, Notice> {
     // The path as git reads it where the repository's agents run.
     let target = crate::features::backend::there(root, abs);
     let diff = |extra: &[&str]| {
@@ -1727,13 +1899,7 @@ fn load_patch(root: &Path, abs: &Path, rel: &str) -> Result<String, Notice> {
         ));
     };
     if !patch.trim().is_empty() {
-        if patch.len() > MAX_PATCH {
-            return Err(Notice::new(
-                IconName::TriangleAlert,
-                "Diff too large",
-                human_size(patch.len() as u64),
-            ));
-        }
+        patch_fits(patch.len() as u64, asked)?;
         return Ok(patch);
     }
     let untracked = git(
@@ -1755,7 +1921,9 @@ fn load_patch(root: &Path, abs: &Path, rel: &str) -> Result<String, Notice> {
             "This file matches HEAD.",
         ));
     }
-    let (text, _) = read_text(abs)?;
+    // Its patch is the file plus a byte a line: the file's size decides.
+    patch_fits(fs::metadata(abs).map_or(0, |m| m.len()), asked)?;
+    let (text, _) = read_text(abs, true)?;
     Ok(untracked_patch(rel, &text))
 }
 
@@ -1863,8 +2031,8 @@ mod tests {
 
     use super::{
         EmbeddedImages, Outside, Rope, atomic_write, data_image, has_scheme, is_markdown,
-        line_count, local_target, looks_binary, offline_image, outside_write, parse_patch,
-        percent_decode, rope_lines, save_rope, scroll_share, status_label, untracked_patch,
+        local_target, looks_binary, offline_image, outside_write, parse_patch, percent_decode,
+        read_text, rope_lines, save_rope, scroll_share, status_label, untracked_patch,
     };
 
     fn temp_dir(tag: &str) -> PathBuf {
@@ -1936,16 +2104,44 @@ Binary files a/logo.png and b/logo.png differ
     fn text_detection() {
         assert!(looks_binary(b"PNG\0\x01"));
         assert!(!looks_binary("héllo".as_bytes()));
-        assert_eq!(line_count(""), 0);
-        assert_eq!(line_count("a"), 1);
-        assert_eq!(line_count("a\nb\n"), 2);
     }
 
     #[test]
-    fn buffer_lines_match_text_lines() {
-        for text in ["", "a", "a\n", "\n", "a\nb\n", "a\n\nb", "x\r\ny"] {
-            assert_eq!(rope_lines(&Rope::from(text)), line_count(text), "{text:?}");
+    fn buffer_lines_ignore_a_trailing_newline() {
+        for (text, lines) in [
+            ("", 0),
+            ("a", 1),
+            ("a\n", 1),
+            ("\n", 1),
+            ("a\nb\n", 2),
+            ("a\n\nb", 3),
+            ("x\r\ny", 2),
+        ] {
+            assert_eq!(rope_lines(&Rope::from(text)), lines, "{text:?}");
         }
+    }
+
+    #[test]
+    fn large_files_load_once_asked_up_to_the_hard_limit() {
+        use gentle_core::preview::FILE;
+
+        let dir = temp_dir("large");
+        let big = dir.join("big.txt");
+        fs::write(&big, "a\n".repeat(FILE.soft as usize / 2 + 1)).unwrap();
+        let notice = read_text(&big, false).unwrap_err();
+        assert!(notice.load_anyway, "{notice:?}");
+        assert_eq!(notice.size, Some(FILE.soft + 2));
+        let (text, size) = read_text(&big, true).unwrap();
+        assert_eq!((text.len() as u64, size), (FILE.soft + 2, FILE.soft + 2));
+
+        let huge = dir.join("huge.txt");
+        fs::File::create(&huge)
+            .unwrap()
+            .set_len(FILE.hard + 1)
+            .unwrap();
+        let notice = read_text(&huge, true).unwrap_err();
+        assert!(!notice.load_anyway, "{notice:?}");
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

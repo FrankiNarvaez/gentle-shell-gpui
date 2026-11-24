@@ -104,8 +104,8 @@ enum StatsSource {
     /// The app's own scan of the session files, re-aggregated per range.
     Files { data: Arc<StatsData>, offset: i64 },
     /// Gentle Shell's own aggregation for the range shown, with what it left
-    /// out. It has no cost per day.
-    Shell { notes: Vec<String> },
+    /// out. `day_cost` when its days carry their cost (5.0.0 on).
+    Shell { notes: Vec<String>, day_cost: bool },
 }
 
 /// Where Local stats come from.
@@ -605,12 +605,13 @@ impl UsageView {
         };
         let offset = self.shell_stats.offset;
         self._stats_task = cx.spawn(async move |this, cx| {
-            let (summary, notes, offset) = cx
+            let (summary, notes, day_cost, offset) = cx
                 .background_executor()
                 .spawn(async move {
                     let offset = offset.unwrap_or_else(local_offset_secs);
                     let summary = shell_stats::shell_summary(&stats, range, now_ms(), offset);
-                    (summary, shell_stats::shell_notes(&stats), offset)
+                    let day_cost = shell_stats::has_day_cost(&stats);
+                    (summary, shell_stats::shell_notes(&stats), day_cost, offset)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -619,11 +620,13 @@ impl UsageView {
                     return;
                 }
                 this.stats = StatsState::Loaded {
-                    source: StatsSource::Shell { notes },
+                    source: StatsSource::Shell { notes, day_cost },
                     summary,
                 };
-                // Gentle Shell's days carry no cost: the chart shows tokens.
-                this.metric = Metric::Tokens;
+                // An older Shell's days carry no cost: the chart shows tokens.
+                if !day_cost {
+                    this.metric = Metric::Tokens;
+                }
                 cx.notify();
             });
         });
