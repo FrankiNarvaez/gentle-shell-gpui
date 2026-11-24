@@ -103,6 +103,9 @@ pub struct SessionView {
     /// Gentle Desktop's permission-mode state on this backend (see
     /// [`state::desktop::permission`]); it borrows `desktop`'s session.
     permission: state::desktop::permission::Permission,
+    /// A `reload_credentials` sent after a sign-in, until it answers: a
+    /// failure falls back to restarting the tab.
+    credentials_reload: Option<ReadTicket>,
     transcript: Transcript,
     /// Rendered Markdown per (item, block): the state, the byte length of
     /// the shown text already pushed and how many Mermaid diagrams it showed
@@ -366,6 +369,7 @@ impl SessionView {
             session_file: None,
             title: None,
             active_shell: None,
+            credentials_reload: None,
             banner: crate::shared::banner::read_config(&pi_rpc::resolve_homes().config),
             banner_reveal: 0.0,
             _banner_anim: Task::ready(()),

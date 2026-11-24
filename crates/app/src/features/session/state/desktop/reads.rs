@@ -1,11 +1,14 @@
 //! The one-shot reads window screens make of a tab's Gentle Shell over the
 //! Desktop channel: the Sessions browser (`list_sessions`, `switch_session`),
 //! Usage › Local stats (`get_usage_stats`), Configuration's update status
-//! (`get_update_status`) and background-subagents policy
-//! (`get_background_subagents`, `set_background_subagents`). Each method is
-//! used only when `capabilities` advertises it; otherwise the screen keeps
-//! its own path (session files, the stats file scan, the npm registry, the
-//! policy files and `/gentle:background-subagents`) and nothing is sent.
+//! (`get_update_status`), background-subagents policy
+//! (`get_background_subagents`, `set_background_subagents`) and sign-ins
+//! (`get_auth_status`), and the tab's own credentials reload
+//! (`reload_credentials`). Each method is used only when `capabilities`
+//! advertises it; otherwise the caller keeps its own path (session files,
+//! the stats file scan, the npm registry, the policy files and
+//! `/gentle:background-subagents`, `auth.json`, a tab restart) and nothing is
+//! sent.
 //!
 //! Requests wait for the shared slot in a queue, like the config stores; each
 //! is answered once, as an outcome for its ticket that the screen takes.
@@ -17,10 +20,10 @@ use std::collections::VecDeque;
 
 use pi_rpc::UiRequest;
 use pi_rpc::desktop_rpc::{
-    BackgroundPolicy, BackgroundSubagents, Capabilities, DesktopErrorCode, DesktopMethod,
-    DesktopRecord, DesktopResponse, DesktopRpcError, DesktopSession, ListSessionsQuery,
-    SessionList, SessionsScope, SetBackgroundSubagentsResult, StatsRange, StatsScope,
-    SwitchSessionResult, UpdateStatus, UsageStats,
+    AuthStatus, BackgroundPolicy, BackgroundSubagents, Capabilities, DesktopErrorCode,
+    DesktopMethod, DesktopRecord, DesktopResponse, DesktopRpcError, DesktopSession,
+    ListSessionsQuery, ReloadCredentials, SessionList, SessionsScope, SetBackgroundSubagentsResult,
+    StatsRange, StatsScope, SwitchSessionResult, UpdateStatus, UsageStats,
 };
 
 use super::Send;
@@ -74,6 +77,10 @@ pub(crate) enum ReadRequest {
         policy: BackgroundPolicy,
         confirmation_token: Option<String>,
     },
+    /// Which providers this session has credentials for (status only).
+    AuthStatus,
+    /// Make this session pick up credentials added or removed elsewhere.
+    ReloadCredentials,
 }
 
 impl ReadRequest {
@@ -85,6 +92,8 @@ impl ReadRequest {
             Self::UpdateStatus { .. } => DesktopMethod::GetUpdateStatus,
             Self::BackgroundSubagents => DesktopMethod::GetBackgroundSubagents,
             Self::SetBackgroundSubagents { .. } => DesktopMethod::SetBackgroundSubagents,
+            Self::AuthStatus => DesktopMethod::GetAuthStatus,
+            Self::ReloadCredentials => DesktopMethod::ReloadCredentials,
         }
     }
 
@@ -106,6 +115,8 @@ impl ReadRequest {
                 policy,
                 confirmation_token,
             } => session.issue_set_background_subagents(*policy, confirmation_token.as_deref()),
+            Self::AuthStatus => session.issue(DesktopMethod::GetAuthStatus),
+            Self::ReloadCredentials => session.issue(DesktopMethod::ReloadCredentials),
         }
     }
 }
@@ -164,6 +175,8 @@ pub(crate) enum ReadOutcome {
     UpdateStatus(UpdateStatus),
     BackgroundSubagents(BackgroundSubagents),
     BackgroundSubagentsSet(SetBackgroundSubagentsResult),
+    AuthStatus(AuthStatus),
+    CredentialsReloaded(ReloadCredentials),
     Failed(ReadFailure),
 }
 
@@ -375,6 +388,10 @@ impl Reads {
             ReadRequest::SetBackgroundSubagents { .. } => response
                 .set_background_subagents()
                 .map(ReadOutcome::BackgroundSubagentsSet),
+            ReadRequest::AuthStatus => response.auth_status().map(ReadOutcome::AuthStatus),
+            ReadRequest::ReloadCredentials => response
+                .reload_credentials()
+                .map(ReadOutcome::CredentialsReloaded),
         };
         let outcome = match decoded {
             Ok(outcome) => outcome,
@@ -421,6 +438,8 @@ pub(in crate::features::session) fn is_read(method: DesktopMethod) -> bool {
             | DesktopMethod::GetUpdateStatus
             | DesktopMethod::GetBackgroundSubagents
             | DesktopMethod::SetBackgroundSubagents
+            | DesktopMethod::GetAuthStatus
+            | DesktopMethod::ReloadCredentials
     )
 }
 

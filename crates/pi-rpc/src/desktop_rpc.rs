@@ -101,6 +101,7 @@ macro_rules! wire_enum {
     };
 }
 
+mod auth;
 mod background;
 mod changes;
 mod output;
@@ -110,6 +111,7 @@ mod sessions;
 mod stats;
 mod updates;
 
+pub use auth::{AuthSource, AuthStatus, AuthType, ProviderAuth, ReloadCredentials};
 pub use background::{
     BackgroundCapability, BackgroundConfirmation, BackgroundPolicy, BackgroundSource,
     BackgroundSubagents, PolicyFile, SetBackgroundSubagentsOutcome, SetBackgroundSubagentsResult,
@@ -186,13 +188,15 @@ pub enum DesktopMethod {
     GetUpdateStatus,
     GetBackgroundSubagents,
     SetBackgroundSubagents,
+    GetAuthStatus,
+    ReloadCredentials,
 }
 
 impl DesktopMethod {
     /// Every method this client knows, in the order `capabilities` lists
     /// them on Gentle Shell `main`. Which ones a peer offers is only what its
     /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 26] = [
+    pub const ALL: [Self; 28] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -219,6 +223,8 @@ impl DesktopMethod {
         Self::GetUpdateStatus,
         Self::GetBackgroundSubagents,
         Self::SetBackgroundSubagents,
+        Self::GetAuthStatus,
+        Self::ReloadCredentials,
     ];
 
     /// The wire name of the method.
@@ -250,6 +256,8 @@ impl DesktopMethod {
             Self::GetUpdateStatus => "get_update_status",
             Self::GetBackgroundSubagents => "get_background_subagents",
             Self::SetBackgroundSubagents => "set_background_subagents",
+            Self::GetAuthStatus => "get_auth_status",
+            Self::ReloadCredentials => "reload_credentials",
         }
     }
 
@@ -303,6 +311,8 @@ impl DesktopMethod {
             "get_update_status" => Ok(Self::GetUpdateStatus),
             "get_background_subagents" => Ok(Self::GetBackgroundSubagents),
             "set_background_subagents" => Ok(Self::SetBackgroundSubagents),
+            "get_auth_status" => Ok(Self::GetAuthStatus),
+            "reload_credentials" => Ok(Self::ReloadCredentials),
             other => Err(DesktopRpcError::UnsupportedMethod(other.to_string())),
         }
     }
@@ -1021,6 +1031,8 @@ wire_enum! {
         UpdatesUnavailable => "updates_unavailable",
         BackgroundSubagentsBusy => "background_subagents_busy",
         BackgroundSubagentsUnavailable => "background_subagents_unavailable",
+        AuthUnavailable => "auth_unavailable",
+        ReloadFailed => "reload_failed",
         NotFound => "not_found",
         InternalError => "internal_error",
     }
@@ -1193,6 +1205,16 @@ impl DesktopResponse {
         &self,
     ) -> Result<SetBackgroundSubagentsResult, DesktopRpcError> {
         SetBackgroundSubagentsResult::from_data(self.data()?)
+    }
+
+    /// The response to `get_auth_status`.
+    pub fn auth_status(&self) -> Result<AuthStatus, DesktopRpcError> {
+        AuthStatus::from_data(self.data()?)
+    }
+
+    /// The response to `reload_credentials`.
+    pub fn reload_credentials(&self) -> Result<ReloadCredentials, DesktopRpcError> {
+        ReloadCredentials::from_data(self.data()?)
     }
 
     fn data(&self) -> Result<&Value, DesktopRpcError> {

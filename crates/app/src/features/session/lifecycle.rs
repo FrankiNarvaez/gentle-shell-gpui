@@ -10,11 +10,36 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::*;
 use pi_rpc::PiProcess;
 
+use pi_rpc::desktop_rpc::DesktopMethod;
+
 use super::SessionView;
 use super::state::BackendStatus;
 use super::state::desktop::permission::Report;
 use super::view;
+use super::{ReadFailure, ReadOutcome, ReadRequest, ReadSupport};
 use gentle_core::transcript::{NoticeLevel, Transcript};
+
+/// What a `reload_credentials` answer means for the tab.
+#[derive(Debug, PartialEq, Eq)]
+enum Settled {
+    /// The registry was rebuilt in place: re-read the models.
+    Reloaded,
+    /// The backend was replaced before it answered; it read the
+    /// credentials when it started.
+    Restarted,
+    /// Not reloaded: restart the tab, as without the method.
+    Restart,
+}
+
+fn credentials_settled(outcome: &ReadOutcome) -> Settled {
+    match outcome {
+        ReadOutcome::CredentialsReloaded(result) if result.reloaded && !result.aborted => {
+            Settled::Reloaded
+        }
+        ReadOutcome::Failed(ReadFailure::Dropped) => Settled::Restarted,
+        _ => Settled::Restart,
+    }
+}
 
 impl SessionView {
     /// Start the backend unless it was started before. Idempotent.
@@ -53,9 +78,11 @@ impl SessionView {
         });
     }
 
-    /// New credentials only reach a backend through a fresh runtime: restart
-    /// the tab, resuming its conversation (mid-turn, once the turn ends). A
-    /// tab not started yet picks them up when it starts.
+    /// Without Gentle Shell's `reload_credentials`, new credentials only
+    /// reach a backend through a fresh runtime: restart the tab, resuming its
+    /// conversation (mid-turn, once the turn ends). A tab not started yet
+    /// picks them up when it starts. Packages and the Claude bridge's plan
+    /// always need this restart.
     pub fn reload_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.backend.started {
             return;
@@ -68,6 +95,41 @@ impl SessionView {
                 window,
                 cx,
             );
+        }
+    }
+
+    /// A sign-in was saved (or removed): when this tab's Gentle Shell
+    /// advertises `reload_credentials`, it refreshes its model registry in
+    /// place (offline, mid-turn too) and the tab keeps running; otherwise,
+    /// or if that reload fails, the tab restarts as before.
+    pub fn reload_credentials(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.backend.started
+            && self.read_support(DesktopMethod::ReloadCredentials) == ReadSupport::Rpc
+            && let Ok(ticket) = self.read(ReadRequest::ReloadCredentials, cx)
+        {
+            self.credentials_reload = Some(ticket);
+            return;
+        }
+        self.reload_models(window, cx);
+    }
+
+    /// The `reload_credentials` answer, once it arrived: a reloaded
+    /// registry re-reads the models it now offers; a failure restarts the
+    /// tab. A replaced backend read the credentials when it started.
+    pub(super) fn settle_credentials(&mut self, cx: &mut Context<Self>) {
+        let Some(ticket) = self.credentials_reload else {
+            return;
+        };
+        let Some(outcome) = self.take_read(ticket) else {
+            return;
+        };
+        self.credentials_reload = None;
+        match credentials_settled(&outcome) {
+            Settled::Reloaded => self.refresh_models(cx),
+            Settled::Restarted => {}
+            Settled::Restart => {
+                self.in_window(cx, |this, window, cx| this.reload_models(window, cx))
+            }
         }
     }
 
@@ -438,10 +500,45 @@ fn mode_action(report: Option<&Report>) -> ModeAction {
 
 #[cfg(test)]
 mod tests {
-    use pi_rpc::desktop_rpc::{DesktopErrorInfo, DesktopRpcError};
+    use pi_rpc::desktop_rpc::{AuthStatus, DesktopErrorInfo, DesktopRpcError, ReloadCredentials};
 
-    use super::Report;
     use super::{ModeAction, drain_queued, mode_action};
+    use super::{ReadFailure, ReadOutcome, Report, Settled, credentials_settled};
+
+    fn reloaded(reloaded: bool, aborted: bool) -> ReadOutcome {
+        ReadOutcome::CredentialsReloaded(ReloadCredentials {
+            reloaded,
+            aborted,
+            failed_providers: Vec::new(),
+            status: AuthStatus {
+                providers: Vec::new(),
+                truncated: false,
+            },
+        })
+    }
+
+    /// Only a registry Gentle Shell rebuilt keeps the tab running; anything
+    /// else restarts it as before, except a backend already replaced.
+    #[test]
+    fn only_a_reloaded_registry_spares_the_restart() {
+        assert_eq!(
+            credentials_settled(&reloaded(true, false)),
+            Settled::Reloaded
+        );
+        assert_eq!(credentials_settled(&reloaded(true, true)), Settled::Restart);
+        assert_eq!(
+            credentials_settled(&reloaded(false, false)),
+            Settled::Restart
+        );
+        assert_eq!(
+            credentials_settled(&ReadOutcome::Failed(ReadFailure::Timeout)),
+            Settled::Restart
+        );
+        assert_eq!(
+            credentials_settled(&ReadOutcome::Failed(ReadFailure::Dropped)),
+            Settled::Restarted
+        );
+    }
 
     #[test]
     fn batches_drain_everything_queued_in_order() {

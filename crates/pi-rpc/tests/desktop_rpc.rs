@@ -3,23 +3,23 @@
 //! adapter only builds the outer prompt and decodes the widget records.
 
 use pi_rpc::desktop_rpc::{
-    ActivityState, ApplyProfileOutcome, ApplyProfileResult, BackgroundCapability,
-    BackgroundConfirmation, BackgroundPolicy, BackgroundSource, BackgroundSubagents, BannerData,
-    Capabilities, ChangeDiff, ChangeRoot, ChangeSource, ChangeStatus, ChangedFile, Changes,
-    CommandSource, ConfigChangeOrigin, ConfigChanged, ConfigErrorCode, ConfigLayer,
-    ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus, ConfigStore, ConfigWrite,
-    ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent, DesignEntry,
-    DesignTransition, DesktopAgent, DesktopAgentStep, DesktopAgentUsage, DesktopErrorCode,
-    DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord, DesktopRequest,
-    DesktopResponse, DesktopRpcError, DesktopSession, Handoff, JobExitCode, JobOutput,
-    ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT,
-    NotificationsData, PROMPT_COMMAND, PackageKind, PackageScope, PackageUpdate,
-    PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
+    ActivityState, ApplyProfileOutcome, ApplyProfileResult, AuthSource, AuthType,
+    BackgroundCapability, BackgroundConfirmation, BackgroundPolicy, BackgroundSource,
+    BackgroundSubagents, BannerData, Capabilities, ChangeDiff, ChangeRoot, ChangeSource,
+    ChangeStatus, ChangedFile, Changes, CommandSource, ConfigChangeOrigin, ConfigChanged,
+    ConfigErrorCode, ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus,
+    ConfigStore, ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas,
+    DesignCanvasEvent, DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep,
+    DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod,
+    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff,
+    JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
+    MAX_SESSIONS_LIMIT, NotificationsData, PROMPT_COMMAND, PackageKind, PackageScope,
+    PackageUpdate, PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
     PermissionModeState, PersonaMode, PiUpdate, PinSource, PolicyFile, ProfileApplied,
     ProfileApplyErrorCode, ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData,
-    ProfileNote, ProfileNoteLevel, ProfilesData, ProviderUsage, RateLimitEvent, RateLimitSource,
-    ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope, ReviewScopes, ReviewSetting,
-    ReviewSource, SCHEMA, SessionActivity, SessionChangedFile, SessionChanges,
+    ProfileNote, ProfileNoteLevel, ProfilesData, ProviderAuth, ProviderUsage, RateLimitEvent,
+    RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope, ReviewScopes,
+    ReviewSetting, ReviewSource, SCHEMA, SessionActivity, SessionChangedFile, SessionChanges,
     SessionChangesSummary, SessionCommand, SessionEntry, SessionJobs, SessionList,
     SessionPermission, SessionProject, SessionSection, SessionTodo, SessionTodoItem,
     SessionTodoProgress, SessionWorktree, SessionsScope, SetBackgroundSubagentsOutcome,
@@ -4813,7 +4813,7 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
 
 /// The `capabilities` methods of Gentle Shell `main` (0336985), as the spec
 /// and a live backend list them.
-const MAIN_METHODS: [&str; 26] = [
+const MAIN_METHODS: [&str; 28] = [
     "capabilities",
     "get_snapshot",
     "get_config",
@@ -4840,6 +4840,8 @@ const MAIN_METHODS: [&str; 26] = [
     "get_update_status",
     "get_background_subagents",
     "set_background_subagents",
+    "get_auth_status",
+    "reload_credentials",
 ];
 const MAIN_EVENTS: [&str; 9] = [
     "config_changed",
@@ -4878,7 +4880,7 @@ const RELEASE_4_8_EVENTS: [&str; 7] = [
     "profile_applied",
     "agents_update",
 ];
-const NEW_METHODS: [DesktopMethod; 12] = [
+const NEW_METHODS: [DesktopMethod; 14] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -4891,6 +4893,8 @@ const NEW_METHODS: [DesktopMethod; 12] = [
     DesktopMethod::GetUpdateStatus,
     DesktopMethod::GetBackgroundSubagents,
     DesktopMethod::SetBackgroundSubagents,
+    DesktopMethod::GetAuthStatus,
+    DesktopMethod::ReloadCredentials,
 ];
 
 fn capabilities_of(methods: &[&str], events: &[&str]) -> Capabilities {
@@ -5008,6 +5012,8 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
         DesktopMethod::GetUsageStats,
         DesktopMethod::GetUpdateStatus,
         DesktopMethod::GetBackgroundSubagents,
+        DesktopMethod::GetAuthStatus,
+        DesktopMethod::ReloadCredentials,
     ] {
         let mut session = DesktopSession::new();
         let request = session.issue(method).unwrap();
@@ -5137,6 +5143,85 @@ fn set_background_subagents_takes_two_calls_and_never_a_scope() {
         "background_subagents_unavailable".parse::<DesktopErrorCode>(),
         Ok(DesktopErrorCode::BackgroundSubagentsUnavailable)
     );
+}
+
+// --- get_auth_status and reload_credentials -------------------------------
+
+/// The doc's `get_auth_status` providers: one signed in, one without
+/// credentials.
+fn auth_providers() -> Value {
+    json!([
+        { "provider": "anthropic", "displayName": "Anthropic", "configured": true, "type": "oauth", "source": "stored" },
+        { "provider": "openai-codex", "displayName": "OpenAI Codex", "configured": false, "type": null, "source": null }
+    ])
+}
+
+#[test]
+fn get_auth_status_reports_status_never_a_value() {
+    let status = ok_response(json!({ "providers": auth_providers(), "truncated": false }))
+        .auth_status()
+        .unwrap();
+    assert_eq!(
+        status.providers[0],
+        ProviderAuth {
+            provider: "anthropic".into(),
+            display_name: "Anthropic".into(),
+            configured: true,
+            kind: Some(AuthType::OAuth),
+            source: Some(AuthSource::Stored),
+        }
+    );
+    assert_eq!(
+        status
+            .configured()
+            .map(|entry| entry.provider.as_str())
+            .collect::<Vec<_>>(),
+        ["anthropic"]
+    );
+    assert!(!status.truncated);
+    // A key from `models.json`, and one whose source Gentle Shell does not name.
+    let other = ok_response(json!({ "providers": [
+        { "provider": "groq", "displayName": "Groq", "configured": true, "type": "api_key", "source": "models_json" },
+        { "provider": "xai", "displayName": "xAI", "configured": true, "type": "api_key", "source": null }
+    ], "truncated": true }))
+    .auth_status()
+    .unwrap();
+    assert_eq!(other.providers[0].kind, Some(AuthType::ApiKey));
+    assert!(other.truncated);
+    // Credentials without a kind, or a kind without credentials, are refused.
+    for odd in [
+        json!({ "provider": "a", "displayName": "A", "configured": true, "type": null, "source": "stored" }),
+        json!({ "provider": "a", "displayName": "A", "configured": false, "type": "oauth", "source": null }),
+        json!({ "provider": "a", "displayName": "A", "configured": true, "type": "token", "source": "stored" }),
+    ] {
+        assert!(
+            ok_response(json!({ "providers": [odd], "truncated": false }))
+                .auth_status()
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn reload_credentials_answers_the_refreshed_status() {
+    let mut session = DesktopSession::new();
+    let request = session.issue(DesktopMethod::ReloadCredentials).unwrap();
+    assert_eq!(
+        request.payload(),
+        payload("desktop-1", "reload_credentials", "{}")
+    );
+    let reloaded = ok_response(json!({
+        "reloaded": true, "aborted": false, "failedProviders": ["openai-codex"],
+        "providers": auth_providers(), "truncated": false
+    }))
+    .reload_credentials()
+    .unwrap();
+    assert!(reloaded.reloaded && !reloaded.aborted);
+    assert_eq!(reloaded.failed_providers, ["openai-codex"]);
+    assert_eq!(reloaded.status.providers.len(), 2);
+    for code in ["auth_unavailable", "reload_failed"] {
+        assert!(code.parse::<DesktopErrorCode>().is_ok(), "{code}");
+    }
 }
 
 // --- get_snapshot sections and session_snapshot ---------------------------
@@ -6453,6 +6538,8 @@ fn every_documented_error_code_is_typed() {
         "updates_unavailable",
         "background_subagents_busy",
         "background_subagents_unavailable",
+        "auth_unavailable",
+        "reload_failed",
         "not_found",
         "internal_error",
     ];

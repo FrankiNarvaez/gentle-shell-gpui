@@ -33,6 +33,7 @@ mod reading_desk;
 mod runs_on;
 mod services;
 mod shell_config;
+mod sign_ins;
 mod snapshot;
 mod theme;
 mod tower;
@@ -98,6 +99,9 @@ pub struct SettingsView {
     /// Gentle Shell's settings stores (persona, banner, notifications) as
     /// the active agent tab's Shell reports them, when it serves them.
     shell_config: shell_config::ShellConfig,
+    /// Which providers have credentials, as the active agent tab's Shell's
+    /// model registry reports them, when it serves `get_auth_status`.
+    sign_ins: sign_ins::SignIns,
     /// Where agents run: this computer, a WSL distro or a command.
     runs_on: runs_on::RunsOn,
 }
@@ -169,6 +173,7 @@ impl SettingsView {
             session,
             shell_updates: upgrade::ShellUpdates::default(),
             shell_config: shell_config::ShellConfig::default(),
+            sign_ins: sign_ins::SignIns::default(),
             runs_on: runs_on::RunsOn::new(window, cx),
         };
         this.reload(cx);
@@ -211,6 +216,7 @@ impl SettingsView {
         self.update_status_changed(cx);
         self.shell_config_changed(cx);
         self.background_changed(cx);
+        self.sign_ins_changed(cx);
     }
 
     /// Show what the active tab's Gentle Shell reported over what the files
@@ -234,20 +240,26 @@ impl SettingsView {
                 snapshot.background_subagents =
                     background::BackgroundPolicy::from_shell(state, project_file);
             }
+            if let Some(status) = &self.sign_ins.status {
+                snapshot.sign_ins = sign_ins::sign_ins_of(status);
+            }
         }
+        self.adopt_sign_ins(cx);
         cx.notify();
     }
 
     /// Prefer update information from the active agent's Desktop RPC.
     /// Fall back to the existing launcher/registry path when unavailable.
-    /// The settings stores and the background-subagents policy are asked of
-    /// it too; the files fill in whatever it does not serve.
+    /// The settings stores, the background-subagents policy and the
+    /// sign-ins are asked of it too; the files fill in whatever it does not
+    /// serve.
     fn reload_with(&mut self, refresh_updates: bool, cx: &mut Context<Self>) {
         let shell_updates = self.ask_update_status(refresh_updates, cx);
         if !shell_updates {
             self.shell_updates.status = None;
         }
         self.ask_shell_config(cx);
+        self.ask_sign_ins(cx);
         self.ask_background(cx);
         let cwd = self.cwd.clone();
         self._load = cx.spawn(async move |this, cx| {

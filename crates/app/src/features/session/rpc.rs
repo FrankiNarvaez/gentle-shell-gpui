@@ -587,7 +587,9 @@ impl SessionView {
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
             | DesktopMethod::GetBackgroundSubagents
-            | DesktopMethod::SetBackgroundSubagents => {
+            | DesktopMethod::SetBackgroundSubagents
+            | DesktopMethod::GetAuthStatus
+            | DesktopMethod::ReloadCredentials => {
                 let applied = self.desktop.reads_expire(generation);
                 self.apply_reads(applied, cx);
             }
@@ -656,7 +658,9 @@ impl SessionView {
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
             | DesktopMethod::GetBackgroundSubagents
-            | DesktopMethod::SetBackgroundSubagents => {
+            | DesktopMethod::SetBackgroundSubagents
+            | DesktopMethod::GetAuthStatus
+            | DesktopMethod::ReloadCredentials => {
                 let applied = self.desktop.reads_outer(generation, handled);
                 self.apply_reads(applied, cx);
             }
@@ -707,16 +711,8 @@ impl SessionView {
         });
     }
 
-    pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
-        self.request(json!({"type": "get_state"}), cx, |this, result, _| {
-            if let Some(state) = this.report(result) {
-                this.models.current = ModelInfo::parse(&state["model"]);
-                this.models.thinking = state["thinkingLevel"].as_str().unwrap_or("off").to_string();
-                this.session_name = state["sessionName"].as_str().map(str::to_string);
-                this.session_file = state["sessionFile"].as_str().map(PathBuf::from);
-                this.usage.auto_compaction = state["autoCompactionEnabled"].as_bool();
-            }
-        });
+    /// Pi's models with usable credentials (`get_available_models`).
+    pub(super) fn refresh_models(&mut self, cx: &mut Context<Self>) {
         self.request(
             json!({"type": "get_available_models"}),
             cx,
@@ -733,6 +729,19 @@ impl SessionView {
                 }
             },
         );
+    }
+
+    pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
+        self.request(json!({"type": "get_state"}), cx, |this, result, _| {
+            if let Some(state) = this.report(result) {
+                this.models.current = ModelInfo::parse(&state["model"]);
+                this.models.thinking = state["thinkingLevel"].as_str().unwrap_or("off").to_string();
+                this.session_name = state["sessionName"].as_str().map(str::to_string);
+                this.session_file = state["sessionFile"].as_str().map(PathBuf::from);
+                this.usage.auto_compaction = state["autoCompactionEnabled"].as_bool();
+            }
+        });
+        self.refresh_models(cx);
         self.refresh_thinking_levels(cx);
         self.refresh_commands(cx);
         self.request(json!({"type": "get_messages"}), cx, |this, result, _| {
