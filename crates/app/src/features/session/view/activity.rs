@@ -147,18 +147,26 @@ impl SessionView {
             });
 
         let width = self.pane_width.get();
+        // Only what needs you shows by itself; the rest waits one hover away.
+        // Extension statuses (a server's state) fold into one quiet chip, as
+        // do the plan limits until one runs high; tiny panes fold every
+        // limit. Engram's status is the exception: its brain opens the
+        // Memory screen on what it names (folded too in tiny panes).
+        let collapse = width < f32::from(rems(TINY / 16.).to_pixels(rem_size));
+        let memory = self
+            .extension
+            .statuses
+            .get("engram")
+            .filter(|_| !collapse)
+            .and_then(|s| Some((s.clone(), gentle_core::engram::status_target(s)?)));
         let statuses: Vec<(String, String)> = self
             .extension
             .statuses
             .iter()
             .filter(|(k, _)| !matches!(k.as_str(), "gentle:mode" | "gentle:yolo" | "gentle-jobs"))
+            .filter(|(k, _)| memory.is_none() || k.as_str() != "engram")
             .map(|(k, s)| (k.clone(), s.clone()))
             .collect();
-        // Only what needs you shows by itself; the rest waits one hover away.
-        // Extension statuses (a memory's "ready", a server's state) fold into
-        // one quiet chip, as do the plan limits until one runs high; tiny
-        // panes fold every limit.
-        let collapse = width < f32::from(rems(TINY / 16.).to_pixels(rem_size));
         let limit_color = |percent: u32| {
             use gentle_core::usage::subscription::LimitTone;
             match gentle_core::usage::subscription::limit_tone(f64::from(percent)) {
@@ -215,6 +223,11 @@ impl SessionView {
             // opens the review.
             .when(!collapse, |this| {
                 this.children(self.render_changes_button(cx))
+            })
+            // Engram's status: a brain (and the memory it just touched); a
+            // click opens Memory on that project and memory.
+            .when_some(memory, |this, (status, target)| {
+                this.child(render_memory_button(status, target, cx))
             })
             .when(self.activity.queued > 0, |this| {
                 this.child(ui::chip(
@@ -620,6 +633,48 @@ impl SessionView {
             },
         ))
     }
+}
+
+/// gentle-engram's status as a button in the changes button's look: the
+/// brain, `#id` once the status names a memory (saved, updated, read,
+/// reviewed); the status itself and what opens in the tooltip.
+fn render_memory_button(
+    status: String,
+    target: gentle_core::engram::MemoryTarget,
+    cx: &mut Context<SessionView>,
+) -> impl IntoElement + use<> {
+    let opens = match (target.observation, &target.project) {
+        (Some(id), _) => format!("Open memory #{id}"),
+        (None, Some(project)) => format!("Open {project}'s memories"),
+        (None, None) => "Open Memory".to_string(),
+    };
+    let tip = format!("{status}\n{opens}");
+    h_flex()
+        .id("engram-memory")
+        .flex_none()
+        // The box of an xsmall ghost button, as its neighbours.
+        .h_5()
+        .px_1()
+        .gap_0p5()
+        .rounded_md()
+        .cursor_pointer()
+        .text_color(ui::faint())
+        .hover(|s| s.text_color(ui::muted()).bg(ui::surface_hover()))
+        .child(Icon::new(IconName::Brain).xsmall())
+        .when_some(target.observation, |this, id| {
+            this.child(
+                div()
+                    .font_family(ui::mono())
+                    .text_size(ui::code_rems(10.5))
+                    .child(format!("#{id}")),
+            )
+        })
+        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+        .on_click(cx.listener(move |_, _, _, cx| {
+            cx.emit(crate::features::session::SessionEvent::OpenMemory(
+                target.clone(),
+            ))
+        }))
 }
 
 /// An extra control at a chip card header's right side (where the count

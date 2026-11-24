@@ -1,5 +1,6 @@
-//! The sidebar's Changes tab, after Tern: the working tree split into
-//! Unstaged and Staged (checkbox per file to move it across), a list or
+//! The sidebar's Changes tab, after Tern: the working tree in three groups,
+//! Staged first, then Unstaged (tracked files' edits) and Untracked, each
+//! with its count and a checkbox per file to move it across; a list or
 //! by-folder view, stash, and a commit box whose message Gentle Shell can
 //! write from the staged diff.
 
@@ -24,7 +25,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use super::status_color;
-use crate::features::git::{self, EntryKind, StatusEntry, WorkTree};
+use crate::features::git::{self, ChangeGroup, EntryKind, StatusEntry, WorkTree};
 use crate::shared::ui;
 
 const POLL: Duration = Duration::from_secs(3);
@@ -76,12 +77,6 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Side {
-    Unstaged,
-    Staged,
-}
-
 #[derive(Clone, PartialEq)]
 struct Repo {
     /// Status paths are relative to this, not to the sidebar's root.
@@ -106,18 +101,17 @@ impl Repo {
 /// One row of the virtualized list; every kind is [`ROW_HEIGHT`] tall.
 enum Line {
     Header {
-        side: Side,
+        group: ChangeGroup,
         count: usize,
     },
-    Untracked(usize),
     Dir {
-        side: Side,
+        group: ChangeGroup,
         dir: String,
         count: usize,
         collapsed: bool,
     },
     Entry {
-        side: Side,
+        group: ChangeGroup,
         /// Index into the work tree's entries.
         entry: usize,
         badge: char,
@@ -131,8 +125,9 @@ pub struct ChangesView {
     /// `None` until the first read, `Some(None)` outside a git work tree.
     repo: Option<Option<Repo>>,
     tree_mode: bool,
-    collapsed: HashSet<(Side, String)>,
-    selected: Option<(Side, String)>,
+    /// Folders folded in the by-folder view, per group.
+    collapsed: HashSet<(ChangeGroup, String)>,
+    selected: Option<(ChangeGroup, String)>,
     /// The list's rows, rebuilt when the tree, mode or collapsed folders change.
     lines: Rc<Vec<Line>>,
     scroll: UniformListScrollHandle,
@@ -174,7 +169,7 @@ impl ChangesView {
         let stash_message =
             cx.new(|cx| InputState::new(window, cx).placeholder("Message (optional)"));
         let focus = cx.focus_handle();
-        // The primary button reads "Generate message" until a summary exists.
+        // The primary button reads "Generate" until a summary exists.
         let subscriptions = vec![cx.subscribe(&summary, |_, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 cx.notify();
@@ -304,71 +299,49 @@ impl ChangesView {
             .filter(|(_, path)| tree.entries.iter().any(|e| e.path == *path))
             .or_else(|| {
                 self.lines.iter().find_map(|line| match line {
-                    Line::Entry { side, entry, .. } => {
-                        Some((*side, tree.entries.get(*entry)?.path.clone()))
+                    Line::Entry { group, entry, .. } => {
+                        Some((*group, tree.entries.get(*entry)?.path.clone()))
                     }
                     _ => None,
                 })
             });
-        if let Some((side, path)) = target {
-            self.click_entry(&path, side, cx);
+        if let Some((group, path)) = target {
+            self.click_entry(&path, group, cx);
         }
     }
 
-    /// Rebuild the flat row model: per side a header, the untracked count,
-    /// then the entries (grouped under folder rows in the by-folder view).
+    /// Rebuild the flat row model: per group (Staged, Unstaged, Untracked) a
+    /// header with its count, then its entries (under folder rows of its own
+    /// in the by-folder view).
     fn relayout(&mut self) {
         let mut lines = Vec::new();
         if let Some(tree) = self.tree() {
-            let untracked = tree
-                .entries
-                .iter()
-                .filter(|e| e.kind == EntryKind::Untracked)
-                .count();
-            for side in [Side::Unstaged, Side::Staged] {
-                let entries: Vec<(usize, char)> = tree
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, e)| {
-                        match side {
-                            Side::Unstaged => e.unstaged(),
-                            Side::Staged => e.staged(),
-                        }
-                        .map(|badge| (i, badge))
-                    })
-                    .collect();
-                if entries.is_empty() {
-                    continue;
-                }
+            for (group, entries) in git::change_groups(&tree.entries) {
                 lines.push(Line::Header {
-                    side,
+                    group,
                     count: entries.len(),
                 });
-                if side == Side::Unstaged && untracked > 0 {
-                    lines.push(Line::Untracked(untracked));
-                }
                 if !self.tree_mode {
                     lines.extend(entries.into_iter().map(|(entry, badge)| Line::Entry {
-                        side,
+                        group,
                         entry,
                         badge,
                         nested: false,
                     }));
                     continue;
                 }
-                let mut groups: BTreeMap<&str, Vec<(usize, char)>> = BTreeMap::new();
+                let mut folders: BTreeMap<&str, Vec<(usize, char)>> = BTreeMap::new();
                 for (entry, badge) in entries {
                     let path = &tree.entries[entry].path;
                     let dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
-                    groups.entry(dir).or_default().push((entry, badge));
+                    folders.entry(dir).or_default().push((entry, badge));
                 }
-                for (dir, files) in groups {
+                for (dir, files) in folders {
                     let nested = !dir.is_empty();
                     if nested {
-                        let collapsed = self.collapsed.contains(&(side, dir.to_string()));
+                        let collapsed = self.collapsed.contains(&(group, dir.to_string()));
                         lines.push(Line::Dir {
-                            side,
+                            group,
                             dir: dir.to_string(),
                             count: files.len(),
                             collapsed,
@@ -378,7 +351,7 @@ impl ChangesView {
                         }
                     }
                     lines.extend(files.into_iter().map(|(entry, badge)| Line::Entry {
-                        side,
+                        group,
                         entry,
                         badge,
                         nested,
@@ -418,21 +391,23 @@ impl ChangesView {
         .detach();
     }
 
-    fn toggle(&mut self, entry: &StatusEntry, side: Side, cx: &mut Context<Self>) {
+    fn toggle(&mut self, entry: &StatusEntry, group: ChangeGroup, cx: &mut Context<Self>) {
         let mut paths = vec![entry.path.clone()];
         // Unstaging a rename has to bring its source back to the index too.
         paths.extend(entry.orig.clone());
-        match side {
-            Side::Unstaged => self.git_op(move |top| git::stage(top, &paths), cx),
-            Side::Staged => self.git_op(move |top| git::unstage(top, &paths), cx),
+        match group {
+            ChangeGroup::Unstaged | ChangeGroup::Untracked => {
+                self.git_op(move |top| git::stage(top, &paths), cx)
+            }
+            ChangeGroup::Staged => self.git_op(move |top| git::unstage(top, &paths), cx),
         }
     }
 
-    fn click_entry(&mut self, path: &str, side: Side, cx: &mut Context<Self>) {
+    fn click_entry(&mut self, path: &str, group: ChangeGroup, cx: &mut Context<Self>) {
         let Some(toplevel) = self.toplevel() else {
             return;
         };
-        self.selected = Some((side, path.to_string()));
+        self.selected = Some((group, path.to_string()));
         cx.emit(ChangesEvent::OpenDiff(toplevel.join(path)));
         cx.notify();
     }
@@ -447,25 +422,27 @@ impl ChangesView {
     }
 
     fn selected_index(&self) -> Option<usize> {
-        let (side, path) = self.selected.as_ref()?;
+        let (group, path) = self.selected.as_ref()?;
         self.lines.iter().position(|line| match line {
-            Line::Entry { side: s, entry, .. } => self
+            Line::Entry {
+                group: g, entry, ..
+            } => self
                 .tree()
                 .and_then(|tree| tree.entries.get(*entry))
-                .is_some_and(|e| *s == *side && e.path == *path),
+                .is_some_and(|e| g == group && e.path == *path),
             _ => false,
         })
     }
 
     fn select_index(&mut self, ix: usize, cx: &mut Context<Self>) {
-        let Some(Line::Entry { side, entry, .. }) = self.lines.get(ix) else {
+        let Some(Line::Entry { group, entry, .. }) = self.lines.get(ix) else {
             return;
         };
         let Some(tree) = self.tree() else { return };
         let Some(entry) = tree.entries.get(*entry) else {
             return;
         };
-        self.selected = Some((*side, entry.path.clone()));
+        self.selected = Some((*group, entry.path.clone()));
         self.scroll.scroll_to_item(ix, ScrollStrategy::Nearest);
         cx.notify();
     }
@@ -497,14 +474,14 @@ impl ChangesView {
     }
 
     fn open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
-        let Some((side, path)) = self.selected.clone() else {
+        let Some((group, path)) = self.selected.clone() else {
             return;
         };
-        self.click_entry(&path, side, cx);
+        self.click_entry(&path, group, cx);
     }
 
     fn toggle_selected(&mut self, _: &ToggleSelected, _: &mut Window, cx: &mut Context<Self>) {
-        let Some((side, path)) = self.selected.clone() else {
+        let Some((group, path)) = self.selected.clone() else {
             return;
         };
         let Some(entry) = self
@@ -514,14 +491,15 @@ impl ChangesView {
         else {
             return;
         };
-        self.toggle(&entry, side, cx);
+        self.toggle(&entry, group, cx);
     }
 
+    /// `s` stages the selected entry; untracked files count as unstaged.
     fn stage_selected(&mut self, _: &StageSelected, _: &mut Window, cx: &mut Context<Self>) {
-        let Some((side, path)) = self.selected.clone() else {
+        let Some((group, path)) = self.selected.clone() else {
             return;
         };
-        if side != Side::Unstaged {
+        if group == ChangeGroup::Staged {
             return;
         }
         let Some(entry) = self
@@ -531,14 +509,15 @@ impl ChangesView {
         else {
             return;
         };
-        self.toggle(&entry, side, cx);
+        self.toggle(&entry, group, cx);
     }
 
+    /// `u` unstages the selected entry; only staged entries can be unstaged.
     fn unstage_selected(&mut self, _: &UnstageSelected, _: &mut Window, cx: &mut Context<Self>) {
-        let Some((side, path)) = self.selected.clone() else {
+        let Some((group, path)) = self.selected.clone() else {
             return;
         };
-        if side != Side::Staged {
+        if group != ChangeGroup::Staged {
             return;
         }
         let Some(entry) = self
@@ -548,13 +527,13 @@ impl ChangesView {
         else {
             return;
         };
-        self.toggle(&entry, side, cx);
+        self.toggle(&entry, group, cx);
     }
 
     fn confirm_discard(
         &mut self,
         entry: StatusEntry,
-        side: Side,
+        group: ChangeGroup,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -565,11 +544,15 @@ impl ChangesView {
             .unwrap_or(&entry.path)
             .to_string();
         let title = format!("Discard changes to \u{201c}{name}\u{201d}?");
-        let description = match (side, entry.kind, entry.index) {
-            (Side::Unstaged, EntryKind::Untracked, _) => "The untracked file is deleted.",
-            (Side::Unstaged, _, _) => "Unstaged edits go back to the staged version.",
-            (Side::Staged, _, 'A' | 'C') => "The new file is removed from the index and deleted.",
-            (Side::Staged, _, _) => "The file goes back to the last commit, staged edits included.",
+        let description = match (group, entry.index) {
+            (ChangeGroup::Untracked, _) => "The untracked file is deleted.",
+            (ChangeGroup::Unstaged, _) => "Unstaged edits go back to the staged version.",
+            (ChangeGroup::Staged, 'A' | 'C') => {
+                "The new file is removed from the index and deleted."
+            }
+            (ChangeGroup::Staged, _) => {
+                "The file goes back to the last commit, staged edits included."
+            }
         };
         let description = format!("{description} This can't be undone.");
         let this = cx.entity().downgrade();
@@ -583,7 +566,7 @@ impl ChangesView {
                 .show_cancel(true)
                 .on_ok(move |_, _, cx| {
                     let entry = entry.clone();
-                    let staged = side == Side::Staged;
+                    let staged = group == ChangeGroup::Staged;
                     let _ = this.update(cx, |this, cx| {
                         this.git_op(move |top| git::discard(top, &entry, staged), cx)
                     });
@@ -836,14 +819,32 @@ impl ChangesView {
             )
     }
 
-    fn render_section_header(&self, side: Side, count: usize, cx: &mut Context<Self>) -> Div {
-        let (label, action, id) = match side {
-            Side::Unstaged => ("Unstaged", "Stage all", "changes-stage-all"),
-            Side::Staged => ("Staged", "Unstage all", "changes-unstage-all"),
+    fn render_section_header(
+        &self,
+        group: ChangeGroup,
+        count: usize,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let (label, action, id) = match group {
+            ChangeGroup::Staged => ("Staged", "Unstage all", "changes-unstage-all"),
+            ChangeGroup::Unstaged => ("Unstaged", "Stage all", "changes-stage-all"),
+            ChangeGroup::Untracked => ("Untracked", "Stage all", "changes-stage-untracked"),
         };
-        let all = move |this: &mut Self, cx: &mut Context<Self>| match side {
-            Side::Unstaged => this.git_op(git::stage_all, cx),
-            Side::Staged => this.git_op(git::unstage_all, cx),
+        let all = move |this: &mut Self, cx: &mut Context<Self>| match group {
+            ChangeGroup::Staged => this.git_op(git::unstage_all, cx),
+            ChangeGroup::Unstaged => this.git_op(git::stage_tracked, cx),
+            ChangeGroup::Untracked => {
+                let paths: Vec<String> = this.tree().map_or_else(Vec::new, |tree| {
+                    tree.entries
+                        .iter()
+                        .filter(|e| e.kind == EntryKind::Untracked)
+                        .map(|e| e.path.clone())
+                        .collect()
+                });
+                if !paths.is_empty() {
+                    this.git_op(move |top| git::stage(top, &paths), cx);
+                }
+            }
         };
         let weak = cx.entity().downgrade();
         h_flex()
@@ -853,7 +854,7 @@ impl ChangesView {
             .child(
                 Checkbox::new(SharedString::from(format!("{id}-check")))
                     .small()
-                    .checked(side == Side::Staged)
+                    .checked(group == ChangeGroup::Staged)
                     .tooltip(action)
                     .on_click(move |_, _, cx| {
                         let _ = weak.update(cx, |this, cx| all(this, cx));
@@ -886,45 +887,28 @@ impl ChangesView {
             )
     }
 
-    fn render_untracked(count: usize) -> Div {
-        h_flex()
-            .h(rems(ROW_HEIGHT / 16.))
-            .px_3()
-            .gap_1()
-            .text_size(rems(12. / 16.))
-            .child(
-                div()
-                    .font_family(ui::mono())
-                    .text_size(ui::code_rems(12.))
-                    .text_color(ui::success())
-                    .child(count.to_string()),
-            )
-            .child(div().text_color(ui::muted()).child("untracked"))
-    }
-
     fn render_line(&self, line: &Line, cx: &mut Context<Self>) -> AnyElement {
         match line {
-            Line::Header { side, count } => self
-                .render_section_header(*side, *count, cx)
+            Line::Header { group, count } => self
+                .render_section_header(*group, *count, cx)
                 .into_any_element(),
-            Line::Untracked(count) => Self::render_untracked(*count).into_any_element(),
             Line::Dir {
-                side,
+                group,
                 dir,
                 count,
                 collapsed,
             } => self
-                .render_dir(*side, dir, *count, *collapsed, cx)
+                .render_dir(*group, dir, *count, *collapsed, cx)
                 .into_any_element(),
             Line::Entry {
-                side,
+                group,
                 entry,
                 badge,
                 nested,
             } => match self.tree().and_then(|tree| tree.entries.get(*entry)) {
                 Some(status) => {
                     let indent = if *nested { 18. } else { 0. };
-                    self.render_entry(status, *side, *badge, indent, cx)
+                    self.render_entry(status, *group, *badge, indent, cx)
                 }
                 None => div().h(rems(ROW_HEIGHT / 16.)).into_any_element(),
             },
@@ -933,15 +917,15 @@ impl ChangesView {
 
     fn render_dir(
         &self,
-        side: Side,
+        group: ChangeGroup,
         dir: &str,
         count: usize,
         collapsed: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let key = (side, dir.to_string());
+        let key = (group, dir.to_string());
         h_flex()
-            .id(SharedString::from(format!("changes-dir-{side:?}-{dir}")))
+            .id(SharedString::from(format!("changes-dir-{group:?}-{dir}")))
             .h(rems(ROW_HEIGHT / 16.))
             .mx_1p5()
             .px_1p5()
@@ -995,7 +979,7 @@ impl ChangesView {
     fn render_entry(
         &self,
         entry: &StatusEntry,
-        side: Side,
+        group: ChangeGroup,
         badge: char,
         indent: f32,
         cx: &mut Context<Self>,
@@ -1003,7 +987,7 @@ impl ChangesView {
         let selected = self
             .selected
             .as_ref()
-            .is_some_and(|(s, path)| *s == side && *path == entry.path);
+            .is_some_and(|(g, path)| *g == group && *path == entry.path);
         // The name first, always whole; its folder after it, quieter, giving
         // way from its start so the part nearest the file stays readable.
         let (dir, name) = match entry.path.rsplit_once('/') {
@@ -1012,12 +996,12 @@ impl ChangesView {
             None => (String::new(), entry.path.clone()),
         };
         let deleted = badge == 'D';
-        let lines = match side {
-            Side::Unstaged => entry.unstaged_lines,
-            Side::Staged => entry.staged_lines,
+        let lines = match group {
+            ChangeGroup::Staged => entry.staged_lines,
+            ChangeGroup::Unstaged | ChangeGroup::Untracked => entry.unstaged_lines,
         }
         .filter(|&(added, removed)| added + removed > 0);
-        let id = format!("change-{side:?}-{}", entry.path);
+        let id = format!("change-{group:?}-{}", entry.path);
         let weak = cx.entity().downgrade();
         let check = {
             let (weak, entry) = (weak.clone(), entry.clone());
@@ -1029,9 +1013,9 @@ impl ChangesView {
                 .child(
                     Checkbox::new(SharedString::from(format!("{id}-check")))
                         .small()
-                        .checked(side == Side::Staged)
+                        .checked(group == ChangeGroup::Staged)
                         .on_click(move |_, _, cx| {
-                            let _ = weak.update(cx, |this, cx| this.toggle(&entry, side, cx));
+                            let _ = weak.update(cx, |this, cx| this.toggle(&entry, group, cx));
                         }),
                 )
         };
@@ -1102,11 +1086,13 @@ impl ChangesView {
                         }),
                 )
             })
-            .on_click(cx.listener(move |this, _, _, cx| this.click_entry(&path, side, cx)))
+            .on_click(cx.listener(move |this, _, _, cx| this.click_entry(&path, group, cx)))
             .context_menu(move |menu, _, _| {
                 let entry = menu_entry.clone();
-                let deleted = side == Side::Unstaged && entry.worktree == 'D'
-                    || side == Side::Staged && entry.index == 'D';
+                let deleted = match group {
+                    ChangeGroup::Staged => entry.index == 'D',
+                    ChangeGroup::Unstaged | ChangeGroup::Untracked => entry.worktree == 'D',
+                };
                 let open = {
                     let (weak, path) = (weak.clone(), entry.path.clone());
                     move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
@@ -1121,14 +1107,15 @@ impl ChangesView {
                     let (weak, entry) = (weak.clone(), entry.clone());
                     move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                         let entry = entry.clone();
-                        let _ = weak
-                            .update(cx, |this, cx| this.confirm_discard(entry, side, window, cx));
+                        let _ = weak.update(cx, |this, cx| {
+                            this.confirm_discard(entry, group, window, cx)
+                        });
                     }
                 };
                 let toggle = {
                     let (weak, entry) = (weak.clone(), entry.clone());
                     move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-                        let _ = weak.update(cx, |this, cx| this.toggle(&entry, side, cx));
+                        let _ = weak.update(cx, |this, cx| this.toggle(&entry, group, cx));
                     }
                 };
                 menu.item(
@@ -1138,13 +1125,13 @@ impl ChangesView {
                         .on_click(open),
                 )
                 .item(
-                    PopupMenuItem::new(match side {
-                        Side::Unstaged => "Stage",
-                        Side::Staged => "Unstage",
+                    PopupMenuItem::new(match group {
+                        ChangeGroup::Staged => "Unstage",
+                        ChangeGroup::Unstaged | ChangeGroup::Untracked => "Stage",
                     })
-                    .icon(Icon::new(match side {
-                        Side::Unstaged => IconName::Plus,
-                        Side::Staged => IconName::Minus,
+                    .icon(Icon::new(match group {
+                        ChangeGroup::Staged => IconName::Minus,
+                        ChangeGroup::Unstaged | ChangeGroup::Untracked => IconName::Plus,
                     }))
                     .on_click(toggle),
                 )
@@ -1198,7 +1185,13 @@ impl ChangesView {
             .tree()
             .is_some_and(|t| t.entries.iter().any(|e| e.staged().is_some()));
         let writes = self.summary_text(cx).is_empty() && !self.amend;
-        let primary_label = if writes { "Generate message" } else { "Commit" };
+        // "Generate" alone keeps the footer inside the sidebar; the tooltip
+        // and the menu spell out "Generate message".
+        let (primary_label, primary_tip) = if writes {
+            ("Generate", "Generate message")
+        } else {
+            ("Commit", "Commit")
+        };
         let working = self.busy.is_some() || self.generating;
         let weak = cx.entity().downgrade();
         v_flex()
@@ -1224,8 +1217,13 @@ impl ChangesView {
                     .text_color(ui::muted())
                     .child(Textarea::new(&self.description).appearance(false)),
             )
+            // The sidebar is narrower than the row's full labels: "Write it"
+            // is the sparkles icon (its tooltip says what it does), the
+            // primary reads "Generate", and the labelled controls may shrink,
+            // ending in an ellipsis, so nothing spills past the panel's edge.
             .child(
                 h_flex()
+                    .min_w_0()
                     .pt_1()
                     .gap_1()
                     .child(
@@ -1233,7 +1231,6 @@ impl ChangesView {
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::Sparkles))
-                            .label("Write it")
                             .loading(self.generating)
                             .disabled(!ready || working || !staged)
                             .tooltip("Write the message from the staged diff with Gentle Shell")
@@ -1244,6 +1241,8 @@ impl ChangesView {
                             .ghost()
                             .xsmall()
                             .label("Amend")
+                            .min_w_0()
+                            .flex_shrink(1.)
                             .selected(self.amend)
                             .disabled(!ready || working)
                             .tooltip("Rewrite the last commit instead of making a new one")
@@ -1251,25 +1250,25 @@ impl ChangesView {
                                 cx.listener(|this, _, window, cx| this.toggle_amend(window, cx)),
                             ),
                     )
-                    .child(div().flex_1())
-                    .when_some(self.busy, |d, busy| {
-                        d.child(
-                            h_flex()
-                                .gap_1p5()
-                                .text_size(rems(11.5 / 16.))
-                                .text_color(ui::muted())
-                                .child(Spinner::new().xsmall().color(ui::accent()))
-                                .child(busy),
-                        )
-                    })
-                    .when(self.generating, |d| {
-                        d.child(
-                            div()
-                                .text_size(rems(11.5 / 16.))
-                                .text_color(ui::muted())
-                                .child("Writing…"),
-                        )
-                    })
+                    // The status fills only the space the buttons leave, so it
+                    // is what truncates first.
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .justify_end()
+                            .gap_1p5()
+                            .text_size(rems(11.5 / 16.))
+                            .text_color(ui::muted())
+                            .when_some(self.busy, |d, busy| {
+                                d.child(Spinner::new().xsmall().color(ui::accent()))
+                                    .child(div().min_w_0().truncate().child(busy))
+                            })
+                            .when(self.generating, |d| {
+                                d.child(div().min_w_0().truncate().child("Writing…"))
+                            }),
+                    )
                     // Secondary actions on the left, the primary last on the
                     // right (the design system's footer), its key in the
                     // tooltip rather than a cap on the button.
@@ -1277,11 +1276,15 @@ impl ChangesView {
                         DropdownButton::new("changes-commit")
                             .primary()
                             .small()
+                            .min_w_0()
+                            .flex_shrink(1.)
                             .disabled(!ready || working)
                             .button(
                                 Button::new("changes-commit-main")
                                     .label(primary_label)
-                                    .tooltip(format!("{primary_label} ({})", ui::shortcut("↵")))
+                                    .min_w_0()
+                                    .flex_shrink(1.)
+                                    .tooltip(format!("{primary_tip} ({})", ui::shortcut("↵")))
                                     .on_click(
                                         cx.listener(|this, _, window, cx| this.primary(window, cx)),
                                     ),

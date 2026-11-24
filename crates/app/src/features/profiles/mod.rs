@@ -17,14 +17,17 @@
 //! When the tab's Gentle Shell serves its config over Desktop RPC
 //! (`get_config`/`set_config`), the `profiles`, `profile_fallbacks` and
 //! `pins` stores are read and written through it by name ([`Backend::Rpc`]),
-//! and `models`, `subagents` and `managed_assets` are shown read-only. The
-//! files are written directly only when the Shell confirms it lacks those
-//! methods. When the Shell also advertises `apply_profile`, Make default and
-//! Use in this session are its own `/gentle:profiles` actions: the screen
-//! saves the draft, sends the request, and shows the Shell's confirmation
-//! and notes. An older Shell keeps the screen's own Make default (routing
+//! and `models`, `subagents` and `managed_assets` are shown read-only;
+//! publishing to the repository is its `repo` pin layer. The files are
+//! written directly only when the Shell confirms it lacks those methods.
+//! When the Shell also advertises `apply_profile`, Make default and Use in
+//! this session are its own `/gentle:profiles` actions: the screen saves the
+//! draft, sends the request, and shows the Shell's confirmation and notes.
+//! An older Shell keeps the screen's own Make default (routing
 //! materialization and Pi's settings on the files) and its `set_model`
-//! switch.
+//! switch. `list_agent_definitions` gives the agent list and Pi's default
+//! orchestrator, and `clear_profile_binding` clears the session binding,
+//! each only where advertised.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -36,9 +39,9 @@ use gentle_core::profiles::{
 };
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
-use pi_rpc::desktop_rpc::{ConfigStore, ConfigWrite, SetConfigResult};
+use pi_rpc::desktop_rpc::{ConfigStore, ConfigWrite, DesktopMethod, SetConfigResult};
 
-use crate::features::session::SessionView;
+use crate::features::session::{ReadOutcome, ReadRequest, ReadSupport, ReadTicket, SessionView};
 
 mod actions;
 mod apply;
@@ -56,8 +59,11 @@ pub(crate) use env::{
 pub use gentle_core::profiles::ModelChoice;
 
 use apply::DefaultPlan;
-use env::{ConfigPort, Env, Landed, Remote, SCREEN_STORES, discover_agents};
-use files::{Loaded, RpcLoad, load_screen, profiles_write, read_orchestrator_settings, rpc_load};
+use env::{ConfigPort, Env, Landed, Remote, SCREEN_STORES, discover_agents, uncovered_agents};
+use files::{
+    Loaded, RpcLoad, load_screen, orchestrator_route, profiles_write, read_orchestrator_settings,
+    reported_names, rpc_load,
+};
 
 /// How long the screen waits for the tab's Shell to report whether it serves
 /// the config stores before saying so instead of spinning.
@@ -181,8 +187,14 @@ pub struct ProfilesView {
     session: Option<Entity<SessionView>>,
     backend: Backend,
     /// The agent names and Pi's default were read (they are not config
-    /// stores, so they come from the files on either path).
+    /// stores: Gentle Shell's `list_agent_definitions` where it offers that,
+    /// else the files).
     local_loaded: bool,
+    /// The `list_agent_definitions` read in flight, and whether its answer
+    /// is a full load (names too) or only Pi's default after an apply.
+    definitions: Option<(ReadTicket, bool)>,
+    /// The `clear_profile_binding` in flight.
+    clearing: Option<ConfigTicket>,
     /// A seed for a missing `profiles` store is being written.
     seeding: bool,
     /// The `profiles` store was read while other reads were in flight; the
@@ -293,6 +305,8 @@ impl ProfilesView {
             session,
             backend: Backend::Undecided,
             local_loaded: false,
+            definitions: None,
+            clearing: None,
             seeding: false,
             profiles_moved: false,
             io_jobs: 0,
@@ -440,8 +454,14 @@ impl ProfilesView {
                     )
                 });
                 for (ticket, outcome) in outcomes {
-                    self.land(ticket, outcome, cx);
+                    if self.clearing == Some(ticket) {
+                        self.clearing = None;
+                        self.binding_cleared(outcome);
+                    } else {
+                        self.land(ticket, outcome, cx);
+                    }
                 }
+                self.take_definitions(&session, cx);
                 if !changes.is_empty() {
                     // A `config_changed` (or a gap) reloads what moved.
                     let read = self.with_remote(cx, |remote, port| remote.changed(port, &changes));
@@ -495,28 +515,93 @@ impl ProfilesView {
                 .is_some_and(|session| session.read(cx).profile_apply_supported())
     }
 
-    /// Read every store over RPC, and the agent names and Pi's default from
-    /// the files (neither is a config store).
+    /// Read every store over RPC, and the agent names and Pi's default
+    /// (neither is a config store).
     fn reload_rpc(&mut self, cx: &mut Context<Self>) {
         self.reread(&SCREEN_STORES, cx);
+        self.read_agents(true, cx);
+    }
+
+    /// The agent names (when `full`) and Pi's default orchestrator: Gentle
+    /// Shell's `list_agent_definitions` where it advertises it, else the
+    /// agent files and Pi's `settings.json`, as before.
+    fn read_agents(&mut self, full: bool, cx: &mut Context<Self>) {
+        if let Some(session) = self.session.clone()
+            && session
+                .read(cx)
+                .read_support(DesktopMethod::ListAgentDefinitions)
+                == ReadSupport::Rpc
+            && let Ok(ticket) = session.update(cx, |session, cx| {
+                session.read(ReadRequest::AgentDefinitions, cx)
+            })
+        {
+            self.definitions = Some((ticket, full));
+            return;
+        }
+        self.read_agent_files(full, cx);
+    }
+
+    fn read_agent_files(&mut self, full: bool, cx: &mut Context<Self>) {
         let env = self.env.clone();
         let cwd = self.cwd.clone();
         self.run_io(
             cx,
             move || {
                 let env = env.unwrap_or_else(|| Env::resolve(cwd));
-                let names = assignment_names(&discover_agents(&env));
+                let names = full.then(|| assignment_names(&discover_agents(&env)));
                 let pi_default = read_orchestrator_settings(&env.settings_path());
                 (env, names, pi_default)
             },
-            |this, (env, names, pi_default), cx| {
-                this.env = Some(env);
-                this.names = names;
-                this.pi_default = pi_default;
-                this.local_loaded = true;
-                this.adopt_rpc(true, cx);
-            },
+            |this, (env, names, pi_default), cx| this.agents_read(env, names, pi_default, cx),
         );
+    }
+
+    /// Gentle Shell answered `list_agent_definitions`: its agents, joined
+    /// with the roots it does not read, and its default orchestrator. A
+    /// failed read takes the files instead, as an older Shell would.
+    fn take_definitions(&mut self, session: &Entity<SessionView>, cx: &mut Context<Self>) {
+        let Some((ticket, full)) = self.definitions else {
+            return;
+        };
+        let Some(outcome) = session.update(cx, |session, _| session.take_read(ticket)) else {
+            return;
+        };
+        self.definitions = None;
+        let ReadOutcome::AgentDefinitions(definitions) = outcome else {
+            return self.read_agent_files(full, cx);
+        };
+        let pi_default = orchestrator_route(&definitions.default_orchestrator);
+        if !full {
+            self.pi_default = pi_default;
+            return;
+        }
+        let env = self.env.clone();
+        let cwd = self.cwd.clone();
+        self.run_io(
+            cx,
+            move || {
+                let env = env.unwrap_or_else(|| Env::resolve(cwd));
+                let names = reported_names(&definitions, &uncovered_agents(&env));
+                (env, Some(names), pi_default)
+            },
+            |this, (env, names, pi_default), cx| this.agents_read(env, names, pi_default, cx),
+        );
+    }
+
+    fn agents_read(
+        &mut self,
+        env: Env,
+        names: Option<Vec<String>>,
+        pi_default: Option<RouteEntry>,
+        cx: &mut Context<Self>,
+    ) {
+        self.env = Some(env);
+        self.pi_default = pi_default;
+        if let Some(names) = names {
+            self.names = names;
+            self.local_loaded = true;
+            self.adopt_rpc(true, cx);
+        }
     }
 
     /// Ask for `stores` again over RPC.

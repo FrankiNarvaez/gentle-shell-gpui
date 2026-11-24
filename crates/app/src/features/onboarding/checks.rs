@@ -89,14 +89,78 @@ pub(super) fn push_lines(log: &mut Vec<String>, chunk: &str) {
     }
 }
 
+/// The provider check as Gentle Shell's own model registry answers it
+/// (`get_auth_status` of the active agent tab), over what the files and
+/// environment suggested: signed in when it has credentials for any
+/// provider; otherwise missing, keeping the look's own fix when it already
+/// said so and offering the Providers screen when it guessed otherwise.
+pub(super) fn with_registry(checks: &mut [Check], answer: &Result<String, String>) {
+    for check in checks.iter_mut().filter(|c| c.id == CheckId::Provider) {
+        match answer {
+            Ok(found) => {
+                check.status = Status::Ok(found.clone());
+                check.fix = Fix::None;
+            }
+            Err(missing) => {
+                if is_ok(check) {
+                    check.fix = Fix::SignIn;
+                }
+                check.status = Status::Missing(missing.clone());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
 
     use super::{
         Check, CheckId, Fix, LOG_KEEP, Need, Status, Tone, all_set, install_plan, push_lines,
-        required_ok, tone, usable,
+        required_ok, tone, usable, with_registry,
     };
+
+    /// The registry's answer replaces the files' guess for the provider
+    /// check only.
+    #[test]
+    fn the_registry_decides_the_provider_check() {
+        let look = || {
+            vec![
+                ok(CheckId::Node, Need::Required),
+                check(
+                    CheckId::Provider,
+                    Need::Optional,
+                    Status::Missing("No provider signed in".into()),
+                    Fix::Terminal("gentle-shell".into()),
+                ),
+            ]
+        };
+        let mut signed_in = look();
+        with_registry(&mut signed_in, &Ok("Signed in: anthropic".into()));
+        assert_eq!(
+            signed_in[1].status,
+            Status::Ok("Signed in: anthropic".into())
+        );
+        assert_eq!(signed_in[1].fix, Fix::None);
+        assert_eq!(signed_in[0].status, Status::Ok("1".into()));
+
+        let mut none = look();
+        with_registry(&mut none, &Err("No provider signed in".into()));
+        assert_eq!(
+            none[1].fix,
+            Fix::Terminal("gentle-shell".into()),
+            "its own fix"
+        );
+        let mut stale = vec![ok(CheckId::Provider, Need::Optional)];
+        with_registry(&mut stale, &Err("No provider signed in".into()));
+        assert_eq!(
+            (&stale[0].status, &stale[0].fix),
+            (
+                &Status::Missing("No provider signed in".into()),
+                &Fix::SignIn
+            )
+        );
+    }
 
     fn check(id: CheckId, need: Need, status: Status, fix: Fix) -> Check {
         Check {

@@ -652,10 +652,23 @@ pub fn read_persisted(path: &Path) -> Option<String> {
     read_theme_key(path)
 }
 
-/// The persisted window transparency (0–1); out-of-range values clamp.
-pub fn read_transparency(path: &Path) -> Option<f32> {
-    let value = read_settings(path)?.get("transparency")?.as_f64()?;
-    Some((value as f32).clamp(0., 1.))
+/// The persisted Appearance sliders. Each key is read on its own and
+/// clamped to 0–1; a missing or unreadable one (a settings file from
+/// before the slider existed) takes its default.
+pub fn read_glass(path: &Path) -> Glass {
+    let settings = read_settings(path);
+    let key = |name: &str, default: f32| {
+        settings
+            .as_ref()
+            .and_then(|s| s.get(name)?.as_f64())
+            .map_or(default, |v| (v as f32).clamp(0., 1.))
+    };
+    let d = Glass::DEFAULT;
+    Glass {
+        transparency: key(Glass::TRANSPARENCY, d.transparency),
+        blur: key(Glass::BLUR, d.blur),
+        opacity: key(Glass::OPACITY, d.opacity),
+    }
 }
 
 /// The persisted interface size in percent (`interfaceScale` holds the
@@ -676,10 +689,21 @@ pub(crate) fn read_key(path: &Path, key: &str) -> Option<Value> {
 
 /// Set `key` in the app's settings file, keeping every other key.
 pub(crate) fn write_key(path: &Path, key: &str, new: Value) -> std::io::Result<()> {
+    write_keys(path, [(key, new)])
+}
+
+/// Set several keys in the app's settings file in one write, keeping every
+/// other key.
+fn write_keys<'a>(
+    path: &Path,
+    keys: impl IntoIterator<Item = (&'a str, Value)>,
+) -> std::io::Result<()> {
     let mut value = read_settings(path)
         .filter(Value::is_object)
         .unwrap_or_else(|| Value::Object(Default::default()));
-    value[key] = new;
+    for (key, new) in keys {
+        value[key] = new;
+    }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -692,11 +716,19 @@ pub fn write_persisted(path: &Path, name: &str) -> std::io::Result<()> {
     write_key(path, "theme", Value::String(name.to_string()))
 }
 
-/// Set `transparency` in the app's settings file, keeping every other key.
-pub fn write_transparency(path: &Path, clear: f32) -> std::io::Result<()> {
-    // Two decimals: the slider's step, and no float noise in the file.
-    let rounded = (f64::from(clear.clamp(0., 1.)) * 100.).round() / 100.;
-    write_key(path, "transparency", Value::from(rounded))
+/// Set the three Appearance sliders in the app's settings file, keeping
+/// every other key.
+pub fn write_glass(path: &Path, glass: Glass) -> std::io::Result<()> {
+    // Two decimals: the sliders' step, and no float noise in the file.
+    let rounded = |v: f32| Value::from((f64::from(v.clamp(0., 1.)) * 100.).round() / 100.);
+    write_keys(
+        path,
+        [
+            (Glass::TRANSPARENCY, rounded(glass.transparency)),
+            (Glass::BLUR, rounded(glass.blur)),
+            (Glass::OPACITY, rounded(glass.opacity)),
+        ],
+    )
 }
 
 /// Set `interfaceScale` (the factor) in the app's settings file, keeping
@@ -846,9 +878,9 @@ struct Resolved {
 }
 
 impl Resolved {
-    fn new(theme: &Theme, clear: f32) -> Self {
+    fn new(theme: &Theme, glass: Glass) -> Self {
         Self {
-            palette: ui::Palette::new(theme, clear),
+            palette: ui::Palette::new(theme, glass),
             term: TermColors::new(theme),
             solid: theme.solid,
         }
@@ -862,13 +894,43 @@ impl Resolved {
 /// glass starts nearly solid.
 pub const DEFAULT_TRANSPARENCY: f32 = if cfg!(target_os = "linux") { 0.15 } else { 0.6 };
 
+/// The Appearance sliders, each 0–1 (shown as 0–100 %).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glass {
+    /// How much shows through the glass: the chrome (title bar, the gaps
+    /// between panes) follows it fully; text areas only down to the
+    /// clearest they can be and still meet AA (`ui::Palette::new`).
+    pub transparency: f32,
+    /// How soft the theme's own background picture is (`backdrop`): 0 is
+    /// sharp. Themes without a picture or scene have nothing to blur.
+    pub blur: f32,
+    /// How opaque the areas that always hold text are, from the clearest
+    /// that still meets AA (0) to opaque (1).
+    pub opacity: f32,
+}
+
+impl Glass {
+    pub const TRANSPARENCY: &str = "transparency";
+    pub const BLUR: &str = "blur";
+    pub const OPACITY: &str = "opacity";
+
+    /// Out of the box: AA holds at any Opacity (the floor sees to it), so
+    /// the default only adds a margin over the bare minimum; the theme's
+    /// picture stays as its author drew it.
+    pub const DEFAULT: Self = Self {
+        transparency: DEFAULT_TRANSPARENCY,
+        blur: 0.,
+        opacity: 0.2,
+    };
+}
+
 /// The resolved active theme; Gentleman-Cute until [`init`] runs.
 static ACTIVE: LazyLock<RwLock<Resolved>> = LazyLock::new(|| {
     let cute = embedded_gentle()
         .into_iter()
         .find(|t| t.name == DEFAULT_THEME)
         .expect("Gentleman-Cute is embedded");
-    RwLock::new(Resolved::new(&cute, DEFAULT_TRANSPARENCY))
+    RwLock::new(Resolved::new(&cute, Glass::DEFAULT))
 });
 
 /// Read the active UI palette.
@@ -890,17 +952,16 @@ pub fn solid() -> bool {
     active.solid
 }
 
-fn install(theme: &Theme, clear: f32) {
-    *ACTIVE.write().unwrap_or_else(|e| e.into_inner()) = Resolved::new(theme, clear);
+fn install(theme: &Theme, glass: Glass) {
+    *ACTIVE.write().unwrap_or_else(|e| e.into_inner()) = Resolved::new(theme, glass);
 }
 
-/// The catalog, the active theme, the window transparency and the interface
+/// The catalog, the active theme, the Appearance sliders and the interface
 /// size, for pickers.
 pub struct Themes {
     pub catalog: Vec<Theme>,
     pub active: usize,
-    /// 0 (most solid) to 1 (clearest).
-    pub transparency: f32,
+    pub glass: Glass,
     /// The interface size in percent (`gentle_core::interface_size`).
     pub interface_size: u16,
     /// The fonts in use: only families that are installed.
@@ -995,10 +1056,7 @@ pub fn init(cx: &mut App) {
     let agent = pi_rpc::resolve_homes().agent;
     let store = store_path();
     let persisted = store.as_deref().and_then(read_persisted);
-    let transparency = store
-        .as_deref()
-        .and_then(read_transparency)
-        .unwrap_or(DEFAULT_TRANSPARENCY);
+    let glass = store.as_deref().map_or(Glass::DEFAULT, read_glass);
     let interface_size = store
         .as_deref()
         .and_then(read_interface_size)
@@ -1016,11 +1074,11 @@ pub fn init(cx: &mut App) {
     let pi = read_pi_setting(&agent);
     let catalog = load_catalog(Vec::new(), read_user_themes(&agent));
     let active = pick_default(&catalog, persisted.as_deref(), pi.as_deref());
-    install(&catalog[active], transparency);
+    install(&catalog[active], glass);
     cx.set_global(Themes {
         catalog,
         active,
-        transparency,
+        glass,
         interface_size,
         fonts: chosen,
     });
@@ -1114,7 +1172,7 @@ fn watch_user_themes(agent: PathBuf, cx: &mut App) {
 fn replace_user_themes(user: Vec<Theme>, cx: &mut App) {
     let themes = cx.global::<Themes>();
     let before = themes.active_theme().clone();
-    let (transparency, interface_size) = (themes.transparency, themes.interface_size);
+    let (glass, interface_size) = (themes.glass, themes.interface_size);
     let chosen = themes.fonts.clone();
     let gentle: Vec<Theme> = themes
         .catalog
@@ -1129,12 +1187,12 @@ fn replace_user_themes(user: Vec<Theme>, cx: &mut App) {
         .unwrap_or_else(|| pick_default(&catalog, None, None));
     let changed = catalog[active] != before;
     if changed {
-        install(&catalog[active], transparency);
+        install(&catalog[active], glass);
     }
     cx.set_global(Themes {
         catalog,
         active,
-        transparency,
+        glass,
         interface_size,
         fonts: chosen,
     });
@@ -1198,7 +1256,7 @@ pub fn share_text(theme: &Theme) -> Option<Result<(String, String), String>> {
 fn merge_gentle(gentle: Vec<Theme>, persisted: Option<String>, pi: Option<String>, cx: &mut App) {
     let themes = cx.global::<Themes>();
     let before = themes.active_theme().clone();
-    let (transparency, interface_size) = (themes.transparency, themes.interface_size);
+    let (glass, interface_size) = (themes.glass, themes.interface_size);
     let chosen = themes.fonts.clone();
     let explicit =
         themes.active != pick_default(&themes.catalog, persisted.as_deref(), pi.as_deref());
@@ -1221,12 +1279,12 @@ fn merge_gentle(gentle: Vec<Theme>, persisted: Option<String>, pi: Option<String
     };
     let changed = catalog[active] != before;
     if changed {
-        install(&catalog[active], transparency);
+        install(&catalog[active], glass);
     }
     cx.set_global(Themes {
         catalog,
         active,
-        transparency,
+        glass,
         interface_size,
         fonts: chosen,
     });
@@ -1243,8 +1301,8 @@ pub fn select(index: usize, cx: &mut App) {
         return;
     };
     themes.active = index;
-    let clear = themes.transparency;
-    install(&theme, clear);
+    let glass = themes.glass;
+    install(&theme, glass);
     ui::apply_theme(cx);
     cx.refresh_windows();
     if let Some(path) = store_path() {
@@ -1257,20 +1315,29 @@ pub fn select(index: usize, cx: &mut App) {
     }
 }
 
-/// Re-tint every window at transparency `clear` (0–1); `persist` writes it
-/// to the settings file (the slider persists on release, not on every drag).
-pub fn set_transparency(clear: f32, persist: bool, cx: &mut App) {
-    let clear = clear.clamp(0., 1.);
+/// Apply the Appearance sliders to every window (re-tinting the glass and
+/// re-blurring the theme's picture); `persist` writes them to the settings
+/// file (the sliders persist on release, not on every drag).
+pub fn set_glass(glass: Glass, persist: bool, cx: &mut App) {
+    let glass = Glass {
+        transparency: glass.transparency.clamp(0., 1.),
+        blur: glass.blur.clamp(0., 1.),
+        opacity: glass.opacity.clamp(0., 1.),
+    };
     let themes = cx.global_mut::<Themes>();
-    themes.transparency = clear;
-    let theme = themes.active_theme().clone();
-    install(&theme, clear);
-    ui::apply_theme(cx);
+    let before = themes.glass;
+    themes.glass = glass;
+    // Blur only changes the backdrop, not the palette.
+    if (before.transparency, before.opacity) != (glass.transparency, glass.opacity) {
+        let theme = themes.active_theme().clone();
+        install(&theme, glass);
+        ui::apply_theme(cx);
+    }
     cx.refresh_windows();
     if persist && let Some(path) = store_path() {
         cx.background_executor()
             .spawn(async move {
-                let _ = write_transparency(&path, clear);
+                let _ = write_glass(&path, glass);
             })
             .detach();
     }
@@ -1590,17 +1657,35 @@ mod tests {
         let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["keep"], 1);
         assert_eq!(value["theme"], "Dracula");
-        // Theme and transparency share the file without clobbering each other.
-        write_transparency(&path, 0.456_7).unwrap();
+        // Theme and the Appearance sliders share the file without clobbering
+        // each other.
+        let glass = Glass {
+            transparency: 0.456_7,
+            blur: 0.3,
+            opacity: 0.8,
+        };
+        write_glass(&path, glass).unwrap();
         write_persisted(&path, "Nord").unwrap();
         assert_eq!(read_persisted(&path).as_deref(), Some("Nord"));
-        assert_eq!(read_transparency(&path), Some(0.46));
+        let read = read_glass(&path);
+        assert_eq!(
+            (read.transparency, read.blur, read.opacity),
+            (0.46, 0.3, 0.8)
+        );
+        // Out-of-range values clamp; a file from before Blur and Opacity
+        // existed keeps its transparency and takes their defaults.
         std::fs::write(&path, r#"{"transparency": 7}"#).unwrap();
-        assert_eq!(read_transparency(&path), Some(1.));
+        let read = read_glass(&path);
+        assert_eq!(read.transparency, 1.);
+        assert_eq!(
+            (read.blur, read.opacity),
+            (Glass::DEFAULT.blur, Glass::DEFAULT.opacity)
+        );
+        assert_eq!(read_glass(&dir.join("missing.json")), Glass::DEFAULT);
         // The interface size shares it too, stored as a factor.
         assert_eq!(read_interface_size(&path), None);
         write_interface_size(&path, 125).unwrap();
-        assert_eq!(read_transparency(&path), Some(1.));
+        assert_eq!(read_glass(&path).transparency, 1.);
         assert_eq!(read_interface_size(&path), Some(125));
         let value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["interfaceScale"], 1.25);

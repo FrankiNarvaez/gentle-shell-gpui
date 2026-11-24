@@ -210,6 +210,10 @@ impl Workspace {
             SessionEvent::OpenScreen(screen) => {
                 self.open_screen(*screen, Some(session.clone()), window, cx)
             }
+            SessionEvent::OpenMemory(target) => {
+                let cwd = session.read(cx).cwd().clone();
+                self.open_memory(cwd, target.clone(), window, cx)
+            }
             SessionEvent::Effort(level) => {
                 if let Some(level) = crate::shared::surge::Level::of(level) {
                     self.play_surge(level, cx)
@@ -235,7 +239,9 @@ impl Workspace {
             SessionEvent::OpenFile { path, line } => {
                 self.open_file_at(path.clone(), *line, window, cx)
             }
-            SessionEvent::AgentWeb(url) => self.open_web(url.clone(), Some(id), false, window, cx),
+            SessionEvent::AgentWeb(url) => {
+                self.open_agent_page(url.clone(), Some(id), true, window, cx)
+            }
             SessionEvent::Notice { level, message } => {
                 let source = self.pane_title(id);
                 let (level, message) = (*level, message.clone());
@@ -319,7 +325,8 @@ impl Workspace {
             ),
             _ => (target, None),
         };
-        // A terminal whose shell exits (`exit`, Ctrl-D) closes its pane.
+        // A terminal whose shell exits (`exit`, Ctrl-D) closes its pane; a
+        // double Ctrl+C at its idle prompt closes it as ⌘W does.
         let subscriptions = item
             .view
             .clone()
@@ -330,8 +337,11 @@ impl Workspace {
                     &terminal,
                     window,
                     move |this, _, event: &crate::features::terminal::TerminalEvent, window, cx| {
-                        if *event == crate::features::terminal::TerminalEvent::Exited {
-                            this.close_pane_now(id, window, cx);
+                        use crate::features::terminal::TerminalEvent;
+                        match event {
+                            TerminalEvent::Exited => this.close_pane_now(id, window, cx),
+                            TerminalEvent::CloseRequested => this.close_pane(id, window, cx),
+                            TerminalEvent::TitleChanged => {}
                         }
                     },
                 )

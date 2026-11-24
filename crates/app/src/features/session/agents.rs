@@ -16,7 +16,9 @@ use super::SessionView;
 use super::state::desktop;
 use super::state::desktop::output::{Failure, JobWatch, ThreadWatch};
 use crate::shared::ui;
-use gentle_core::activity::{AgentTask, Thread, ThreadItem};
+use gentle_core::activity::{
+    AgentTask, Progress, ProjectedProgress, Thread, ThreadItem, helper_progress,
+};
 use gentle_core::gentle_state::{Job, JobOutcome};
 use gentle_core::transcript::format_tokens;
 
@@ -66,9 +68,10 @@ impl AgentsFilter {
 /// One helper shown in the panel: the structured channel projection when the
 /// peer offers it, or the legacy `gentle-agents` widget entry otherwise. The
 /// structured entry is the truth for identity, status, model, usage and
-/// cancel; Shell only projects coarse steps (`starting` until the run ends),
-/// so the widget's entry for the same task, when it has one, adds the live
-/// step, time, turns, tools, label and thread.
+/// cancel, and from Gentle Shell 5.0.0 for in-run progress too (turns, tool
+/// calls, the tool running now). The widget's entry for the same task, when
+/// it has one, adds time, label and thread, and the live step and counts
+/// only for an older Shell whose projection carries none.
 #[derive(Clone, Copy)]
 enum Helper<'a> {
     Structured(&'a DesktopAgent, Option<&'a AgentTask>),
@@ -127,16 +130,30 @@ impl<'a> Helper<'a> {
         }
     }
 
-    fn last_step(&self) -> Option<String> {
+    /// Turns, tool calls and the step, from one source
+    /// ([`gentle_core::activity::helper_progress`]).
+    fn progress(&self) -> Progress {
         match self {
-            // While it runs, the widget's step says what it is doing; once it
-            // ends, Shell's terminal reason is the final word.
-            Self::Structured(agent, live) => live
-                .filter(|_| self.is_active())
-                .and_then(|task| task.summary.last_step.clone())
-                .or_else(|| Some(agent.last_step.to_string())),
-            Self::Legacy(task) => task.summary.last_step.clone(),
+            Self::Structured(agent, live) => helper_progress(
+                ProjectedProgress {
+                    active: self.is_active(),
+                    step: agent.last_step.as_str(),
+                    turns: agent.turns,
+                    tool_calls: agent.tool_calls,
+                    active_tool: agent.active_tool.as_deref(),
+                },
+                live.map(|task| &task.summary),
+            ),
+            Self::Legacy(task) => Progress {
+                turns: Some(task.summary.turns),
+                tool_calls: Some(task.summary.tool_calls),
+                step: task.summary.last_step.clone(),
+            },
         }
+    }
+
+    fn last_step(&self) -> Option<String> {
+        self.progress().step
     }
 
     fn elapsed_ms(&self, now: u64) -> Option<u64> {
@@ -144,11 +161,11 @@ impl<'a> Helper<'a> {
     }
 
     fn turns(&self) -> Option<u64> {
-        Some(self.live()?.summary.turns)
+        self.progress().turns
     }
 
     fn tool_calls(&self) -> Option<u64> {
-        Some(self.live()?.summary.tool_calls)
+        self.progress().tool_calls
     }
 }
 
@@ -174,7 +191,7 @@ fn format_cost(cost: f64) -> String {
     format!("${cost:.4}")
 }
 
-/// A legacy count (turns, tools) that the structured projection does not carry.
+/// A count (turns, tools) neither source carries for this helper.
 fn count(value: Option<u64>) -> String {
     value.map_or_else(|| "–".into(), |value| value.to_string())
 }
@@ -815,7 +832,13 @@ impl SessionView {
                 format!("{queued} queued"),
                 format!("{finished} finished"),
             ];
-            if !structured {
+            // Counts from the widget, or from a projection that carries them
+            // (Gentle Shell 5.0.0); an older projection alone has none.
+            let counted = !structured
+                || helpers
+                    .iter()
+                    .any(|h| matches!(h, Helper::Structured(agent, _) if agent.turns.is_some()));
+            if counted {
                 let turns: u64 = helpers.iter().filter_map(|h| h.turns()).sum();
                 let tools: u64 = helpers.iter().filter_map(|h| h.tool_calls()).sum();
                 bits.push(format!("{turns} turns"));
@@ -1315,14 +1338,13 @@ impl SessionView {
                             ))
                             .child(stat("Cost", format_cost(agent.usage.cost))),
                     )
-                    .when_some(helper.live(), |d, task| {
-                        let s = &task.summary;
+                    .when(helper.live().is_some() || agent.turns.is_some(), |d| {
                         d.child(
                             h_flex()
                                 .gap_2()
-                                .child(stat("Time", duration(s.elapsed_ms(now))))
-                                .child(stat("Turns", s.turns.to_string()))
-                                .child(stat("Tools", s.tool_calls.to_string())),
+                                .child(stat("Time", duration(helper.elapsed_ms(now))))
+                                .child(stat("Turns", count(helper.turns())))
+                                .child(stat("Tools", count(helper.tool_calls()))),
                         )
                     })
                     .child(
@@ -1609,6 +1631,9 @@ mod tests {
             fallback_from: None,
             thinking: None,
             last_step: DesktopAgentStep::Writing,
+            turns: None,
+            tool_calls: None,
+            active_tool: None,
             usage,
         }
     }

@@ -82,7 +82,10 @@ fn fixture<'a>(
         cx.set_global(crate::shared::themes::Themes {
             catalog: crate::shared::themes::builtin_themes(),
             active: 0,
-            transparency: 0.0,
+            glass: crate::shared::themes::Glass {
+                transparency: 0.0,
+                ..crate::shared::themes::Glass::DEFAULT
+            },
             interface_size: gentle_core::interface_size::DEFAULT,
             fonts: Default::default(),
         });
@@ -164,6 +167,9 @@ fn fixture<'a>(
                         _surge_end: None,
                         stages: Vec::new(),
                         next_stage: 1,
+                        opened_outside: Default::default(),
+                        browser_dock_drag: None,
+                        browser_dock_room: Default::default(),
                         resume_welcome: None,
                         drop_hint: None,
                         pane_mode: false,

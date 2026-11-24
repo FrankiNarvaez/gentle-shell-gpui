@@ -32,6 +32,7 @@ While a sequence is pending (after ⌃Space, or the first `g` of `gg`), a which-
 | Focus Git changes | ⌘⇧G | Ctrl+Shift+G |
 | Toggle the Files sidebar | ⌘B | Ctrl+B |
 | Command palette | ⌘K | Ctrl+K |
+| Browse folders (folder explorer) | ⌘O | Ctrl+O |
 | Workspaces | ⌃⌘K | Ctrl+Alt+K |
 | Sessions | ⌘⇧O | Ctrl+Shift+O |
 | Settings | ⌘, | Ctrl+, |

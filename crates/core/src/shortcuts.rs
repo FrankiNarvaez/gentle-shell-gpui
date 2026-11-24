@@ -112,6 +112,7 @@ pub fn label(action: &str) -> Option<&'static str> {
         "gentle::OpenShortcuts" => "Keyboard shortcuts",
         "gentle::OpenSessions" => "Sessions",
         "gentle::OpenWorkspaces" => "Switch workspace…",
+        "gentle::OpenExplorer" => "Browse folders",
         "gentle::GoToTab" => "Go to tab…",
         "gentle::FocusTabList" => "Browse tabs",
         "gentle::CreateWorkspace" => "Create workspace",

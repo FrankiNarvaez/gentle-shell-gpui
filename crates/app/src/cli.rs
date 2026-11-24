@@ -1,11 +1,15 @@
-//! Command line: `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT] [--open-url URL]
-//! [--diagnostics]`.
+//! Command line: `gentle-shell-gpui [FOLDER] [--cwd] [-p|--prompt TEXT]
+//! [--open-url URL] [--diagnostics]`.
 
 use std::path::{Path, PathBuf};
 
-/// `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT]`
+/// `gentle-shell-gpui [FOLDER] [--cwd] [-p|--prompt TEXT]`
 pub struct Cli {
     pub folder: Option<PathBuf>,
+    /// `--cwd`: without `FOLDER`, open the folder the app was launched in
+    /// (what `gsd` passes). A plain launch doesn't: the Start menu or Finder
+    /// start in some unrelated folder, and the last workspace is restored.
+    pub here: bool,
     pub prompt: Option<String>,
     /// `--open-url URL`: show a page in the running app's browser.
     pub url: Option<String>,
@@ -14,6 +18,7 @@ pub struct Cli {
 pub fn parse_cli() -> Cli {
     let mut cli = Cli {
         folder: None,
+        here: false,
         prompt: None,
         url: None,
     };
@@ -21,6 +26,8 @@ pub fn parse_cli() -> Cli {
     while let Some(arg) = args.next() {
         if arg == "-p" || arg == "--prompt" {
             cli.prompt = args.next().map(|p| p.to_string_lossy().into_owned());
+        } else if arg == "--cwd" {
+            cli.here = true;
         } else if arg == "--open-url" || arg == "--url" {
             cli.url = Some(
                 args.next()
@@ -39,10 +46,24 @@ pub fn parse_cli() -> Cli {
 /// The folder the first tab opens: the CLI argument, else the folder the app
 /// was launched in, else home (GUI launches start in `/`).
 pub fn default_cwd() -> PathBuf {
-    cli_folder(parse_cli().folder, launch_dir())
+    requested_folder(&parse_cli())
         .or_else(|| launch_folder(launch_dir(), pi_rpc::managed_install_root().as_deref()))
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// The workspace folder this launch asks for: the folder argument, else with
+/// `--cwd` the folder the app was launched in; `None` restores the last
+/// workspace.
+pub fn requested_folder(cli: &Cli) -> Option<PathBuf> {
+    resolve_folder(cli.folder.clone(), cli.here, launch_dir())
+}
+
+/// `folder`, else with `here` the launch folder `launch`, as an existing
+/// canonical folder (see [`cli_folder`]).
+fn resolve_folder(folder: Option<PathBuf>, here: bool, launch: Option<PathBuf>) -> Option<PathBuf> {
+    let folder = folder.or_else(|| (here && launch.is_some()).then(|| PathBuf::from(".")));
+    cli_folder(folder, launch)
 }
 
 /// The CLI folder argument as an existing folder. A relative argument (`.`,
@@ -96,6 +117,34 @@ fn within(path: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn here_flag_uses_the_launch_folder_only_without_a_folder() {
+        let base = std::env::temp_dir().join(format!("gsd-cli-test-{}", std::process::id()));
+        let (here, there) = (base.join("here"), base.join("there"));
+        std::fs::create_dir_all(&here).unwrap();
+        std::fs::create_dir_all(&there).unwrap();
+        let canon = |p: &Path| dunce::canonicalize(p).unwrap();
+
+        // `gsd` in a folder: that folder.
+        assert_eq!(
+            resolve_folder(None, true, Some(here.clone())),
+            Some(canon(&here))
+        );
+        // `gsd <folder>`: the folder wins over the launch folder.
+        assert_eq!(
+            resolve_folder(Some(there.clone()), true, Some(here.clone())),
+            Some(canon(&there))
+        );
+        // A plain launch (Start menu, Finder) keeps restoring the last workspace.
+        assert_eq!(resolve_folder(None, false, Some(here.clone())), None);
+        // A folder that doesn't exist never falls back to the launch folder.
+        assert_eq!(
+            resolve_folder(Some(base.join("missing")), true, Some(here)),
+            None
+        );
+        std::fs::remove_dir_all(&base).unwrap();
+    }
 
     /// A terminal launch without a folder argument opens the terminal's
     /// folder, as before the app moved off its launch folder at startup.

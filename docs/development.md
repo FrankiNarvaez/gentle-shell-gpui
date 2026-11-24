@@ -50,17 +50,20 @@ cargo build --profile dist -p gentle-shell-gpui   # as in a release
 
 ### CLI
 
-`crates/app/src/cli.rs`: `gentle-shell-gpui [FOLDER] [-p|--prompt TEXT]`.
+`crates/app/src/cli.rs`: `gentle-shell-gpui [FOLDER] [--cwd] [-p|--prompt TEXT]`.
 
 | Argument | Effect |
 | --- | --- |
 | `FOLDER` | Selects (or creates) the workspace with that root. Ignored if it is not a directory. Without a folder, the last workspace is restored. |
+| `--cwd` | Without `FOLDER`, opens the folder the app was launched in (`cli::launch_dir`) as a workspace instead of restoring the last one. It is what `gsd` passes; a plain launch (Start menu, Finder, Dock) never uses its launch folder this way. A `FOLDER` that doesn't exist is ignored without falling back to the launch folder. |
 | `-p TEXT`, `--prompt TEXT` | Opens a new agent tab and, once the backend starts, runs the text as if it had been typed in the composer (`SessionView::run_text` in `features/session/submit.rs`). |
 | `-p "!cmd"` | Runs `cmd` as a shell command in that tab; `-p "!!cmd"` keeps it out of the context (Pi convention). |
 | `--diagnostics` | Records resource diagnostics for this run, like `GENTLE_SHELL_GPUI_DIAGNOSTICS=1` (see [Diagnostics](#diagnostics)). |
 | `--diagnostics-report [FILE]` | Prints the ranking of a recording (the newest one without `FILE`) and exits. |
 
 `-p` is useful during development to bring the app to a specific state without typing into it.
+
+`gsd` (`crates/app/src/platform/gsd.rs`) is the user's command for this: a generated shim that runs `<app> --cwd "$@"` in the background (`start "" "<app>" --cwd %*` in a `.cmd` on Windows) and returns to the prompt. Unlike the agents' shims it lives on the user's own PATH, and only when they ask: the Windows installer ships `{app}\bin\gsd.cmd` and adds `{app}\bin` to `HKCU\Environment\Path` (removed on uninstall); ⌘K → Install `gsd` command writes `~/.local/bin/gsd` (macOS, Linux) or `<app data dir>\bin\gsd.cmd` plus that folder on the user PATH (Windows, read and written as the raw `REG_EXPAND_SZ` value so `%VAR%` entries survive). A marker line makes a `gsd` file the app's own: startup refreshes only that one (the executable moves on update), and the install refuses to overwrite anyone else's. An isolated copy (`GENTLE_SHELL_GPUI_DATA_DIR`) never refreshes it.
 
 ### Single instance
 
@@ -76,7 +79,7 @@ Everything the app stores lives under `dirs::data_dir()/gentle-shell-gpui/`, or 
 | --- | --- |
 | `instance.json` | `platform/instance.rs` |
 | `workspaces.json` | `features/workspaces/store.rs` |
-| `settings.json` | `shared/themes.rs` (`store_path`): theme, transparency, the interface size (`interfaceScale`, a factor such as `1.25`), the fonts (`interfaceFont`, `codeFont`, `terminalFont`: a family name; absent means the default, and the terminal follows the code font), the code and terminal sizes (`codeFontSize`, `terminalFontSize`: px at 100 % zoom, 8–32; absent means the default 13; the interface has no size of its own, Interface size sets it), the composer's kisses while typing (`composerParticles`: `"auto"`, which follows the system's reduce motion, or `"off"`; anything else reads as auto, written by `shared/kisses.rs`), the water reminder (`hydration`: `{ "enabled": true, "everyMinutes": 60 }`, written by `features/hydration`), Agent UI (`genuiMode`: `"proactive"`, `"asked"` or `"off"`, written by `features/genui/mode.rs`), where agents run (`backend`, written by `features/backend/`; see `docs/integrations.md`) and the `onboarding` key (`{ "done": true, "version": … }`) that decides the first run (`features/setup/mod.rs`: `first_run`, `mark_done`). |
+| `settings.json` | `shared/themes.rs` (`store_path`): theme, the Appearance sliders (`transparency`, `blur`, `opacity`: 0–1 each, two decimals; a missing key takes its default — 0.6 (0.15 on Linux), 0 and 0.2 — so a file from before Blur and Opacity keeps its transparency; `read_glass`, `write_glass`), the interface size (`interfaceScale`, a factor such as `1.25`), the fonts (`interfaceFont`, `codeFont`, `terminalFont`: a family name; absent means the default, and the terminal follows the code font), the code and terminal sizes (`codeFontSize`, `terminalFontSize`: px at 100 % zoom, 8–32; absent means the default 13; the interface has no size of its own, Interface size sets it), the composer's kisses while typing (`composerParticles`: `"auto"`, which follows the system's reduce motion, or `"off"`; anything else reads as auto, written by `shared/kisses.rs`), the water reminder (`hydration`: `{ "enabled": true, "everyMinutes": 60 }`, written by `features/hydration`), Agent UI (`genuiMode`: `"proactive"`, `"asked"` or `"off"`, written by `features/genui/mode.rs`), where agents run (`backend`, written by `features/backend/`; see `docs/integrations.md`) and the `onboarding` key (`{ "done": true, "version": … }`) that decides the first run (`features/setup/mod.rs`: `first_run`, `mark_done`). |
 | `app-update.json` | `features/app_update/cache.rs` |
 | `toolchain/` | `features/setup/mod.rs` (Node, npm prefix, Engram, Maestro and its Java, and the diagram renderer `bin/merman-cli`, installed by the app) |
 | `diagnostics/` | `features/diagnostics/`: resource recordings (`diagnostics-<UTC>.jsonl`), only when diagnostics are on; the newest 10 are kept. |

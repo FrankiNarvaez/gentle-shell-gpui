@@ -48,9 +48,18 @@ impl Render for Workspace {
         self.sync_web_views(covered, cx);
         let (devices_docked, devices_floating) = {
             let panel = self.devices.read(cx);
-            let docked = panel.mode() == crate::features::devices::Mode::Docked;
+            let docked = panel.mode() == crate::shared::floating::Mode::Docked;
             (panel.visible() && docked, panel.visible() && !docked)
         };
+        // Browser cards: floating over the window, or docked in a column at
+        // its right, whose divider may be being dragged.
+        let floating_stages: Vec<AnyElement> = self
+            .stages
+            .iter()
+            .filter_map(|stage| stage.element(cx))
+            .collect();
+        let browser_dock = self.render_browser_dock(cx);
+        let browser_dock_drag = self.browser_dock_drag_layer(cx);
         // While the surge plays, the window shakes before the rose hatches:
         // the root moves in place and asks for the next frame, so the element
         // tree (and every element's state) stays the same.
@@ -125,6 +134,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_open_shortcuts))
             .on_action(cx.listener(Self::on_open_workspaces))
+            .on_action(cx.listener(Self::on_open_explorer))
             .on_action(cx.listener(Self::on_close_overlay))
             .key_context(if self.pane_mode {
                 "GentleWorkspace pane_mode"
@@ -385,8 +395,10 @@ impl Render for Workspace {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(self.render_body(window, cx)),
+                            .child(self.render_body(window, cx))
+                            .child(self.measure_conversation()),
                     )
+                    .children(browser_dock)
                     .when(devices_docked, |row| row.child(self.devices.clone()))
                     // Ctrl/Cmd+B toggles only the right Files/Changes/Branches sidebar.
                     .when_some(files_sidebar, |row, view| {
@@ -408,7 +420,7 @@ impl Render for Workspace {
                         ))
                     }),
             )
-            .children(self.stages.iter().filter_map(Stage::element))
+            .children(floating_stages)
             .children(self.render_badge_picker(window, cx))
             .children(self.render_context_menu(cx))
             .when(devices_floating, |root| root.child(self.devices.clone()))
@@ -425,11 +437,13 @@ impl Render for Workspace {
                     })
                     .map(|hint| crate::features::shortcuts::panel(&hint, cx)),
             )
+            .children(browser_dock_drag)
             .children(self.overlay.as_ref().map(|(overlay, _)| {
                 let (view, full_window) = match overlay {
                     Overlay::Providers(view) => (view.clone().into_any_element(), false),
                     Overlay::Sessions(view) => (view.clone().into_any_element(), false),
                     Overlay::Palette(view) => (view.clone().into_any_element(), false),
+                    Overlay::Explorer(view) => (view.clone().into_any_element(), false),
                     Overlay::Usage(view) => (view.clone().into_any_element(), false),
                     Overlay::Memory(view) => (view.clone().into_any_element(), false),
                     Overlay::Docs(view) => (view.clone().into_any_element(), false),

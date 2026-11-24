@@ -20,6 +20,7 @@ use crate::features::workspace::{
 };
 
 use crate::features::session;
+use crate::shared::ui;
 
 use super::{PaletteAction, Row, TabLayout};
 
@@ -124,6 +125,21 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             "Welcome screen",
             "The first-run screen: the intro, then the install sequence",
             PaletteAction::Welcome,
+        ),
+        row(
+            IconName::Folder,
+            "Browse folders",
+            &format!(
+                "Open Gentle Shell in any folder, oil-style ({})",
+                ui::shortcut("O")
+            ),
+            PaletteAction::OpenExplorer,
+        ),
+        row(
+            IconName::Terminal,
+            "Install `gsd` command",
+            "Type gsd in any terminal folder to open it here as a workspace",
+            PaletteAction::InstallGsd,
         ),
         row(
             IconName::Plus,

@@ -81,3 +81,9 @@ pub(super) fn load(project: Option<&str>, query: &str) -> Result<Vec<Observation
         Err(error) => Err(error),
     }
 }
+
+/// One observation (`GET /observations/{id}`), for a memory the session
+/// status points at that the loaded page doesn't hold.
+pub(super) fn observation(id: i64) -> Option<Observation> {
+    serde_json::from_value(get(&format!("/observations/{id}")).ok()?).ok()
+}

@@ -83,6 +83,7 @@ impl SessionView {
             })
             .detach();
         }
+        self.settle_credentials(cx);
         cx.notify();
     }
 }

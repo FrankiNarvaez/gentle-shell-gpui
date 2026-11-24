@@ -29,8 +29,10 @@ pub struct Picture {
 }
 
 impl Picture {
-    pub fn decode(bytes: &[u8]) -> Option<Self> {
-        let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+    /// Decode the picture, blurred as the backdrop shows it at `blur`
+    /// (0–1), so the effects move the same soft pixels the window shows.
+    pub fn decode(bytes: &[u8], blur: f32) -> Option<Self> {
+        let image = super::soften(image::load_from_memory(bytes).ok()?.to_rgba8(), blur);
         Some(Self {
             width: image.width() as usize,
             height: image.height() as usize,
