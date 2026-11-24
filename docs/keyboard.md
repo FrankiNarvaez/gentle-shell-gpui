@@ -60,6 +60,8 @@ Esc closes the screen that is open; with none open, in an agent pane, it interru
 | `f` / `g` | Focus Files / focus Git changes |
 | `i` | Focus the composer |
 | `b` | Toggle the Files sidebar |
+| `a` | Create workspace (choose a folder) |
+| `Shift+d` | Delete workspace… |
 | `:` | Command palette |
 | `?` | Keyboard shortcuts |
 | `Space` | Enter pane mode |
@@ -103,7 +105,7 @@ Terminal panes get every key that the app has no binding for. The app takes ⌃S
 
 Leader `w` opens **Go to tab…**. Search by tab title or workspace name; each result shows both. Up and Down highlight without switching. Enter opens the highlighted tab directly, and Esc returns to the previous focus.
 
-Leader `Shift+w` opens **Switch workspace…**, and leader `a` opens **Create workspace from folder…**. For new tabs, use leader `c` (Agent), `t` (Terminal), or `Shift+c` (Canvas).
+Leader `Shift+w` opens **Switch workspace…**, leader `a` opens **Create workspace** (choose a folder; the workspace is named after it), and leader `Shift+d` opens **Delete workspace…**. For new tabs, use leader `c` (Agent), `t` (Terminal), or `Shift+c` (Canvas).
 
 The leader waits about a second for its second key.
 

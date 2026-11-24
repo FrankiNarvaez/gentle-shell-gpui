@@ -2,16 +2,17 @@
 //! the backend's slash commands.
 
 use gpui_kit::assets::IconName;
-use gpui_kit::{Action, KeyContext, Window};
+use gpui_kit::{Action, App, KeyContext, Window};
 
 use gentle_core::commands::{self, SlashCommand};
 use gentle_core::keyboard::format_binding;
+use gentle_core::shortcuts::{self as shortcuts_core, Binding};
 
 use crate::features::workspace::{
     ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5, ActivateTab6,
-    ActivateTab7, ActivateTab8, ActivateTab9, ClosePane, FocusChanges, FocusComposer, FocusFiles,
-    FocusNextPane, FocusPrevPane, NewCanvasTab, NewTab, NewTerminalTab, NextTab, PrevTab,
-    ReopenClosed, SplitDown, TilePane, ToggleSidebar,
+    ActivateTab7, ActivateTab8, ActivateTab9, ClosePane, CreateWorkspace, DeleteWorkspace,
+    FocusChanges, FocusComposer, FocusFiles, FocusNextPane, FocusPrevPane, NewCanvasTab, NewTab,
+    NewTerminalTab, NextTab, PrevTab, ReopenClosed, SplitDown, TilePane, ToggleSidebar,
 };
 use crate::features::workspace::{
     FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp, ResizePaneDown, ResizePaneLeft,
@@ -162,9 +163,15 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
         ),
         row(
             IconName::FolderOpen,
-            "Create workspace from folder…",
-            "Choose a folder for a new workspace",
+            "Create workspace",
+            "Choose a folder; the new workspace is named after it",
             PaletteAction::CreateWorkspaceFromFolder,
+        ),
+        row(
+            IconName::Trash,
+            "Delete workspace…",
+            "Choose a workspace to delete",
+            PaletteAction::OpenDeleteWorkspace,
         ),
         row(
             IconName::Building2,
@@ -367,9 +374,8 @@ pub(super) fn palette_action_to_gpui(action: &PaletteAction) -> Option<Box<dyn A
         PaletteAction::NewCanvasTab => Some(Box::new(NewCanvasTab)),
         PaletteAction::GoToTab => Some(Box::new(crate::features::workspace::GoToTab)),
         PaletteAction::OpenWorkspaces => Some(Box::new(crate::features::workspace::OpenWorkspaces)),
-        PaletteAction::CreateWorkspaceFromFolder => Some(Box::new(
-            crate::features::workspace::CreateWorkspaceFromFolder,
-        )),
+        PaletteAction::OpenDeleteWorkspace => Some(Box::new(DeleteWorkspace)),
+        PaletteAction::CreateWorkspaceFromFolder => Some(Box::new(CreateWorkspace)),
         PaletteAction::ClosePane => Some(Box::new(ClosePane)),
         PaletteAction::ReopenClosed => Some(Box::new(ReopenClosed)),
         PaletteAction::NextTab => Some(Box::new(NextTab)),
@@ -408,8 +414,9 @@ pub(super) fn palette_action_to_gpui(action: &PaletteAction) -> Option<Box<dyn A
 
 /// Append live shortcut hints from the current keymap to row descriptions.
 /// Rows whose action has no binding keep their description unchanged.
-pub(super) fn apply_binding_hints(rows: &mut [Row], window: &mut Window) {
+pub(super) fn apply_binding_hints(rows: &mut [Row], window: &mut Window, cx: &App) {
     let macos = cfg!(target_os = "macos");
+    let live: Vec<Binding> = crate::features::shortcuts::live_bindings(cx);
     for row in rows {
         let Some(action) = palette_action_to_gpui(&row.action) else {
             continue;
@@ -431,12 +438,15 @@ pub(super) fn apply_binding_hints(rows: &mut [Row], window: &mut Window) {
         let keystrokes: Vec<String> = binding
             .keystrokes()
             .iter()
-            .map(|k| format_binding(&keystroke_binding_string(k, macos), macos))
+            .map(|k| keystroke_binding_string(k, macos))
             .collect();
         if keystrokes.is_empty() {
             continue;
         }
-        let hint = keystrokes.join(" ");
+        let raw = keystrokes.join(" ");
+        let display =
+            shortcuts_core::preferred_display_sequence(action.name(), &raw, &live).unwrap_or(raw);
+        let hint = format_binding(&display, macos);
         row.detail = format!("{} ({})", row.detail, hint);
     }
 }

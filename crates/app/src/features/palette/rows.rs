@@ -72,6 +72,27 @@ impl PaletteView {
             .filter_map(|w| Some((fuzzy_score(&self.needle.lower, &w.name)?, w)))
             .collect();
         scored.sort_by_key(|(score, w)| (*score, w.index));
+        if self.deleting {
+            return scored
+                .into_iter()
+                .take(if all { 6 } else { usize::MAX })
+                .map(|(_, w)| Row {
+                    icon: IconName::Trash,
+                    title: w.name.clone(),
+                    meta: format!(
+                        "{} {}{}",
+                        w.tabs,
+                        if w.tabs == 1 { "tab" } else { "tabs" },
+                        if w.current { " · current" } else { "" }
+                    ),
+                    detail: "Press Enter to delete".into(),
+                    group: "Workspaces",
+                    action: PaletteAction::DeleteWorkspace(w.index),
+                    workspace: None,
+                    current: w.current,
+                })
+                .collect();
+        }
         let mut rows: Vec<Row> = scored
             .into_iter()
             .take(if all { 6 } else { usize::MAX })
@@ -122,7 +143,7 @@ impl PaletteView {
         }
         rows.push(Row {
             icon: IconName::FolderOpen,
-            title: "Create workspace from folder…".into(),
+            title: "Create workspace".into(),
             meta: String::new(),
             detail: if query.is_empty() {
                 "Named after the folder".into()

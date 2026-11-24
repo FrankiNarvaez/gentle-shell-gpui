@@ -574,13 +574,22 @@ impl Workspace {
         self.open_palette(Category::Tabs, window, cx);
     }
 
-    pub(super) fn on_create_workspace_from_folder(
+    pub(super) fn on_create_workspace(
         &mut self,
-        _: &CreateWorkspaceFromFolder,
+        _: &CreateWorkspace,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.pick_workspace_folder(None, window, cx);
+    }
+
+    pub(super) fn on_delete_workspace(
+        &mut self,
+        _: &DeleteWorkspace,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_workspace_deleter(window, cx);
     }
 
     pub(super) fn on_open_sessions(

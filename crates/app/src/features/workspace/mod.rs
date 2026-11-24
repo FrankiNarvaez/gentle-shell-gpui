@@ -59,7 +59,9 @@ mod sidebars;
 mod spaces;
 mod stages;
 #[cfg(test)]
-mod t8_verifier;
+mod t10_tests;
+#[cfg(test)]
+pub(crate) mod t8_verifier;
 mod tab_panel;
 mod tabs;
 mod view;
@@ -95,7 +97,8 @@ actions!(
         OpenPalette,
         OpenWorkspaces,
         GoToTab,
-        CreateWorkspaceFromFolder,
+        CreateWorkspace,
+        DeleteWorkspace,
         OpenSettings,
         OpenShortcuts,
         CloseOverlay,

@@ -1,8 +1,8 @@
 use super::*;
-use crate::features::shortcuts::keystroke_string;
+use crate::features::shortcuts::{keystroke_string, live_bindings};
 use gentle_core::{
     keyboard::format_binding,
-    shortcuts::{label, same_keys},
+    shortcuts::{self, same_keys},
 };
 
 /// Owns the sequence independently of GPUI's timed pending input.
@@ -50,30 +50,13 @@ impl ComposerLeader {
 
     pub(super) fn hint(&self, cx: &App) -> Option<WhichKey> {
         let macos = cfg!(target_os = "macos");
-        let mut entries = Vec::new();
-        for binding in cx
-            .key_bindings()
-            .borrow()
-            .possible_next_bindings_for_input(&self.input, &self.context)
-        {
-            if let Some(label) = label(binding.action().name()) {
-                let key = keystroke_string(binding.keystrokes()[self.input.len()].inner());
-                let entry = (format_binding(&key, macos), label);
-                if !entries.contains(&entry) {
-                    entries.push(entry);
-                }
-            }
-        }
+        let input: Vec<String> = self.input.iter().map(keystroke_string).collect();
+        let entries: Vec<_> = shortcuts::hints(&live_bindings(cx), &input)
+            .into_iter()
+            .map(|hint| (format_binding(&hint.keys[0], macos), hint.label))
+            .collect();
         (!entries.is_empty()).then(|| WhichKey {
-            title: format_binding(
-                &self
-                    .input
-                    .iter()
-                    .map(keystroke_string)
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                macos,
-            ),
+            title: format_binding(&input.join(" "), macos),
             entries,
             footer: "Esc cancels",
         })
@@ -139,8 +122,8 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{Choice, ComposerLeader};
-    use gpui_kit::{KeyBinding, Keymap, Keystroke};
+    use super::{Choice, ComposerLeader, OpenPalette, OpenShortcuts};
+    use gpui_kit::{KeyBinding, Keymap, Keystroke, TestAppContext};
 
     #[gpui::test]
     fn composer_leader_ignores_elapsed_timeout_and_resolves_configured_choice(
@@ -174,5 +157,47 @@ mod tests {
             selection.choose(&Keystroke::parse("escape").unwrap(), &map),
             Choice::Cancel
         ));
+    }
+
+    #[gpui::test]
+    fn composer_hint_matches_pending_hint_and_prefers_glyphs(cx: &mut TestAppContext) {
+        let prefix = Keystroke::parse("ctrl-space").unwrap();
+        let (composer_hint, normal) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.bind_keys([
+                KeyBinding::new("ctrl-space ?", OpenShortcuts, None),
+                KeyBinding::new("ctrl-space shift-/", OpenShortcuts, None),
+                KeyBinding::new("ctrl-space :", OpenPalette, None),
+                KeyBinding::new("ctrl-space shift-;", OpenPalette, None),
+                KeyBinding::new("ctrl-space a", super::CreateWorkspace, None),
+            ]);
+            let leader = crate::app::leader(cx);
+            let bindings = cx.key_bindings();
+            let map = bindings.borrow();
+            let selection = ComposerLeader::start(&prefix, &leader, vec![], &map).unwrap();
+            drop(map);
+            drop(bindings);
+            let composer_hint = selection.hint(cx).unwrap();
+            let live = crate::features::shortcuts::live_bindings(cx);
+            let normal = super::shortcuts::hints(&live, &[leader]);
+            (composer_hint, normal)
+        });
+        assert_eq!(composer_hint.entries.len(), normal.len());
+        for ((got_key, got_label), hint) in composer_hint.entries.iter().zip(normal.iter()) {
+            assert_eq!(*got_label, hint.label);
+            assert_eq!(
+                got_key.as_str(),
+                gentle_core::keyboard::format_binding(&hint.keys[0], cfg!(target_os = "macos"))
+            );
+        }
+        let keys: Vec<_> = composer_hint
+            .entries
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert!(keys.contains(&"?"));
+        assert!(keys.contains(&":"));
+        assert!(!keys.iter().any(|k| k.contains('/') && k.contains('⇧')));
+        assert!(!keys.iter().any(|k| k.contains(';')));
     }
 }

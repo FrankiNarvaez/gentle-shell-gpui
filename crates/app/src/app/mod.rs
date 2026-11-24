@@ -72,7 +72,8 @@ fn leader_bindings(prefix: &str) -> Vec<(String, Box<dyn Action>)> {
         entry(p, "shift-/", workspace::OpenShortcuts),
         entry(p, "w", workspace::GoToTab),
         entry(p, "shift-w", workspace::OpenWorkspaces),
-        entry(p, "a", workspace::CreateWorkspaceFromFolder),
+        entry(p, "a", workspace::CreateWorkspace),
+        entry(p, "shift-d", workspace::DeleteWorkspace),
         entry(p, "shift-c", NewCanvasTab),
     ]
 }
@@ -536,7 +537,9 @@ mod tests {
         .collect();
         expected.extend((1..=9).map(|n| format!("ctrl-space {n}")));
         expected.extend(["ctrl-space ?".to_string(), "ctrl-space shift-/".to_string()]);
-        expected.extend(["w", "shift-w", "a", "shift-c"].map(|key| format!("ctrl-space {key}")));
+        expected.extend(
+            ["w", "shift-w", "a", "shift-d", "shift-c"].map(|key| format!("ctrl-space {key}")),
+        );
         assert_eq!(keys, expected);
     }
 
@@ -579,6 +582,14 @@ mod tests {
         );
         assert_eq!(label(session::Abort.name()), Some("Interrupt the agent"));
         assert_eq!(label(super::ZoomIn.name()), Some("Zoom in"));
+        assert_eq!(
+            label(workspace::CreateWorkspace.name()),
+            Some("Create workspace")
+        );
+        assert_eq!(
+            label(workspace::DeleteWorkspace.name()),
+            Some("Delete workspace…")
+        );
     }
 
     #[test]

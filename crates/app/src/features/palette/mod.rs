@@ -90,6 +90,7 @@ pub enum PaletteAction {
     GoToTab,
     ActivateGlobalTab(usize),
     OpenWorkspaces,
+    OpenDeleteWorkspace,
     CreateWorkspaceFromFolder,
     SwitchWorkspace(usize),
     RenameWorkspace {
@@ -217,6 +218,8 @@ pub struct PaletteView {
     files: Option<Vec<FileEntry>>,
     branches: Option<Vec<(String, bool)>>,
     renaming: Option<(usize, Entity<InputState>)>,
+    /// Choosing a workspace to delete: Enter confirms instead of switching.
+    deleting: bool,
     /// The query as last matched.
     needle: Needle,
     /// Matched rows and their display lines, recomputed by
@@ -245,7 +248,7 @@ impl PaletteView {
             }
         });
         let mut commands = screen_rows(input.tab_layout);
-        apply_binding_hints(&mut commands, window);
+        apply_binding_hints(&mut commands, window, cx);
         commands.extend(input.commands.into_iter().filter_map(command_row));
 
         let root = input.root.clone();
@@ -290,6 +293,7 @@ impl PaletteView {
             files: None,
             branches: None,
             renaming: None,
+            deleting: false,
             needle: Needle::default(),
             rows: Vec::new(),
             lines: Vec::new(),
@@ -312,6 +316,9 @@ impl PaletteView {
         cx: &mut Context<Self>,
     ) {
         self.category = category;
+        if category != Category::Workspaces {
+            self.deleting = false;
+        }
         self.selected = 0;
         self.renaming = None;
         self.scroll.scroll_to_item(0);
@@ -328,9 +335,21 @@ impl PaletteView {
 
     /// Enter the workspace picker from its command row, not from a category shortcut.
     pub fn show_workspace_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.deleting = false;
         self.query
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.set_category(Category::Workspaces, window, cx);
+    }
+
+    /// Enter the workspace deleter: each row deletes instead of switching.
+    pub fn show_workspace_deleter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.deleting = true;
+        self.query
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.set_category(Category::Workspaces, window, cx);
+        self.query.update(cx, |state, cx| {
+            state.set_placeholder("Choose a workspace to delete…", window, cx)
+        });
     }
 
     /// The workspaces changed while the switcher is open (an agent started,

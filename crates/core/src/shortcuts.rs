@@ -113,7 +113,8 @@ pub fn label(action: &str) -> Option<&'static str> {
         "gentle::OpenSessions" => "Sessions",
         "gentle::OpenWorkspaces" => "Switch workspace…",
         "gentle::GoToTab" => "Go to tab…",
-        "gentle::CreateWorkspaceFromFolder" => "Create workspace from folder…",
+        "gentle::CreateWorkspace" => "Create workspace",
+        "gentle::DeleteWorkspace" => "Delete workspace…",
         "gentle::OpenSettings" => "Settings",
         "gentle::CloseOverlay" => "Close screen",
         "gentle::Quit" => "Quit",
@@ -163,9 +164,28 @@ pub fn label(action: &str) -> Option<&'static str> {
     })
 }
 
+/// The last keystroke of a binding string (a single keystroke or the last
+/// one of a sequence).
+fn last_keystroke(sequence: &str) -> &str {
+    sequence.split_whitespace().last().unwrap_or(sequence)
+}
+
+/// When both the glyph (`?`, `:`) and its `shift-` spelling bind the same
+/// action, keep only the glyph. The physical key is the same on most
+/// layouts, and the guide should show one entry.
+fn collapse_shift_aliases(keys: &mut Vec<String>) {
+    let has_question = keys.iter().any(|k| last_keystroke(k) == "?");
+    let has_colon = keys.iter().any(|k| last_keystroke(k) == ":");
+    keys.retain(|k| {
+        let last = last_keystroke(k);
+        !(has_question && last == "shift-/" || has_colon && last == "shift-;")
+    });
+}
+
 /// The keys that can follow `pending` (binding strings), for bindings with
 /// a label. Several bindings to the same action merge into one hint; the
-/// keymap's order is kept.
+/// keymap's order is kept. `?` and `:` are preferred over `shift-/` and
+/// `shift-;`.
 pub fn hints(bindings: &[Binding], pending: &[String]) -> Vec<Hint> {
     let mut hints: Vec<Hint> = Vec::new();
     for binding in bindings {
@@ -187,6 +207,9 @@ pub fn hints(bindings: &[Binding], pending: &[String]) -> Vec<Hint> {
                 label,
             }),
         }
+    }
+    for hint in &mut hints {
+        collapse_shift_aliases(&mut hint.keys);
     }
     hints
 }
@@ -281,10 +304,48 @@ pub fn groups(bindings: &[Binding], leader: &str) -> Vec<Group> {
                     }),
                 }
             }
+            for row in &mut rows {
+                collapse_shift_aliases(&mut row.keys);
+            }
             rows.sort_by_key(|r| r.label.to_lowercase());
             (!rows.is_empty()).then_some(Group { section, rows })
         })
         .collect()
+}
+
+/// If `selected` ends with `shift-/` (or `shift-;`) and the same action is
+/// also bound to `?` (or `:`), return `selected` with the glyph spelling.
+/// This keeps both bindings working while the hint shows the preferred one.
+pub fn preferred_display_sequence(
+    action: &str,
+    selected: &str,
+    bindings: &[Binding],
+) -> Option<String> {
+    let last = last_keystroke(selected);
+    let preferred = match last {
+        "shift-/"
+            if bindings
+                .iter()
+                .any(|b| b.action == action && last_keystroke(&b.keys.join(" ")) == "?") =>
+        {
+            "?"
+        }
+        "shift-;"
+            if bindings
+                .iter()
+                .any(|b| b.action == action && last_keystroke(&b.keys.join(" ")) == ":") =>
+        {
+            ":"
+        }
+        _ => return None,
+    };
+    Some(
+        selected
+            .split_whitespace()
+            .map(|part| if part == last { preferred } else { part })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
 }
 
 /// The groups that match `query`: every word has to appear in the row's
@@ -403,10 +464,12 @@ mod tests {
     }
 
     #[test]
-    fn hints_merge_aliases_of_one_action() {
+    fn hints_merge_aliases_of_one_action_and_prefer_the_glyph() {
         let hints = hints(&keymap(), &pending(&["ctrl-space"]));
         let palette = hints.iter().find(|h| h.label == "Command palette").unwrap();
-        assert_eq!(palette.keys, [":", "shift-;"]);
+        assert_eq!(palette.keys, [":"]);
+        assert!(!hints.iter().any(|h| h.keys.iter().any(|k| k == "shift-;")));
+        assert!(!hints.iter().any(|h| h.keys.iter().any(|k| k == "shift-/")));
     }
 
     #[test]
@@ -464,7 +527,7 @@ mod tests {
             labels,
             ["Command palette", "Focus pane left", "New agent tab"]
         );
-        assert_eq!(leader.rows[0].keys, ["ctrl-space :", "ctrl-space shift-;"]);
+        assert_eq!(leader.rows[0].keys, ["ctrl-space :"]);
         let files = groups.iter().find(|g| g.section == Section::Files).unwrap();
         assert!(files.rows.iter().all(|r| r.vim));
         let direct = groups
@@ -504,5 +567,33 @@ mod tests {
         let all = groups(&keymap(), "ctrl-space");
         assert!(search(&all, "zzz", true).is_empty());
         assert_eq!(search(&all, "   ", true), all);
+    }
+
+    #[test]
+    fn workspace_action_labels_are_renamed() {
+        assert_eq!(label("gentle::CreateWorkspace"), Some("Create workspace"));
+        assert_eq!(label("gentle::DeleteWorkspace"), Some("Delete workspace…"));
+    }
+
+    #[test]
+    fn preferred_display_sequence_chooses_the_glyph_alias() {
+        let bindings = [
+            b(&["ctrl-space", "?"], "gentle::OpenShortcuts", None),
+            b(&["ctrl-space", "shift-/"], "gentle::OpenShortcuts", None),
+            b(&["ctrl-space", ":"], "gentle::OpenPalette", None),
+            b(&["ctrl-space", "shift-;"], "gentle::OpenPalette", None),
+        ];
+        assert_eq!(
+            preferred_display_sequence("gentle::OpenShortcuts", "ctrl-space shift-/", &bindings),
+            Some("ctrl-space ?".into())
+        );
+        assert_eq!(
+            preferred_display_sequence("gentle::OpenPalette", "ctrl-space shift-;", &bindings),
+            Some("ctrl-space :".into())
+        );
+        assert!(
+            preferred_display_sequence("gentle::OpenShortcuts", "ctrl-space ?", &bindings)
+                .is_none()
+        );
     }
 }

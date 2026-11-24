@@ -15,11 +15,24 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_palette_internal(category, false, window, cx)
+    }
+
+    fn open_palette_internal(
+        &mut self,
+        category: Category,
+        deleting: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some((Overlay::Palette(view), _)) = &self.overlay {
-            if view.read(cx).category() == category {
+            if view.read(cx).category() == category && !deleting {
                 self.close_overlay(window, cx);
             } else {
                 view.update(cx, |view, cx| view.set_category(category, window, cx));
+                if deleting {
+                    view.update(cx, |view, cx| view.show_workspace_deleter(window, cx));
+                }
             }
             return;
         }
@@ -80,14 +93,25 @@ impl Workspace {
                 PaletteEvent::Run(PaletteAction::OpenWorkspaces) => {
                     palette.update(cx, |view, cx| view.show_workspace_picker(window, cx));
                 }
+                PaletteEvent::Run(PaletteAction::OpenDeleteWorkspace) => {
+                    palette.update(cx, |view, cx| view.show_workspace_deleter(window, cx));
+                }
                 PaletteEvent::Run(action) => {
                     this.close_overlay(window, cx);
                     this.run_palette_action(action.clone(), window, cx);
                 }
             },
         );
+        if deleting {
+            view.update(cx, |view, cx| view.show_workspace_deleter(window, cx));
+        }
         self.overlay = Some((Overlay::Palette(view), subscription));
         cx.notify();
+    }
+
+    /// Open the workspace switcher in delete mode.
+    pub(super) fn open_workspace_deleter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette_internal(Category::Workspaces, true, window, cx);
     }
 
     /// Every workspace as the switcher lists it, with what its agents do.
@@ -255,6 +279,7 @@ impl Workspace {
             PaletteAction::GoToTab => self.open_palette(Category::Tabs, window, cx),
             PaletteAction::ActivateGlobalTab(_) => {}
             PaletteAction::OpenWorkspaces => self.open_palette(Category::Workspaces, window, cx),
+            PaletteAction::OpenDeleteWorkspace => self.open_workspace_deleter(window, cx),
             PaletteAction::CreateWorkspaceFromFolder => {
                 self.pick_workspace_folder(None, window, cx)
             }

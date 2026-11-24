@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 #[derive(Default)]
-struct Trace {
+pub(crate) struct Trace {
     built: RefCell<Vec<PathBuf>>,
     roots: RefCell<Vec<PathBuf>>,
 }
@@ -42,10 +42,10 @@ fn saved(id: usize, kind: PaneKind, cwd: PathBuf) -> Tab {
     }
 }
 
-struct TestRoot(PathBuf);
+pub(crate) struct TestRoot(PathBuf);
 
 impl TestRoot {
-    fn join(&self, path: &str) -> PathBuf {
+    pub(crate) fn join(&self, path: &str) -> PathBuf {
         self.0.join(path)
     }
 }
@@ -56,7 +56,7 @@ impl Drop for TestRoot {
     }
 }
 
-fn fixture<'a>(
+pub(crate) fn fixture<'a>(
     cx: &'a mut TestAppContext,
     tag: &str,
     cold: bool,
@@ -222,14 +222,14 @@ fn fixture<'a>(
     (host, cx, root, trace)
 }
 
-fn active(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> (usize, usize) {
+pub(crate) fn active(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> (usize, usize) {
     cx.update(|_, cx| {
         let w = host.read(cx);
         (w.current, w.tab().unwrap().id)
     })
 }
 
-fn category(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> Option<Category> {
+pub(crate) fn category(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> Option<Category> {
     cx.update(|_, cx| match &host.read(cx).overlay {
         Some((Overlay::Palette(p), _)) => Some(p.read(cx).category()),
         _ => None,
@@ -362,7 +362,7 @@ fn t8_verifier_palette_commands_and_folder_cancel(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("enter");
     assert_eq!(active(&host, cx), (0, 11));
     cx.simulate_keystrokes(palette_key);
-    cx.simulate_input("Create workspace from folder");
+    cx.simulate_input("Create workspace");
     cx.simulate_keystrokes("enter");
     assert!(cx.did_prompt_for_paths());
     cx.simulate_path_prompt_response(|o| {
