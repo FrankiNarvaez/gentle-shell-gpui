@@ -133,8 +133,6 @@ pub enum FileTreeEvent {
     OpenAgent(PathBuf),
     /// Show the Git pane of this repository.
     OpenHistory(PathBuf),
-    /// The header's collapse button: the owner should hide the sidebar.
-    Collapse,
     /// The header's folder name: the owner should let the user pick another
     /// root folder.
     ChooseFolder,
@@ -1537,15 +1535,7 @@ impl Render for FileTreeView {
                             None => menu,
                         }),
                 )
-            })
-            .child(
-                Self::header_button(
-                    "file-tree-collapse",
-                    IconName::PanelRightClose,
-                    "Hide Files sidebar",
-                )
-                .on_click(cx.listener(|_, _, _, cx| cx.emit(FileTreeEvent::Collapse))),
-            );
+            });
         // Only the visible tab polls git, so the badge reads whichever one is
         // live: the Changes view on its tab, the tree's own snapshot elsewhere.
         let change_count = match (&self.tab, &self.git) {
