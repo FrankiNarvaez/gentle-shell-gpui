@@ -474,7 +474,24 @@ impl Workspace {
                                         .icon(Icon::new(kind.icon()))
                                         .on_click(move |_, window, cx| {
                                             let _ = weak.update(cx, |this, cx| {
-                                                this.open_workspace_tab(index, kind, window, cx);
+                                                let Some(space) = this.spaces.get(index) else {
+                                                    return;
+                                                };
+                                                let name = space.name.clone();
+                                                cx.spawn_in(window, async move |this, cx| {
+                                                    let _ = this.update_in(cx, |this, window, cx| {
+                                                        if let Some(index) = this
+                                                            .spaces
+                                                            .iter()
+                                                            .position(|space| space.name == name)
+                                                        {
+                                                            this.open_workspace_tab(
+                                                                index, kind, window, cx,
+                                                            );
+                                                        }
+                                                    });
+                                                })
+                                                .detach();
                                             });
                                         }),
                                 );

@@ -981,6 +981,31 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn empty_workspace_can_open_and_close_first_tab(cx: &mut TestAppContext) {
+        with_workspace(
+            cx,
+            vec![space_with("A", &[]), space_with("B", &[])],
+            0,
+            |ws, window, cx| {
+                ws.switch_workspace(1, window, cx);
+                assert!(ws.space().tabs.is_empty());
+                ws.open_workspace_tab(1, PaneKind::Terminal, window, cx);
+                assert_eq!(ws.space().tabs.len(), 1);
+                let pane = ws.focused_pane().unwrap();
+                assert!(ws.panes.contains_key(&pane));
+                ws.switch_workspace(0, window, cx);
+                assert!(ws.space().tabs.is_empty());
+                assert!(ws.panes.contains_key(&pane));
+                ws.switch_workspace(1, window, cx);
+                assert_eq!(ws.focused_pane(), Some(pane));
+                ws.close_tab_now(0, window, cx);
+                assert!(ws.space().tabs.is_empty());
+                assert!(!ws.panes.contains_key(&pane));
+            },
+        );
+    }
+
     fn sorted(ids: Vec<usize>) -> Vec<usize> {
         let mut ids = ids;
         ids.sort_unstable();

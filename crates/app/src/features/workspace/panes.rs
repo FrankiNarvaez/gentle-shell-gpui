@@ -411,7 +411,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Option<PaneId> {
         match kind {
-            PaneKind::Agent => Some(self.new_agent_pane(target, prompt, resume, true, window, cx)),
+            // Register the pane before starting its backend. Activation
+            // starts shown agents after the new tab has been inserted.
+            PaneKind::Agent => Some(self.new_agent_pane(target, prompt, resume, false, window, cx)),
             PaneKind::Terminal
             | PaneKind::File
             | PaneKind::History
