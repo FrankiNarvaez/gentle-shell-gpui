@@ -83,8 +83,11 @@ fn render_group(group: &Group, leader: &str) -> Div {
 impl Render for ShortcutsView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.query.read(cx).value().to_string();
-        let groups = shortcuts::search(&self.groups, &query, MACOS);
+        // Read the live keymap on every render, so a reload while the screen
+        // is open shows the new bindings.
         let leader = crate::app::leader(cx);
+        let all = shortcuts::groups(&super::live_bindings(cx), &leader);
+        let groups = shortcuts::search(&all, &query, MACOS);
         let (backdrop, panel) = ui::screen(Some(760.));
         backdrop.occlude().child(ui::pop_in(
             "shortcuts-screen",

@@ -6,7 +6,7 @@
 mod hint;
 mod view;
 
-use gentle_core::shortcuts::{Binding, Group};
+use gentle_core::shortcuts::Binding;
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
@@ -18,7 +18,6 @@ pub enum ShortcutsEvent {
 
 pub struct ShortcutsView {
     query: Entity<InputState>,
-    groups: Vec<Group>,
     _subscription: Subscription,
 }
 
@@ -34,7 +33,6 @@ impl ShortcutsView {
             cx.subscribe_in(&query, window, |_, _, _: &InputEvent, _, cx| cx.notify());
         Self {
             query,
-            groups: gentle_core::shortcuts::groups(&live_bindings(cx), &crate::app::leader(cx)),
             _subscription: subscription,
         }
     }

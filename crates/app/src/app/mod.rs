@@ -229,6 +229,11 @@ pub fn leader(cx: &App) -> String {
 /// top (later bindings win). Calling it again reloads the keymap. Returns what
 /// was wrong in the file, one line each; bad entries are skipped.
 pub fn bind_keys(cx: &mut App) -> Vec<String> {
+    bind_keys_from(crate::shared::keymap::load(), cx)
+}
+
+/// [`bind_keys`] with the user's keymap given, so tests don't need the file.
+fn bind_keys_from(user: keymap::Keymap, cx: &mut App) -> Vec<String> {
     if cx.has_global::<Foreign>() {
         let foreign = cx.global::<Foreign>().0.clone();
         cx.clear_key_bindings();
@@ -237,7 +242,6 @@ pub fn bind_keys(cx: &mut App) -> Vec<String> {
         let snapshot = cx.key_bindings().borrow().bindings().cloned().collect();
         cx.set_global(Foreign(snapshot));
     }
-    let user = crate::shared::keymap::load();
     let mut messages: Vec<String> = user.errors.iter().map(|e| e.describe()).collect();
     bind_defaults(cx);
     let mut leader = Vec::new();
@@ -252,8 +256,25 @@ pub fn bind_keys(cx: &mut App) -> Vec<String> {
     cx.bind_keys(pane_mode_bindings());
     files::bind_keys(cx);
     crate::features::canvas::bind_keys(cx);
+    // Defaults with no context: a user entry in a context never beats these.
+    let globals: Vec<String> = cx
+        .key_bindings()
+        .borrow()
+        .bindings()
+        .filter(|b| b.predicate().is_none())
+        .map(|b| {
+            b.keystrokes()
+                .iter()
+                .map(|k| crate::features::shortcuts::keystroke_string(k.inner()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect();
     let mut bindings = Vec::new();
     for entry in &user.bindings {
+        if let Some(issue) = keymap::contextual_override_warning(entry, &globals) {
+            messages.push(issue.describe());
+        }
         match user_binding(entry, cx) {
             Ok(binding) => bindings.push(binding),
             Err(e) => messages.push(
@@ -452,8 +473,49 @@ fn set_menus(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{leader_bindings, pane_mode_bindings};
-    use gentle_core::keymap::DEFAULT_LEADER;
+    use super::{bind_keys_from, leader_bindings, pane_mode_bindings};
+    use gentle_core::keymap::{self, DEFAULT_LEADER};
+    use gpui_kit::{KeyBinding, TestAppContext};
+
+    gpui_kit::actions!(keymap_test, [Probe]);
+
+    fn count(cx: &mut TestAppContext) -> usize {
+        cx.update(|cx| cx.key_bindings().borrow().bindings().count())
+    }
+
+    /// Reloading rebinds from scratch: the count is stable, the bindings other
+    /// code registered survive, and a context on a global default warns.
+    #[gpui::test]
+    fn reloading_the_keymap_is_idempotent_and_keeps_foreign_bindings(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| cx.bind_keys([KeyBinding::new("ctrl-alt-9", Probe, None)]));
+        let foreign = count(cx);
+        let first = cx.update(|cx| bind_keys_from(keymap::Keymap::default(), cx));
+        assert!(first.is_empty(), "{first:?}");
+        let bound = count(cx);
+        assert!(bound > foreign);
+        let again = cx.update(|cx| bind_keys_from(keymap::Keymap::default(), cx));
+        assert!(again.is_empty());
+        assert_eq!(count(cx), bound);
+        let kept = cx.update(|cx| {
+            cx.key_bindings()
+                .borrow()
+                .bindings()
+                .any(|b| b.action().name() == "keymap_test::Probe")
+        });
+        assert!(kept);
+
+        let user = keymap::parse(
+            r#"{"bindings":[{"keys":"ctrl-space h","action":null,"context":"GentleWorkspace"}]}"#,
+        );
+        let messages = cx.update(|cx| bind_keys_from(user, cx));
+        assert_eq!(
+            messages,
+            [
+                "keymap.json bindings[0]: \"ctrl-space h\" is bound globally by default; omit \"context\" to change it"
+            ]
+        );
+    }
 
     #[test]
     fn default_leader_bindings_are_unchanged() {

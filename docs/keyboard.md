@@ -99,7 +99,7 @@ More Files keys (always on): open to the side ⌘↵, open in a new tab ⌥⌘�
 
 ## Terminals
 
-Terminal panes get every key that the app has no binding for. The app takes ⌃Space for the leader, so a terminal program never sees it: that is Ctrl+Space (NUL), which readline, emacs and tmux use for set-mark and as an alternative prefix. If you rely on it, run tmux with another prefix inside the app; the leader's key is meant to become configurable (see below).
+Terminal panes get every key that the app has no binding for. The app takes ⌃Space for the leader, so a terminal program never sees it: that is Ctrl+Space (NUL), which readline, emacs and tmux use for set-mark and as an alternative prefix. If you rely on it, run tmux with another prefix inside the app; the leader's key is configurable in `keymap.json` (see below).
 
 The leader waits about a second for its second key.
 

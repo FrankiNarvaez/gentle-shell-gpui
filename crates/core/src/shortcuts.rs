@@ -189,8 +189,50 @@ pub fn hints(bindings: &[Binding], pending: &[String]) -> Vec<Hint> {
     hints
 }
 
+/// A keystroke in one canonical spelling, so `shift-ctrl-a`, `ctrl-shift-a`
+/// and (off macOS) `cmd-a`/`super-a` compare equal: modifiers in the order
+/// ctrl, super, alt, shift, fn; `cmd`, `super` and `win` are the same key.
+pub fn canonical_keystroke(stroke: &str) -> String {
+    let mut mods = [false; 5];
+    let mut rest = stroke;
+    while let Some((head, tail)) = rest.split_once('-') {
+        let slot = match head {
+            "ctrl" | "control" => 0,
+            "cmd" | "super" | "win" => 1,
+            "alt" | "option" => 2,
+            "shift" => 3,
+            "fn" => 4,
+            _ => break,
+        };
+        mods[slot] = true;
+        rest = tail;
+    }
+    let mut out = String::new();
+    for (on, name) in mods.iter().zip(["ctrl", "super", "alt", "shift", "fn"]) {
+        if *on {
+            out.push_str(name);
+            out.push('-');
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Whether two binding strings (a keystroke or a sequence) press the same keys.
+pub fn same_keys(a: &str, b: &str) -> bool {
+    let mut a = a.split_whitespace();
+    let mut b = b.split_whitespace();
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) if canonical_keystroke(x) == canonical_keystroke(y) => {}
+            _ => return false,
+        }
+    }
+}
+
 fn section_of(binding: &Binding, leader: &str) -> Section {
-    if binding.keys.len() > 1 && binding.keys[0] == leader {
+    if binding.keys.len() > 1 && same_keys(&binding.keys[0], leader) {
         return Section::Leader;
     }
     let context = binding.context.as_deref().unwrap_or("");
@@ -318,6 +360,27 @@ mod tests {
                 Some("GentleSession && !pane_mode"),
             ),
         ]
+    }
+
+    #[test]
+    fn leader_section_ignores_how_the_leader_is_spelled() {
+        let keymap = [b(&["ctrl-shift-a", "h"], "gentle::FocusPaneLeft", None)];
+        for leader in ["ctrl-shift-a", "shift-ctrl-a"] {
+            let groups = groups(&keymap, leader);
+            assert_eq!(groups.len(), 1, "leader {leader}");
+            assert_eq!(groups[0].section, Section::Leader, "leader {leader}");
+        }
+        let keymap = [b(&["super-a", "h"], "gentle::FocusPaneLeft", None)];
+        assert_eq!(groups(&keymap, "cmd-a")[0].section, Section::Leader);
+        assert_eq!(groups(&keymap, "ctrl-a")[0].section, Section::Direct);
+    }
+
+    #[test]
+    fn same_keys_compares_sequences_and_the_minus_key() {
+        assert!(same_keys("ctrl-space h", "ctrl-space  h"));
+        assert!(!same_keys("ctrl-space h", "ctrl-space"));
+        assert!(same_keys("cmd--", "cmd--"));
+        assert!(!same_keys("cmd--", "cmd-="));
     }
 
     #[test]

@@ -187,6 +187,24 @@ pub fn template(leader: &str) -> String {
     format!("{{\n  \"leader\": \"{leader}\",\n  \"bindings\": []\n}}\n")
 }
 
+/// The warning for an entry that names a context but whose keys the app binds
+/// without one by default: GPUI ranks a context-less binding deepest, so the
+/// entry would never win. `globals` are the default bindings that have no
+/// context, one binding string each. `None` when the entry is fine.
+pub fn contextual_override_warning(entry: &Binding, globals: &[String]) -> Option<Issue> {
+    entry.context.as_ref()?;
+    globals
+        .iter()
+        .any(|g| crate::shortcuts::same_keys(g, &entry.keys))
+        .then(|| Issue {
+            index: Some(entry.index),
+            message: format!(
+                "\"{}\" is bound globally by default; omit \"context\" to change it",
+                entry.keys
+            ),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -320,5 +338,27 @@ mod tests {
         let k = parse(&template("ctrl-a"));
         assert_eq!(k.leader, "ctrl-a");
         assert!(k.errors.is_empty() && k.bindings.is_empty());
+    }
+
+    #[test]
+    fn contextual_entry_on_a_global_default_warns() {
+        let globals = vec!["ctrl-space h".to_string(), "cmd-t".to_string()];
+        let entry = b(3, "ctrl-space h", None, Some("GentleWorkspace"));
+        let issue = contextual_override_warning(&entry, &globals).unwrap();
+        assert_eq!(
+            issue.describe(),
+            "keymap.json bindings[3]: \"ctrl-space h\" is bound globally by default; omit \"context\" to change it"
+        );
+        // Spelled differently, same keys.
+        let entry = b(0, "ctrl-space  h", Some("x"), Some("GentleWorkspace"));
+        assert!(contextual_override_warning(&entry, &globals).is_some());
+    }
+
+    #[test]
+    fn no_warning_without_context_or_without_a_global_default() {
+        let globals = vec!["ctrl-space h".to_string()];
+        assert!(contextual_override_warning(&b(0, "ctrl-space h", None, None), &globals).is_none());
+        let other = b(0, "ctrl-space j", None, Some("GentleWorkspace"));
+        assert!(contextual_override_warning(&other, &globals).is_none());
     }
 }
