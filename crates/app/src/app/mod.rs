@@ -4,8 +4,9 @@
 pub mod integration;
 
 use std::path::PathBuf;
+use std::rc::Rc;
 
-use gentle_core::interface_size;
+use gentle_core::{interface_size, keymap};
 use gpui_kit::component::{Theme, ThemeMode, TitleBar};
 use gpui_kit::*;
 
@@ -26,48 +27,46 @@ use crate::{
 
 actions!(gentle, [ZoomIn, ZoomOut, ActualSize]);
 
-/// The leader prefix: every one-shot leader binding is this followed by one
-/// key. One value so a configurable prefix only has to change it.
-pub const LEADER: &str = "ctrl-space";
-
 /// Key context of the workspace while pane mode is on.
 const PANE_MODE: &str = "GentleWorkspace && pane_mode";
 
-/// The leader (one-shot) bindings, all built from `prefix`.
-fn leader_bindings(prefix: &str) -> Vec<KeyBinding> {
-    // `KeyBinding::new` wants `'static` text; these few strings live for the
-    // whole run anyway and are built once at startup.
-    let seq = |k: &str| -> &'static str { Box::leak(format!("{prefix} {k}").into_boxed_str()) };
+/// The leader (one-shot) bindings as `(keystrokes, action)`, all built from
+/// `prefix` (the user's leader, `keymap.json`; `ctrl-space` by default).
+fn leader_bindings(prefix: &str) -> Vec<(String, Box<dyn Action>)> {
+    fn entry<A: Action>(prefix: &str, key: &str, action: A) -> (String, Box<dyn Action>) {
+        (format!("{prefix} {key}"), Box::new(action))
+    }
+    let p = prefix;
     vec![
-        KeyBinding::new(seq("h"), FocusPaneLeft, None),
-        KeyBinding::new(seq("j"), FocusPaneDown, None),
-        KeyBinding::new(seq("k"), FocusPaneUp, None),
-        KeyBinding::new(seq("l"), FocusPaneRight, None),
-        KeyBinding::new(seq("v"), SplitRight, None),
-        KeyBinding::new(seq("s"), SplitDown, None),
-        KeyBinding::new(seq("x"), ClosePane, None),
-        KeyBinding::new(seq("u"), ReopenClosed, None),
-        KeyBinding::new(seq("c"), NewTab, None),
-        KeyBinding::new(seq("t"), NewTerminalTab, None),
-        KeyBinding::new(seq("n"), NextTab, None),
-        KeyBinding::new(seq("p"), PrevTab, None),
-        KeyBinding::new(seq("f"), FocusFiles, None),
-        KeyBinding::new(seq("g"), FocusChanges, None),
-        KeyBinding::new(seq("i"), FocusComposer, None),
-        KeyBinding::new(seq("b"), ToggleSidebar, None),
+        entry(p, "h", FocusPaneLeft),
+        entry(p, "j", FocusPaneDown),
+        entry(p, "k", FocusPaneUp),
+        entry(p, "l", FocusPaneRight),
+        entry(p, "v", SplitRight),
+        entry(p, "s", SplitDown),
+        entry(p, "x", ClosePane),
+        entry(p, "u", ReopenClosed),
+        entry(p, "c", NewTab),
+        entry(p, "t", NewTerminalTab),
+        entry(p, "n", NextTab),
+        entry(p, "p", PrevTab),
+        entry(p, "f", FocusFiles),
+        entry(p, "g", FocusChanges),
+        entry(p, "i", FocusComposer),
+        entry(p, "b", ToggleSidebar),
         // `:` is shift-; on most layouts; platforms report it either way.
-        KeyBinding::new(seq(":"), workspace::OpenPalette, None),
-        KeyBinding::new(seq("shift-;"), workspace::OpenPalette, None),
-        KeyBinding::new(seq("space"), TogglePaneMode, None),
-        KeyBinding::new(seq("1"), ActivateTab1, None),
-        KeyBinding::new(seq("2"), ActivateTab2, None),
-        KeyBinding::new(seq("3"), ActivateTab3, None),
-        KeyBinding::new(seq("4"), ActivateTab4, None),
-        KeyBinding::new(seq("5"), ActivateTab5, None),
-        KeyBinding::new(seq("6"), ActivateTab6, None),
-        KeyBinding::new(seq("7"), ActivateTab7, None),
-        KeyBinding::new(seq("8"), ActivateTab8, None),
-        KeyBinding::new(seq("9"), ActivateTab9, None),
+        entry(p, ":", workspace::OpenPalette),
+        entry(p, "shift-;", workspace::OpenPalette),
+        entry(p, "space", TogglePaneMode),
+        entry(p, "1", ActivateTab1),
+        entry(p, "2", ActivateTab2),
+        entry(p, "3", ActivateTab3),
+        entry(p, "4", ActivateTab4),
+        entry(p, "5", ActivateTab5),
+        entry(p, "6", ActivateTab6),
+        entry(p, "7", ActivateTab7),
+        entry(p, "8", ActivateTab8),
+        entry(p, "9", ActivateTab9),
     ]
 }
 
@@ -118,7 +117,7 @@ pub fn run(
             crate::features::backend::init(cx);
             crate::features::diagnostics::start(cx);
 
-            bind_keys(cx);
+            let key_messages = bind_keys(cx);
             cx.on_action(|_: &Quit, cx| cx.quit());
             cx.on_action(|_: &ZoomIn, cx| step_interface_size(interface_size::bigger, cx));
             cx.on_action(|_: &ZoomOut, cx| step_interface_size(interface_size::smaller, cx));
@@ -154,6 +153,7 @@ pub fn run(
                     Workspace::new(folder.clone(), prompt.clone(), url.clone(), window, cx)
                 });
                 integration::attach_sidebar(&workspace, window, cx);
+                workspace.update(cx, |w, cx| w.report_keymap(&key_messages, cx));
                 workspace
             })
             .expect("failed to open the Gentle Shell window");
@@ -204,7 +204,75 @@ fn step_interface_size(step: fn(u16) -> u16, cx: &mut App) {
     themes::set_interface_size(step(now), cx);
 }
 
-fn bind_keys(cx: &mut App) {
+/// Bindings other code registered before the app's own (text inputs, …): a
+/// reload clears the keymap and puts these back.
+struct Foreign(Vec<KeyBinding>);
+
+impl Global for Foreign {}
+
+/// Binds every app shortcut: the defaults, then the user's `keymap.json` on
+/// top (later bindings win). Calling it again reloads the keymap. Returns what
+/// was wrong in the file, one line each; bad entries are skipped.
+pub fn bind_keys(cx: &mut App) -> Vec<String> {
+    if cx.has_global::<Foreign>() {
+        let foreign = cx.global::<Foreign>().0.clone();
+        cx.clear_key_bindings();
+        cx.bind_keys(foreign);
+    } else {
+        let snapshot = cx.key_bindings().borrow().bindings().cloned().collect();
+        cx.set_global(Foreign(snapshot));
+    }
+    let user = crate::shared::keymap::load();
+    let mut messages: Vec<String> = user.errors.iter().map(|e| e.describe()).collect();
+    bind_defaults(cx);
+    let mut leader = Vec::new();
+    for (keys, action) in leader_bindings(&user.leader) {
+        match KeyBinding::load(&keys, action, None, false, None, cx) {
+            Ok(binding) => leader.push(binding),
+            Err(e) => messages.push(format!("keymap.json: leader {}: {e}", user.leader)),
+        }
+    }
+    cx.bind_keys(leader);
+    cx.bind_keys(pane_mode_bindings());
+    files::bind_keys(cx);
+    crate::features::canvas::bind_keys(cx);
+    let mut bindings = Vec::new();
+    for entry in &user.bindings {
+        match user_binding(entry, cx) {
+            Ok(binding) => bindings.push(binding),
+            Err(e) => messages.push(
+                keymap::Issue {
+                    index: Some(entry.index),
+                    message: e,
+                }
+                .describe(),
+            ),
+        }
+    }
+    cx.bind_keys(bindings);
+    messages
+}
+
+/// A `keymap.json` entry as a GPUI binding; the error names what GPUI rejects
+/// (an unregistered action, a context it can't parse, a keystroke).
+fn user_binding(entry: &keymap::Binding, cx: &App) -> Result<KeyBinding, String> {
+    let action = match &entry.action {
+        None => Box::new(NoAction) as Box<dyn Action>,
+        Some(name) => cx.build_action(name, None).map_err(|_| {
+            format!("unknown action {name:?} (see \"Keymap file\" in docs/integrations.md)")
+        })?,
+    };
+    let context = match &entry.context {
+        None => None,
+        Some(c) => Some(Rc::new(
+            KeyBindingContextPredicate::parse(c).map_err(|e| format!("context {c:?}: {e}"))?,
+        )),
+    };
+    KeyBinding::load(&entry.keys, action, context, false, None, cx)
+        .map_err(|e| format!("keys {:?}: {e}", entry.keys))
+}
+
+fn bind_defaults(cx: &mut App) {
     // Cmd on macOS, Ctrl elsewhere.
     macro_rules! key {
         ($k:literal) => {
@@ -315,10 +383,6 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("-"), ZoomOut, None),
         KeyBinding::new(key!("0"), ActualSize, None),
     ]);
-    cx.bind_keys(leader_bindings(LEADER));
-    cx.bind_keys(pane_mode_bindings());
-    files::FileView::bind_keys(cx);
-    crate::features::canvas::bind_keys(cx);
 }
 
 fn set_menus(cx: &mut App) {
@@ -356,24 +420,31 @@ fn set_menus(cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{LEADER, leader_bindings, pane_mode_bindings};
+    use super::{leader_bindings, pane_mode_bindings};
+    use gentle_core::keymap::DEFAULT_LEADER;
 
     #[test]
-    fn leader_bindings_share_one_prefix_and_parse() {
-        let bindings = leader_bindings(LEADER);
-        for b in &bindings {
-            let ks = b.keystrokes();
-            assert_eq!(ks.len(), 2, "leader bindings are prefix + one key");
-            assert!(ks[0].modifiers().control);
-        }
-        assert!(
-            bindings
-                .iter()
-                .any(|b| b.keystrokes().get(1).is_some_and(|k| k.key() == ":"))
-        );
-        // Changing the prefix changes every binding.
-        for b in leader_bindings("ctrl-a") {
-            assert_eq!(b.keystrokes()[0].key(), "a");
+    fn default_leader_bindings_are_unchanged() {
+        let keys: Vec<String> = leader_bindings(DEFAULT_LEADER)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        let mut expected: Vec<String> = [
+            "h", "j", "k", "l", "v", "s", "x", "u", "c", "t", "n", "p", "f", "g", "i", "b", ":",
+            "shift-;", "space",
+        ]
+        .iter()
+        .map(|k| format!("ctrl-space {k}"))
+        .collect();
+        expected.extend((1..=9).map(|n| format!("ctrl-space {n}")));
+        assert_eq!(keys, expected);
+    }
+
+    #[test]
+    fn a_configured_leader_prefixes_every_binding() {
+        for (keys, _) in leader_bindings("ctrl-a") {
+            assert!(keys.starts_with("ctrl-a "), "{keys}");
+            assert_eq!(keys.split(' ').count(), 2);
         }
     }
 

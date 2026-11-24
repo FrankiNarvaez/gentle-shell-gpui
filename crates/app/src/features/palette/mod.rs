@@ -35,6 +35,10 @@ pub enum PaletteAction {
     History,
     Devices,
     Settings,
+    /// Create (if missing) and open the user's `keymap.json`.
+    OpenKeymap,
+    /// Re-read `keymap.json` and rebind every shortcut.
+    ReloadKeymap,
     /// The onboarding screen: dependency checks and installs.
     Setup,
     /// The first-run welcome screen, from its intro.

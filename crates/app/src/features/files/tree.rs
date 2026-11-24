@@ -75,12 +75,15 @@ actions!(
     ]
 );
 
-/// The tree's shortcuts, live while it has focus (the context menu shows them).
+/// The tree's persisted "show ignored" state.
 pub fn init(cx: &mut App) {
     let path = themes::store_path();
     let value = path.as_deref().is_some_and(read_show_ignored);
     cx.set_global(ShowIgnored { value, path });
+}
 
+/// The tree's shortcuts, live while it has focus (the context menu shows them).
+pub fn bind_keys(cx: &mut App) {
     // Cmd on macOS, Ctrl elsewhere, as main.rs binds the app shortcuts
     // (this gpui has no `secondary-` modifier: it panics at startup).
     macro_rules! key {

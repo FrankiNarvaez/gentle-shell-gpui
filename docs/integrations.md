@@ -581,6 +581,7 @@ App paths: `dirs::data_dir()/gentle-shell-gpui/` (on macOS, `~/Library/Applicati
 | --- | --- | --- | --- |
 | `<data>/gentle-shell-gpui/settings.json` (`theme`, `transparency`, `interfaceScale`, `interfaceFont`, `codeFont`, `terminalFont`, `codeFontSize`, `terminalFontSize`, `composerParticles`, `onboarding`, `browserProfiles`) | App | R/W | `shared/themes.rs` (`store_path`, `write_key`, `write_fonts` through `apply_fonts`), `shared/kisses.rs` (`set_typing`), `features/setup/mod.rs` (`first_run`, `mark_done`), `features/browser/mod.rs` (`add_named_profile`) |
 | `<data>/gentle-shell-gpui/workspaces.json` | App | R/W | `features/workspaces/store.rs` |
+| `<data>/gentle-shell-gpui/keymap.json` (`leader`, `bindings`; the user's shortcuts) | App (the user edits it) | R at startup and on "Reload keymap"; W only when the user runs "Open keymap file" and none exists (created from a template, never overwritten) | `shared/keymap.rs`, `gentle_core::keymap`, `app/mod.rs` (`bind_keys`) |
 | `<data>/gentle-shell-gpui/app-update.json` | App | R/W | `features/app_update/cache.rs` |
 | `<data>/gentle-shell-gpui/engram-update.json` (`checkedAt`, `latest`, `skipped`) | App | R/W | `features/updates/engram.rs` |
 | `<data>/gentle-shell-gpui/instance.json` (port and token, 0600) | App | R/W | `platform/instance.rs` |
@@ -689,6 +690,25 @@ The activity strip's **GitHub** view (`features/history/contributions.rs`, parsi
 ### Browser for Gentle Design (`features/browser/`)
 
 The canvas is detected from the Gentle Desktop `design_canvas` events and seed (see Design canvas under RPC protocol), from the `gentle_design` result (`details.url`, `refreshed`, `stopped`) or from a `notify` "Design canvas: <url>" / "Design canvas refreshed: <url>" / "Design canvas stopped."; only loopback URLs are accepted (`http://127.0.0.1:` or `http://localhost:`). The window shows it in `BrowserPanel`. Implementation per OS: `macos.rs` (WKWebView as a subview), `windows.rs` (WebView2 in its own popup that follows the window), `linux.rs` (WebKitGTK as a child of the X11 window; on Wayland the canvas stays in the browser that Gentle Shell opened).
+
+### Keymap file (`shared/keymap.rs`, `gentle_core::keymap`)
+
+`<data>/gentle-shell-gpui/keymap.json` holds the user's shortcuts and the leader key. It is the app's file (not Pi's) and optional: without it the defaults apply and nothing is reported. The palette's **Open keymap file** creates it from a template (the current leader and an empty `bindings` array) if missing, never overwrites an existing one, and opens it in the file viewer; **Reload keymap** applies it without restarting (it clears the keymap, restores the bindings other code registered, such as text inputs, and binds the defaults and then the file again). The palette's shortcut hints read the live keymap, so they show the user's bindings.
+
+```json
+{ "leader": "ctrl-space",
+  "bindings": [
+    { "keys": "cmd-shift-p", "action": "gentle::OpenPalette" },
+    { "keys": "ctrl-space o", "action": "gentle::FocusFiles", "context": "GentleWorkspace" },
+    { "keys": "cmd-l", "action": null }
+  ] }
+```
+
+- `leader`: one keystroke with a modifier; the prefix of every one-shot leader binding (`<leader> h`, `<leader> v`…). Default `ctrl-space`. Changing it moves all of them; entries in `bindings` that spell `ctrl-space …` are literal and don't follow it.
+- `bindings`: applied after the defaults, so they win over a default on the same keys and context. `keys` is a keystroke or a space-separated sequence (`cmd-shift-p`, `ctrl-space o`); modifiers `cmd`, `ctrl`, `alt`, `shift`, `fn`, then the key (`cmd--` is ⌘ and minus). `action` is a registered GPUI action name, `namespace::Name`, or `null` to unbind those keys in that `context`. `context` is optional (omitted = everywhere) and is a GPUI key context predicate such as `GentleWorkspace && !pane_mode`. Unknown fields are ignored.
+- Action names: `gentle::` (`NewTab`, `NewTerminalTab`, `NewCanvasTab`, `CloseTab`, `NextTab`, `PrevTab`, `SplitRight`, `SplitDown`, `SplitLeft`, `SplitUp`, `TilePane`, `ClosePane`, `ReopenClosed`, `FocusNextPane`, `FocusPrevPane`, `FocusPaneLeft/Right/Up/Down`, `ResizePaneLeft/Right/Up/Down`, `TogglePaneMode`, `ExitPaneMode`, `ToggleSidebar`, `OpenPalette`, `OpenWorkspaces`, `OpenSessions`, `OpenSettings`, `OpenProviders`, `ActivateTab1`…`ActivateTab9`, `FocusComposer`, `FocusFiles`, `FocusChanges`, `CloseOverlay`, `Quit`, `ZoomIn`, `ZoomOut`, `ActualSize`), `session::` (`Abort`, `Stop`, `ToggleAgents`, `NewSession`), `canvas::` (`Undo`, `Redo`, `SelectAll`, `Duplicate`, `Copy`, `Cut`, `Paste`, `Cancel`, `Delete`), `file_view::Save`, `file_tree::*` and `changes::*` (the list actions, e.g. `changes::StageSelected`). Palette commands have no action name.
+- Contexts: `GentleWorkspace` (the window; flag `pane_mode` while pane mode is on), `GentleSession` (an agent pane), `Terminal`, `FileTree`, `GentleChanges` (these two with `Input` while a text field has focus and `vim` when the Vim keys setting is on, e.g. `FileTree && vim && !Input`), `GentleFileView`, `GentleCanvas`.
+- Errors never stop the app. An unreadable or malformed file means the defaults plus one error; a bad entry (bad keystroke, unknown action, unparsable context) is skipped and reported as `keymap.json bindings[N]: …`; an invalid `leader` falls back to `ctrl-space`. At startup and on reload the lines appear in the notification center (🔔) as warnings under the source "Keymap".
 
 ## Limits of an RPC host
 

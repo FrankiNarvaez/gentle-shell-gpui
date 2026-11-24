@@ -71,6 +71,57 @@ impl Workspace {
             .collect()
     }
 
+    /// Lists keymap file problems (one line each) among the notifications.
+    pub fn report_keymap(&mut self, messages: &[String], cx: &mut Context<Self>) {
+        self.keymap_notice(gentle_core::transcript::NoticeLevel::Warning, messages, cx);
+    }
+
+    fn keymap_notice(
+        &mut self,
+        level: gentle_core::transcript::NoticeLevel,
+        messages: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        if messages.is_empty() {
+            return;
+        }
+        self.notices.update(cx, |store, cx| {
+            for message in messages {
+                store.push(
+                    level,
+                    message.clone(),
+                    "Keymap".into(),
+                    None,
+                    std::time::Instant::now(),
+                );
+            }
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// "Open keymap file": creates it from the template when missing (never
+    /// overwrites), then opens it in the file viewer.
+    fn open_keymap_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gentle_core::transcript::NoticeLevel;
+        let leader = crate::shared::keymap::load().leader;
+        match crate::shared::keymap::ensure(&leader) {
+            Ok(path) => self.open_file(path, window, cx),
+            Err(e) => self.keymap_notice(NoticeLevel::Error, &[e], cx),
+        }
+    }
+
+    /// "Reload keymap": rebinds every shortcut from the file without a restart.
+    fn reload_keymap(&mut self, cx: &mut Context<Self>) {
+        use gentle_core::transcript::NoticeLevel;
+        let messages = crate::app::bind_keys(cx);
+        if messages.is_empty() {
+            self.keymap_notice(NoticeLevel::Info, &["Keymap reloaded".into()], cx);
+        } else {
+            self.keymap_notice(NoticeLevel::Warning, &messages, cx);
+        }
+    }
+
     pub(super) fn run_palette_action(
         &mut self,
         action: PaletteAction,
@@ -101,6 +152,8 @@ impl Workspace {
             }
             PaletteAction::Devices => self.devices.update(cx, |panel, cx| panel.show(cx)),
             PaletteAction::Settings => self.open_settings(window, cx),
+            PaletteAction::OpenKeymap => self.open_keymap_file(window, cx),
+            PaletteAction::ReloadKeymap => self.reload_keymap(cx),
             PaletteAction::Setup => self.open_onboarding(None, window, cx),
             PaletteAction::Welcome => self.open_welcome(None, window, cx),
             PaletteAction::NewTab => self.on_new_tab(&NewTab, window, cx),

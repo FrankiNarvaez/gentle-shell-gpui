@@ -172,7 +172,7 @@ Click a commit for its details under the list: the whole message and the files i
 
 ### Command palette (⌘K) — Every command, one keystroke away
 
-Categories: All, Commands, Workspaces, Files, Branches. Includes every Gentle Shell slash command and skill. ↑↓ move, ↵ runs, Tab or ←→ (while the search is empty) switch category, Esc closes. Each command shows its current key binding as a live hint, so later custom keymaps (T5) update automatically. Gentle Shell commands whose screen only exists in the terminal open the app's own: `/gentle:usage` and `/gentle:stats` open Usage (Subscription / Local stats), `/gentle:agents` the Agents window and `/gentle:jobs` its Jobs tab, `/gentle:profiles` (no arguments) Profiles, `/gentle:commands` ⌘K, `/gentle:changes` Review.
+Categories: All, Commands, Workspaces, Files, Branches. Includes every Gentle Shell slash command and skill. ↑↓ move, ↵ runs, Tab or ←→ (while the search is empty) switch category, Esc closes. Each command shows its current key binding as a live hint, so your own keymap shows up there. Gentle Shell commands whose screen only exists in the terminal open the app's own: `/gentle:usage` and `/gentle:stats` open Usage (Subscription / Local stats), `/gentle:agents` the Agents window and `/gentle:jobs` its Jobs tab, `/gentle:profiles` (no arguments) Profiles, `/gentle:commands` ⌘K, `/gentle:changes` Review. Shortcuts and the leader key are yours to change: **Open keymap file** edits `keymap.json` and **Reload keymap** applies it without restarting (see [Keymap file](docs/integrations.md#keymap-file-sharedkeymaprs-gentle_corekeymap)).
 
 <details>
 <summary><kbd>More</kbd> <strong>Categories and Gentle Shell commands</strong></summary>

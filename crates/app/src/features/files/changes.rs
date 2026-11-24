@@ -58,7 +58,7 @@ actions!(
 
 /// Bindings for the changes list. Arrows, Enter and Space work always;
 /// j/k/gg/G/s/u/d are gated by the opt-in vim-keys setting.
-pub fn init(cx: &mut App) {
+pub fn bind_keys(cx: &mut App) {
     let ctx = Some("GentleChanges && !Input");
     let vim_ctx = Some("GentleChanges && vim && !Input");
     cx.bind_keys([

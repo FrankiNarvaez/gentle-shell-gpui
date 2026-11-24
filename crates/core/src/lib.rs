@@ -22,6 +22,7 @@ pub mod ides;
 pub mod input_style;
 pub mod interface_size;
 pub mod keyboard;
+pub mod keymap;
 pub mod list_nav;
 pub mod markdown;
 pub mod music;

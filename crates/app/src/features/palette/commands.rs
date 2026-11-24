@@ -95,6 +95,18 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             PaletteAction::Settings,
         ),
         row(
+            IconName::Settings,
+            "Open keymap file",
+            "Your shortcuts and the leader key (keymap.json)",
+            PaletteAction::OpenKeymap,
+        ),
+        row(
+            IconName::RotateCcwClock,
+            "Reload keymap",
+            "Apply keymap.json now, without restarting",
+            PaletteAction::ReloadKeymap,
+        ),
+        row(
             IconName::CircleCheck,
             "Setup & requirements",
             "Check Node, Gentle Shell, providers and extras; install what's missing",
