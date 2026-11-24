@@ -2172,9 +2172,10 @@ impl CodeLine {
 }
 
 /// A message as its bubble shows it: the Markdown it renders
-/// ([`gentle_core::markdown::sent_message`], image tokens as `🖼 #N`) and a
-/// long one's folded start. Made once per message: every frame hands the
-/// text view the same strings, which it recognizes without parsing again.
+/// ([`gentle_core::markdown::sent_message`]; images are the numbered tiles
+/// above it) and a long one's folded start. Made once per message: every
+/// frame hands the text view the same strings, which it recognizes without
+/// parsing again.
 struct BubbleText {
     markdown: SharedString,
     /// The first [`USER_LINES`] lines of `markdown` and how many more it
@@ -2185,7 +2186,7 @@ struct BubbleText {
 
 impl BubbleText {
     fn new(text: &str) -> Self {
-        let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(text));
+        let markdown = gentle_core::markdown::sent_message(text);
         let lines = line_count(&markdown);
         let folded = (lines > USER_LINES + USER_SLACK).then(|| {
             let (head, _) = head_slice(&markdown, lines, USER_LINES);
@@ -2601,8 +2602,8 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         })
 }
 
-/// A user message: its images (numbered like their `[Image #N]` tokens)
-/// over the text, tokens shown as `🖼 #N`, a long text folded unless
+/// A user message: its images (numbered in the order they were sent)
+/// over the text, a long text folded unless
 /// `open`, with its `toggle`. `None` is an image that could not be decoded.
 /// The text is selectable and copies with the platform shortcut, like an
 /// answer's; `ix` keys its selection. Images its Markdown shows load only
@@ -2701,7 +2702,7 @@ fn image_tile(image: Option<Arc<Image>>, width: Rems, height: Rems) -> Div {
         })
 }
 
-/// `#N` in an image's lower-left corner, matching its `[Image #N]` token.
+/// `#N` in an image's lower-left corner: the image's place in what was sent.
 fn number_badge(n: usize) -> Div {
     div()
         .absolute()

@@ -365,7 +365,7 @@ The app-level live check `live_review_changes_and_external_config` (`session/sta
 
 | `type` | Fields | Where | Use |
 | --- | --- | --- | --- |
-| `prompt` | `message`, `images?`, `streamingBehavior: "steer"?` | `attachments::prompt_command`, `rpc.rs` `send_prompt_with` | Send; in the middle of a turn it is sent as steer |
+| `prompt` | `message`, `images?`, `streamingBehavior: "steer"?` | `attachments::prompt_command`, `rpc.rs` `send_prompt_with` | Send; in the middle of a turn it is sent as steer. Images travel base64-encoded in `images` (PNG, JPEG, GIF or WebP; BMP and TIFF re-encoded to PNG; 20 MB each); files the user attached are not inlined: they are named by path in `message`, in a block after the text (`\n\nAttached files:\n- src/main.rs`), relative to the agent's cwd when inside it and absolute otherwise, and the agent reads them with its own tools |
 | `prompt` | `message` (`/gentle:…`) | `rpc.rs` `run_extension_command` | Extension command without a turn; success only if `disposition == "handled"` |
 | `prompt` | `message` (`/gentle-ui:event {json}`) | Generative UI | What the user did in a `gentle_ui` surface (see Generative UI); extension commands run at once, even mid-turn, and answer `disposition: "handled"` |
 | `clear_queue`, `abort` | — | `rpc.rs` `stop` | Stop the turn (Esc, ⌘. / Ctrl+. or the Stop button): clear the queue, then abort; the activity line reads "stopping…" until the turn ends. Esc first closes what is open (the `/` menu and model picker from the composer, then panels and dialogs, then an expanded generative UI surface: `GenUi::collapse_on_escape`, unless the surface has the keyboard and handles Esc itself); an Esc within 600 ms of one that closed something doesn't stop |

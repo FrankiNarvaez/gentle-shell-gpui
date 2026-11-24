@@ -21,7 +21,7 @@ use super::activity::{ChipPopoverOptions, chip_popover};
 use super::dialogs::checkbox_box;
 use super::{NARROW, TINY, image_tile, number_badge};
 use crate::features::session::SessionView;
-use crate::features::session::attachments::PastedText;
+use crate::features::session::attachments::{self, AttachedFile, PastedText};
 use crate::shared::kisses::{HEART, LIPS, noise, paint_sprite};
 use crate::shared::ui;
 use gentle_core::input_style::InputStyle;
@@ -249,10 +249,10 @@ impl SessionView {
         )
     }
 
-    /// 64px tiles of what waits to be sent: numbered image thumbnails, then
-    /// pasted-text cards; each with ×.
+    /// 64px tiles of what waits to be sent: numbered image thumbnails, file
+    /// cards, then pasted-text cards; each with ×.
     fn render_attachments(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if self.attachments.is_empty() && self.pasted.is_empty() {
+        if self.attachments.is_empty() && self.files.is_empty() && self.pasted.is_empty() {
             return None;
         }
         let images: Vec<_> = self
@@ -268,10 +268,16 @@ impl SessionView {
                 .child(number_badge(ix + 1))
                 .child(remove_button(
                     ("attachment-remove", ix),
-                    cx.listener(move |this, _, window, cx| this.remove_attachment(ix, window, cx)),
+                    cx.listener(move |this, _, _, cx| this.remove_attachment(ix, cx)),
                 ))
             })
             .collect();
+        let files = self.files.iter().enumerate().map(|(ix, file)| {
+            file_card(file).child(remove_button(
+                ("file-remove", ix),
+                cx.listener(move |this, _, _, cx| this.remove_file(ix, cx)),
+            ))
+        });
         let pastes = self.pasted.iter().enumerate().map(|(ix, paste)| {
             pasted_card(ix + 1, paste).child(remove_button(
                 ("pasted-remove", ix),
@@ -284,6 +290,7 @@ impl SessionView {
                 .flex_wrap()
                 .gap_2()
                 .children(images)
+                .children(files)
                 .children(pastes),
         )
     }
@@ -465,7 +472,9 @@ impl SessionView {
         rem_size: Pixels,
         cx: &mut Context<Self>,
     ) -> (AnyElement, Option<AnyElement>) {
-        let empty = self.composer.read(cx).value().trim().is_empty() && self.attachments.is_empty();
+        let empty = self.composer.read(cx).value().trim().is_empty()
+            && self.attachments.is_empty()
+            && self.files.is_empty();
         let busy = self.busy();
         let ready = self.backend.is_ready();
         let style = crate::features::session::input_style::style(cx);
@@ -517,9 +526,9 @@ impl SessionView {
             } else {
                 IconName::Paperclip
             }))
-            .tooltip("Attach images (or paste / drop them)")
+            .tooltip("Attach files or images (or paste / drop them)")
             .disabled(!ready)
-            .on_click(cx.listener(|this, _, window, cx| this.pick_images(window, cx)));
+            .on_click(cx.listener(|this, _, window, cx| this.pick_attachments(window, cx)));
         // The model, effort and plan chips every style keeps together.
         let controls = h_flex()
             .min_w_0()
@@ -1036,6 +1045,58 @@ fn pasted_card(n: usize, paste: &PastedText) -> Div {
                         .text_size(rems(11. / 16.))
                         .text_color(ui::muted())
                         .child(lines),
+                ),
+        )
+}
+
+/// A file waiting to be sent: a page with its glyph, then its name and size.
+/// The agent gets its path in the prompt, not its contents.
+fn file_card(file: &AttachedFile) -> Div {
+    h_flex()
+        .relative()
+        .flex_shrink_0()
+        .h(rems(64. / 16.))
+        .pl(rems(7. / 16.))
+        .pr(rems(30. / 16.))
+        .gap_2p5()
+        .rounded_lg()
+        .border_1()
+        .border_color(ui::border_strong())
+        .bg(ui::surface())
+        .child(
+            div()
+                .flex_shrink_0()
+                .w(rems(38. / 16.))
+                .h(rems(48. / 16.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_md()
+                .border_1()
+                .border_color(ui::border())
+                .bg(ui::well())
+                .child(Icon::new(IconName::File).small().text_color(ui::muted())),
+        )
+        .child(
+            v_flex()
+                .min_w_0()
+                .max_w(rems(180. / 16.))
+                .gap_0p5()
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(ui::fg())
+                        .child(file.name.clone()),
+                )
+                .child(
+                    div()
+                        .text_size(rems(11. / 16.))
+                        .text_color(ui::muted())
+                        .child(attachments::human_size(file.bytes)),
                 ),
         )
 }

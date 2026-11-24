@@ -149,8 +149,12 @@ pub struct SessionView {
     kisses_blown: usize,
     /// The composer's text length last time, to tell typing from deleting.
     composer_len: usize,
-    /// Images waiting to go with the next prompt; `[Image #N]` is the N-th.
+    /// Images waiting to go with the next prompt, shown as the numbered
+    /// thumbnails of its strip and sent in that order.
     attachments: Vec<attachments::Attachment>,
+    /// Regular files waiting to go with the next prompt, shown as cards in
+    /// the same strip and sent as paths in the prompt's `message`.
+    files: Vec<attachments::AttachedFile>,
     /// Long pastes waiting to go with the next prompt, each sent in place
     /// of its `[Pasted text #N]` token: the N-th is `pasted[N - 1]`.
     pasted: Vec<attachments::PastedText>,
@@ -348,6 +352,7 @@ impl SessionView {
             kisses_blown: 0,
             composer_len: 0,
             attachments: Vec::new(),
+            files: Vec::new(),
             pasted: Vec::new(),
             image_cache: attachments::ImageCache::default(),
             extension: state::ExtensionUi::default(),

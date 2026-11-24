@@ -8,7 +8,6 @@ use gpui_kit::component::input::{InlineToken, InputContent, Position};
 use gpui_kit::*;
 use serde_json::json;
 
-use super::attachments::Kind;
 use super::{SessionEvent, SessionView, attachments, builtins};
 use gentle_core::commands::PiBuiltin;
 
@@ -20,13 +19,14 @@ impl SessionView {
         let shell = typed.starts_with('!');
         let text = attachments::expand(&typed, &self.pasted);
         let images = !shell && !self.attachments.is_empty();
-        if (text.is_empty() && !images) || self.process().is_none() {
+        let files = !shell && !self.files.is_empty();
+        if (text.is_empty() && !images && !files) || self.process().is_none() {
             return;
         }
-        if shell && !self.attachments.is_empty() {
-            // Clearing the composer would strand the images with no tokens left.
+        if shell && (!self.attachments.is_empty() || !self.files.is_empty()) {
+            // A shell command carries no attachments; nothing would show them.
             let message =
-                "Shell commands cannot carry images. Remove the attachments or drop the leading !.";
+                "Shell commands cannot carry attachments. Remove them or drop the leading !.";
             self.warn(message.into(), window, cx);
             return;
         }
@@ -50,13 +50,20 @@ impl SessionView {
             return;
         }
 
-        if self.attachments.is_empty() && !pasted && self.intercept(&text, cx) {
+        if self.attachments.is_empty()
+            && self.files.is_empty()
+            && !pasted
+            && self.intercept(&text, cx)
+        {
             cx.notify();
             return;
         }
 
         let images = std::mem::take(&mut self.attachments);
-        self.send_prompt_with(text, images, cx);
+        let files = std::mem::take(&mut self.files);
+        // What the prompt says: the text, then where the agent reads the files.
+        let message = attachments::with_files(&text, &files, &self.cwd);
+        self.send_prompt_with(message, images, cx);
         cx.notify();
     }
 
@@ -215,36 +222,25 @@ impl SessionView {
         self.pasted.clear();
     }
 
-    /// Attach validated images (inserting their tokens at the cursor) and warn
-    /// about the rest.
-    fn attach(
+    /// Attach what was dropped or picked and warn about the rest: images wait
+    /// as thumbnails, files as cards, both in the strip above the composer.
+    /// Nothing is typed into the text.
+    pub(super) fn attach(
         &mut self,
-        loaded: Vec<Result<attachments::Attachment, attachments::Rejection>>,
+        loaded: Vec<Result<attachments::Loaded, attachments::Rejection>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let first = self.attachments.len() + 1;
         let mut rejected = Vec::new();
         for result in loaded {
             match result {
-                Ok(attachment) => self.attachments.push(attachment),
+                Ok(attachments::Loaded::Image(image)) => self.attachments.push(image),
+                Ok(attachments::Loaded::File(file)) => self.files.push(file),
                 Err(rejection) => rejected.push(rejection.to_string()),
             }
         }
-        let added = first..self.attachments.len() + 1;
-        if !added.is_empty() {
-            self.composer.update(cx, |state, cx| {
-                let value = state.value();
-                let mut before = value[..state.cursor().min(value.len())].chars().next_back();
-                let mut tokens = String::new();
-                for n in added {
-                    tokens.push_str(&attachments::insertion(before, n));
-                    before = Some(' ');
-                }
-                state.insert(tokens, window, cx);
-                state.focus(window, cx);
-            });
-        }
+        self.composer
+            .update(cx, |state, cx| state.focus(window, cx));
         for message in rejected {
             self.warn(message, window, cx);
         }
@@ -276,9 +272,7 @@ impl SessionView {
     /// Run `load` on the background executor, then attach what it read.
     fn attach_off_thread(
         &mut self,
-        load: impl FnOnce() -> Vec<Result<attachments::Attachment, attachments::Rejection>>
-        + Send
-        + 'static,
+        load: impl FnOnce() -> Vec<Result<attachments::Loaded, attachments::Rejection>> + Send + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -325,7 +319,10 @@ impl SessionView {
                 move || {
                     images
                         .into_iter()
-                        .map(|bytes| attachments::Attachment::from_bytes("The pasted image", bytes))
+                        .map(|bytes| {
+                            attachments::Attachment::from_bytes("The pasted image", bytes)
+                                .map(attachments::Loaded::Image)
+                        })
                         .collect()
                 },
                 window,
@@ -357,7 +354,7 @@ impl SessionView {
                 .is_err()
             {
                 // Mid-composition the chip can't go in; the token still works.
-                state.replace(attachments::token(Kind::Pasted, n), window, cx);
+                state.replace(attachments::token(n), window, cx);
             }
             state.insert(" ", window, cx);
             state.focus(window, cx);
@@ -366,8 +363,8 @@ impl SessionView {
         true
     }
 
-    /// The 📎 button: pick image files.
-    pub(super) fn pick_images(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// The 📎 button: pick files or images.
+    pub(super) fn pick_attachments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -383,30 +380,21 @@ impl SessionView {
         .detach();
     }
 
-    /// Drop attachment `index` (0-based) and its token; later tokens shift down.
-    pub(super) fn remove_attachment(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    /// Drop image `index` (0-based) from the strip; the text stays as typed.
+    pub(super) fn remove_attachment(&mut self, index: usize, cx: &mut Context<Self>) {
         if index >= self.attachments.len() {
             return;
         }
         self.attachments.remove(index);
-        let text =
-            attachments::remove_token(&self.composer.read(cx).value(), Kind::Image, index + 1);
-        let end = text.len();
-        if self.pasted.is_empty() {
-            let position = position_at(&text, end);
-            self.composer.update(cx, |state, cx| {
-                state.replace_all(text, window, cx);
-                state.set_cursor_position(position, window, cx);
-            });
-        } else {
-            // Only setting the value keeps the pastes' chips.
-            self.set_composer_text(text, end, window, cx);
+        cx.notify();
+    }
+
+    /// Drop file `index` (0-based) from the strip; the text stays as typed.
+    pub(super) fn remove_file(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.files.len() {
+            return;
         }
+        self.files.remove(index);
         cx.notify();
     }
 
@@ -421,8 +409,7 @@ impl SessionView {
             return;
         }
         self.pasted.remove(index);
-        let text =
-            attachments::remove_token(&self.composer.read(cx).value(), Kind::Pasted, index + 1);
+        let text = attachments::remove_token(&self.composer.read(cx).value(), index + 1);
         let end = text.len();
         self.set_composer_text(text, end, window, cx);
         cx.notify();
@@ -438,7 +425,7 @@ impl SessionView {
             let state = self.composer.read(cx);
             (state.value(), state.cursor().min(state.value().len()))
         };
-        let kept = attachments::present(&text, Kind::Pasted, self.pasted.len());
+        let kept = attachments::present(&text, self.pasted.len());
         if kept.len() == self.pasted.len() {
             return;
         }
@@ -447,8 +434,8 @@ impl SessionView {
             number += 1;
             kept.binary_search(&number).is_ok()
         });
-        let cursor = attachments::renumber(&text[..cursor], Kind::Pasted, &kept).len();
-        let text = attachments::renumber(&text, Kind::Pasted, &kept);
+        let cursor = attachments::renumber(&text[..cursor], &kept).len();
+        let text = attachments::renumber(&text, &kept);
         self.set_composer_text(text, cursor, window, cx);
         cx.notify();
     }
@@ -464,7 +451,7 @@ impl SessionView {
         cx: &mut Context<Self>,
     ) {
         let position = position_at(&text, cursor);
-        let chips = attachments::find_tokens(&text, Kind::Pasted);
+        let chips = attachments::find_tokens(&text);
         let mut content = InputContent::new(text);
         for (range, n) in chips {
             if (1..=self.pasted.len()).contains(&n) {
@@ -484,8 +471,9 @@ impl SessionView {
     /// first; ↓ on its last line walks back toward the newest, then to the
     /// draft that was being written. Nothing is sent. Lines in between move
     /// the cursor as usual, the `/` menu keeps its ↑/↓ until history is
-    /// entered, and a composer holding attachments or long pastes is left
-    /// alone (a recalled prompt would drop their tokens).
+    /// entered, and a composer holding long pastes is left alone (a recalled
+    /// prompt would drop their tokens). Images and files wait beside the
+    /// text, not in it, so they stay attached.
     pub(in crate::features::session) fn history_key(
         &mut self,
         keystroke: &Keystroke,
@@ -501,10 +489,7 @@ impl SessionView {
             "down" => false,
             _ => return false,
         };
-        if !self.composer.focus_handle(cx).is_focused(window)
-            || !self.attachments.is_empty()
-            || !self.pasted.is_empty()
-        {
+        if !self.composer.focus_handle(cx).is_focused(window) || !self.pasted.is_empty() {
             return false;
         }
         let (text, line) = {
@@ -543,7 +528,7 @@ impl SessionView {
 /// icon is not a `📄` in the label: gpui-kit's tokens draw stray glyphs
 /// after an emoji label.
 fn pasted_chip(n: usize) -> InlineToken {
-    InlineToken::new("pasted-text", attachments::token(Kind::Pasted, n)).with_label(format!("#{n}"))
+    InlineToken::new("pasted-text", attachments::token(n)).with_label(format!("#{n}"))
 }
 
 /// The editor position (line, UTF-16 column) of byte `offset` in `text`.

@@ -8,7 +8,11 @@ use pi_rpc::desktop_rpc::{PROMPT_COMMAND, SCHEMA, WIDGET_KEY};
 use pi_rpc::{UiMethod, UiRequest};
 use serde_json::{Value, json};
 
+use super::attachments::{Attachment, Loaded};
 use super::{AgentsTab, SessionView};
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+const JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10];
 
 fn widget(record: Value) -> UiRequest {
     UiRequest {
@@ -706,6 +710,66 @@ fn user_bubble_triple_backtick_inline_copy(cx: &mut TestAppContext) {
 #[gpui::test]
 fn user_bubble_backslash_hard_break_copy(cx: &mut TestAppContext) {
     assert_user_bubble_copy(cx, "one\\\ntwo", "one\ntwo", Some(1.), 1.);
+}
+
+/// Attaching an image types nothing into the composer, so the strip above it
+/// is the only list of what will be sent; removing one from the strip leaves
+/// the rest, in the strip's own order.
+#[gpui::test]
+fn images_attach_without_text_and_the_strip_is_what_is_sent(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let first = Attachment::from_bytes("a.png", PNG.to_vec()).unwrap();
+    let second = Attachment::from_bytes("b.jpeg", JPEG.to_vec()).unwrap();
+    let second_key = second.key;
+    view.update_in(cx, |view, window, cx| {
+        view.attach(
+            vec![Ok(Loaded::Image(first)), Ok(Loaded::Image(second))],
+            window,
+            cx,
+        );
+    });
+    let text = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string())
+    };
+    assert_eq!(text(cx), "", "attaching an image types nothing");
+    assert_eq!(view.read_with(cx, |view, _| view.attachments.len()), 2);
+
+    view.update_in(cx, |view, _, cx| view.remove_attachment(0, cx));
+    assert_eq!(text(cx), "", "removing one types nothing either");
+    let sent: Vec<u64> = view.read_with(cx, |view, _| {
+        view.attachments.iter().map(|a| a.key).collect()
+    });
+    assert_eq!(sent, vec![second_key], "the strip's images, in its order");
+}
+
+/// ↑ recalls a sent prompt while an image waits: only the text changes, so
+/// the strip still sends the image it shows.
+#[gpui::test]
+fn history_recall_leaves_a_waiting_image_in_the_strip(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let image = Attachment::from_bytes("a.png", PNG.to_vec()).unwrap();
+    let key = image.key;
+    view.update(cx, |view, _| view.prompt_history.record("first"));
+    view.update_in(cx, |view, window, cx| {
+        view.attach(vec![Ok(Loaded::Image(image))], window, cx);
+    });
+    cx.update(|window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.set_value("draft", window, cx);
+        });
+    });
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string()),
+        "first"
+    );
+    let sent: Vec<u64> = view.read_with(cx, |view, _| {
+        view.attachments.iter().map(|a| a.key).collect()
+    });
+    assert_eq!(sent, vec![key]);
 }
 
 /// ↑ and ↓ in the composer walk the prompts sent before and come back to
