@@ -90,7 +90,7 @@ impl Workspace {
         let now = std::time::Instant::now();
         let occupied = |side| {
             let (width, fraction) = self.sidebar_geometry(side, window_px, now);
-            rem((width + 6.) * fraction)
+            rem(self.sidebar_allocation(side, width, fraction, now) + 6. * fraction)
         };
         let w =
             (f32::from(viewport.width) - rem(12.) - occupied(Side::Tabs) - occupied(Side::Files))

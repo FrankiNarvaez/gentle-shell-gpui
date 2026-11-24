@@ -622,8 +622,8 @@ pub fn chip(text: impl Into<SharedString>, color: Hsla) -> Div {
 
 /// A vertical resize handle for sidebar edges, as wide as the window body's
 /// `gap_1p5` (6 px at 100 %) so it fills the gap beside a sidebar. It shows no
-/// visible line until hover, when a 2×40 px pill lights up in the accent color.
-pub fn resize_handle(id: impl Into<ElementId>) -> Stateful<Div> {
+/// visible line until hover or an active resize, when a 2×40 px pill lights up.
+pub fn resize_handle(id: impl Into<ElementId>, active: bool, hover: bool) -> Stateful<Div> {
     div()
         .id(id.into())
         .group("resize-handle")
@@ -639,9 +639,11 @@ pub fn resize_handle(id: impl Into<ElementId>) -> Stateful<Div> {
                 .w(px(2.))
                 .h(px(40.))
                 .rounded_full()
-                .bg(border_strong())
-                .opacity(0.0)
-                .group_hover("resize-handle", |s| s.opacity(1.0).bg(petal())),
+                .bg(petal())
+                .opacity(if active { 1. } else { 0. })
+                .when(hover, |pill| {
+                    pill.group_hover("resize-handle", |s| s.opacity(1.))
+                }),
         )
 }
 
