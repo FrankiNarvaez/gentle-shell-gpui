@@ -6,13 +6,17 @@
 //! their own panel (`features::devices`).
 
 use super::*;
-use crate::features::browser::{BrowserEvent, BrowserPanel, CanvasNotice, external};
+use crate::features::browser::{
+    BrowserEvent, BrowserPanel, CanvasNotice, card_layout, external, set_card_layout,
+};
 use crate::shared::floating;
+use gentle_core::browser::CardLayout;
 use gentle_core::web_browsers::AgentPages;
 use gpui_kit::component::popover::{Popover, PopoverState};
 use gpui_kit::component::{ActiveTheme as _, Selectable};
 
-/// One web page, shown floating or kept in the tray.
+/// One web page, shown (floating, or docked in the window's right column) or
+/// kept in the tray.
 pub(super) struct Stage {
     id: u64,
     panel: Entity<BrowserPanel>,
@@ -26,9 +30,18 @@ pub(super) struct Stage {
 }
 
 impl Stage {
+    fn docked(&self, cx: &App) -> bool {
+        self.panel.read(cx).mode() == floating::Mode::Docked
+    }
+
     /// The floating card, while shown.
-    pub(super) fn element(&self) -> Option<AnyElement> {
-        self.shown.then(|| self.panel.clone().into_any_element())
+    pub(super) fn element(&self, cx: &App) -> Option<AnyElement> {
+        (self.shown && !self.docked(cx)).then(|| self.panel.clone().into_any_element())
+    }
+
+    /// The card in the docked column, while shown.
+    pub(super) fn docked_element(&self, cx: &App) -> Option<AnyElement> {
+        (self.shown && self.docked(cx)).then(|| self.panel.clone().into_any_element())
     }
 
     fn set_shown(&mut self, shown: bool, cx: &mut App) {
@@ -167,13 +180,18 @@ impl Workspace {
     ) {
         let id = self.next_stage;
         self.next_stage += 1;
-        // The card's own button only hides it; the tray closes it.
+        // The card's own button only hides it; the tray closes it. Docking
+        // or floating a card lays the others out again.
         let subscriptions = [
             cx.subscribe_in(
                 &panel,
                 window,
-                move |this, _, _: &BrowserEvent, window, cx| {
-                    this.set_stage_shown(id, false, window, cx)
+                move |this, _, event: &BrowserEvent, window, cx| match event {
+                    BrowserEvent::Hide => this.set_stage_shown(id, false, window, cx),
+                    BrowserEvent::Layout => {
+                        this.tile_stages(window, cx);
+                        cx.notify();
+                    }
                 },
             ),
             cx.observe(&panel, move |this, _, cx| this.stage_changed(id, cx)),
@@ -474,17 +492,26 @@ impl Workspace {
         self.web_shown = shown;
     }
 
-    pub(super) fn shown_stages(&self) -> usize {
-        self.stages.iter().filter(|stage| stage.shown).count()
+    /// Shown cards floating over the window (docked ones are in its column).
+    pub(super) fn floating_stages(&self, cx: &App) -> usize {
+        self.stages
+            .iter()
+            .filter(|stage| stage.shown && !stage.docked(cx))
+            .count()
     }
 
-    /// Dock the shown stages at the bottom-right ([`floating::docked`]): side
-    /// by side at their natural size, shrunk together when they don't fit in
-    /// the part of the window they may take, wrapped into rows past that.
-    /// Cards stay draggable and resizable afterwards.
+    /// Dock the shown floating stages at the bottom-right
+    /// ([`floating::docked`]): side by side at their natural size (the size
+    /// the user last gave a card), shrunk together when they don't fit in the
+    /// part of the window they may take, wrapped into rows past that. Cards
+    /// stay draggable and resizable afterwards.
     pub(super) fn tile_stages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let shown: Vec<&Stage> = self.stages.iter().filter(|stage| stage.shown).collect();
-        let frame = crate::features::browser::DEFAULT_FRAME;
+        let shown: Vec<&Stage> = self
+            .stages
+            .iter()
+            .filter(|stage| stage.shown && !stage.docked(cx))
+            .collect();
+        let frame = crate::features::browser::opening_frame(cx);
         let sizes: Vec<(f32, f32)> = shown.iter().map(|_| (frame.w, frame.h)).collect();
         let size = window.viewport_size();
         let title_bar = f32::from(rems(floating::TITLE_BAR / 16.).to_pixels(window.rem_size()));
@@ -498,6 +525,95 @@ impl Workspace {
                 .panel
                 .update(cx, |panel, cx| panel.set_frame(frame, cx));
         }
+    }
+
+    // ── The docked column ───────────────────────────────────────────────────
+
+    /// The docked cards, stacked in a column at the window's right (left of
+    /// the device panel's), with the divider that changes its width. `None`
+    /// while no shown card is docked. Its width leaves the conversation room
+    /// ([`floating::dock_width`]).
+    pub(super) fn render_browser_dock(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let cards: Vec<AnyElement> = self
+            .stages
+            .iter()
+            .filter_map(|stage| stage.docked_element(cx))
+            .collect();
+        let (conversation, column) = self.browser_dock_room.get();
+        if cards.is_empty() {
+            self.browser_dock_room.set((conversation, 0.));
+            return None;
+        }
+        let room = conversation + column;
+        let width = floating::dock_width(card_layout(cx).dock_width, room);
+        self.browser_dock_room.set((conversation, width));
+        Some(
+            div()
+                .id("browser-dock")
+                .relative()
+                .flex_none()
+                .h_full()
+                .w(px(width))
+                .child(
+                    v_flex().size_full().gap_1p5().children(
+                        cards
+                            .into_iter()
+                            .map(|card| div().flex_1().min_h_0().child(card)),
+                    ),
+                )
+                .child(floating::dock_divider(
+                    "browser-dock-divider",
+                    cx,
+                    move |this, at, cx| {
+                        this.browser_dock_drag = Some((at.x.as_f32(), width, room));
+                        cx.notify();
+                    },
+                ))
+                .into_any_element(),
+        )
+    }
+
+    /// Measures the conversation's width for the docked column (see
+    /// [`Self::render_browser_dock`]); goes inside the conversation's area.
+    pub(super) fn measure_conversation(&self) -> impl IntoElement {
+        let room = self.browser_dock_room.clone();
+        canvas(
+            move |bounds, _, _| {
+                let (_, column) = room.get();
+                room.set((bounds.size.width.as_f32(), column));
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0()
+    }
+
+    /// While the docked column's divider is dragged, a layer over the window
+    /// follows the pointer; the width is saved when it is let go.
+    pub(super) fn browser_dock_drag_layer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (start_x, start_width, room) = self.browser_dock_drag?;
+        Some(floating::pointer_layer(
+            CursorStyle::ResizeLeftRight,
+            cx,
+            "browser-dock-drag",
+            move |_, at, cx| {
+                // The column grows leftwards from the window's right edge.
+                let asked = start_width + start_x - at.x.as_f32();
+                let layout = CardLayout {
+                    dock_width: floating::dock_width(asked, room),
+                    ..card_layout(cx)
+                };
+                if layout != card_layout(cx) {
+                    set_card_layout(layout, false, cx);
+                    cx.notify();
+                }
+            },
+            |this, cx| {
+                this.browser_dock_drag = None;
+                set_card_layout(card_layout(cx), true, cx);
+                cx.notify();
+            },
+        ))
     }
 
     // ── The tray ────────────────────────────────────────────────────────────

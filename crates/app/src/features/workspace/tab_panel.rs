@@ -903,6 +903,8 @@ mod tests {
                         stages: Vec::new(),
                         next_stage: 1,
                         opened_outside: Default::default(),
+                        browser_dock_drag: None,
+                        browser_dock_room: Default::default(),
                         resume_welcome: None,
                         drop_hint: None,
                         closed: Vec::new(),

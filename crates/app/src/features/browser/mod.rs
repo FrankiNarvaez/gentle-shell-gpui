@@ -1,15 +1,17 @@
-//! The in-app browser: a floating card over the window that embeds the
-//! system's web view (WKWebView on macOS, WebView2 on Windows, WebKitGTK on
-//! Linux). It shows Gentle Design's live canvas and any other http(s) page,
-//! opened with `gentle-open`, `/web` or a loopback URL printed by a tool.
-//! Pages an agent opens wait in the window's instance tray (or open in the
-//! user's own browser when Configuration › Devices › Browser says so, see
-//! [`external`]); the native view
-//! (and its web process) only exists while the card is shown. A lone card
-//! sits at the bottom-right by default; multiple cards are tiled by the
-//! workspace. Drag its header to move it, any edge or corner to resize it, or
-//! maximize it. The canvas reloads itself as artboards change, so the card
-//! shows the design in real time.
+//! The in-app browser: a card that embeds the system's web view (WKWebView
+//! on macOS, WebView2 on Windows, WebKitGTK on Linux), floating over the
+//! window or docked in a column at its right. It shows Gentle Design's live
+//! canvas and any other http(s) page, opened with `gentle-open`, `/web` or a
+//! loopback URL printed by a tool. Pages an agent opens wait in the window's
+//! instance tray (or open in the user's own browser when Configuration ›
+//! Devices › Browser says so, see [`external`]); the native view (and its web
+//! process) only exists while the card is shown. A lone floating card sits
+//! at the bottom-right by default; multiple ones are tiled by the workspace.
+//! Drag its header to move it, any edge or corner to resize it, or maximize
+//! it; its dock button puts it in the column (the column's divider sets the
+//! width), and later cards open the way the last one was left
+//! ([`CardLayout`]). The canvas reloads itself as artboards change, so the
+//! card shows the design in real time.
 //!
 //! The web view is a native view above everything GPUI draws, so it hides
 //! while a screen covers the window. It stays up while the card is dragged:
@@ -17,7 +19,7 @@
 
 use std::rc::Rc;
 
-use gentle_core::browser::Profile;
+use gentle_core::browser::{CardLayout, LAYOUT_KEY, Profile};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,7 +30,7 @@ use gpui_kit::component::{Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::shared::floating::{self, CardState, DragKind};
+use crate::shared::floating::{self, CardState, DragKind, Mode};
 use crate::shared::ui;
 
 pub mod automation;
@@ -338,19 +340,51 @@ fn host_label(url: &str) -> String {
     }
 }
 
-/// The card's place when it opens: bottom-right. Docking scales it.
-pub const DEFAULT_FRAME: floating::Frame = floating::Frame {
-    right: 16.,
-    bottom: 16.,
-    w: 560.,
-    h: 380.,
-};
+/// The card's place when it opens: bottom-right, at the size the user last
+/// gave a floating card. Tiling scales it.
+pub fn opening_frame(cx: &App) -> floating::Frame {
+    let layout = card_layout(cx);
+    floating::Frame {
+        right: 16.,
+        bottom: 16.,
+        w: layout.width,
+        h: layout.height,
+    }
+}
+
+// ── How cards open ──────────────────────────────────────────────────────────
+
+struct Layout(CardLayout);
+
+impl Global for Layout {}
+
+/// Docked or floating, the docked column's width and a floating card's size,
+/// as the user last left them.
+pub fn card_layout(cx: &App) -> CardLayout {
+    cx.try_global::<Layout>()
+        .map(|layout| layout.0)
+        .unwrap_or_default()
+}
+
+/// Remember how cards open; `save` writes it to `settings.json` too (a
+/// divider drag saves once, when it ends).
+pub fn set_card_layout(layout: CardLayout, save: bool, cx: &mut App) {
+    cx.set_global(Layout(layout));
+    if save
+        && let Some(path) = crate::shared::themes::store_path()
+        && let Err(err) = crate::shared::themes::write_key(&path, LAYOUT_KEY, layout.to_json())
+    {
+        eprintln!("gentle-shell-gpui: could not save the browser card's layout: {err}");
+    }
+}
 
 // ── The panel ───────────────────────────────────────────────────────────────
 
 pub enum BrowserEvent {
     /// The card's button: send it to the instance tray.
     Hide,
+    /// Docked or floated: the window lays its cards out again.
+    Layout,
 }
 
 // ── Profiles the user named ──────────────────────────────────────────────────
@@ -362,9 +396,15 @@ struct NamedProfiles(Vec<String>);
 
 impl Global for NamedProfiles {}
 
-/// Read the profiles the user made, and where pages outside the app open.
+/// Read the profiles the user made, how cards open, and where pages outside
+/// the app open.
 pub fn init(cx: &mut App) {
     external::init(cx);
+    let layout = crate::shared::themes::store_path()
+        .and_then(|path| crate::shared::themes::read_key(&path, LAYOUT_KEY))
+        .map(|value| CardLayout::from_json(&value))
+        .unwrap_or_default();
+    cx.set_global(Layout(layout));
     let names = crate::shared::themes::store_path()
         .and_then(|path| crate::shared::themes::read_key(&path, PROFILES_KEY))
         .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
@@ -410,6 +450,8 @@ pub struct BrowserPanel {
     choosing: Option<Choosing>,
     /// A screen covers the window (see [`Self::set_covered`]).
     screen_covered: bool,
+    /// Docked in the window's right column, or floating over the window.
+    mode: Mode,
     card: CardState,
     /// The page itself.
     surface: Entity<WebSurface>,
@@ -432,13 +474,37 @@ impl BrowserPanel {
             repository: None,
             choosing: None,
             screen_covered: false,
-            card: CardState::new(DEFAULT_FRAME),
+            mode: if card_layout(cx).docked {
+                Mode::Docked
+            } else {
+                Mode::Floating
+            },
+            card: CardState::new(opening_frame(cx)),
             surface,
         }
     }
 
     pub fn url(&self) -> &str {
         &self.url
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// Dock the card or float it; later cards open the same way.
+    fn set_mode(&mut self, mode: Mode, cx: &mut Context<Self>) {
+        self.mode = mode;
+        if self.card.maximized() {
+            self.card.toggle_maximized();
+        }
+        let layout = CardLayout {
+            docked: mode == Mode::Docked,
+            ..card_layout(cx)
+        };
+        set_card_layout(layout, true, cx);
+        cx.emit(BrowserEvent::Layout);
+        cx.notify();
     }
 
     pub fn surface(&self) -> &Entity<WebSurface> {
@@ -620,8 +686,19 @@ impl BrowserPanel {
         }
     }
 
+    /// A drag ended; a resize makes that the size later cards open at.
     fn end_drag(&mut self, cx: &mut Context<Self>) {
+        let resized = self.card.resizing();
         if self.card.end_drag() {
+            if resized {
+                let (width, height) = self.card.size();
+                let layout = CardLayout {
+                    width,
+                    height,
+                    ..card_layout(cx)
+                };
+                set_card_layout(layout, true, cx);
+            }
             cx.notify();
         }
     }
@@ -640,6 +717,7 @@ impl BrowserPanel {
             .to_string();
         let url = self.url.clone();
         let maximized = self.card.maximized();
+        let docked = self.mode == Mode::Docked;
         let profile_label = self.profile(cx).label();
         h_flex()
             .id("browser-header")
@@ -648,24 +726,28 @@ impl BrowserPanel {
             .px_3()
             .gap_2()
             .items_center()
-            .cursor(CursorStyle::OpenHand)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                    if event.click_count == 2 {
-                        this.toggle_maximized(cx);
-                    } else {
-                        this.start_drag(DragKind::Move, event.position, cx);
-                    }
-                }),
-            )
+            // A docked card stays in its column: no moving, no maximizing.
+            .when(!docked, |header| {
+                header.cursor(CursorStyle::OpenHand).on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                        if event.click_count == 2 {
+                            this.toggle_maximized(cx);
+                        } else {
+                            this.start_drag(DragKind::Move, event.position, cx);
+                        }
+                    }),
+                )
+            })
             .child(Icon::new(icon).small().text_color(ui::petal()))
             .child(
+                // In a narrow card the title gives way before the buttons.
                 div()
+                    .min_w_0()
                     .text_size(rems(12.5 / 16.))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(ui::fg())
-                    .whitespace_nowrap()
+                    .truncate()
                     .child(title),
             )
             .child(
@@ -681,6 +763,7 @@ impl BrowserPanel {
             .child(
                 // Buttons keep their mouse-down from starting a drag.
                 h_flex()
+                    .flex_none()
                     .gap_0p5()
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .when(self.driven, |row| {
@@ -727,17 +810,36 @@ impl BrowserPanel {
                             .on_click(move |_, _, cx| external::open(&url, cx)),
                     )
                     .child(
-                        Button::new("browser-maximize")
+                        Button::new("browser-dock")
                             .ghost()
                             .xsmall()
-                            .icon(Icon::new(if maximized {
-                                IconName::Minimize2
+                            .icon(Icon::new(if docked {
+                                IconName::PictureInPicture2
                             } else {
-                                IconName::Maximize2
+                                IconName::PanelRight
                             }))
-                            .tooltip(if maximized { "Restore" } else { "Maximize" })
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_maximized(cx))),
+                            .tooltip(if docked { "Float" } else { "Dock to the right" })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.set_mode(
+                                    if docked { Mode::Floating } else { Mode::Docked },
+                                    cx,
+                                )
+                            })),
                     )
+                    .when(!docked, |row| {
+                        row.child(
+                            Button::new("browser-maximize")
+                                .ghost()
+                                .xsmall()
+                                .icon(Icon::new(if maximized {
+                                    IconName::Minimize2
+                                } else {
+                                    IconName::Maximize2
+                                }))
+                                .tooltip(if maximized { "Restore" } else { "Maximize" })
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_maximized(cx))),
+                        )
+                    })
                     .child(
                         Button::new("browser-close")
                             .ghost()
@@ -887,6 +989,18 @@ impl BrowserPanel {
 
 impl Render for BrowserPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.mode == Mode::Docked {
+            // The window puts it in its right column and sizes it; the
+            // column's divider changes the width.
+            return v_flex()
+                .size_full()
+                .rounded_xl()
+                .bg(ui::panel())
+                .overflow_hidden()
+                .child(self.header(cx))
+                .child(self.body(cx))
+                .into_any_element();
+        }
         self.card.fit();
         let card = ui::island(cx)
             .absolute()
@@ -911,6 +1025,7 @@ impl Render for BrowserPanel {
             .child(floating::area_canvas(&self.card))
             .child(card)
             .when_some(drag_layer, |root, layer| root.child(layer))
+            .into_any_element()
     }
 }
 

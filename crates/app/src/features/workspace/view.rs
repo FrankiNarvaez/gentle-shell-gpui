@@ -645,15 +645,9 @@ impl Workspace {
                             .when(horizontal, |d| d.w(px(6.)).h_full().cursor_col_resize())
                             .when(!horizontal, |d| d.h(px(6.)).w_full().cursor_row_resize())
                             .on_drag(drag, |_, _, _, cx| cx.new(|_| Invisible))
-                            .child(
-                                div()
-                                    .rounded_full()
-                                    .bg(ui::border_strong())
-                                    .opacity(0.0)
-                                    .group_hover("divider", |s| s.opacity(1.0).bg(ui::petal()))
-                                    .when(horizontal, |d| d.w(px(2.)).h(px(40.)))
-                                    .when(!horizontal, |d| d.h(px(2.)).w(px(40.))),
-                            ),
+                            .child(crate::shared::floating::divider_handle(
+                                "divider", horizontal,
+                            )),
                     )
                     .child(cell(second, 1.0 - *ratio))
                     .into_any_element()
