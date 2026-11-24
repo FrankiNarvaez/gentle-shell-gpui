@@ -320,16 +320,18 @@ struct SidebarDrag {
     revision: std::rc::Rc<std::cell::Cell<u64>>,
     gesture: std::cell::RefCell<gentle_core::workspaces::SidebarGesture>,
     picking_up_width: std::cell::Cell<bool>,
+    starting_width: f32,
 }
 
 impl SidebarDrag {
-    fn new(side: Side, owner: gpui::EntityId, revision: u64) -> Self {
+    fn new(side: Side, owner: gpui::EntityId, revision: u64, starting_width: f32) -> Self {
         Self {
             side,
             owner,
             revision: std::rc::Rc::new(std::cell::Cell::new(revision)),
             gesture: Default::default(),
             picking_up_width: Default::default(),
+            starting_width,
         }
     }
 }

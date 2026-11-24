@@ -25,11 +25,45 @@ fn sidebar_clip(side: Side, width: f32, content: impl IntoElement) -> Div {
     )
 }
 
+fn drag_saved_width(
+    side: Side,
+    action: Option<gentle_core::workspaces::SidebarDrag>,
+    pointer: f32,
+    window: f32,
+    saved: f32,
+    start: f32,
+) -> Option<f32> {
+    use gentle_core::workspaces::{
+        SidebarDrag::{Compact, Width},
+        shown_sidebar_width,
+    };
+    match (side, action) {
+        // A drag against the rendered cap is not a request to shrink the saved width.
+        (Side::Files, Some(Width(w)))
+            if saved > w && w == shown_sidebar_width(saved, window) && pointer >= w =>
+        {
+            None
+        }
+        (_, Some(Width(w))) => Some(w),
+        // Intermediate resize events must not choose the width restored from the rail.
+        (Side::Tabs, Some(Compact)) => Some(start),
+        _ => None,
+    }
+}
+
 impl Workspace {
     fn sidebar_handle(&self, side: Side, cx: &mut Context<Self>) -> impl IntoElement {
-        let (id, revision) = match side {
-            Side::Tabs => ("tabs-resize-handle", self.tabs_sidebar_motion.revision),
-            Side::Files => ("files-resize-handle", self.files_sidebar_motion.revision),
+        let (id, revision, width) = match side {
+            Side::Tabs => (
+                "tabs-resize-handle",
+                self.tabs_sidebar_motion.revision,
+                self.tabs_sidebar_width,
+            ),
+            Side::Files => (
+                "files-resize-handle",
+                self.files_sidebar_motion.revision,
+                self.files_sidebar_width,
+            ),
         };
         ui::resize_handle(id)
             .absolute()
@@ -39,7 +73,7 @@ impl Workspace {
             .when(matches!(side, Side::Files), |d| d.left(rems(-6. / 16.)))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_drag(
-                SidebarDrag::new(side, cx.entity_id(), revision),
+                SidebarDrag::new(side, cx.entity_id(), revision, width),
                 |_, _, _, cx| cx.new(|_| Invisible),
             )
             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
@@ -121,13 +155,29 @@ impl Workspace {
             drag.picking_up_width.set(false);
         }
         let drag_revision = drag.revision.clone();
-        match (side, action) {
-            (Side::Tabs, Some(Width(w))) => self.resize_tab_sidebar(w, cx),
-            (Side::Files, Some(Width(w))) if self.files_sidebar_width != w => {
-                self.files_sidebar_width = w;
-                self.schedule_save(cx);
-                cx.notify();
+        let saved = match side {
+            Side::Tabs => self.tabs_sidebar_width,
+            Side::Files => self.files_sidebar_width,
+        };
+        if let Some(w) = drag_saved_width(
+            side,
+            action,
+            pointer,
+            window_width,
+            saved,
+            drag.starting_width,
+        ) {
+            match side {
+                Side::Tabs => self.resize_tab_sidebar(w, cx),
+                Side::Files if saved != w => {
+                    self.files_sidebar_width = w;
+                    self.schedule_save(cx);
+                    cx.notify();
+                }
+                Side::Files => {}
             }
+        }
+        match (side, action) {
             (Side::Tabs, Some(Compact | Expand)) => {
                 self.set_sidebar_compact(action == Some(Compact), cx);
             }
@@ -559,5 +609,52 @@ impl Workspace {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Side, drag_saved_width};
+    use gentle_core::workspaces::{SidebarDrag as Action, SidebarGesture, shown_sidebar_width};
+
+    #[test]
+    fn files_drag_at_window_cap_preserves_saved_width() {
+        let mut gesture = SidebarGesture::default();
+        let saved = 420.;
+        assert_eq!(shown_sidebar_width(saved, 800.), 320.);
+        for pointer in [320., 370.] {
+            let action = gesture.update(pointer, 800., true, true);
+            assert_eq!(
+                drag_saved_width(Side::Files, action, pointer, 800., saved, saved),
+                None
+            );
+        }
+        let action = gesture.update(300., 800., true, true);
+        assert_eq!(
+            drag_saved_width(Side::Files, action, 300., 800., saved, saved),
+            Some(300.)
+        );
+    }
+
+    #[test]
+    fn compact_drag_keeps_the_width_from_before_the_gesture() {
+        for pointers in [&[190., 130.][..], &[130.][..]] {
+            let mut gesture = SidebarGesture::default();
+            let start = 345.;
+            let mut saved = start;
+            let mut compact = false;
+            for &pointer in pointers {
+                let action = gesture.update_compact(pointer, 1200., true, compact, true);
+                saved = drag_saved_width(Side::Tabs, action, pointer, 1200., saved, start)
+                    .unwrap_or(saved);
+                compact = action == Some(Action::Compact);
+            }
+            assert!(compact);
+            assert_eq!(
+                gesture.update_compact(200., 1200., true, compact, true),
+                Some(Action::Expand)
+            );
+            assert_eq!(saved, 345.);
+        }
     }
 }
