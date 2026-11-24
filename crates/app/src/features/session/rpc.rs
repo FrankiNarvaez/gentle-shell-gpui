@@ -33,8 +33,9 @@ use gentle_core::transcript::NoticeLevel;
 const DESKTOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The reads that may legitimately take longer: a listing or stats scan
-/// reads every session file in scope, a switch replaces the session, and an
-/// update refresh is bounded by the server's own 15-second deadline.
+/// reads every session file in scope, a switch replaces the session, an
+/// update refresh is bounded by the server's own 15-second deadline, and a
+/// status read audits every managed asset file.
 const DESKTOP_SLOW_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn desktop_timeout(method: DesktopMethod) -> Duration {
@@ -42,7 +43,8 @@ fn desktop_timeout(method: DesktopMethod) -> Duration {
         DesktopMethod::ListSessions
         | DesktopMethod::SwitchSession
         | DesktopMethod::GetUsageStats
-        | DesktopMethod::GetUpdateStatus => DESKTOP_SLOW_TIMEOUT,
+        | DesktopMethod::GetUpdateStatus
+        | DesktopMethod::GetStatus => DESKTOP_SLOW_TIMEOUT,
         _ => DESKTOP_TIMEOUT,
     }
 }
@@ -611,6 +613,7 @@ impl SessionView {
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
             | DesktopMethod::ListAgentDefinitions
+            | DesktopMethod::GetStatus
             | DesktopMethod::GetBackgroundSubagents
             | DesktopMethod::SetBackgroundSubagents
             | DesktopMethod::GetAuthStatus
@@ -687,6 +690,7 @@ impl SessionView {
             | DesktopMethod::GetUsageStats
             | DesktopMethod::GetUpdateStatus
             | DesktopMethod::ListAgentDefinitions
+            | DesktopMethod::GetStatus
             | DesktopMethod::GetBackgroundSubagents
             | DesktopMethod::SetBackgroundSubagents
             | DesktopMethod::GetAuthStatus

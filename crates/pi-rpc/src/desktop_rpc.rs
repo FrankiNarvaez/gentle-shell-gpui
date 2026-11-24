@@ -111,6 +111,7 @@ mod review;
 mod session_state;
 mod sessions;
 mod stats;
+mod status;
 mod updates;
 
 pub use auth::{AuthSource, AuthStatus, AuthType, ProviderAuth, ReloadCredentials};
@@ -149,7 +150,11 @@ pub use sessions::{
 };
 pub use stats::{
     StatsRange, StatsScope, UsageStats, UsageStatsDay, UsageStatsModel, UsageStatsProject,
-    UsageStatsTotals, UsageStatsTruncated,
+    UsageStatsProvider, UsageStatsTotals, UsageStatsTruncated,
+};
+pub use status::{
+    AssetStatus, DevBinary, DevBinaryState, ModelConfigPresence, ModelConfigStatus, RoutingState,
+    ShellStatus, StatusAssets, StatusSeverity,
 };
 pub use updates::{
     PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PackagesUpdate, PiUpdate,
@@ -197,6 +202,7 @@ pub enum DesktopMethod {
     GetUsageStats,
     GetUpdateStatus,
     ListAgentDefinitions,
+    GetStatus,
     GetBackgroundSubagents,
     SetBackgroundSubagents,
     GetProfileBinding,
@@ -209,7 +215,7 @@ impl DesktopMethod {
     /// Every method this client knows, in the order `capabilities` lists
     /// them on Gentle Shell 5.0.0. Which ones a peer offers is only what its
     /// `capabilities` say: Gentle Shell 4.8.0 offers fourteen of them.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::Capabilities,
         Self::GetSnapshot,
         Self::GetConfig,
@@ -235,6 +241,7 @@ impl DesktopMethod {
         Self::GetUsageStats,
         Self::GetUpdateStatus,
         Self::ListAgentDefinitions,
+        Self::GetStatus,
         Self::GetBackgroundSubagents,
         Self::SetBackgroundSubagents,
         Self::GetProfileBinding,
@@ -271,6 +278,7 @@ impl DesktopMethod {
             Self::GetUsageStats => "get_usage_stats",
             Self::GetUpdateStatus => "get_update_status",
             Self::ListAgentDefinitions => "list_agent_definitions",
+            Self::GetStatus => "get_status",
             Self::GetBackgroundSubagents => "get_background_subagents",
             Self::SetBackgroundSubagents => "set_background_subagents",
             Self::GetProfileBinding => "get_profile_binding",
@@ -329,6 +337,7 @@ impl DesktopMethod {
             "get_usage_stats" => Ok(Self::GetUsageStats),
             "get_update_status" => Ok(Self::GetUpdateStatus),
             "list_agent_definitions" => Ok(Self::ListAgentDefinitions),
+            "get_status" => Ok(Self::GetStatus),
             "get_background_subagents" => Ok(Self::GetBackgroundSubagents),
             "set_background_subagents" => Ok(Self::SetBackgroundSubagents),
             "get_profile_binding" => Ok(Self::GetProfileBinding),
@@ -1022,10 +1031,10 @@ impl DesktopErrorInfo {
 wire_enum! {
     /// Every documented `error.code`. The config and `apply_profile` subsets
     /// are also [`ConfigErrorCode`] and [`ProfileApplyErrorCode`].
-    /// `changes_unavailable`, `session_unavailable` and `updates_unavailable`
-    /// are answered by Gentle Shell `main` but missing from its specification's
-    /// list of codes; they are kept here because the server sends them, as is
-    /// `agent_definitions_unavailable` (5.0.0).
+    /// `changes_unavailable`, `session_unavailable`, `updates_unavailable`,
+    /// `agent_definitions_unavailable` and `status_unavailable` are answered
+    /// by Gentle Shell but missing from its specification's list of codes;
+    /// they are kept here because the server sends them.
     DesktopErrorCode, "error.code" {
         InvalidRequest => "invalid_request",
         UnknownStore => "unknown_store",
@@ -1053,6 +1062,7 @@ wire_enum! {
         StatsUnavailable => "stats_unavailable",
         UpdatesUnavailable => "updates_unavailable",
         AgentDefinitionsUnavailable => "agent_definitions_unavailable",
+        StatusUnavailable => "status_unavailable",
         BackgroundSubagentsBusy => "background_subagents_busy",
         BackgroundSubagentsUnavailable => "background_subagents_unavailable",
         AuthUnavailable => "auth_unavailable",
@@ -1222,6 +1232,11 @@ impl DesktopResponse {
     /// The response to `list_agent_definitions`.
     pub fn agent_definitions(&self) -> Result<AgentDefinitions, DesktopRpcError> {
         AgentDefinitions::from_data(self.data()?)
+    }
+
+    /// The response to `get_status`.
+    pub fn status(&self) -> Result<ShellStatus, DesktopRpcError> {
+        ShellStatus::from_data(self.data()?)
     }
 
     /// The response to `get_background_subagents`.

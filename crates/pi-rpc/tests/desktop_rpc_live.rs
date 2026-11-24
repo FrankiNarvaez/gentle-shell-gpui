@@ -1105,6 +1105,18 @@ impl Probe {
             eprintln!("desktop_rpc_live: get_update_status {refresh:?} -> {status:?}");
         }
 
+        // 7b. Gentle Shell's own status (5.0.0 on): the facts
+        // `/gentle:status` prints. An older launcher does not advertise it.
+        if capabilities.supports(DesktopMethod::GetStatus) {
+            let status = self
+                .gated(capabilities, DesktopMethod::GetStatus, |s| {
+                    s.issue(DesktopMethod::GetStatus)
+                })?
+                .status()
+                .map_err(|e| anyhow!("status decode: {e}"))?;
+            eprintln!("desktop_rpc_live: get_status -> {status:?}");
+        }
+
         // 8. An external config change (#3335): a profiles.json written
         // behind the channel's back is announced with `source: external`.
         std::fs::write(
@@ -1239,7 +1251,7 @@ impl Probe {
 }
 
 /// The methods Gentle Shell `main` added after 4.8.0.
-const NEW_METHODS: [DesktopMethod; 10] = [
+const NEW_METHODS: [DesktopMethod; 11] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -1250,6 +1262,7 @@ const NEW_METHODS: [DesktopMethod; 10] = [
     DesktopMethod::SetReviewMode,
     DesktopMethod::GetUsageStats,
     DesktopMethod::GetUpdateStatus,
+    DesktopMethod::GetStatus,
 ];
 
 /// Require a response to be the documented error `code`.

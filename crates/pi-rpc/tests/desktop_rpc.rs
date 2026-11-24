@@ -12,24 +12,24 @@ use pi_rpc::desktop_rpc::{
     ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent,
     DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep, DesktopAgentUsage,
     DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord,
-    DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff, JobExitCode,
-    JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT,
-    NotificationsData, OrchestratorStatus, PROMPT_COMMAND, PackageKind, PackageScope,
-    PackageUpdate, PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
-    PermissionModeState, PersonaMode, PiUpdate, PinSource, PolicyFile, ProfileApplied,
-    ProfileApplyErrorCode, ProfileApplyMode, ProfileBinding, ProfileBindingChanged,
-    ProfileBindingKind, ProfileBindingOrigin, ProfileConfirmation, ProfileFallbacksData,
-    ProfileNote, ProfileNoteLevel, ProfilesData, ProviderAuth, ProviderUsage, RateLimitEvent,
-    RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope, ReviewScopes,
-    ReviewSetting, ReviewSource, SCHEMA, SessionActivity, SessionChangedFile, SessionChanges,
-    SessionChangesSummary, SessionCommand, SessionEntry, SessionJobs, SessionList,
-    SessionPermission, SessionProject, SessionSection, SessionTodo, SessionTodoItem,
-    SessionTodoProgress, SessionWorktree, SessionsScope, SetBackgroundSubagentsOutcome,
-    SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
-    StatsRange, StatsScope, SubagentThread, SwitchSessionResult, ThreadItem, UpdateState,
-    UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel,
-    UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload,
-    decode_widget,
+    DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, DevBinary, DevBinaryState,
+    Handoff, JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
+    MAX_SESSIONS_LIMIT, ModelConfigPresence, NotificationsData, OrchestratorStatus, PROMPT_COMMAND,
+    PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PendingQuestionKind,
+    PermissionMode, PermissionModeChanged, PermissionModeState, PersonaMode, PiUpdate, PinSource,
+    PolicyFile, ProfileApplied, ProfileApplyErrorCode, ProfileApplyMode, ProfileBinding,
+    ProfileBindingChanged, ProfileBindingKind, ProfileBindingOrigin, ProfileConfirmation,
+    ProfileFallbacksData, ProfileNote, ProfileNoteLevel, ProfilesData, ProviderAuth, ProviderUsage,
+    RateLimitEvent, RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope,
+    ReviewScopes, ReviewSetting, ReviewSource, RoutingState, SCHEMA, SessionActivity,
+    SessionChangedFile, SessionChanges, SessionChangesSummary, SessionCommand, SessionEntry,
+    SessionJobs, SessionList, SessionPermission, SessionProject, SessionSection, SessionTodo,
+    SessionTodoItem, SessionTodoProgress, SessionWorktree, SessionsScope,
+    SetBackgroundSubagentsOutcome, SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome,
+    ShellChannel, ShellUpdate, StatsRange, StatsScope, StatusSeverity, SubagentThread,
+    SwitchSessionResult, ThreadItem, UpdateState, UsageLimit, UsageLimitScope, UsageRefresh,
+    UsageResetAt, UsageStatsDay, UsageStatsModel, UsageStatsProvider, UsageStatsTotals,
+    UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload, decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -4818,7 +4818,7 @@ fn capabilities_expose_the_profile_apply_method_and_event() {
 
 /// The `capabilities` methods of Gentle Shell 5.0.0, as the spec and a live
 /// backend list them.
-const MAIN_METHODS: [&str; 31] = [
+const MAIN_METHODS: [&str; 32] = [
     "capabilities",
     "get_snapshot",
     "get_config",
@@ -4844,6 +4844,7 @@ const MAIN_METHODS: [&str; 31] = [
     "get_usage_stats",
     "get_update_status",
     "list_agent_definitions",
+    "get_status",
     "get_background_subagents",
     "set_background_subagents",
     "get_profile_binding",
@@ -4889,7 +4890,7 @@ const RELEASE_4_8_EVENTS: [&str; 7] = [
     "profile_applied",
     "agents_update",
 ];
-const NEW_METHODS: [DesktopMethod; 17] = [
+const NEW_METHODS: [DesktopMethod; 18] = [
     DesktopMethod::GetJobOutput,
     DesktopMethod::GetSubagentThread,
     DesktopMethod::ListSessions,
@@ -4901,6 +4902,7 @@ const NEW_METHODS: [DesktopMethod; 17] = [
     DesktopMethod::GetUsageStats,
     DesktopMethod::GetUpdateStatus,
     DesktopMethod::ListAgentDefinitions,
+    DesktopMethod::GetStatus,
     DesktopMethod::GetBackgroundSubagents,
     DesktopMethod::SetBackgroundSubagents,
     DesktopMethod::GetProfileBinding,
@@ -5024,6 +5026,7 @@ fn new_methods_with_required_params_only_come_from_their_typed_requests() {
         DesktopMethod::GetReviewMode,
         DesktopMethod::GetUsageStats,
         DesktopMethod::GetUpdateStatus,
+        DesktopMethod::GetStatus,
         DesktopMethod::GetBackgroundSubagents,
         DesktopMethod::GetAuthStatus,
         DesktopMethod::ReloadCredentials,
@@ -6371,19 +6374,23 @@ fn usage_stats_decode_the_spec_answer_and_its_truncation_flags() {
             share: 0.512,
         }
     );
+    // A Shell older than 5.0.0: no cost per day, no byProvider.
     assert_eq!(
         stats.by_day[2],
         UsageStatsDay {
             day: "2026-10-09".into(),
-            tokens: 1365
+            tokens: 1365,
+            cost: None,
         }
     );
+    assert_eq!(stats.by_provider, None);
     assert_eq!(stats.by_project.as_ref().unwrap()[1].name, "beta");
     assert_eq!(
         stats.truncated,
         UsageStatsTruncated {
             by_model: false,
             by_day: false,
+            by_provider: None,
             by_project: Some(false)
         }
     );
@@ -6412,6 +6419,115 @@ fn usage_stats_decode_the_spec_answer_and_its_truncation_flags() {
 
 fn zero_totals() -> Value {
     json!({ "sessions": 0, "messages": 0, "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 0, "cost": 0 })
+}
+
+#[test]
+fn usage_stats_decode_the_cost_per_day_and_providers_of_5_0() {
+    let stats = ok_response(json!({
+        "range": "30d",
+        "scope": "all",
+        "totals": { "sessions": 3, "messages": 4, "inputTokens": 1310, "outputTokens": 155, "cacheReadTokens": 1000, "cacheWriteTokens": 200, "totalTokens": 2665, "cost": 1.76 },
+        "byModel": [
+            { "model": "claude-opus-5-5", "messages": 2, "tokens": 1365, "cost": 0.51, "share": 0.512 },
+            { "model": "gpt-5.5", "messages": 2, "tokens": 1300, "cost": 1.25, "share": 0.488 }
+        ],
+        "byDay": [{ "day": "2026-09-20", "tokens": 1000, "cost": 1 }, { "day": "2026-10-08", "tokens": 300, "cost": 0.25 }, { "day": "2026-10-09", "tokens": 1365, "cost": 0.51 }],
+        "byProvider": [{ "provider": "anthropic", "messages": 4, "tokens": 2665, "cost": 1.76, "share": 1 }],
+        "byProject": [
+            { "name": "alpha", "sessions": 2, "messages": 3, "tokens": 2365, "cost": 1.51 },
+            { "name": "beta", "sessions": 1, "messages": 1, "tokens": 300, "cost": 0.25 }
+        ],
+        "truncated": { "byModel": false, "byDay": false, "byProvider": false, "byProject": false }
+    }))
+    .usage_stats()
+    .unwrap();
+    assert_eq!(stats.by_day[0].cost, Some(1.0));
+    assert_eq!(stats.by_day[1].cost, Some(0.25));
+    assert_eq!(
+        stats.by_provider.unwrap(),
+        [UsageStatsProvider {
+            provider: "anthropic".into(),
+            messages: 4,
+            tokens: 2665,
+            cost: 1.76,
+            share: 1.0,
+        }]
+    );
+    assert_eq!(stats.truncated.by_provider, Some(false));
+}
+
+// --- get_status -----------------------------------------------------------
+
+#[test]
+fn status_requests_send_empty_params_and_decode_the_spec_answer() {
+    let mut session = DesktopSession::new();
+    assert_eq!(
+        session.issue(DesktopMethod::GetStatus).unwrap().payload(),
+        payload("desktop-1", "get_status", "{}")
+    );
+
+    let status = ok_response(json!({
+        "package": "active",
+        "odd": "active",
+        "persona": "gentleman",
+        "devBinary": { "state": "inactive", "sha256Prefix": null },
+        "assets": {
+            "delegation": { "stale": 0, "userOverrides": 1, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+        },
+        "modelConfig": { "global": "present", "routing": "valid" },
+        "severity": "info"
+    }))
+    .status()
+    .unwrap();
+    assert_eq!(status.persona, "gentleman");
+    assert_eq!(
+        status.dev_binary,
+        DevBinary {
+            state: DevBinaryState::Inactive,
+            sha256_prefix: None,
+        }
+    );
+    assert_eq!(status.assets.delegation.user_overrides, 1);
+    assert_eq!(
+        (status.model_config.global, status.model_config.routing),
+        (ModelConfigPresence::Present, RoutingState::Valid)
+    );
+    assert_eq!(status.severity, StatusSeverity::Info);
+
+    let warning = ok_response(json!({
+        "package": "active", "odd": "active", "persona": "neutral",
+        "devBinary": { "state": "active", "sha256Prefix": "0123456789abcdef" },
+        "assets": {
+            "delegation": { "stale": 2, "userOverrides": 0, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 1 }
+        },
+        "modelConfig": { "global": "missing", "routing": "invalid" },
+        "severity": "warning"
+    }))
+    .status()
+    .unwrap();
+    assert_eq!(warning.severity, StatusSeverity::Warning);
+    assert_eq!(
+        warning.dev_binary.sha256_prefix.as_deref(),
+        Some("0123456789abcdef")
+    );
+
+    // A value outside the documented vocabulary is refused, not misread.
+    let mut bad = json!({
+        "package": "active", "odd": "active", "persona": "gentleman",
+        "devBinary": { "state": "inactive", "sha256Prefix": null },
+        "assets": {
+            "delegation": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 },
+            "review": { "stale": 0, "userOverrides": 0, "activeAgentOverrides": 0 }
+        },
+        "modelConfig": { "global": "present", "routing": "valid" },
+        "severity": "error"
+    });
+    assert!(ok_response(bad.clone()).status().is_err());
+    bad["severity"] = json!("info");
+    bad["modelConfig"]["routing"] = json!("broken");
+    assert!(ok_response(bad).status().is_err());
 }
 
 // --- get_update_status ----------------------------------------------------
@@ -6550,6 +6666,7 @@ fn every_documented_error_code_is_typed() {
         "stats_unavailable",
         "updates_unavailable",
         "agent_definitions_unavailable",
+        "status_unavailable",
         "background_subagents_busy",
         "background_subagents_unavailable",
         "auth_unavailable",

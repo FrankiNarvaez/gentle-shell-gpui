@@ -549,6 +549,7 @@ pub(in crate::features::session) mod desktop {
                     | Some(DesktopMethod::GetUsageStats)
                     | Some(DesktopMethod::GetUpdateStatus)
                     | Some(DesktopMethod::ListAgentDefinitions)
+                    | Some(DesktopMethod::GetStatus)
                     | Some(DesktopMethod::GetBackgroundSubagents)
                     | Some(DesktopMethod::SetBackgroundSubagents)
                     | Some(DesktopMethod::GetProfileBinding)

@@ -33,6 +33,7 @@ mod reading_desk;
 mod runs_on;
 mod services;
 mod shell_config;
+mod shell_status;
 mod sign_ins;
 mod snapshot;
 mod theme;
@@ -99,6 +100,8 @@ pub struct SettingsView {
     /// Gentle Shell's settings stores (persona, banner, notifications) as
     /// the active agent tab's Shell reports them, when it serves them.
     shell_config: shell_config::ShellConfig,
+    /// Gentle Shell's own status (`get_status`), when its Shell offers it.
+    shell_status: shell_status::ShellStatusRead,
     /// Which providers have credentials, as the active agent tab's Shell's
     /// model registry reports them, when it serves `get_auth_status`.
     sign_ins: sign_ins::SignIns,
@@ -173,6 +176,7 @@ impl SettingsView {
             session,
             shell_updates: upgrade::ShellUpdates::default(),
             shell_config: shell_config::ShellConfig::default(),
+            shell_status: shell_status::ShellStatusRead::default(),
             sign_ins: sign_ins::SignIns::default(),
             runs_on: runs_on::RunsOn::new(window, cx),
         };
@@ -214,6 +218,7 @@ impl SettingsView {
     /// or event arrived.
     fn session_changed(&mut self, cx: &mut Context<Self>) {
         self.update_status_changed(cx);
+        self.shell_status_changed(cx);
         self.shell_config_changed(cx);
         self.background_changed(cx);
         self.sign_ins_changed(cx);
@@ -254,6 +259,7 @@ impl SettingsView {
     /// sign-ins are asked of it too; the files fill in whatever it does not
     /// serve.
     fn reload_with(&mut self, refresh_updates: bool, cx: &mut Context<Self>) {
+        self.ask_shell_status(cx);
         let shell_updates = self.ask_update_status(refresh_updates, cx);
         if !shell_updates {
             self.shell_updates.status = None;
