@@ -204,6 +204,10 @@ impl Workspace {
             SessionEvent::OpenScreen(screen) => {
                 self.open_screen(*screen, Some(session.clone()), window, cx)
             }
+            SessionEvent::OpenMemory(target) => {
+                let cwd = session.read(cx).cwd().clone();
+                self.open_memory(cwd, target.clone(), window, cx)
+            }
             SessionEvent::Effort(level) => {
                 if let Some(level) = crate::shared::surge::Level::of(level) {
                     self.play_surge(level, cx)

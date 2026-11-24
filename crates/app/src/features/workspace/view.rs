@@ -518,7 +518,10 @@ impl Workspace {
                                 "Memory",
                                 "Engram observations",
                                 "",
-                                |this, window, cx| this.open_memory(window, cx),
+                                |this, window, cx| {
+                                    let cwd = this.active_cwd(cx);
+                                    this.open_memory(cwd, Default::default(), window, cx)
+                                },
                             ))
                             .item(entry(
                                 IconName::RotateCcwClock,

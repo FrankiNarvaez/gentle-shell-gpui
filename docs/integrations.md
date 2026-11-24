@@ -557,7 +557,8 @@ Known keys:
 | `gentle:yolo` | status and widget | Hidden: the permissions chip already shows the mode. |
 | `gentle-jobs` | status | Hidden: jobs have their own chip, built from `details.gentleJobs`. |
 | `gentle-agents` | widget | Helper activity model, not a generic chip. |
-| Any other | status / widget | Generic text next to the composer (`view/activity.rs`); in narrow panels only an icon with a tooltip, in minimal panels it collapses into "+N". The code gives no special handling to any Engram key. |
+| `engram` | status | gentle-engram's `🧠 <project> · <state>`: a brain button next to the review's `±` (with `#id` when the state names a memory) that opens the Memory screen on that project and memory (`gentle_core::engram::status_target`; `unknown` is no project, a deleted memory or a saved prompt no memory). Folds with the others in minimal panels, and when the text isn't that shape (`🧠 memory disabled`). |
+| Any other | status / widget | Generic text next to the composer (`view/activity.rs`); in narrow panels only an icon with a tooltip, in minimal panels it collapses into "+N". |
 
 The filters are in `session/view/activity.rs` (`statuses` and `render_widget_chips`). `lifecycle.rs` `start` clears statuses, widgets and dialogs on every start.
 
@@ -631,7 +632,7 @@ Its own JSONL protocol: the app sends `list`, `login` (`provider`, `authType: oa
 
 ### Engram (`features/memory/client.rs`)
 
-Blocking HTTP GET (ureq, 8 s, no redirects) on the background executor. Base URL: `ENGRAM_URL`, otherwise `http://127.0.0.1:${ENGRAM_PORT}`, default port `7437`. `ENGRAM_HTTP_TOKEN` adds `Authorization: Bearer`. Routes: `/project/current?cwd=`, `/observations/recent?…&limit=60`, `/search?q=…&limit=40` (with `project=` or `all_projects=true`). The `Observation` model, `encode` and `parse_observations` are in `gentle_core::engram`. The app does not start Engram: Gentle Shell does it with the first session.
+Blocking HTTP GET (ureq, 8 s, no redirects) on the background executor. Base URL: `ENGRAM_URL`, otherwise `http://127.0.0.1:${ENGRAM_PORT}`, default port `7437`. `ENGRAM_HTTP_TOKEN` adds `Authorization: Bearer`. Routes: `/project/current?cwd=`, `/observations/recent?…&limit=60`, `/search?q=…&limit=40` (with `project=` or `all_projects=true`), and `/observations/{id}` for the memory a session's Engram status opens the screen on when the page doesn't hold it. The `Observation` model, `MemoryTarget`, `status_target`, `encode` and `parse_observations` are in `gentle_core::engram`. The app does not start Engram: Gentle Shell does it with the first session.
 
 ### Subscription usage (`features/usage/`)
 
