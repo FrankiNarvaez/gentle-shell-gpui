@@ -604,7 +604,7 @@ fn rpc_screen_reads_every_store_by_name() {
     let remote = opened(&mut port);
     let mut asked: Vec<ConfigStore> = port.gets.iter().map(|(_, store)| *store).collect();
     asked.sort_by_key(|store| store.as_str());
-    let mut every = ConfigStore::ALL.to_vec();
+    let mut every = SCREEN_STORES.to_vec();
     every.sort_by_key(|store| store.as_str());
     assert_eq!(asked, every, "each store once, by name");
     assert!(port.sets.is_empty(), "reading writes nothing");

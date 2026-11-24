@@ -3,28 +3,28 @@
 //! adapter only builds the outer prompt and decodes the widget records.
 
 use pi_rpc::desktop_rpc::{
-    ActivityState, ApplyProfileOutcome, ApplyProfileResult, Capabilities, ChangeDiff, ChangeRoot,
-    ChangeSource, ChangeStatus, ChangedFile, Changes, CommandSource, ConfigChangeOrigin,
-    ConfigChanged, ConfigErrorCode, ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState,
-    ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState,
-    DesignCanvas, DesignCanvasEvent, DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep,
-    DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod,
-    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, Handoff,
-    JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
-    MAX_SESSIONS_LIMIT, PROMPT_COMMAND, PackageKind, PackageScope, PackageUpdate,
-    PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
-    PermissionModeState, PiUpdate, PinSource, ProfileApplied, ProfileApplyErrorCode,
-    ProfileApplyMode, ProfileConfirmation, ProfileFallbacksData, ProfileNote, ProfileNoteLevel,
-    ProfilesData, ProviderUsage, RateLimitEvent, RateLimitSource, ReviewConfirmation,
-    ReviewEffective, ReviewMode, ReviewScope, ReviewScopes, ReviewSetting, ReviewSource, SCHEMA,
-    SessionActivity, SessionChangedFile, SessionChanges, SessionChangesSummary, SessionCommand,
-    SessionEntry, SessionJobs, SessionList, SessionPermission, SessionProject, SessionSection,
-    SessionTodo, SessionTodoItem, SessionTodoProgress, SessionWorktree, SessionsScope,
-    SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
-    StatsRange, StatsScope, SubagentThread, SwitchSessionResult, ThreadItem, UpdateState,
-    UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay, UsageStatsModel,
-    UsageStatsTotals, UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload,
-    decode_widget,
+    ActivityState, ApplyProfileOutcome, ApplyProfileResult, BannerData, Capabilities, ChangeDiff,
+    ChangeRoot, ChangeSource, ChangeStatus, ChangedFile, Changes, CommandSource,
+    ConfigChangeOrigin, ConfigChanged, ConfigErrorCode, ConfigLayer, ConfigLayerSource,
+    ConfigScope, ConfigState, ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget,
+    ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent, DesignEntry, DesignTransition,
+    DesktopAgent, DesktopAgentStep, DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo,
+    DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord, DesktopRequest, DesktopResponse,
+    DesktopRpcError, DesktopSession, Handoff, JobExitCode, JobOutput, ListSessionsQuery,
+    MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT, NotificationsData, PROMPT_COMMAND,
+    PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PendingQuestionKind,
+    PermissionMode, PermissionModeChanged, PermissionModeState, PersonaMode, PiUpdate, PinSource,
+    ProfileApplied, ProfileApplyErrorCode, ProfileApplyMode, ProfileConfirmation,
+    ProfileFallbacksData, ProfileNote, ProfileNoteLevel, ProfilesData, ProviderUsage,
+    RateLimitEvent, RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope,
+    ReviewScopes, ReviewSetting, ReviewSource, SCHEMA, SessionActivity, SessionChangedFile,
+    SessionChanges, SessionChangesSummary, SessionCommand, SessionEntry, SessionJobs, SessionList,
+    SessionPermission, SessionProject, SessionSection, SessionTodo, SessionTodoItem,
+    SessionTodoProgress, SessionWorktree, SessionsScope, SetConfigResult, SetPermissionModeResult,
+    SetReviewModeOutcome, ShellChannel, ShellUpdate, StatsRange, StatsScope, SubagentThread,
+    SwitchSessionResult, ThreadItem, UpdateState, UsageLimit, UsageLimitScope, UsageRefresh,
+    UsageResetAt, UsageStatsDay, UsageStatsModel, UsageStatsTotals, UsageStatsTruncated,
+    UsageStatus, UsageWindow, WIDGET_KEY, decode_payload, decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -3044,6 +3044,19 @@ fn config_stores_are_a_closed_vocabulary_with_their_documented_shape() {
             ConfigScope::Global,
             true,
         ),
+        (
+            ConfigStore::Persona,
+            "persona",
+            ConfigScope::GlobalProject,
+            false,
+        ),
+        (ConfigStore::Banner, "banner", ConfigScope::Global, false),
+        (
+            ConfigStore::Notifications,
+            "notifications",
+            ConfigScope::Global,
+            false,
+        ),
     ];
     assert_eq!(ConfigStore::ALL.len(), expected.len());
     for (store, (want, name, scope, read_only)) in ConfigStore::ALL.into_iter().zip(expected) {
@@ -3340,6 +3353,178 @@ fn get_config_decodes_a_writable_store_with_its_write_targets() {
         Some("sha256:8f2a")
     );
     assert_eq!(state.write_revision(ConfigWriteTarget::Local), None);
+}
+
+/// The settings stores (Gentle Shell 5.0.0), with the documented content:
+/// `persona` is the mode in effect, `banner` its three settings and
+/// `notifications` the settings without `schema`, a file sound as `"file"`.
+#[test]
+fn get_config_decodes_the_settings_stores() {
+    let persona = config_response(json!({
+        "store": "persona",
+        "scope": "global+project",
+        "readOnly": false,
+        "status": "ok",
+        "revision": "sha256:41aa",
+        "value": { "mode": "neutral" },
+        "layers": [
+            { "source": "global", "status": "ok" },
+            { "source": "project", "status": "missing" }
+        ],
+        "writeTargets": [{ "target": "global", "status": "ok", "writeRevision": "sha256:4b01" }],
+    }))
+    .config()
+    .unwrap();
+    assert_eq!(persona.store, ConfigStore::Persona);
+    assert_eq!(persona.value, Some(json!({ "mode": "neutral" })));
+    assert_eq!(
+        persona.write_revision(ConfigWriteTarget::Global),
+        Some("sha256:4b01")
+    );
+
+    let banner = config_response(json!({
+        "store": "banner",
+        "scope": "global",
+        "readOnly": false,
+        "status": "missing",
+        "revision": "sha256:9c02",
+        "layers": [{ "source": "global", "status": "missing" }],
+        "writeTargets": [{ "target": "global", "status": "missing", "writeRevision": "sha256:9c03" }],
+    }))
+    .config()
+    .unwrap();
+    assert_eq!(
+        (banner.store, banner.status, banner.value),
+        (ConfigStore::Banner, ConfigStatus::Missing, None)
+    );
+
+    let value = json!({
+        "enabled": true,
+        "audio": {
+            "backend": "auto",
+            "minimumIntervalMs": 1000,
+            "coalesceWindowMs": 300,
+            "events": { "agent.completed": "file", "agent.attention": "builtin:attention" }
+        }
+    });
+    let notifications = config_response(json!({
+        "store": "notifications",
+        "scope": "global",
+        "readOnly": false,
+        "status": "ok",
+        "revision": "sha256:d317",
+        "value": value,
+        "layers": [{ "source": "global", "status": "ok" }],
+        "writeTargets": [{ "target": "global", "status": "ok", "writeRevision": "sha256:d318" }],
+    }))
+    .config()
+    .unwrap();
+    assert_eq!(notifications.value, Some(value));
+
+    // The settings stores are writable: a read-only claim is refused.
+    assert!(
+        config_response(json!({
+            "store": "banner",
+            "scope": "global",
+            "readOnly": true,
+            "status": "missing",
+            "revision": "sha256:9c02",
+            "layers": [{ "source": "global", "status": "missing" }],
+        }))
+        .config()
+        .is_err()
+    );
+}
+
+#[test]
+fn set_config_writes_the_settings_stores_through_their_global_target() {
+    let persona = DesktopRequest::set_config(
+        "desktop-3",
+        ConfigWrite::Persona(PersonaMode::Neutral),
+        "r1",
+    )
+    .unwrap();
+    assert_eq!(
+        persona.payload(),
+        request_payload(
+            "desktop-3",
+            "set_config",
+            json!({ "store": "persona", "data": { "mode": "neutral" }, "expectedRevision": "r1" }),
+        )
+    );
+
+    let banner_data = json!({ "showRose": false, "showTextLogo": true, "color": "cyan" });
+    let banner = ConfigWrite::Banner(BannerData::new(banner_data.clone()).unwrap());
+    assert_eq!(
+        (banner.store(), banner.write_target()),
+        (ConfigStore::Banner, ConfigWriteTarget::Global)
+    );
+    assert_eq!(
+        DesktopRequest::set_config("desktop-4", banner, "r2")
+            .unwrap()
+            .payload(),
+        request_payload(
+            "desktop-4",
+            "set_config",
+            json!({ "store": "banner", "data": banner_data, "expectedRevision": "r2" }),
+        )
+    );
+
+    // The `"file"` marker goes back exactly as read: it keeps that file.
+    let settings = json!({
+        "enabled": false,
+        "audio": { "backend": "auto", "minimumIntervalMs": 1000, "coalesceWindowMs": 300,
+                   "events": { "agent.completed": "file" } }
+    });
+    let write = ConfigWrite::Notifications(NotificationsData::new(settings.clone()).unwrap());
+    assert_eq!(write.store(), ConfigStore::Notifications);
+    assert_eq!(
+        DesktopRequest::set_config("desktop-5", write, "r3")
+            .unwrap()
+            .payload(),
+        request_payload(
+            "desktop-5",
+            "set_config",
+            json!({ "store": "notifications", "data": settings, "expectedRevision": "r3" }),
+        )
+    );
+    assert!(matches!(
+        NotificationsData::new(json!([])),
+        Err(DesktopRpcError::InvalidConfigData(_))
+    ));
+    assert_eq!(
+        "gentleman".parse::<PersonaMode>().unwrap(),
+        PersonaMode::Gentleman
+    );
+    assert!("pirate".parse::<PersonaMode>().is_err());
+}
+
+#[test]
+fn config_changed_decodes_a_settings_store_change() {
+    let external = config_event(
+        3,
+        "config_changed",
+        json!({ "store": "notifications", "scope": "global", "revision": "sha256:5f1d",
+                "status": "ok", "source": "external" }),
+    )
+    .config_changed()
+    .unwrap();
+    assert_eq!(external.store, ConfigStore::Notifications);
+    assert_eq!(
+        external.origin,
+        ConfigChangeOrigin::External {
+            status: ConfigStatus::Ok
+        }
+    );
+    let desktop = config_event(
+        4,
+        "config_changed",
+        json!({ "store": "persona", "scope": "global+project", "writeTarget": "global",
+                "revision": "sha256:1c80", "writeRevision": "sha256:c4b0", "source": "desktop" }),
+    )
+    .config_changed()
+    .unwrap();
+    assert_eq!(desktop.store, ConfigStore::Persona);
 }
 
 #[test]

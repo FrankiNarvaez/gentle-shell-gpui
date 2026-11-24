@@ -420,8 +420,16 @@ pub(crate) trait ConfigPort {
 }
 
 /// Every store the screen reads: the three it writes and the three it only
-/// shows.
-pub(super) const SCREEN_STORES: [ConfigStore; 6] = ConfigStore::ALL;
+/// shows. The settings stores (`persona`, `banner`, `notifications`) are
+/// Configuration's.
+pub(super) const SCREEN_STORES: [ConfigStore; 6] = [
+    ConfigStore::Profiles,
+    ConfigStore::Models,
+    ConfigStore::ProfileFallbacks,
+    ConfigStore::Subagents,
+    ConfigStore::Pins,
+    ConfigStore::ManagedAssets,
+];
 
 /// What one answer meant for the screen. `K` is what the screen wants done
 /// once its write lands; it comes back exactly once, or is dropped with the
@@ -729,14 +737,17 @@ impl<K> Remote<K> {
 
     /// Stores changed on the server: re-read each one whose revision differs
     /// from the one held (a write's own echo does not), or every one named
-    /// after a gap.
+    /// after a gap. Stores the screen does not show are left alone.
     pub(super) fn changed(
         &mut self,
         port: &mut dyn ConfigPort,
         changes: &[ConfigChange],
     ) -> Result<(), ConfigFailure> {
         let mut stale: Vec<ConfigStore> = Vec::new();
-        for change in changes {
+        for change in changes
+            .iter()
+            .filter(|change| SCREEN_STORES.contains(&change.store))
+        {
             let held = self
                 .states
                 .get(&change.store)

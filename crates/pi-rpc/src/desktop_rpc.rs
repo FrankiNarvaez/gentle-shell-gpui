@@ -685,8 +685,8 @@ impl DesktopRequest {
 
     /// The `set_config` request. Params are exactly `{ store, data,
     /// expectedRevision }`; `expected_revision` is the `writeRevision` of the
-    /// target `write` replaces, as last read. Only the three writable stores
-    /// can be named, through [`ConfigWrite`]. Before sending, an empty
+    /// target `write` replaces, as last read. Only the writable stores can
+    /// be named, through [`ConfigWrite`]. Before sending, an empty
     /// `expected_revision` ([`DesktopRpcError::InvalidExpectedRevision`]) and
     /// an empty pin profile ([`DesktopRpcError::InvalidPinProfile`]) are
     /// refused; everything else in `data` is the server's to validate.
@@ -2415,8 +2415,10 @@ impl DesignCanvasEvent {
     }
 }
 
-/// The six configuration stores the protocol names. A store is an
-/// identifier, never a path; anything else is refused.
+/// The nine configuration stores the protocol names. A store is an
+/// identifier, never a path; anything else is refused. Gentle Shell 4.9.0
+/// knows only the first six: it answers `unknown_store` for the settings
+/// stores (`persona`, `banner`, `notifications`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfigStore {
     Profiles,
@@ -2425,17 +2427,23 @@ pub enum ConfigStore {
     Subagents,
     Pins,
     ManagedAssets,
+    Persona,
+    Banner,
+    Notifications,
 }
 
 impl ConfigStore {
     /// Every store the protocol speaks, in wire order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::Profiles,
         Self::Models,
         Self::ProfileFallbacks,
         Self::Subagents,
         Self::Pins,
         Self::ManagedAssets,
+        Self::Persona,
+        Self::Banner,
+        Self::Notifications,
     ];
 
     /// The wire name of the store.
@@ -2447,14 +2455,21 @@ impl ConfigStore {
             Self::Subagents => "subagents",
             Self::Pins => "pins",
             Self::ManagedAssets => "managed_assets",
+            Self::Persona => "persona",
+            Self::Banner => "banner",
+            Self::Notifications => "notifications",
         }
     }
 
     /// The owner layers the store is assembled from.
     pub fn scope(self) -> ConfigScope {
         match self {
-            Self::Profiles | Self::ProfileFallbacks | Self::ManagedAssets => ConfigScope::Global,
-            Self::Models | Self::Subagents => ConfigScope::GlobalProject,
+            Self::Profiles
+            | Self::ProfileFallbacks
+            | Self::ManagedAssets
+            | Self::Banner
+            | Self::Notifications => ConfigScope::Global,
+            Self::Models | Self::Subagents | Self::Persona => ConfigScope::GlobalProject,
             Self::Pins => ConfigScope::LocalRepo,
         }
     }
@@ -2466,9 +2481,15 @@ impl ConfigStore {
     }
 
     /// The files a write to this store may replace; empty when read-only.
+    /// `persona`'s `global` target also covers the project file when that
+    /// one already exists.
     pub fn write_targets(self) -> &'static [ConfigWriteTarget] {
         match self {
-            Self::Profiles | Self::ProfileFallbacks => &[ConfigWriteTarget::Global],
+            Self::Profiles
+            | Self::ProfileFallbacks
+            | Self::Persona
+            | Self::Banner
+            | Self::Notifications => &[ConfigWriteTarget::Global],
             Self::Pins => &[ConfigWriteTarget::Local, ConfigWriteTarget::Repo],
             Self::Models | Self::Subagents | Self::ManagedAssets => &[],
         }
@@ -2735,7 +2756,50 @@ impl ProfileFallbacksData {
     }
 }
 
-/// One `set_config` write. Only the three writable stores exist here, so a
+wire_enum! {
+    /// The persona a `persona` store holds (`{ mode }`).
+    PersonaMode, "mode" {
+        Gentleman => "gentleman",
+        Neutral => "neutral",
+    }
+}
+
+/// The complete `banner` store content, exactly `{ showRose, showTextLogo,
+/// color }`. Only the JSON object shape is checked here; the server keeps
+/// only those three settings and answers `invalid_data` for anything else.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BannerData(Value);
+
+impl BannerData {
+    pub fn new(data: Value) -> Result<Self, DesktopRpcError> {
+        store_document(&data, "banner")?;
+        Ok(Self(data))
+    }
+
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+}
+
+/// The complete `notifications` store content, as `get_config` returned it:
+/// the validated settings without `schema`, every file sound as the
+/// `"file"` marker (sent back where it was, it keeps that file). Only the
+/// JSON object shape is checked here; the server's owner validates the rest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NotificationsData(Value);
+
+impl NotificationsData {
+    pub fn new(data: Value) -> Result<Self, DesktopRpcError> {
+        store_document(&data, "notifications")?;
+        Ok(Self(data))
+    }
+
+    pub fn as_value(&self) -> &Value {
+        &self.0
+    }
+}
+
+/// One `set_config` write. Only the writable stores exist here, so a
 /// read-only store cannot be targeted through the typed API.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConfigWrite {
@@ -2749,6 +2813,13 @@ pub enum ConfigWrite {
         source: PinSource,
         profile: Option<String>,
     },
+    /// Set the persona as `/gentle:persona` does: the global file, plus the
+    /// project file only when it already exists.
+    Persona(PersonaMode),
+    /// Replace the whole `banner` store.
+    Banner(BannerData),
+    /// Replace the whole `notifications` store.
+    Notifications(NotificationsData),
 }
 
 impl ConfigWrite {
@@ -2774,14 +2845,21 @@ impl ConfigWrite {
             Self::Profiles(_) => ConfigStore::Profiles,
             Self::ProfileFallbacks(_) => ConfigStore::ProfileFallbacks,
             Self::Pin { .. } => ConfigStore::Pins,
+            Self::Persona(_) => ConfigStore::Persona,
+            Self::Banner(_) => ConfigStore::Banner,
+            Self::Notifications(_) => ConfigStore::Notifications,
         }
     }
 
     /// The target whose `writeRevision` must be sent as `expectedRevision`.
     pub fn write_target(&self) -> ConfigWriteTarget {
         match self {
-            Self::Profiles(_) | Self::ProfileFallbacks(_) => ConfigWriteTarget::Global,
             Self::Pin { source, .. } => source.write_target(),
+            Self::Profiles(_)
+            | Self::ProfileFallbacks(_)
+            | Self::Persona(_)
+            | Self::Banner(_)
+            | Self::Notifications(_) => ConfigWriteTarget::Global,
         }
     }
 }
@@ -2810,6 +2888,9 @@ fn set_config_params(
             }
             json!({ "source": source.as_str(), "profile": profile })
         }
+        ConfigWrite::Persona(mode) => json!({ "mode": mode.as_str() }),
+        ConfigWrite::Banner(data) => data.as_value().clone(),
+        ConfigWrite::Notifications(data) => data.as_value().clone(),
     };
     Ok(json!({
         "store": write.store().as_str(),
@@ -3983,7 +4064,7 @@ pub enum DesktopRpcError {
     InvalidLastStep(String),
     /// A design canvas `transition` outside the closed vocabulary.
     InvalidDesignTransition(String),
-    /// A config store identifier outside the six documented stores.
+    /// A config store identifier outside the nine documented stores.
     UnknownConfigStore(String),
     /// A config `scope` outside the closed vocabulary.
     InvalidConfigScope(String),

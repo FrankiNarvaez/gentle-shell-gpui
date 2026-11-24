@@ -32,6 +32,7 @@ mod pages;
 mod reading_desk;
 mod runs_on;
 mod services;
+mod shell_config;
 mod snapshot;
 mod theme;
 mod tower;
@@ -94,6 +95,9 @@ pub struct SettingsView {
     _session_sub: Option<Subscription>,
     /// RPC status and its in-flight ticket; separate from upgrade UI state.
     shell_updates: upgrade::ShellUpdates,
+    /// Gentle Shell's settings stores (persona, banner, notifications) as
+    /// the active agent tab's Shell reports them, when it serves them.
+    shell_config: shell_config::ShellConfig,
     /// Where agents run: this computer, a WSL distro or a command.
     runs_on: runs_on::RunsOn,
 }
@@ -161,9 +165,10 @@ impl SettingsView {
             fonts: fonts::FontsUi::new(window, cx),
             _session_sub: session
                 .as_ref()
-                .map(|session| cx.observe(session, |this, _, cx| this.update_status_changed(cx))),
+                .map(|session| cx.observe(session, |this, _, cx| this.session_changed(cx))),
             session,
             shell_updates: upgrade::ShellUpdates::default(),
+            shell_config: shell_config::ShellConfig::default(),
             runs_on: runs_on::RunsOn::new(window, cx),
         };
         this.reload(cx);
@@ -200,13 +205,23 @@ impl SettingsView {
         self.reload_with(false, cx);
     }
 
+    /// The active agent tab changed: its probe answered, or a Desktop answer
+    /// or event arrived.
+    fn session_changed(&mut self, cx: &mut Context<Self>) {
+        self.update_status_changed(cx);
+        self.shell_config_changed(cx);
+    }
+
     /// Prefer update information from the active agent's Desktop RPC.
     /// Fall back to the existing launcher/registry path when unavailable.
+    /// The settings stores are asked of it too; the files fill in whatever
+    /// it does not serve.
     fn reload_with(&mut self, refresh_updates: bool, cx: &mut Context<Self>) {
         let shell_updates = self.ask_update_status(refresh_updates, cx);
         if !shell_updates {
             self.shell_updates.status = None;
         }
+        self.ask_shell_config(cx);
         let cwd = self.cwd.clone();
         self._load = cx.spawn(async move |this, cx| {
             let snapshot = cx
@@ -215,7 +230,7 @@ impl SettingsView {
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.snapshot = Some(snapshot);
-                cx.notify();
+                this.adopt_shell(cx);
             });
         });
     }
