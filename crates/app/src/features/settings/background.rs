@@ -331,7 +331,12 @@ impl SettingsView {
             ),
             Err(error) => (error, true),
         });
-        self.reload(cx);
+        // Called from inside the tab's update (its command's answer), and the
+        // reload reads the tab: it waits until that update is over.
+        let view = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |this, cx| this.reload(cx));
+        });
     }
 
     /// Gentle Shell's confirmation, exactly as sent, with its two answers.
