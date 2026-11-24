@@ -1482,7 +1482,11 @@ fn spawn_probe(spec: LaunchSpec, root: TempRoot) -> Result<Probe> {
 }
 
 /// The Gentle Shell launcher (`bin/gentle-shell.mjs`) from
-/// `GENTLE_SHELL_LIVE_LAUNCHER`, or a clear skip.
+/// `GENTLE_SHELL_LIVE_LAUNCHER`, or a clear skip. A launcher of the active
+/// bundled install (`<prefix>/versions/<id>`, `<prefix>/current` naming it)
+/// is refused: it hands Pi `GENTLE_SHELL_PREFIX`, and a bundled prefix's
+/// config folder wins over `GENTLE_PI_CONFIG_HOME`, so the probe would read
+/// the real `<prefix>/config/gentle-ai` instead of its temporary one.
 fn locate_launcher() -> Option<PathBuf> {
     let path = match std::env::var_os("GENTLE_SHELL_LIVE_LAUNCHER") {
         Some(path) if !path.is_empty() => PathBuf::from(path),
@@ -1495,15 +1499,47 @@ fn locate_launcher() -> Option<PathBuf> {
         }
     };
     let absolute = std::fs::canonicalize(&path).unwrap_or(path);
-    if absolute.is_file() {
-        Some(absolute)
-    } else {
+    if !absolute.is_file() {
         eprintln!(
             "desktop_rpc_live: GENTLE_SHELL_LIVE_LAUNCHER={} is not a file; skipping",
             absolute.display()
         );
-        None
+        return None;
     }
+    if let Some(prefix) = active_bundled_prefix(&absolute) {
+        panic!(
+            "desktop_rpc_live: {} belongs to the active Gentle Shell install at {}: it would \
+             read and write {}/config/gentle-ai, not the probe's temporary config. Copy the \
+             version folder outside `versions/` (cp -R {}/versions/<id> /tmp/gs-copy) and \
+             point GENTLE_SHELL_LIVE_LAUNCHER at the copy's bin/gentle-shell.mjs",
+            absolute.display(),
+            prefix.display(),
+            prefix.display(),
+            prefix.display(),
+        );
+    }
+    Some(absolute)
+}
+
+/// The prefix of the active bundled install `launcher` runs from, by the
+/// Shell's own rule (`resolveBundledInstall`): the first ancestor directly
+/// under a `versions` folder is the version, and it is active when the
+/// prefix's `current` names it.
+fn active_bundled_prefix(launcher: &Path) -> Option<PathBuf> {
+    let version = launcher.ancestors().find(|dir| {
+        dir.parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "versions")
+    })?;
+    let id = version.file_name()?.to_str()?;
+    let prefix = version.parent()?.parent()?;
+    let current = prefix.join("current");
+    let active = if cfg!(windows) {
+        std::fs::read_to_string(&current).is_ok_and(|text| text == format!("{id}\n"))
+    } else {
+        std::fs::read_link(&current).is_ok_and(|target| target == Path::new("versions").join(id))
+    };
+    active.then(|| prefix.to_path_buf())
 }
 
 /// Make the workspace a Git repository with one committed file, then modify
@@ -1607,7 +1643,8 @@ fn live_desktop_shell_roundtrip() {
 /// Against `main` every added method and event is exercised; against a
 /// release that predates them (4.8.0), the capability gate must refuse each
 /// one without sending it. Point `GENTLE_SHELL_LIVE_LAUNCHER` at either
-/// `bin/gentle-shell.mjs`.
+/// `bin/gentle-shell.mjs`, never the active bundled install's (refused: see
+/// `locate_launcher`); a copy of its version folder elsewhere is fine.
 #[test]
 #[ignore = "live launcher probe: set GENTLE_SHELL_LIVE_LAUNCHER to .../bin/gentle-shell.mjs, then run with --ignored"]
 fn live_desktop_launcher_additions() {
@@ -1716,4 +1753,29 @@ fn profiles_disk_bytes_match_the_owner_serializer() {
         expected_profiles_bytes(),
         "{\n  \"kind\": \"gentle-pi.agent_model_profiles\",\n  \"version\": 1,\n  \"profiles\": {}\n}\n"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn only_the_active_bundled_version_is_refused() {
+    let root = TempRoot::new();
+    let prefix = root.dir("home").join(".gentle-shell");
+    let launcher_in = |id: &str| {
+        let bin = prefix
+            .join("versions")
+            .join(id)
+            .join("node_modules/gentle-pi/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        bin.join("gentle-shell.mjs")
+    };
+    let active = launcher_in("5.0.0-1.6.0");
+    let kept = launcher_in("4.9.0-1.6.0");
+    std::os::unix::fs::symlink("versions/5.0.0-1.6.0", prefix.join("current")).unwrap();
+
+    assert_eq!(active_bundled_prefix(&active), Some(prefix.clone()));
+    assert_eq!(active_bundled_prefix(&kept), None);
+    let copy = root
+        .dir("tmp")
+        .join("gs-copy/5.0.0-1.6.0/node_modules/gentle-pi/bin");
+    assert_eq!(active_bundled_prefix(&copy.join("gentle-shell.mjs")), None);
 }
