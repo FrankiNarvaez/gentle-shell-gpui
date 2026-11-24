@@ -574,6 +574,15 @@ impl Workspace {
         self.open_palette(Category::Tabs, window, cx);
     }
 
+    pub(super) fn on_focus_tab_list(
+        &mut self,
+        _: &FocusTabList,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_tab_list(window, cx);
+    }
+
     pub(super) fn on_create_workspace(
         &mut self,
         _: &CreateWorkspace,

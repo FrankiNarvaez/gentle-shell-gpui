@@ -17,6 +17,12 @@ impl Workspace {
             .px_2()
             .pb_2()
             .gap_px()
+            .track_focus(&self.tab_list_focus)
+            .key_context("GentleTabList")
+            .on_action(cx.listener(Self::on_tab_list_next))
+            .on_action(cx.listener(Self::on_tab_list_prev))
+            .on_action(cx.listener(Self::on_tab_list_activate))
+            .on_action(cx.listener(Self::on_tab_list_cancel))
             .child(Self::section_row("Workspaces"));
         let mut matches = 0;
         for space in self.sidebar_spaces() {

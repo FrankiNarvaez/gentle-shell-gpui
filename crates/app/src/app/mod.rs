@@ -70,7 +70,7 @@ fn leader_bindings(prefix: &str) -> Vec<(String, Box<dyn Action>)> {
         // `?` is shift-/ on most layouts.
         entry(p, "?", workspace::OpenShortcuts),
         entry(p, "shift-/", workspace::OpenShortcuts),
-        entry(p, "w", workspace::GoToTab),
+        entry(p, "w", workspace::FocusTabList),
         entry(p, "shift-w", workspace::OpenWorkspaces),
         entry(p, "a", workspace::CreateWorkspace),
         entry(p, "shift-d", workspace::DeleteWorkspace),
@@ -260,6 +260,7 @@ fn bind_keys_from(user: keymap::Keymap, cx: &mut App) -> Vec<String> {
     cx.set_global(ActiveLeader(user.leader.clone()));
     cx.bind_keys(pane_mode_bindings());
     files::bind_keys(cx);
+    crate::features::workspace::sidebars::bind_keys(cx);
     crate::features::canvas::bind_keys(cx);
     // Defaults with no context: a user entry in a context never beats these.
     let globals: Vec<String> = cx

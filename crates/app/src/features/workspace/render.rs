@@ -118,6 +118,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_split_up))
             .on_action(cx.listener(Self::on_toggle_pane_mode))
             .on_action(cx.listener(Self::on_exit_pane_mode))
+            .on_action(cx.listener(Self::on_focus_tab_list))
             .on_action(cx.listener(Self::on_open_providers))
             .on_action(cx.listener(Self::on_open_sessions))
             .on_action(cx.listener(Self::on_open_palette))

@@ -55,11 +55,13 @@ mod overlays;
 mod panes;
 mod persistence;
 mod render;
-mod sidebars;
+pub mod sidebars;
 mod spaces;
 mod stages;
 #[cfg(test)]
 mod t10_tests;
+#[cfg(test)]
+mod t11_tests;
 #[cfg(test)]
 pub(crate) mod t8_verifier;
 mod tab_panel;
@@ -127,6 +129,7 @@ actions!(
         SplitUp,
         TogglePaneMode,
         ExitPaneMode,
+        FocusTabList,
     ]
 );
 
@@ -471,6 +474,13 @@ pub struct Workspace {
     /// The keys that can follow the key sequence pending in the window.
     which_key: Option<WhichKey>,
     composer_leader: Option<(FocusHandle, ComposerLeader)>,
+    /// Keyboard focus for the vertical tab sidebar while it is being
+    /// navigated with the keyboard.
+    tab_list_focus: FocusHandle,
+    /// The tab highlighted in the sidebar, without activating it.
+    tab_list_highlight: Option<(usize, usize)>,
+    /// Where focus was before the tab list took it, so Esc can return there.
+    tab_list_return_focus: Option<FocusHandle>,
     /// Panes and tabs closed, most recent last, to reopen.
     closed: Vec<closed::Closed>,
     /// gentle-stream, behind the title bar's ♪ button.
@@ -606,6 +616,9 @@ impl Workspace {
             pane_mode_focus: cx.focus_handle(),
             which_key: None,
             composer_leader: None,
+            tab_list_focus: cx.focus_handle(),
+            tab_list_highlight: None,
+            tab_list_return_focus: None,
             closed: Vec::new(),
             music,
             devices,
