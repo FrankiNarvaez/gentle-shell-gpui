@@ -462,7 +462,7 @@ With an older Shell the list falls back to that widget alone (time, turns, tools
 
 <br>
 
-A route's model picker searches by name, id or provider (every word must match: `bridge opus`), groups models by provider, and takes ↑/↓, Enter and Esc; a custom model id is the last row. The effort menu opens in the same style. ⬇ / ⬆ next to the profile list import and export one profile in Gentle Shell's export format (`gentle-pi.agent_model_profile`): export suggests `profiles.export.json` in the config home, the file `/gentle:profiles import` reads in a terminal; importing a name that exists asks before replacing it.
+A route's model picker searches by name, id or provider (every word must match: `bridge opus`), lists models in Gentle Shell's selector order (the session's current model, then Gentle Shell's default model, then by provider name; the composer's model picker uses the same order), groups models by provider, and takes ↑/↓, Enter and Esc; a custom model id is the last row. The effort menu opens in the same style. ⬇ / ⬆ next to the profile list import and export one profile in Gentle Shell's export format (`gentle-pi.agent_model_profile`): export suggests `profiles.export.json` in the config home, the file `/gentle:profiles import` reads in a terminal; importing a name that exists asks before replacing it.
 
 </details>
 

@@ -346,7 +346,7 @@ The app-level live check `live_review_changes_and_external_config` (`session/sta
 | `abort_bash` | — | `rpc.rs` `stop` | Stop a running `!cmd` (same Stop button / Esc / ⌘.; shown while one runs, `Transcript::shells_running`). Its `bash` response then settles the card. Sent alongside `abort` when a turn runs too |
 | `bash` | `command`, `excludeFromContext` | `submit.rs` `run_shell` | `!cmd` / `!!cmd`; output arrives via `bash_execution_update` |
 | `get_state` | — | `refresh_state`, `set_model` | `model`, `thinkingLevel`, `sessionName`, `sessionFile`, `autoCompactionEnabled` |
-| `get_available_models` | — | `refresh_state` | Model picker |
+| `get_available_models` | — | `refresh_state` | Model picker; both pickers sort it as Gentle Shell's selector does (`sort_like_shell`: current model, then `defaultProvider`/`defaultModel` read from Gentle Shell's `settings.json`, then provider name) |
 | `get_available_thinking_levels` | — | `refresh_thinking_levels` | Effort slider |
 | `get_commands` | — | `refresh_state` | `/` menu and palette |
 | `get_messages` | — | `refresh_state` | Rebuild the conversation (`Transcript::load_messages`) |

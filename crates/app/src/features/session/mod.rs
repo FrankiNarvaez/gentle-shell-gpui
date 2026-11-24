@@ -480,9 +480,26 @@ impl SessionView {
             .or_else(|| self.session_file.clone())
     }
 
+    /// The models to pick from, in Gentle Shell's selector order: the current
+    /// one, the default one, then by provider.
+    fn ordered_models(&self) -> Vec<state::ModelInfo> {
+        let mut models = self.models.available.clone();
+        let current = self
+            .models
+            .current
+            .as_ref()
+            .map(|m| format!("{}/{}", m.provider, m.id));
+        gentle_core::profiles::sort_like_shell(
+            &mut models,
+            |m| (m.provider.clone(), m.id.clone()),
+            current.as_deref(),
+            self.models.default.as_deref(),
+        );
+        models
+    }
+
     pub fn model_choices(&self) -> Vec<(String, String, String, bool)> {
-        self.models
-            .available
+        self.ordered_models()
             .iter()
             .map(|m| {
                 (

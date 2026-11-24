@@ -91,6 +91,9 @@ impl ModelInfo {
 pub(super) struct Models {
     pub(super) current: Option<ModelInfo>,
     pub(super) available: Vec<ModelInfo>,
+    /// Gentle Shell's default model as `provider/id`, if it has one: the
+    /// pickers list it right after the current model.
+    pub(super) default: Option<String>,
     /// `get_available_models` answered since the backend started.
     pub(super) loaded: bool,
     /// Bumped whenever `available` is replaced.
@@ -106,6 +109,7 @@ impl Default for Models {
         Self {
             current: None,
             available: Vec::new(),
+            default: None,
             loaded: false,
             rev: 0,
             thinking: "off".into(),

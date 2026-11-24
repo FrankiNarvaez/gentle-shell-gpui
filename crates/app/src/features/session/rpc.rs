@@ -729,6 +729,7 @@ impl SessionView {
                 }
             },
         );
+        self.refresh_default_model(cx);
         self.refresh_thinking_levels(cx);
         self.refresh_commands(cx);
         self.request(json!({"type": "get_messages"}), cx, |this, result, _| {
@@ -758,8 +759,27 @@ impl SessionView {
                 this.models.thinking = state["thinkingLevel"].as_str().unwrap_or("off").to_string();
             }
         });
+        self.refresh_default_model(cx);
         self.refresh_thinking_levels(cx);
         self.refresh_stats(cx);
+    }
+
+    /// Gentle Shell's default model, which the model pickers list second.
+    fn refresh_default_model(&mut self, cx: &mut Context<Self>) {
+        let cwd = self.cwd.clone();
+        cx.spawn(async move |this, cx| {
+            let default = cx
+                .background_executor()
+                .spawn(async move { crate::features::profiles::shell_default_model(cwd) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.models.default != default {
+                    this.models.default = default;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Pi's `get_session_stats`: the cost (its authority, also with the

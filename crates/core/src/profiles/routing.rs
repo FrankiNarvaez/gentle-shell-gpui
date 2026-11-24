@@ -54,6 +54,31 @@ impl ModelChoice {
     }
 }
 
+/// Gentle Shell's model selector order (`sortModels`): the current model,
+/// then the default one, then the rest by provider name. Within a provider
+/// the catalog order stays. `route` gives a model's `provider/id`; `current`
+/// and `default` are routes too.
+pub fn sort_like_shell<T>(
+    models: &mut [T],
+    route: impl Fn(&T) -> (String, String),
+    current: Option<&str>,
+    default: Option<&str>,
+) {
+    // Stable: equal keys keep the catalog order.
+    models.sort_by_cached_key(|model| {
+        let (provider, id) = route(model);
+        let full = format!("{provider}/{id}");
+        let rank = if current == Some(full.as_str()) {
+            0
+        } else if default == Some(full.as_str()) {
+            1
+        } else {
+            2
+        };
+        (rank, provider.to_lowercase())
+    });
+}
+
 pub fn is_thinking_level(value: &str) -> bool {
     THINKING_LEVELS.contains(&value)
 }
@@ -265,7 +290,48 @@ pub fn clamp_level(level: &str, supported: &[&str]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ModelChoice;
+    use super::{ModelChoice, sort_like_shell};
+
+    #[test]
+    fn models_sort_current_then_default_then_provider() {
+        let mut models = vec![
+            ("openai", "gpt-b"),
+            ("anthropic", "sonnet"),
+            ("Google", "gemini"),
+            ("openai", "gpt-a"),
+            ("anthropic", "opus"),
+            ("claude-bridge", "haiku"),
+        ];
+        let route = |m: &(&str, &str)| (m.0.to_string(), m.1.to_string());
+        sort_like_shell(
+            &mut models,
+            route,
+            Some("openai/gpt-a"),
+            Some("claude-bridge/haiku"),
+        );
+        assert_eq!(
+            models,
+            [
+                ("openai", "gpt-a"),
+                ("claude-bridge", "haiku"),
+                ("anthropic", "sonnet"),
+                ("anthropic", "opus"),
+                ("Google", "gemini"),
+                ("openai", "gpt-b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn models_without_current_or_default_sort_by_provider_only() {
+        let mut models = vec![("zai", "glm"), ("anthropic", "opus"), ("zai", "air")];
+        let route = |m: &(&str, &str)| (m.0.to_string(), m.1.to_string());
+        sort_like_shell(&mut models, route, None, Some("gone/model"));
+        assert_eq!(
+            models,
+            [("anthropic", "opus"), ("zai", "glm"), ("zai", "air")]
+        );
+    }
 
     fn model(provider: &str, id: &str, name: &str) -> ModelChoice {
         ModelChoice {
