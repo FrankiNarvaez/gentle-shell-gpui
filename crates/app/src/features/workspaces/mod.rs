@@ -266,6 +266,7 @@ pub enum TabLayout {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(from = "SavedStateOnDisk")]
 pub struct SavedState {
     #[serde(default)]
     pub version: u32,
@@ -281,7 +282,7 @@ pub struct SavedState {
     #[serde(default)]
     pub tab_layout: TabLayout,
     /// Expanded navigator width (px at 100 % interface size).
-    #[serde(default = "default_sidebar_width", alias = "sidebar_width")]
+    #[serde(rename = "sidebar_width")]
     pub tabs_sidebar_width: f32,
     /// Width of the right Files sidebar (px at 100 % interface size).
     #[serde(default = "default_sidebar_width")]
@@ -292,6 +293,49 @@ pub struct SavedState {
     /// Whether resizing inward stops at the rail before hiding.
     #[serde(default)]
     pub sidebar_compact_first: bool,
+}
+
+// Read both spellings independently so a mixed-version file is not rejected
+// as a duplicate field. Write the original key for older binaries.
+#[derive(Deserialize)]
+struct SavedStateOnDisk {
+    #[serde(default)]
+    version: u32,
+    #[serde(default)]
+    current: usize,
+    #[serde(default)]
+    workspaces: Vec<SavedWorkspace>,
+    #[serde(default = "shown")]
+    sidebar: bool,
+    #[serde(default)]
+    tab_layout: TabLayout,
+    sidebar_width: Option<f32>,
+    tabs_sidebar_width: Option<f32>,
+    #[serde(default = "default_sidebar_width")]
+    files_sidebar_width: f32,
+    #[serde(default)]
+    sidebar_compact: bool,
+    #[serde(default)]
+    sidebar_compact_first: bool,
+}
+
+impl From<SavedStateOnDisk> for SavedState {
+    fn from(state: SavedStateOnDisk) -> Self {
+        Self {
+            version: state.version,
+            current: state.current,
+            workspaces: state.workspaces,
+            sidebar: state.sidebar,
+            tab_layout: state.tab_layout,
+            tabs_sidebar_width: state
+                .tabs_sidebar_width
+                .or(state.sidebar_width)
+                .unwrap_or_else(default_sidebar_width),
+            files_sidebar_width: state.files_sidebar_width,
+            sidebar_compact: state.sidebar_compact,
+            sidebar_compact_first: state.sidebar_compact_first,
+        }
+    }
 }
 
 fn shown() -> bool {

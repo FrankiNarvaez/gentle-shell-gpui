@@ -1102,6 +1102,33 @@ mod tests {
         });
     }
 
+    #[gpui::test]
+    fn held_sidebar_reversal_preserves_rendered_width_and_gap(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
+            let side = super::Side::Tabs;
+            let geometry = |ws: &Workspace| {
+                let now = std::time::Instant::now();
+                let (width, fraction) = ws.sidebar_geometry(side, 1200., now);
+                (
+                    ws.sidebar_allocation(side, width, fraction, now),
+                    6. * fraction,
+                )
+            };
+            for compact in [true, false] {
+                ws.set_tab_layout(TabLayout::Vertical, cx);
+                ws.resize_tab_sidebar(365., cx);
+                ws.set_sidebar_compact(compact, cx);
+                ws.tabs_sidebar_motion = Default::default();
+                ws.retarget_sidebar_drag(side, false, false, 1200., cx);
+                let before = geometry(ws);
+                ws.retarget_sidebar_drag(side, true, !compact, 1200., cx);
+                let after = geometry(ws);
+                assert!((before.0 - after.0).abs() < 5., "{before:?} → {after:?}");
+                assert!((before.1 - after.1).abs() < 0.1, "{before:?} → {after:?}");
+            }
+        });
+    }
+
     fn sorted(ids: Vec<usize>) -> Vec<usize> {
         let mut ids = ids;
         ids.sort_unstable();

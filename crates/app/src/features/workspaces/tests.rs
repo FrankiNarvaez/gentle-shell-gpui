@@ -110,8 +110,21 @@ fn restores_legacy_compact_rail_and_width() {
     assert_eq!(state.tabs_sidebar_width, 340.);
     assert_eq!(state.files_sidebar_width, 260.);
     let stored = serde_json::to_value(state).unwrap();
-    assert_eq!(stored["tabs_sidebar_width"], 340.);
-    assert!(stored.get("sidebar_width").is_none());
+    assert_eq!(stored["sidebar_width"], 340.);
+    assert!(stored.get("tabs_sidebar_width").is_none());
+}
+
+#[test]
+fn mixed_sidebar_width_keys_keep_workspaces_and_prefer_modern_width() {
+    let mut json = serde_json::to_value(sample()).unwrap();
+    json["sidebar_width"] = 371.0.into();
+    json["tabs_sidebar_width"] = 333.0.into();
+    json["files_sidebar_width"] = 302.0.into();
+    let state: SavedState = serde_json::from_value(json).unwrap();
+    assert_eq!(state.workspaces, sample().workspaces);
+    assert_eq!(state.tabs_sidebar_width, 333.);
+    assert_eq!(state.files_sidebar_width, 302.);
+    assert_eq!(serde_json::to_value(&state).unwrap()["sidebar_width"], 333.);
 }
 
 #[test]
@@ -151,7 +164,7 @@ fn json_round_trip() {
     // Data saved before this feature must still load without layout or pin fields.
     let mut legacy = serde_json::to_value(&state).unwrap();
     legacy.as_object_mut().unwrap().remove("tab_layout");
-    legacy.as_object_mut().unwrap().remove("tabs_sidebar_width");
+    legacy.as_object_mut().unwrap().remove("sidebar_width");
     legacy
         .as_object_mut()
         .unwrap()
