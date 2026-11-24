@@ -117,7 +117,7 @@ impl SettingsView {
                     Some(if choice.is_none() {
                         IconName::Globe
                     } else {
-                        IconName::AppWindow
+                        IconName::ArrowUpRight
                     }),
                     div()
                         .flex_1()
