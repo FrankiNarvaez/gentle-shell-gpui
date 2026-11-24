@@ -130,15 +130,20 @@ impl Render for Workspace {
                                             this.open_empty_area_menu(event.position, window, cx);
                                         }),
                                     )
-                                    .child(self.render_workspace_chip(cx))
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .w(px(1.))
-                                            .h(rems(14. / 16.))
-                                            .bg(ui::border()),
-                                    )
-                                    .when(!vertical_tabs, |row| row.child(self.render_tabs(cx))),
+                                    // With vertical tabs the sidebar header shows
+                                    // the workspace and switches it, so the chip
+                                    // would only repeat it.
+                                    .when(!vertical_tabs, |row| {
+                                        row.child(self.render_workspace_chip(cx))
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .w(px(1.))
+                                                    .h(rems(14. / 16.))
+                                                    .bg(ui::border()),
+                                            )
+                                            .child(self.render_tabs(cx))
+                                    }),
                             )
                             .child(
                                 h_flex()
