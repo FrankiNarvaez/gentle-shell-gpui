@@ -463,6 +463,7 @@ pub struct Workspace {
     pane_mode_focus: FocusHandle,
     /// The keys that can follow the key sequence pending in the window.
     which_key: Option<WhichKey>,
+    composer_leader: Option<(FocusHandle, ComposerLeader)>,
     /// Panes and tabs closed, most recent last, to reopen.
     closed: Vec<closed::Closed>,
     /// gentle-stream, behind the title bar's ♪ button.
@@ -470,6 +471,9 @@ pub struct Workspace {
     /// Simulators and emulators, docked at the right or floating.
     devices: Entity<DevicePanel>,
 }
+
+mod composer_leader;
+use composer_leader::ComposerLeader;
 
 impl EventEmitter<WorkspaceEvent> for Workspace {}
 
@@ -547,6 +551,12 @@ impl Workspace {
                 },
             ),
         ];
+        let weak = cx.weak_entity();
+        lifecycle.push(cx.intercept_keystrokes(move |event, window, cx| {
+            let _ = weak.update(cx, |this, cx| {
+                this.composer_leader_key(&event.keystroke, window, cx)
+            });
+        }));
         // The which-key hint follows the window's pending key sequence.
         lifecycle.push(cx.observe_pending_input(window, |this, window, cx| {
             let hint = crate::features::shortcuts::pending_hint(window, cx);
@@ -588,6 +598,7 @@ impl Workspace {
             pane_mode: false,
             pane_mode_focus: cx.focus_handle(),
             which_key: None,
+            composer_leader: None,
             closed: Vec::new(),
             music,
             devices,

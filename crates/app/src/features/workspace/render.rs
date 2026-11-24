@@ -31,6 +31,11 @@ impl Render for Workspace {
             || window.has_active_sheet(cx)
             || cx.has_active_drag()
             || crate::features::browser::popovers_open(cx);
+        if self.composer_leader.is_some()
+            && (covered || !window.is_window_active() || !self.pane_mode_focus.is_focused(window))
+        {
+            self.cancel_composer_leader(window, cx);
+        }
         if self.pane_mode && (covered || !window.is_window_active()) {
             self.pane_mode = false;
             // Focus still parked on the pane-mode handle goes back to the
@@ -121,6 +126,9 @@ impl Render for Workspace {
             } else {
                 "GentleWorkspace"
             })
+            .when(self.composer_leader.is_some(), |this| {
+                this.track_focus(&self.pane_mode_focus)
+            })
             .when(self.pane_mode, |this| {
                 this.track_focus(&self.pane_mode_focus)
                     .capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
@@ -196,6 +204,9 @@ impl Render for Workspace {
                                                 .mx_1()
                                                 .bg(ui::border()),
                                         )
+                                    })
+                                    .when(self.composer_leader.is_some(), |this| {
+                                        this.track_focus(&self.pane_mode_focus)
                                     })
                                     .when(self.pane_mode, |d| {
                                         d.child(
@@ -398,8 +409,10 @@ impl Render for Workspace {
             .when(devices_floating, |root| root.child(self.devices.clone()))
             // Which keys come next: while a sequence is pending, or in pane mode.
             .children(
-                self.which_key
-                    .clone()
+                self.composer_leader
+                    .as_ref()
+                    .and_then(|(_, selection)| selection.hint(cx))
+                    .or_else(|| self.which_key.clone())
                     .or_else(|| {
                         self.pane_mode
                             .then(|| crate::features::shortcuts::pane_mode_hint(cx))

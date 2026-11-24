@@ -10,7 +10,7 @@ Notation: ⌘ is Cmd on macOS and Ctrl elsewhere unless a column says otherwise.
 2. **Leader** (⌃Space, then one key): short, mnemonic, no modifiers to hold. The tmux/herdr style.
 3. **Pane mode** (⌃Space, `Space`): sticky, so you can move, resize and split with bare keys until Esc.
 
-While a sequence is pending (after ⌃Space, or the first `g` of `gg`), a which-key panel at the bottom of the window lists the keys that can come next and what they do. It disappears when the sequence completes, when you press Esc or a key that continues nothing, or after about a second without a key. Pane mode shows its own keys in the same panel, and a PANE badge in the title bar.
+While a sequence is pending (after ⌃Space, or the first `g` of `gg`), a which-key panel at the bottom of the window lists the keys that can come next and what they do. When you start the leader from the composer, focus leaves the draft and the guide waits without a timeout. Choose a command, or press Esc to return to the unchanged draft. In other contexts, the usual pending-input behavior still applies: the guide disappears when the sequence completes, when you press Esc or a key that continues nothing, or after about a second without a key. Pane mode shows its own keys in the same panel, and a PANE badge in the title bar.
 
 ## Direct chords
 
