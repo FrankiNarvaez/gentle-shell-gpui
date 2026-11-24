@@ -247,7 +247,7 @@ app_update/
 providers/          # mod.rs: types and constructor; login.rs (login helper and flow), list.rs, flow_view.rs, render.rs
 onboarding/         # mod.rs: state and API; checks.rs (install plan, tones), install.rs, view.rs
 notices/            # mod.rs: Notice, Notices; store.rs (push, read, limit), bell.rs, panel.rs
-memory/             # mod.rs: MemoryView; client.rs (HTTP to Engram), view.rs
+memory/             # mod.rs: MemoryView (opens on a MemoryTarget); client.rs (HTTP to Engram), view.rs
 alerts/             # mod.rs: fire, context_threshold; policy.rs, sound.rs, tones.rs
 updates/            # mod.rs: check and skip; cache.rs (launcher config), registry.rs (npm)
 workspaces/         # mod.rs: saved model; store.rs (workspaces.json), tests.rs
