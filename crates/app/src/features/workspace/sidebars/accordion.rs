@@ -27,17 +27,7 @@ impl Workspace {
             }
             matches += 1;
             let open = searching || self.sidebar_space_open(space.index);
-            let index = space.index;
-            list = list.child(
-                self.space_row(&space, Some(open), "accordion-space", cx)
-                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        if event.click_count() >= 2 {
-                            this.switch_workspace(index, window, cx);
-                        } else {
-                            this.toggle_sidebar_space(index, cx);
-                        }
-                    })),
-            );
+            list = list.child(self.space_row(&space, Some(open), "accordion-space", cx));
             if !open {
                 continue;
             }

@@ -366,8 +366,8 @@ impl Workspace {
 
     /// A workspace as a 26 px row: `chevron` (open or closed) when it
     /// folds, its badge, name, activity dot and tab count. A right-click
-    /// opens its menu; the caller adds what a click does. Dragging a row
-    /// onto another reorders the workspaces.
+    /// opens its menu. The chevron only folds the group; the name selects
+    /// the workspace with one click. Dragging a row reorders workspaces.
     pub(super) fn space_row(
         &self,
         space: &SpaceEntry,
@@ -389,6 +389,7 @@ impl Workspace {
             .gap_1p5()
             .rounded_md()
             .cursor_pointer()
+            .when(space.current, |d| d.bg(ui::raised()))
             .hover(|d| d.bg(ui::surface_hover()))
             .when(!self.popups_open(), |d| {
                 d.tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
@@ -408,48 +409,72 @@ impl Workspace {
             )
             .when_some(chevron, |d, open| {
                 d.child(
-                    Icon::new(if open {
-                        IconName::ChevronDown
-                    } else {
-                        IconName::ChevronRight
-                    })
-                    .xsmall()
-                    .text_color(ui::faint()),
-                )
-            })
-            .child(workspace_avatar(&space.mark))
-            .map(|d| {
-                if self.renaming_workspace(index, WorkspaceMenuSource::SidebarRow) {
-                    d.child(self.workspace_rename_input(cx))
-                } else {
-                    d.child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rems(12.5 / 16.))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if space.current { ui::fg() } else { ui::muted() })
-                            .child(space.name.clone()),
-                    )
-                }
-            })
-            .when_some(space.dot(), |d, (color, _)| {
-                d.child(
-                    div()
-                        .size(rems(6. / 16.))
+                    h_flex()
+                        .id(("workspace-chevron", index))
                         .flex_none()
-                        .rounded_full()
-                        .bg(color),
+                        .h(rems(ROW / 16.))
+                        .px_1()
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_sidebar_space(index, cx);
+                        }))
+                        .child(
+                            Icon::new(if open {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .xsmall()
+                            .text_color(ui::faint()),
+                        ),
                 )
             })
             .child(
-                div()
-                    .flex_none()
-                    .font_family(ui::mono())
-                    .text_size(ui::code_rems(10.5))
-                    .text_color(ui::faint())
-                    .child(space.tabs.to_string()),
+                h_flex()
+                    .id(("workspace-select", index))
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .gap_1p5()
+                    .when(
+                        !self.renaming_workspace(index, WorkspaceMenuSource::SidebarRow),
+                        |d| {
+                            d.on_click(cx.listener(move |this, _, window, cx| {
+                                if this.current != index {
+                                    this.switch_workspace(index, window, cx);
+                                }
+                            }))
+                        },
+                    )
+                    .child(workspace_avatar(&space.mark))
+                    .map(|d| {
+                        if self.renaming_workspace(index, WorkspaceMenuSource::SidebarRow) {
+                            d.child(self.workspace_rename_input(cx))
+                        } else {
+                            d.child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(rems(12.5 / 16.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(if space.current { ui::fg() } else { ui::muted() })
+                                    .child(space.name.clone()),
+                            )
+                        }
+                    })
+                    .when_some(space.dot(), |d, (color, _)| {
+                        d.child(div().size(rems(6. / 16.)).flex_none().rounded_full().bg(color))
+                    })
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(10.5))
+                            .text_color(ui::faint())
+                            .child(space.tabs.to_string()),
+                    ),
             )
             .child(
                 Button::new(("workspace-new-agent", index))
