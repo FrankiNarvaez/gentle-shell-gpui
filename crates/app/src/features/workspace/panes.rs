@@ -85,13 +85,21 @@ impl Workspace {
         let rem = |n: f32| f32::from(rems(n / 16.).to_pixels(window.rem_size()));
         // Vertical tabs and Files are separate columns. Keep pane hit-testing
         // and split-size calculations aligned with the actual rendered width.
+        let window_px =
+            f32::from(window.viewport_size().width) / (f32::from(window.rem_size()) / 16.);
         let left = if self.tab_layout == TabLayout::Vertical {
-            rem(SIDEBAR_WIDTH) + 6.
+            rem(gentle_core::workspaces::shown_sidebar_width(
+                self.tabs_sidebar_width,
+                window_px,
+            )) + 6.
         } else {
             0.
         };
         let right = if self.sidebar_visible && self.sidebar.is_some() {
-            rem(SIDEBAR_WIDTH) + 6.
+            rem(gentle_core::workspaces::shown_sidebar_width(
+                self.files_sidebar_width,
+                window_px,
+            )) + 6.
         } else {
             0.
         };

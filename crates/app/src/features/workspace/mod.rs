@@ -99,8 +99,6 @@ actions!(
     ]
 );
 
-pub const SIDEBAR_WIDTH: f32 = 260.;
-
 /// What the window tells whoever embeds things in it (the sidebar's owner).
 pub enum WorkspaceEvent {
     /// The shown workspace changed; its root folder.
@@ -301,6 +299,17 @@ struct DividerDrag {
     path: Vec<bool>,
 }
 
+/// Which sidebar a drag handle is resizing.
+#[derive(Clone)]
+enum Side {
+    Tabs,
+    Files,
+}
+
+/// Dragged by a sidebar's inner edge.
+#[derive(Clone)]
+struct SidebarDrag(Side);
+
 /// Dragged by a pane's grip pill: dropped near another pane's edge it moves
 /// to that side, in the middle the two swap.
 #[derive(Clone)]
@@ -385,6 +394,10 @@ pub struct Workspace {
     sidebar: Option<AnyView>,
     sidebar_visible: bool,
     tab_layout: TabLayout,
+    /// Width of the vertical tabs sidebar (px at 100 % interface size).
+    tabs_sidebar_width: f32,
+    /// Width of the right Files sidebar (px at 100 % interface size).
+    files_sidebar_width: f32,
     /// Workspaces opened or closed by hand in the sidebar, by name; one not
     /// listed is open while it is the shown one.
     sidebar_open_spaces: HashMap<String, bool>,
@@ -520,6 +533,12 @@ impl Workspace {
             sidebar: None,
             sidebar_visible: saved.sidebar,
             tab_layout: saved.tab_layout,
+            tabs_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
+                saved.tabs_sidebar_width,
+            ),
+            files_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
+                saved.files_sidebar_width,
+            ),
             sidebar_open_spaces: HashMap::new(),
             badge_picker: None,
             open_menu: None,

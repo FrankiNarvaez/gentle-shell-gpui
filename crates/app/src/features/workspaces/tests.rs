@@ -70,6 +70,8 @@ fn sample() -> SavedState {
         ],
         sidebar: false,
         tab_layout: TabLayout::Vertical,
+        tabs_sidebar_width: 300.,
+        files_sidebar_width: 350.,
     }
 }
 
@@ -109,10 +111,26 @@ fn json_round_trip() {
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
+    // Both sidebar widths round-trip and legacy files default to 260.
+    assert_eq!(back.tabs_sidebar_width, 300.);
+    assert_eq!(back.files_sidebar_width, 350.);
+    assert_eq!(
+        minimal.tabs_sidebar_width,
+        gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH
+    );
+    assert_eq!(
+        minimal.files_sidebar_width,
+        gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH
+    );
 
     // Data saved before this feature must still load without layout or pin fields.
     let mut legacy = serde_json::to_value(&state).unwrap();
     legacy.as_object_mut().unwrap().remove("tab_layout");
+    legacy.as_object_mut().unwrap().remove("tabs_sidebar_width");
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("files_sidebar_width");
     legacy["workspaces"][0]["tabs"][0]
         .as_object_mut()
         .unwrap()
@@ -120,6 +138,8 @@ fn json_round_trip() {
     let old: SavedState = serde_json::from_value(legacy).unwrap();
     assert_eq!(old.tab_layout, TabLayout::Horizontal);
     assert!(!old.workspaces[0].tabs[0].pinned);
+    assert_eq!(old.tabs_sidebar_width, 260.);
+    assert_eq!(old.files_sidebar_width, 260.);
     assert_eq!(SavedState::default().sidebar, minimal.sidebar);
 }
 

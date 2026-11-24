@@ -23,6 +23,8 @@ impl Render for Workspace {
         let files_sidebar = self.sidebar.clone().filter(|_| self.sidebar_visible);
         let has_files_sidebar = self.sidebar.is_some();
         let vertical_tabs = self.tab_layout == TabLayout::Vertical;
+        let window_px_at_100 =
+            f32::from(window.viewport_size().width) / (f32::from(window.rem_size()) / 16.);
         // Native web views would cover a screen or a dialog opened over
         // them, and swallow the pointer while a pane is dragged over them;
         // device cards stop capturing while covered.
@@ -258,14 +260,73 @@ impl Render for Workspace {
                     .px_1p5()
                     .pb_1p5()
                     .gap_1p5()
+                    .on_drag_move(cx.listener(
+                        move |this, event: &DragMoveEvent<SidebarDrag>, window, cx| {
+                            let bounds = event.bounds;
+                            let position = event.event.position;
+                            // Pointer distance from the sidebar's outer edge, in px
+                            // at 100 %: the row's `px_1p5` padding is 6 of those.
+                            let scale = f32::from(window.rem_size()) / 16.;
+                            match event.drag(cx).0 {
+                                Side::Tabs if this.tab_layout == TabLayout::Vertical => {
+                                    let pointer =
+                                        (f32::from(position.x) - f32::from(bounds.left())) / scale
+                                            - 6.;
+                                    match gentle_core::workspaces::drag_sidebar_width(
+                                        pointer,
+                                        window_px_at_100,
+                                    ) {
+                                        gentle_core::workspaces::SidebarDrag::Width(w)
+                                            if w != this.tabs_sidebar_width =>
+                                        {
+                                            this.tabs_sidebar_width = w;
+                                            this.schedule_save(cx);
+                                            cx.notify();
+                                        }
+                                        gentle_core::workspaces::SidebarDrag::Width(_) => {}
+                                        gentle_core::workspaces::SidebarDrag::Collapse => {
+                                            this.set_tab_layout(TabLayout::Horizontal, cx);
+                                        }
+                                    }
+                                }
+                                Side::Files if this.sidebar_visible && this.sidebar.is_some() => {
+                                    let pointer =
+                                        (f32::from(bounds.right()) - f32::from(position.x)) / scale
+                                            - 6.;
+                                    match gentle_core::workspaces::drag_sidebar_width(
+                                        pointer,
+                                        window_px_at_100,
+                                    ) {
+                                        gentle_core::workspaces::SidebarDrag::Width(w)
+                                            if w != this.files_sidebar_width =>
+                                        {
+                                            this.files_sidebar_width = w;
+                                            this.schedule_save(cx);
+                                            cx.notify();
+                                        }
+                                        gentle_core::workspaces::SidebarDrag::Width(_) => {}
+                                        gentle_core::workspaces::SidebarDrag::Collapse => {
+                                            this.toggle_sidebar(cx);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        },
+                    ))
                     // The vertical tab navigator remains independent of the Files panel.
                     .when(vertical_tabs, |row| {
+                        let width = gentle_core::workspaces::shown_sidebar_width(
+                            self.tabs_sidebar_width,
+                            window_px_at_100,
+                        );
                         row.child(
                             div()
                                 .id("vertical-tab-panel")
-                                .w(rems(SIDEBAR_WIDTH / 16.))
+                                .w(rems(width / 16.))
                                 .flex_none()
                                 .h_full()
+                                .relative()
                                 .on_mouse_down(
                                     MouseButton::Right,
                                     cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -283,7 +344,32 @@ impl Render for Workspace {
                                         .border_color(gpui_kit::transparent_black())
                                         .overflow_hidden()
                                         .child(self.render_tab_sidebar(cx)),
-                                )),
+                                ))
+                                .child(
+                                    ui::resize_handle("tabs-resize-handle")
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .right(rems(-6. / 16.))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .on_drag(SidebarDrag(Side::Tabs), |_, _, _, cx| {
+                                            cx.new(|_| Invisible)
+                                        })
+                                        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                            if event.click_count() == 2 {
+                                                this.tabs_sidebar_width =
+                                                    gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH;
+                                                this.schedule_save(cx);
+                                                cx.notify();
+                                            }
+                                        }))
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new("Drag to resize · double-click to reset")
+                                                .build(window, cx)
+                                        }),
+                                ),
                         )
                     })
                     .child(
@@ -298,22 +384,56 @@ impl Render for Workspace {
                     .when(devices_docked, |row| row.child(self.devices.clone()))
                     // Ctrl/Cmd+B toggles only the right Files/Changes/Branches sidebar.
                     .when_some(files_sidebar, |row, view| {
-                        row.child(ui::appear(
-                            "files-sidebar-in",
+                        let width = gentle_core::workspaces::shown_sidebar_width(
+                            self.files_sidebar_width,
+                            window_px_at_100,
+                        );
+                        row.child(
                             div()
-                                .w(rems(SIDEBAR_WIDTH / 16.))
+                                .w(rems(width / 16.))
                                 .flex_none()
                                 .h_full()
-                                .rounded_xl()
-                                .bg(ui::panel())
-                                .border_1()
-                                .border_color(gpui_kit::transparent_black())
-                                .overflow_hidden()
+                                .relative()
+                                .child(ui::appear(
+                                    "files-sidebar-in",
+                                    div()
+                                        .size_full()
+                                        .rounded_xl()
+                                        .bg(ui::panel())
+                                        .border_1()
+                                        .border_color(gpui_kit::transparent_black())
+                                        .overflow_hidden()
+                                        .child(
+                                            view.cached(StyleRefinement::default().size_full())
+                                                .into_any_element(),
+                                        ),
+                                ))
                                 .child(
-                                    view.cached(StyleRefinement::default().size_full())
-                                        .into_any_element(),
+                                    ui::resize_handle("files-resize-handle")
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .left(rems(-6. / 16.))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .on_drag(SidebarDrag(Side::Files), |_, _, _, cx| {
+                                            cx.new(|_| Invisible)
+                                        })
+                                        .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                                            if event.click_count() == 2 {
+                                                this.files_sidebar_width =
+                                                    gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH;
+                                                this.schedule_save(cx);
+                                                cx.notify();
+                                            }
+                                        }))
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new("Drag to resize · double-click to reset")
+                                                .build(window, cx)
+                                        }),
                                 ),
-                        ))
+                        )
                     }),
             )
             .children(self.stages.iter().filter_map(Stage::element))

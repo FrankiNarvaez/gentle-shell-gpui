@@ -277,11 +277,22 @@ pub struct SavedState {
     /// Older workspaces.json files keep the familiar horizontal layout.
     #[serde(default)]
     pub tab_layout: TabLayout,
+    /// Width of the vertical tabs sidebar (px at 100 % interface size).
+    #[serde(default = "default_sidebar_width")]
+    pub tabs_sidebar_width: f32,
+    /// Width of the right Files sidebar (px at 100 % interface size).
+    #[serde(default = "default_sidebar_width")]
+    pub files_sidebar_width: f32,
 }
 
 fn shown() -> bool {
     true
 }
+
+fn default_sidebar_width() -> f32 {
+    gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH
+}
+
 /// A first launch shows the sidebar, as a file from before it was saved does.
 impl Default for SavedState {
     fn default() -> Self {
@@ -291,6 +302,8 @@ impl Default for SavedState {
             workspaces: Vec::new(),
             sidebar: true,
             tab_layout: TabLayout::Horizontal,
+            tabs_sidebar_width: default_sidebar_width(),
+            files_sidebar_width: default_sidebar_width(),
         }
     }
 }
