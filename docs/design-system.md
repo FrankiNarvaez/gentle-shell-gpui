@@ -9,7 +9,7 @@ These principles come from the current code. They are not aspirations.
 | Principle | How it applies |
 | --- | --- |
 | **Translucent glass** | The window requests `WindowBackgroundAppearance::Blurred` and a transparent title bar (`crates/app/src/app/mod.rs`). Surfaces (`panel`, `surface`, `well`…) are the theme background, tinted and with alpha, so the blurred desktop shows through. What floats on top (menus, screens, palette) is opaque: `popover_bg` and `screen_bg` have alpha 1 at any transparency. |
-| **No lines in the chrome** | The title bar has no border (`title_bar_border = clear` in `ui::apply_theme`). Panels and the sidebar have a transparent `border_1()`; only the focused panel of a split shows a `petal().opacity(0.45)` border (`features/workspace/view.rs`). Dividers between panels are a 6 px gap (`DIVIDER`) with a 2×40 px handle that appears in `petal()` only on hover (`floating::divider_handle`): the splits, the docked browser column's left edge (`floating::dock_divider`) and the straight edges of a floating card. Inside, zones are separated by space and by the change of surface (`panel` → `surface` → `well`). |
+| **No lines in the chrome** | The title bar has no border (`title_bar_border = clear` in `ui::apply_theme`). Panels and the sidebar have a transparent `border_1()`; only the focused panel of a split shows a `petal().opacity(0.45)` border (`features/workspace/view.rs`). Dividers between panels are a 6 px gap (`DIVIDER`) with a 2×40 px handle that appears in `petal()` only on hover (`floating::divider_handle`): the splits, the docked browser column's left edge (`floating::dock_divider`) and the straight edges of a floating card. The sidebars’ inner edges use `ui::resize_handle` with the same hover treatment. Inside, zones are separated by space and by the change of surface (`panel` → `surface` → `well`). |
 | **Thin lines only in screens** | Inside an overlay screen there is a `ui::border()` line between header, body and footer (`screen_header` uses `border_b_1`, footers use `border_t_1`), and Settings rows use `border().opacity(0.5)`. No more are added. |
 | **Petal as accent** | The brand pink (the theme's `accent`) is reserved for what is live and primary: the dot that pulses while the agent works, the `✿ phase…` text, the focused panel, primary buttons and the welcome glow. It is not used as a background fill. |
 | **Dense but calm** | `text_xs` is the most used size and `muted` the most used color (more than `fg`). Semantic color goes on icons, chips and card borders, not on large blocks. Animations last 220–420 ms and overshoot by no more than ~3 %. |
@@ -255,7 +255,8 @@ Presentation utilities in the same module: `split_path` (prefix `~/a/b/` and lea
 
 | Function | Duration | Curve | Effect | Typical use |
 | --- | --- | --- | --- | --- |
-| `appear(id, el)` | 220 ms | `ease_out_quint` | Opacity 0→1 and relative `top` from 6 px to 0 | First appearance: rows, Settings content, sidebar, usage cards. |
+| `appear(id, el)` | 220 ms | `ease_out_quint` | Opacity 0→1 and relative `top` from 6 px to 0 | First appearance: rows, Settings content, usage cards. |
+| Workspace sidebar slide | 220 ms | Ease-out quint | Clips a full-width sidebar while animating its allocated width and adjacent gap; reverses from the current fraction. | Tab and Files sidebar visibility, immediate with reduced motion. Resizing an open sidebar follows the pointer directly. |
 | `appear_after(id, delay, rise, el)` | `delay` + 420 ms | ease-out-quint computed by hand (the wait stays linear) | Opacity and relative `top` from `rise` px | Staggered entrances (welcome, onboarding steps). |
 | `pop_in(id, el)` | 340 ms | `spring` | Opacity and relative `top` from 12 px | Screens, dialogs, palette. |
 | `popover_in(id, el)` | 300 ms | `spring` | Opacity only, without changing the measured size | Content inside an `island` or a popover. |
@@ -365,6 +366,10 @@ The composer's bottom bar inside the box reads `📎 · model · effort · NN% �
 ### Terminal pane chips
 
 A terminal pane (`features/terminal/mod.rs`) states what happens to it in a chip at its bottom-right corner, 10 px in from the edges, over the grid: `Process exited` (`faint`) once the shell ends, and `Press ⌃C again to close` (`Ctrl+C` off macOS; `muted`, on a `panel` backing so it reads over the text) after a first Ctrl+C at an idle prompt. That hint lives exactly as long as the double press's window (`gentle_core::double_interrupt::WINDOW`, 700 ms): one `with_animation` over the window (`NamedInteger("close-hint", n)`, a new id per hint) fades it in over its first 15 % and out over its last 35 %, and the view drops it when the window ends, so it shows exactly while a second press would close the pane.
+
+### Canvas style panel
+
+A canvas tab's style panel (`features/canvas/chrome.rs`, top-right over the page, `popover_bg` with 14 px corners) offers only what changes the shapes it would touch: the current tool's and the selection's (`gentle_core::canvas::Kind::controls`). The Stroke / Fill tabs and the Fill row appear for rectangles, ellipses and the pen (closed ink loops fill); the Pen row for pen ink, never the highlighter; the 16 swatches and Size for everything but images (a note's color is its paper, a text's size its font); Opacity always. Restyling a mixed selection gives each shape only what shows on it, so a line never keeps a hidden fill.
 
 ### Conversation cards
 

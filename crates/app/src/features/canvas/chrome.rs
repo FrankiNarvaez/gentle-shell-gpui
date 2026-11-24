@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use gentle_core::canvas::{Color, Fill, Kind, OPACITIES, Pen, Rect, SIZES, Shape};
+use gentle_core::canvas::{Color, Controls, Fill, Kind, OPACITIES, Pen, Rect, SIZES, Shape};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::input::Textarea;
@@ -705,18 +705,39 @@ impl CanvasView {
 
     // ── Style panel ────────────────────────────────────────────────────────
 
+    /// What the panel can change: what the current tool draws with and
+    /// what shows on the selected shapes.
+    pub(super) fn style_controls(&self) -> Controls {
+        let drawing = match self.tool {
+            Tool::Pen => Controls::INK,
+            Tool::Rect | Tool::Ellipse => Controls::GEO,
+            Tool::Highlighter | Tool::Arrow | Tool::Line | Tool::Text | Tool::Note => {
+                Controls::MARK
+            }
+            Tool::Select | Tool::Lasso | Tool::Hand | Tool::Eraser | Tool::Laser | Tool::Image => {
+                Controls::default()
+            }
+        };
+        self.selected
+            .iter()
+            .filter_map(|id| self.doc.get(*id))
+            .fold(drawing, |c, s| c.union(s.kind.controls()))
+    }
+
     /// Shown while drawing or with shapes selected.
     fn shows_style_panel(&self) -> bool {
-        !self.selected.is_empty()
-            || !matches!(
-                self.tool,
-                Tool::Select | Tool::Lasso | Tool::Hand | Tool::Eraser | Tool::Laser
-            )
+        self.style_controls() != Controls::default()
+    }
+
+    /// The swatches pick the fill color.
+    fn picks_fill_color(&self) -> bool {
+        self.fill_tab && self.style_controls().fill
     }
 
     fn style_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let style = self.style;
-        let fill_tab = self.fill_tab;
+        let controls = self.style_controls();
+        let fill_tab = self.picks_fill_color();
         let shown = if fill_tab {
             style.fill_color()
         } else {
@@ -750,7 +771,7 @@ impl CanvasView {
                             gpui_kit::component::tooltip::Tooltip::new(c.name()).build(window, cx)
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            let fill = this.fill_tab;
+                            let fill = this.picks_fill_color();
                             this.restyle(
                                 move |s| {
                                     if fill {
@@ -805,19 +826,22 @@ impl CanvasView {
             )
             .on_click(cx.listener(move |this, _, _, cx| this.restyle(move |s| s.opacity = o, cx)))
         });
+        let ink = paint::color(style.color);
         let pens = Pen::ALL.into_iter().enumerate().map(|(i, p)| {
-            let icon = match p {
-                Pen::Pen => IconName::Signature,
-                Pen::Monoline => IconName::Spline,
-                Pen::Fountain => IconName::PenTool,
-            };
             option(
                 ("canvas-pen", i),
                 style.pen == p,
-                Icon::new(icon).size(px(14.)),
+                // The pen's own stroke, as it draws on the page.
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint::pen_preview(p, ink, bounds, window),
+                )
+                .w(px(40.))
+                .h(px(18.)),
             )
             .tooltip(move |window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(p.name()).build(window, cx)
+                gpui_kit::component::tooltip::Tooltip::new(format!("{}: {}", p.name(), p.hint()))
+                    .build(window, cx)
             })
             .on_click(cx.listener(move |this, _, _, cx| this.restyle(move |s| s.pen = p, cx)))
         });
@@ -839,11 +863,6 @@ impl CanvasView {
                 cx.listener(move |this, _, _, cx| this.restyle(move |s| s.size = i as u8, cx)),
             )
         });
-        let shows_pen = matches!(self.tool, Tool::Pen | Tool::Highlighter)
-            || self
-                .selected
-                .iter()
-                .any(|id| matches!(self.doc.get(*id).map(|s| &s.kind), Some(Kind::Ink { .. })));
         v_flex()
             .absolute()
             .top_3()
@@ -868,29 +887,36 @@ impl CanvasView {
                 inset: false,
             }])
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(
-                ui::segmented(
-                    "canvas-style-tab",
-                    &["Stroke", "Fill"],
-                    Some(usize::from(fill_tab)),
-                    {
-                        let weak = cx.entity().downgrade();
-                        move |i, _, cx| {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.fill_tab = *i == 1;
-                                cx.notify();
-                            });
-                        }
-                    },
+            // Only shapes with an inside have a fill to pick a color for.
+            .when(controls.fill, |d| {
+                d.child(
+                    ui::segmented(
+                        "canvas-style-tab",
+                        &["Stroke", "Fill"],
+                        Some(usize::from(fill_tab)),
+                        {
+                            let weak = cx.entity().downgrade();
+                            move |i, _, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.fill_tab = *i == 1;
+                                    cx.notify();
+                                });
+                            }
+                        },
+                    )
+                    .w_full()
+                    .justify_center(),
                 )
-                .w_full()
-                .justify_center(),
-            )
-            .child(v_flex().gap(px(2.)).px_1().children(colors))
-            .child(row("Fill").children(fills))
-            .child(row("Opacity").children(opacities))
-            .when(shows_pen, |d| d.child(row("Pen").children(pens)))
-            .child(row("Size").children(sizes))
+            })
+            .when(controls.color || controls.fill, |d| {
+                d.child(v_flex().gap(px(2.)).px_1().children(colors))
+            })
+            .when(controls.fill, |d| d.child(row("Fill").children(fills)))
+            .when(controls.opacity, |d| {
+                d.child(row("Opacity").children(opacities))
+            })
+            .when(controls.pen, |d| d.child(row("Pen").children(pens)))
+            .when(controls.size, |d| d.child(row("Size").children(sizes)))
     }
 
     // ── Minimap ────────────────────────────────────────────────────────────

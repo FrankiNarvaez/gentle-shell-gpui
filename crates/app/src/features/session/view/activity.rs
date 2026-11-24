@@ -460,6 +460,7 @@ impl SessionView {
             ui::muted()
         };
         let weak = cx.entity().downgrade();
+        let open_agents = weak.clone();
         chip_popover(
             ChipPopoverOptions::new(
                 "helpers",
@@ -468,10 +469,29 @@ impl SessionView {
                 format!("{active}/{total}"),
             )
             .title("Helpers")
-            .count(format!("{active} active")),
+            .count(format!("{active} active"))
+            .footer_action(Box::new(move |_window, cx| {
+                h_flex()
+                    .pt_1()
+                    .child(
+                        Button::new("helpers-open-agents")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::Users))
+                            .label(format!("Open Agents ({})", ui::shortcut_shift("A")))
+                            .on_click(cx.listener({
+                                let open_agents = open_agents.clone();
+                                move |state: &mut PopoverState, _, window, cx| {
+                                    state.dismiss(window, cx);
+                                    let _ = open_agents
+                                        .update(cx, |this, cx| this.open_agents(None, cx));
+                                }
+                            })),
+                    )
+                    .into_any_element()
+            })),
             move || {
-                let mut items: Vec<AnyElement> = rows
-                    .iter()
+                rows.iter()
                     .map(|(agent, status, color, label, step)| {
                         v_flex()
                             .gap_0p5()
@@ -522,24 +542,7 @@ impl SessionView {
                             })
                             .into_any_element()
                     })
-                    .collect();
-                let weak = weak.clone();
-                items.push(
-                    h_flex()
-                        .pt_1()
-                        .child(
-                            Button::new("helpers-open-agents")
-                                .ghost()
-                                .xsmall()
-                                .icon(Icon::new(IconName::Users))
-                                .label(format!("Open Agents ({})", ui::shortcut_shift("A")))
-                                .on_click(move |_, _, cx| {
-                                    let _ = weak.update(cx, |this, cx| this.open_agents(None, cx));
-                                }),
-                        )
-                        .into_any_element(),
-                );
-                items
+                    .collect()
             },
         )
     }
@@ -684,6 +687,11 @@ fn render_memory_button(
 pub(super) type ChipHeaderAction =
     Box<dyn Fn(&mut Window, &mut Context<PopoverState>) -> AnyElement>;
 
+/// An extra control at the bottom of a chip card's scrollable body. Like
+/// [`ChipHeaderAction`], it is rebuilt with the card and can dismiss the
+/// popover from its click handler.
+pub(super) type ChipFooterAction = ChipHeaderAction;
+
 /// The slots of a chip card's header, shared by every chip popover: the
 /// trigger's id, icon and color, its label, the card's title, and either a
 /// count in `ui::mono()` or a header action where the count would sit.
@@ -695,6 +703,7 @@ pub(super) struct ChipPopoverOptions {
     title: SharedString,
     count: SharedString,
     action: Option<ChipHeaderAction>,
+    footer_action: Option<ChipFooterAction>,
     mono: bool,
 }
 
@@ -713,6 +722,7 @@ impl ChipPopoverOptions {
             title: "".into(),
             count: "".into(),
             action: None,
+            footer_action: None,
             mono: false,
         }
     }
@@ -732,6 +742,12 @@ impl ChipPopoverOptions {
     /// A right-side control instead of the count (see [`ChipHeaderAction`]).
     pub(super) fn action(mut self, action: ChipHeaderAction) -> Self {
         self.action = Some(action);
+        self
+    }
+
+    /// A bottom control inside the card body (see [`ChipFooterAction`]).
+    pub(super) fn footer_action(mut self, action: ChipFooterAction) -> Self {
+        self.footer_action = Some(action);
         self
     }
 
@@ -757,6 +773,7 @@ pub(super) fn chip_popover(
         title,
         count,
         action,
+        footer_action,
         mono,
     } = options;
     let trigger = Button::new(SharedString::from(format!("{id}-chip")))
@@ -808,7 +825,10 @@ pub(super) fn chip_popover(
                                 .max_h(rems(380. / 16.))
                                 .overflow_y_scroll()
                                 .gap_1p5()
-                                .children(body()),
+                                .children(body())
+                                .when_some(footer_action.as_ref(), |d, build| {
+                                    d.child(build(window, cx))
+                                }),
                         ),
                 ))
                 .into_any_element()
