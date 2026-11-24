@@ -196,9 +196,97 @@ pub fn workspace_index_remap(order: &[usize]) -> Vec<usize> {
     remap
 }
 
+/// A sidebar's width (px at 100 % interface size) before anyone drags it.
+pub const SIDEBAR_DEFAULT_WIDTH: f32 = 260.;
+/// Narrower than this, a sidebar's header no longer fits.
+pub const SIDEBAR_MIN_WIDTH: f32 = 200.;
+pub const SIDEBAR_MAX_WIDTH: f32 = 480.;
+/// The share of the window a sidebar may take at most.
+pub const SIDEBAR_MAX_SHARE: f32 = 0.4;
+/// Dragged narrower than this, a sidebar collapses; between this and the
+/// minimum it holds at the minimum, so a resize doesn't hide it by accident.
+pub const SIDEBAR_COLLAPSE_BELOW: f32 = 140.;
+
+/// A saved width as the app keeps it: between the minimum and the maximum,
+/// the default when it isn't a number.
+pub fn saved_sidebar_width(width: f32) -> f32 {
+    if !width.is_finite() {
+        return SIDEBAR_DEFAULT_WIDTH;
+    }
+    width.clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+}
+
+/// The width a sidebar shows at in a `window` this wide: its saved width,
+/// held to the window's share (and never below the minimum). The saved width
+/// stays, so a wider window gives it back.
+pub fn shown_sidebar_width(saved: f32, window: f32) -> f32 {
+    let cap = (window * SIDEBAR_MAX_SHARE).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+    saved_sidebar_width(saved).min(cap)
+}
+
+/// What dragging a sidebar's inner edge does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SidebarDrag {
+    /// The sidebar takes this width.
+    Width(f32),
+    /// Dragged past the collapse point: the sidebar hides.
+    Collapse,
+}
+
+/// Dragging a sidebar's edge to `pointer`, its distance from the sidebar's
+/// outer edge, in a `window` this wide.
+pub fn drag_sidebar_width(pointer: f32, window: f32) -> SidebarDrag {
+    if pointer < SIDEBAR_COLLAPSE_BELOW {
+        SidebarDrag::Collapse
+    } else {
+        SidebarDrag::Width(shown_sidebar_width(pointer, window))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_sidebar_width_stays_between_the_minimum_and_the_maximum() {
+        assert_eq!(saved_sidebar_width(320.), 320.);
+        assert_eq!(saved_sidebar_width(120.), SIDEBAR_MIN_WIDTH);
+        assert_eq!(saved_sidebar_width(900.), SIDEBAR_MAX_WIDTH);
+        assert_eq!(saved_sidebar_width(f32::NAN), SIDEBAR_DEFAULT_WIDTH);
+        assert_eq!(saved_sidebar_width(f32::INFINITY), SIDEBAR_DEFAULT_WIDTH);
+    }
+
+    #[test]
+    fn a_sidebar_takes_at_most_40_percent_of_the_window() {
+        // Wide window: the saved width shows as is.
+        assert_eq!(shown_sidebar_width(400., 1600.), 400.);
+        // 1000 px window: 40 % is 400.
+        assert_eq!(shown_sidebar_width(480., 1000.), 400.);
+        // Never narrower than the minimum, however small the window.
+        assert_eq!(shown_sidebar_width(300., 300.), SIDEBAR_MIN_WIDTH);
+        assert_eq!(shown_sidebar_width(f32::NAN, 1600.), SIDEBAR_DEFAULT_WIDTH);
+    }
+
+    #[test]
+    fn dragging_a_sidebar_edge_resizes_it_or_collapses_it() {
+        assert_eq!(drag_sidebar_width(330., 1600.), SidebarDrag::Width(330.));
+        // Past the maximum or the window share, it stops there.
+        assert_eq!(
+            drag_sidebar_width(700., 1600.),
+            SidebarDrag::Width(SIDEBAR_MAX_WIDTH)
+        );
+        assert_eq!(drag_sidebar_width(450., 1000.), SidebarDrag::Width(400.));
+        // Between the collapse point and the minimum it holds at the minimum.
+        assert_eq!(
+            drag_sidebar_width(SIDEBAR_COLLAPSE_BELOW, 1600.),
+            SidebarDrag::Width(SIDEBAR_MIN_WIDTH)
+        );
+        assert_eq!(
+            drag_sidebar_width(SIDEBAR_COLLAPSE_BELOW - 1., 1600.),
+            SidebarDrag::Collapse
+        );
+        assert_eq!(drag_sidebar_width(-20., 1600.), SidebarDrag::Collapse);
+    }
 
     #[test]
     fn names_stay_unique() {
