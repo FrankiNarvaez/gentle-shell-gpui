@@ -904,6 +904,7 @@ mod tests {
                         next_stage: 1,
                         resume_welcome: None,
                         drop_hint: None,
+                        pane_mode: false,
                         closed: Vec::new(),
                         music: cx.new(|cx| Music::new(window, cx)),
                         devices: cx.new(DevicePanel::new),

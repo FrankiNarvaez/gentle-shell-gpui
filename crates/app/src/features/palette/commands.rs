@@ -13,6 +13,10 @@ use crate::features::workspace::{
     FocusNextPane, FocusPrevPane, NewCanvasTab, NewTab, NewTerminalTab, NextTab, PrevTab,
     ReopenClosed, SplitDown, TilePane, ToggleSidebar,
 };
+use crate::features::workspace::{
+    FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp, ResizePaneDown, ResizePaneLeft,
+    ResizePaneRight, ResizePaneUp, SplitLeft, SplitUp, TogglePaneMode,
+};
 
 use crate::features::session;
 
@@ -236,6 +240,72 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             "Move focus to the previous pane in this tab",
             PaletteAction::FocusPrevPane,
         ),
+        row(
+            IconName::ArrowLeft,
+            "Focus pane left",
+            "Move focus to the pane on the left",
+            PaletteAction::FocusPaneLeft,
+        ),
+        row(
+            IconName::ArrowRight,
+            "Focus pane right",
+            "Move focus to the pane on the right",
+            PaletteAction::FocusPaneRight,
+        ),
+        row(
+            IconName::ArrowUp,
+            "Focus pane up",
+            "Move focus to the pane above",
+            PaletteAction::FocusPaneUp,
+        ),
+        row(
+            IconName::ArrowDown,
+            "Focus pane down",
+            "Move focus to the pane below",
+            PaletteAction::FocusPaneDown,
+        ),
+        row(
+            IconName::Columns2,
+            "Split left",
+            "Same kind of pane to the left of this one",
+            PaletteAction::SplitLeft,
+        ),
+        row(
+            IconName::Rows2,
+            "Split up",
+            "Same kind of pane above this one",
+            PaletteAction::SplitUp,
+        ),
+        row(
+            IconName::MoveHorizontal,
+            "Resize pane left",
+            "Move the focused pane's left edge",
+            PaletteAction::ResizePaneLeft,
+        ),
+        row(
+            IconName::MoveHorizontal,
+            "Resize pane right",
+            "Move the focused pane's right edge",
+            PaletteAction::ResizePaneRight,
+        ),
+        row(
+            IconName::MoveVertical,
+            "Resize pane up",
+            "Move the focused pane's top edge",
+            PaletteAction::ResizePaneUp,
+        ),
+        row(
+            IconName::MoveVertical,
+            "Resize pane down",
+            "Move the focused pane's bottom edge",
+            PaletteAction::ResizePaneDown,
+        ),
+        row(
+            IconName::LayoutDashboard,
+            "Pane mode",
+            "Sticky keys: hjkl move, HJKL resize, v s split, x close, Esc exits",
+            PaletteAction::TogglePaneMode,
+        ),
     ];
     for n in 1..=9 {
         rows.push(row(
@@ -267,6 +337,17 @@ pub(super) fn palette_action_to_gpui(action: &PaletteAction) -> Option<Box<dyn A
         PaletteAction::FocusNextPane => Some(Box::new(FocusNextPane)),
         PaletteAction::FocusPrevPane => Some(Box::new(FocusPrevPane)),
         PaletteAction::ToggleSidebar => Some(Box::new(ToggleSidebar)),
+        PaletteAction::FocusPaneLeft => Some(Box::new(FocusPaneLeft)),
+        PaletteAction::FocusPaneRight => Some(Box::new(FocusPaneRight)),
+        PaletteAction::FocusPaneUp => Some(Box::new(FocusPaneUp)),
+        PaletteAction::FocusPaneDown => Some(Box::new(FocusPaneDown)),
+        PaletteAction::SplitLeft => Some(Box::new(SplitLeft)),
+        PaletteAction::SplitUp => Some(Box::new(SplitUp)),
+        PaletteAction::ResizePaneLeft => Some(Box::new(ResizePaneLeft)),
+        PaletteAction::ResizePaneRight => Some(Box::new(ResizePaneRight)),
+        PaletteAction::ResizePaneUp => Some(Box::new(ResizePaneUp)),
+        PaletteAction::ResizePaneDown => Some(Box::new(ResizePaneDown)),
+        PaletteAction::TogglePaneMode => Some(Box::new(TogglePaneMode)),
         PaletteAction::FocusComposer => Some(Box::new(FocusComposer)),
         PaletteAction::FocusFiles => Some(Box::new(FocusFiles)),
         PaletteAction::FocusChanges => Some(Box::new(FocusChanges)),
@@ -493,6 +574,14 @@ mod tests {
         assert!(
             palette_action_to_gpui(&PaletteAction::ActivateTab(1))
                 .is_some_and(|a| a.name() == ActivateTab1.name())
+        );
+        assert!(
+            palette_action_to_gpui(&PaletteAction::FocusPaneLeft)
+                .is_some_and(|a| a.name() == crate::features::workspace::FocusPaneLeft.name())
+        );
+        assert!(
+            palette_action_to_gpui(&PaletteAction::TogglePaneMode)
+                .is_some_and(|a| a.name() == crate::features::workspace::TogglePaneMode.name())
         );
         assert!(palette_action_to_gpui(&PaletteAction::ActivateTab(10)).is_none());
         assert!(palette_action_to_gpui(&PaletteAction::Sessions).is_none());

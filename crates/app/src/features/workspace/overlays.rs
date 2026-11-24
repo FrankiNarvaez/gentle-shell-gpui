@@ -120,6 +120,19 @@ impl Workspace {
             PaletteAction::NextTab => self.on_next_tab(&NextTab, window, cx),
             PaletteAction::PrevTab => self.on_prev_tab(&PrevTab, window, cx),
             PaletteAction::FocusNextPane => self.on_focus_next_pane(&FocusNextPane, window, cx),
+            PaletteAction::FocusPaneLeft => self.on_focus_pane_left(&FocusPaneLeft, window, cx),
+            PaletteAction::FocusPaneRight => self.on_focus_pane_right(&FocusPaneRight, window, cx),
+            PaletteAction::FocusPaneUp => self.on_focus_pane_up(&FocusPaneUp, window, cx),
+            PaletteAction::FocusPaneDown => self.on_focus_pane_down(&FocusPaneDown, window, cx),
+            PaletteAction::SplitLeft => self.on_split_left(&SplitLeft, window, cx),
+            PaletteAction::SplitUp => self.on_split_up(&SplitUp, window, cx),
+            PaletteAction::ResizePaneLeft => self.on_resize_pane_left(&ResizePaneLeft, window, cx),
+            PaletteAction::ResizePaneRight => {
+                self.on_resize_pane_right(&ResizePaneRight, window, cx)
+            }
+            PaletteAction::ResizePaneUp => self.on_resize_pane_up(&ResizePaneUp, window, cx),
+            PaletteAction::ResizePaneDown => self.on_resize_pane_down(&ResizePaneDown, window, cx),
+            PaletteAction::TogglePaneMode => self.on_toggle_pane_mode(&TogglePaneMode, window, cx),
             PaletteAction::FocusPrevPane => self.on_focus_prev_pane(&FocusPrevPane, window, cx),
             PaletteAction::ActivateTab(n) => {
                 let index = if n == 9 {

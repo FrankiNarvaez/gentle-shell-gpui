@@ -39,8 +39,8 @@ use crate::features::workspaces::{
     self, Badge, SavedPane, SavedState, SavedTab, SavedWorkspace, TabLayout,
 };
 use crate::shared::pane::{
-    AskAgent, CloseViewer, OpenCommitDiff, OpenTerminalAt, PaneFactories, PaneId, PaneItem,
-    PaneKind, PaneTree, ShowInPane, SplitAxis,
+    AskAgent, CloseViewer, OpenCommitDiff, OpenTerminalAt, PaneDirection, PaneFactories, PaneId,
+    PaneItem, PaneKind, PaneTree, ShowInPane, SplitAxis,
 };
 use crate::shared::ui;
 use gentle_core::commands::Screen;
@@ -105,7 +105,19 @@ actions!(
         ActivateTab9,
         FocusComposer,
         FocusFiles,
-        FocusChanges
+        FocusChanges,
+        FocusPaneLeft,
+        FocusPaneRight,
+        FocusPaneUp,
+        FocusPaneDown,
+        ResizePaneLeft,
+        ResizePaneRight,
+        ResizePaneUp,
+        ResizePaneDown,
+        SplitLeft,
+        SplitUp,
+        TogglePaneMode,
+        ExitPaneMode,
     ]
 );
 
@@ -439,6 +451,9 @@ pub struct Workspace {
     /// While a pane is dragged: the pane under the pointer and where it would
     /// land there.
     drop_hint: Option<(PaneId, DropZone)>,
+    /// Sticky pane mode: hjkl/HJKL/v/s/x act on panes and other keys are
+    /// swallowed until Esc or Enter.
+    pane_mode: bool,
     /// Panes and tabs closed, most recent last, to reopen.
     closed: Vec<closed::Closed>,
     /// gentle-stream, behind the title bar's ♪ button.
@@ -553,6 +568,7 @@ impl Workspace {
             next_stage: 1,
             resume_welcome: None,
             drop_hint: None,
+            pane_mode: false,
             closed: Vec::new(),
             music,
             devices,

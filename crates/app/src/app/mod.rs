@@ -15,12 +15,82 @@ use crate::features::workspace::{
     FocusFiles, FocusNextPane, FocusPrevPane, NewCanvasTab, NewTab, NewTerminalTab, NextTab,
     PrevTab, Quit, ReopenClosed, SplitDown, SplitRight, TilePane, ToggleSidebar, Workspace,
 };
+use crate::features::workspace::{
+    ExitPaneMode, FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp, ResizePaneDown,
+    ResizePaneLeft, ResizePaneRight, ResizePaneUp, SplitLeft, SplitUp, TogglePaneMode,
+};
 use crate::{
     features::app_update, features::files, features::session, features::workspace,
     platform::instance, shared::assets, shared::themes,
 };
 
 actions!(gentle, [ZoomIn, ZoomOut, ActualSize]);
+
+/// The leader prefix: every one-shot leader binding is this followed by one
+/// key. One value so a configurable prefix only has to change it.
+pub const LEADER: &str = "ctrl-space";
+
+/// Key context of the workspace while pane mode is on.
+const PANE_MODE: &str = "GentleWorkspace && pane_mode";
+
+/// The leader (one-shot) bindings, all built from `prefix`.
+fn leader_bindings(prefix: &str) -> Vec<KeyBinding> {
+    // `KeyBinding::new` wants `'static` text; these few strings live for the
+    // whole run anyway and are built once at startup.
+    let seq = |k: &str| -> &'static str { Box::leak(format!("{prefix} {k}").into_boxed_str()) };
+    vec![
+        KeyBinding::new(seq("h"), FocusPaneLeft, None),
+        KeyBinding::new(seq("j"), FocusPaneDown, None),
+        KeyBinding::new(seq("k"), FocusPaneUp, None),
+        KeyBinding::new(seq("l"), FocusPaneRight, None),
+        KeyBinding::new(seq("v"), SplitRight, None),
+        KeyBinding::new(seq("s"), SplitDown, None),
+        KeyBinding::new(seq("x"), ClosePane, None),
+        KeyBinding::new(seq("u"), ReopenClosed, None),
+        KeyBinding::new(seq("c"), NewTab, None),
+        KeyBinding::new(seq("t"), NewTerminalTab, None),
+        KeyBinding::new(seq("n"), NextTab, None),
+        KeyBinding::new(seq("p"), PrevTab, None),
+        KeyBinding::new(seq("f"), FocusFiles, None),
+        KeyBinding::new(seq("g"), FocusChanges, None),
+        KeyBinding::new(seq("i"), FocusComposer, None),
+        KeyBinding::new(seq("b"), ToggleSidebar, None),
+        // `:` is shift-; on most layouts; platforms report it either way.
+        KeyBinding::new(seq(":"), workspace::OpenPalette, None),
+        KeyBinding::new(seq("shift-;"), workspace::OpenPalette, None),
+        KeyBinding::new(seq("space"), TogglePaneMode, None),
+        KeyBinding::new(seq("1"), ActivateTab1, None),
+        KeyBinding::new(seq("2"), ActivateTab2, None),
+        KeyBinding::new(seq("3"), ActivateTab3, None),
+        KeyBinding::new(seq("4"), ActivateTab4, None),
+        KeyBinding::new(seq("5"), ActivateTab5, None),
+        KeyBinding::new(seq("6"), ActivateTab6, None),
+        KeyBinding::new(seq("7"), ActivateTab7, None),
+        KeyBinding::new(seq("8"), ActivateTab8, None),
+        KeyBinding::new(seq("9"), ActivateTab9, None),
+    ]
+}
+
+/// Sticky pane mode bindings: active while the workspace root carries the
+/// `pane_mode` context flag.
+fn pane_mode_bindings() -> Vec<KeyBinding> {
+    let c = Some(PANE_MODE);
+    vec![
+        KeyBinding::new("h", FocusPaneLeft, c),
+        KeyBinding::new("j", FocusPaneDown, c),
+        KeyBinding::new("k", FocusPaneUp, c),
+        KeyBinding::new("l", FocusPaneRight, c),
+        KeyBinding::new("shift-h", ResizePaneLeft, c),
+        KeyBinding::new("shift-j", ResizePaneDown, c),
+        KeyBinding::new("shift-k", ResizePaneUp, c),
+        KeyBinding::new("shift-l", ResizePaneRight, c),
+        KeyBinding::new("v", SplitRight, c),
+        KeyBinding::new("s", SplitDown, c),
+        KeyBinding::new("x", ClosePane, c),
+        KeyBinding::new("escape", ExitPaneMode, c),
+        KeyBinding::new("enter", ExitPaneMode, c),
+    ]
+}
 
 /// Runs the app until its last window closes. `requests` carries later
 /// launches' folders and prompts to this window.
@@ -220,7 +290,12 @@ fn bind_keys(cx: &mut App) {
         ),
         KeyBinding::new(key!("q"), Quit, None),
         KeyBinding::new("escape", workspace::CloseOverlay, Some("GentleWorkspace")),
-        KeyBinding::new("escape", session::Abort, Some(session::CONTEXT)),
+        // Pane mode owns Esc (it exits the mode), not the agent's abort.
+        KeyBinding::new(
+            "escape",
+            session::Abort,
+            Some("GentleSession && !pane_mode"),
+        ),
         KeyBinding::new(key!("."), session::Stop, Some(session::CONTEXT)),
         KeyBinding::new(
             key!("shift-a"),
@@ -240,6 +315,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("-"), ZoomOut, None),
         KeyBinding::new(key!("0"), ActualSize, None),
     ]);
+    cx.bind_keys(leader_bindings(LEADER));
+    cx.bind_keys(pane_mode_bindings());
     files::FileView::bind_keys(cx);
     crate::features::canvas::bind_keys(cx);
 }
@@ -254,6 +331,8 @@ fn set_menus(cx: &mut App) {
             MenuItem::action("New Pane (Tiled)", TilePane),
             MenuItem::action("Split Right", SplitRight),
             MenuItem::action("Split Down", SplitDown),
+            MenuItem::action("Split Left", SplitLeft),
+            MenuItem::action("Split Up", SplitUp),
             MenuItem::action("Close Pane", ClosePane),
             MenuItem::action("Close Tab", CloseTab),
             MenuItem::action("Reopen Closed Pane", ReopenClosed),
@@ -273,4 +352,33 @@ fn set_menus(cx: &mut App) {
         ],
         disabled: false,
     }]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LEADER, leader_bindings, pane_mode_bindings};
+
+    #[test]
+    fn leader_bindings_share_one_prefix_and_parse() {
+        let bindings = leader_bindings(LEADER);
+        for b in &bindings {
+            let ks = b.keystrokes();
+            assert_eq!(ks.len(), 2, "leader bindings are prefix + one key");
+            assert!(ks[0].modifiers().control);
+        }
+        assert!(
+            bindings
+                .iter()
+                .any(|b| b.keystrokes().get(1).is_some_and(|k| k.key() == ":"))
+        );
+        // Changing the prefix changes every binding.
+        for b in leader_bindings("ctrl-a") {
+            assert_eq!(b.keystrokes()[0].key(), "a");
+        }
+    }
+
+    #[test]
+    fn pane_mode_bindings_parse() {
+        assert_eq!(pane_mode_bindings().len(), 13);
+    }
 }

@@ -31,6 +31,9 @@ impl Render for Workspace {
             || window.has_active_sheet(cx)
             || cx.has_active_drag()
             || crate::features::browser::popovers_open(cx);
+        if self.pane_mode && (covered || !window.is_window_active()) {
+            self.pane_mode = false;
+        }
         self.set_stages_covered(covered, cx);
         self.sync_web_views(covered, cx);
         let (devices_docked, devices_floating) = {
@@ -89,13 +92,36 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_focus_composer))
             .on_action(cx.listener(Self::on_focus_files))
             .on_action(cx.listener(Self::on_focus_changes))
+            .on_action(cx.listener(Self::on_focus_pane_left))
+            .on_action(cx.listener(Self::on_focus_pane_right))
+            .on_action(cx.listener(Self::on_focus_pane_up))
+            .on_action(cx.listener(Self::on_focus_pane_down))
+            .on_action(cx.listener(Self::on_resize_pane_left))
+            .on_action(cx.listener(Self::on_resize_pane_right))
+            .on_action(cx.listener(Self::on_resize_pane_up))
+            .on_action(cx.listener(Self::on_resize_pane_down))
+            .on_action(cx.listener(Self::on_split_left))
+            .on_action(cx.listener(Self::on_split_up))
+            .on_action(cx.listener(Self::on_toggle_pane_mode))
+            .on_action(cx.listener(Self::on_exit_pane_mode))
             .on_action(cx.listener(Self::on_open_providers))
             .on_action(cx.listener(Self::on_open_sessions))
             .on_action(cx.listener(Self::on_open_palette))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_open_workspaces))
             .on_action(cx.listener(Self::on_close_overlay))
-            .key_context("GentleWorkspace")
+            .key_context(if self.pane_mode {
+                "GentleWorkspace pane_mode"
+            } else {
+                "GentleWorkspace"
+            })
+            .when(self.pane_mode, |this| {
+                this.capture_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
+                    if this.pane_mode {
+                        cx.stop_propagation();
+                    }
+                }))
+            })
             .relative()
             .left(px(shake_x))
             .top(px(shake_y))
@@ -157,6 +183,38 @@ impl Render for Workspace {
                                     // focused pane, each entry with its shortcut.
                                     .when(self.tab().is_some(), |d| {
                                         d.child(self.render_layout_menu(cx)).child(
+                                            div()
+                                                .w(px(1.))
+                                                .h(rems(14. / 16.))
+                                                .mx_1()
+                                                .bg(ui::border()),
+                                        )
+                                    })
+                                    .when(self.pane_mode, |d| {
+                                        d.child(
+                                            h_flex()
+                                                .gap_1()
+                                                .px_2()
+                                                .py(px(1.))
+                                                .rounded_md()
+                                                .bg(ui::petal().opacity(0.14))
+                                                .border_1()
+                                                .border_color(ui::petal().opacity(0.45))
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .text_color(ui::petal())
+                                                        .child("PANE"),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .text_xs()
+                                                        .text_color(ui::faint())
+                                                        .child("esc"),
+                                                ),
+                                        )
+                                        .child(
                                             div()
                                                 .w(px(1.))
                                                 .h(rems(14. / 16.))
