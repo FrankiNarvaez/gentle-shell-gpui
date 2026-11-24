@@ -39,6 +39,7 @@ pub enum PaletteAction {
     OpenKeymap,
     /// Re-read `keymap.json` and rebind every shortcut.
     ReloadKeymap,
+    Shortcuts,
     /// The onboarding screen: dependency checks and installs.
     Setup,
     /// The first-run welcome screen, from its intro.

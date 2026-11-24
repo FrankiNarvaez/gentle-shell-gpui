@@ -113,6 +113,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_open_sessions))
             .on_action(cx.listener(Self::on_open_palette))
             .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_open_shortcuts))
             .on_action(cx.listener(Self::on_open_workspaces))
             .on_action(cx.listener(Self::on_close_overlay))
             .key_context(if self.pane_mode {
@@ -395,6 +396,17 @@ impl Render for Workspace {
             .children(self.render_badge_picker(window, cx))
             .children(self.render_context_menu(cx))
             .when(devices_floating, |root| root.child(self.devices.clone()))
+            // Which keys come next: while a sequence is pending, or in pane mode.
+            .children(
+                self.which_key
+                    .clone()
+                    .or_else(|| {
+                        self.pane_mode
+                            .then(|| crate::features::shortcuts::pane_mode_hint(cx))
+                            .flatten()
+                    })
+                    .map(|hint| crate::features::shortcuts::panel(&hint, cx)),
+            )
             .children(self.overlay.as_ref().map(|(overlay, _)| {
                 let (view, full_window) = match overlay {
                     Overlay::Providers(view) => (view.clone().into_any_element(), false),
@@ -404,6 +416,7 @@ impl Render for Workspace {
                     Overlay::Memory(view) => (view.clone().into_any_element(), false),
                     Overlay::Docs(view) => (view.clone().into_any_element(), false),
                     Overlay::Settings(view) => (view.clone().into_any_element(), false),
+                    Overlay::Shortcuts(view) => (view.clone().into_any_element(), false),
                     Overlay::Profiles(view) => (view.clone().into_any_element(), false),
                     Overlay::Review(view) => (view.clone().into_any_element(), false),
                     // First-run screens still cover the whole window.

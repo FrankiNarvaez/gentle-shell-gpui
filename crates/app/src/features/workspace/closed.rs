@@ -356,6 +356,7 @@ mod tests {
                     drop_hint: None,
                     pane_mode: false,
                     pane_mode_focus: cx.focus_handle(),
+                    which_key: None,
                     closed: vec![closed],
                     music: cx.new(|cx| Music::new(window, cx)),
                     devices: cx.new(DevicePanel::new),

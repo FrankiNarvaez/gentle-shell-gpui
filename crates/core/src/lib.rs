@@ -33,6 +33,7 @@ pub mod screen;
 pub mod scroll;
 pub mod sessions;
 pub mod setup;
+pub mod shortcuts;
 pub mod text;
 pub mod tools;
 pub mod transcript;

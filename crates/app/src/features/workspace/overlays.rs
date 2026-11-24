@@ -154,6 +154,7 @@ impl Workspace {
             PaletteAction::Settings => self.open_settings(window, cx),
             PaletteAction::OpenKeymap => self.open_keymap_file(window, cx),
             PaletteAction::ReloadKeymap => self.reload_keymap(cx),
+            PaletteAction::Shortcuts => self.open_shortcuts(window, cx),
             PaletteAction::Setup => self.open_onboarding(None, window, cx),
             PaletteAction::Welcome => self.open_welcome(None, window, cx),
             PaletteAction::NewTab => self.on_new_tab(&NewTab, window, cx),
@@ -561,6 +562,19 @@ impl Workspace {
             },
         );
         self.overlay = Some((Overlay::Docs(view), subscription));
+        cx.notify();
+    }
+
+    pub(super) fn open_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let view = cx.new(|cx| ShortcutsView::new(window, cx));
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &ShortcutsEvent, window, cx| match event {
+                ShortcutsEvent::Close => this.close_overlay(window, cx),
+            },
+        );
+        self.overlay = Some((Overlay::Shortcuts(view), subscription));
         cx.notify();
     }
 

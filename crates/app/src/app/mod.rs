@@ -67,6 +67,9 @@ fn leader_bindings(prefix: &str) -> Vec<(String, Box<dyn Action>)> {
         entry(p, "7", ActivateTab7),
         entry(p, "8", ActivateTab8),
         entry(p, "9", ActivateTab9),
+        // `?` is shift-/ on most layouts.
+        entry(p, "?", workspace::OpenShortcuts),
+        entry(p, "shift-/", workspace::OpenShortcuts),
     ]
 }
 
@@ -210,6 +213,18 @@ struct Foreign(Vec<KeyBinding>);
 
 impl Global for Foreign {}
 
+/// The leader the keymap was last bound with.
+struct ActiveLeader(String);
+
+impl Global for ActiveLeader {}
+
+/// The leader key in use: the user's `keymap.json` one, else the default.
+pub fn leader(cx: &App) -> String {
+    cx.try_global::<ActiveLeader>()
+        .map(|l| l.0.clone())
+        .unwrap_or_else(|| gentle_core::keymap::DEFAULT_LEADER.to_string())
+}
+
 /// Binds every app shortcut: the defaults, then the user's `keymap.json` on
 /// top (later bindings win). Calling it again reloads the keymap. Returns what
 /// was wrong in the file, one line each; bad entries are skipped.
@@ -233,6 +248,7 @@ pub fn bind_keys(cx: &mut App) -> Vec<String> {
         }
     }
     cx.bind_keys(leader);
+    cx.set_global(ActiveLeader(user.leader.clone()));
     cx.bind_keys(pane_mode_bindings());
     files::bind_keys(cx);
     crate::features::canvas::bind_keys(cx);
@@ -375,6 +391,21 @@ fn bind_defaults(cx: &mut App) {
         KeyBinding::new(workspaces, workspace::OpenWorkspaces, None),
         KeyBinding::new(key!("shift-o"), workspace::OpenSessions, None),
         KeyBinding::new(key!(","), workspace::OpenSettings, None),
+        // ⌘/ on macOS. Off macOS ctrl-/ is the terminals' undo (0x1f), so the
+        // chord takes shift like the other global ones; `?` is shift-/.
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-/"
+            } else {
+                "ctrl-shift-/"
+            },
+            workspace::OpenShortcuts,
+            None,
+        ),
+        // Some platforms report that chord as `?` with shift. Not on macOS:
+        // ⌘? is the Help menu's search.
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-?", workspace::OpenShortcuts, None),
         // Interface size. Bindings run before a terminal sees the keys. ⌘+
         // is shift-= on most layouts; the platforms report it either way.
         KeyBinding::new(key!("="), ZoomIn, None),
@@ -407,6 +438,7 @@ fn set_menus(cx: &mut App) {
             MenuItem::action("Focus Git Changes", FocusChanges),
             MenuItem::separator(),
             MenuItem::action("Configuration…", workspace::OpenSettings),
+            MenuItem::action("Keyboard Shortcuts", workspace::OpenShortcuts),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn),
             MenuItem::action("Zoom Out", ZoomOut),
@@ -437,6 +469,7 @@ mod tests {
         .map(|k| format!("ctrl-space {k}"))
         .collect();
         expected.extend((1..=9).map(|n| format!("ctrl-space {n}")));
+        expected.extend(["ctrl-space ?".to_string(), "ctrl-space shift-/".to_string()]);
         assert_eq!(keys, expected);
     }
 
@@ -446,6 +479,39 @@ mod tests {
             assert!(keys.starts_with("ctrl-a "), "{keys}");
             assert_eq!(keys.split(' ').count(), 2);
         }
+    }
+
+    #[test]
+    fn leader_opens_the_shortcuts_screen_on_both_reports_of_question_mark() {
+        use gpui_kit::Action as _;
+        let keys: Vec<String> = leader_bindings(DEFAULT_LEADER)
+            .iter()
+            .filter(|(_, action)| action.name() == crate::features::workspace::OpenShortcuts.name())
+            .map(|(keys, _)| keys.clone())
+            .collect();
+        assert_eq!(keys, ["ctrl-space ?", "ctrl-space shift-/"]);
+    }
+
+    #[test]
+    fn action_names_match_the_cheat_sheet_labels() {
+        use gpui_kit::Action as _;
+
+        use crate::features::{session, workspace};
+        use gentle_core::shortcuts::label;
+        assert_eq!(
+            label(workspace::OpenShortcuts.name()),
+            Some("Keyboard shortcuts")
+        );
+        assert_eq!(
+            label(workspace::FocusPaneLeft.name()),
+            Some("Focus pane left")
+        );
+        assert_eq!(
+            label(workspace::ExitPaneMode.name()),
+            Some("Exit pane mode")
+        );
+        assert_eq!(label(session::Abort.name()), Some("Interrupt the agent"));
+        assert_eq!(label(super::ZoomIn.name()), Some("Zoom in"));
     }
 
     #[test]

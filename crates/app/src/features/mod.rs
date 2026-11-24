@@ -26,6 +26,7 @@ pub mod session;
 pub mod sessions;
 pub mod settings;
 pub mod setup;
+pub mod shortcuts;
 pub mod terminal;
 pub mod tower;
 pub mod updates;

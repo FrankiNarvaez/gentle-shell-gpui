@@ -32,6 +32,7 @@ use crate::features::review::{ReviewEvent, ReviewView};
 use crate::features::session::{AgentsTab, SessionEvent, SessionView};
 use crate::features::sessions::{SessionsEvent, SessionsView};
 use crate::features::settings::{SettingsEvent, SettingsView};
+use crate::features::shortcuts::{ShortcutsEvent, ShortcutsView, WhichKey};
 use crate::features::tower::TowerView;
 use crate::features::usage::{UsageEvent, UsageView};
 use crate::features::welcome::{WelcomeEvent, WelcomeView};
@@ -92,6 +93,7 @@ actions!(
         OpenPalette,
         OpenWorkspaces,
         OpenSettings,
+        OpenShortcuts,
         CloseOverlay,
         Quit,
         ActivateTab1,
@@ -149,6 +151,7 @@ enum Overlay {
     Memory(Entity<MemoryView>),
     Docs(Entity<DocsView>),
     Settings(Entity<SettingsView>),
+    Shortcuts(Entity<ShortcutsView>),
     Profiles(Entity<ProfilesView>),
     Review(Entity<ReviewView>),
     Onboarding(Entity<OnboardingView>),
@@ -458,6 +461,8 @@ pub struct Workspace {
     /// and no deeper key contexts, so the pane-mode keys and the swallow of
     /// everything else apply wherever focus was before.
     pane_mode_focus: FocusHandle,
+    /// The keys that can follow the key sequence pending in the window.
+    which_key: Option<WhichKey>,
     /// Panes and tabs closed, most recent last, to reopen.
     closed: Vec<closed::Closed>,
     /// gentle-stream, behind the title bar's ♪ button.
@@ -542,6 +547,14 @@ impl Workspace {
                 },
             ),
         ];
+        // The which-key hint follows the window's pending key sequence.
+        lifecycle.push(cx.observe_pending_input(window, |this, window, cx| {
+            let hint = crate::features::shortcuts::pending_hint(window, cx);
+            if this.which_key != hint {
+                this.which_key = hint;
+                cx.notify();
+            }
+        }));
         lifecycle.push(
             cx.subscribe_in(&tab_search, window, |_, _, _: &InputEvent, _, cx| {
                 cx.notify()
@@ -574,6 +587,7 @@ impl Workspace {
             drop_hint: None,
             pane_mode: false,
             pane_mode_focus: cx.focus_handle(),
+            which_key: None,
             closed: Vec::new(),
             music,
             devices,

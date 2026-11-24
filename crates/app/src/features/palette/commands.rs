@@ -107,6 +107,12 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
             PaletteAction::ReloadKeymap,
         ),
         row(
+            IconName::Keyboard,
+            "Keyboard shortcuts",
+            "Every key, by section, searchable; the leader and pane mode included",
+            PaletteAction::Shortcuts,
+        ),
+        row(
             IconName::CircleCheck,
             "Setup & requirements",
             "Check Node, Gentle Shell, providers and extras; install what's missing",
@@ -335,6 +341,7 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
 /// shortcut hints from the current keymap.
 pub(super) fn palette_action_to_gpui(action: &PaletteAction) -> Option<Box<dyn Action>> {
     match action {
+        PaletteAction::Shortcuts => Some(Box::new(crate::features::workspace::OpenShortcuts)),
         PaletteAction::Agents => Some(Box::new(session::ToggleAgents)),
         PaletteAction::NewSession => Some(Box::new(session::NewSession)),
         PaletteAction::NewTab => Some(Box::new(NewTab)),

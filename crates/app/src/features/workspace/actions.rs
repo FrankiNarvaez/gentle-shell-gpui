@@ -580,6 +580,21 @@ impl Workspace {
         }
     }
 
+    /// ⌘/ (Ctrl+Shift+/ elsewhere), ⌃Space ?: the shortcuts screen, or closes
+    /// it when it's open.
+    pub(super) fn on_open_shortcuts(
+        &mut self,
+        _: &OpenShortcuts,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(self.overlay, Some((Overlay::Shortcuts(_), _))) {
+            self.close_overlay(window, cx);
+        } else {
+            self.open_shortcuts(window, cx);
+        }
+    }
+
     pub(super) fn on_open_workspaces(
         &mut self,
         _: &OpenWorkspaces,
