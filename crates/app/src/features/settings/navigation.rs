@@ -102,7 +102,7 @@ impl SettingsPage {
                 "home setup requirements agent directory configuration launcher path environment initial diagnostics performance cpu memory slow record recording report backend wsl linux distro remote vm orbstack lima docker container where agents run"
             }
             Self::Appearance => {
-                "theme color dark light import share transparency window opacity interface zoom size font fonts family typeface nerd monospace code scene motion background animated library terminal banner rose text tabs vertical horizontal placement sidebar typing kisses hearts particles composer input style card bar prompt pill soft"
+                "theme color dark light import share transparency window opacity blur glass contrast readable readability accessibility interface zoom size font fonts family typeface nerd monospace code scene motion background picture animated library terminal banner rose text tabs vertical horizontal placement sidebar typing kisses hearts particles composer input style card bar prompt pill soft"
             }
             Self::Agents => {
                 "background subagents gentle ai persona permissions helpers agent ui generative proactive when asked"
@@ -395,6 +395,9 @@ mod tests {
             assert!(SettingsPage::Appearance.matches_query(term));
         }
         assert!(SettingsPage::Appearance.matches_query("window transparency"));
+        for term in ["blur", "opacity", "contrast"] {
+            assert!(SettingsPage::Appearance.matches_query(term));
+        }
         assert!(SettingsPage::Appearance.matches_query("THEME"));
         assert!(SettingsPage::Models.matches_query("claude bridge"));
         assert!(SettingsPage::Extensions.matches_query("install npm"));

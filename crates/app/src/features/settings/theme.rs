@@ -1,6 +1,6 @@
-//! The Theme section: the app's theme grid, window transparency, and
-//! sharing themes (export one as a `.gentletheme` file, import one from a
-//! file, a link or a drop).
+//! The Theme section: the app's theme grid, the window's glass
+//! (transparency, blur, opacity), and sharing themes (export one as a
+//! `.gentletheme` file, import one from a file, a link or a drop).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -9,7 +9,7 @@ use gentle_core::interface_size;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::slider::Slider;
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState};
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -179,9 +179,9 @@ impl SettingsView {
     }
 
     /// Tern-style theme grid: a card per theme drawn in its own colors;
-    /// clicking applies it to every window and remembers it. Above it, a
-    /// slider sets how much of the blurred desktop shows through and a
-    /// stepper sets the interface size.
+    /// clicking applies it to every window and remembers it. Above it, the
+    /// Transparency, Blur and Opacity sliders set the glass and a stepper
+    /// sets the interface size.
     pub(super) fn theme_section(&self, cx: &mut Context<Self>) -> Div {
         let state = cx.global::<themes::Themes>();
         let groups = [
@@ -190,42 +190,50 @@ impl SettingsView {
             (themes::Source::Pi, "Your Pi themes"),
             (themes::Source::Builtin, "Popular"),
         ];
-        let percent = (state.transparency * 100.).round();
+        let glass = state.glass;
         let size = state.interface_size;
         let active = state.active_theme().clone();
+        // Blur softens the theme's own picture or scene; a sky gradient is
+        // already soft, and without a backdrop there is nothing to blur.
+        let blurrable = active
+            .background
+            .as_ref()
+            .is_some_and(|b| b.image.is_some() || b.scene.is_some());
+        let blur_note = match active.background.as_ref() {
+            _ if !blurrable => "This theme has no background picture to blur.",
+            Some(b) if b.scene.is_some() && b.image.is_none() => {
+                "Softens the theme's animated scene (scenes are faded, not blurred)."
+            }
+            Some(b) if b.scene.is_some() => {
+                "Blurs the theme's picture; its animated scene is faded, not blurred."
+            }
+            _ => "Blurs the theme's background picture.",
+        };
         let mut card = section(IconName::Sparkles, "Theme")
             .child(
                 div().pt_1().pb_1().child(ui::section_label("Window & interface")),
             )
-            .child(
-                h_flex()
-                    .pt_1()
-                    .pb_2()
-                    .gap_3()
-                    .child(
-                        div()
-                            .w(rems(120. / 16.))
-                            .text_sm()
-                            .text_color(ui::muted())
-                            .child("Transparency"),
-                    )
-                    .child(
-                        div().flex_1().child(
-                            Slider::new(&self.transparency)
-                                .horizontal()
-                                .accessibility_label("Window transparency"),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .w(rems(44. / 16.))
-                            .text_right()
-                            .text_size(ui::code_rems(14.))
-                            .font_family(ui::mono())
-                            .text_color(ui::fg())
-                            .child(format!("{percent:.0}%")),
-                    ),
-            )
+            .child(glass_row(
+                "Transparency",
+                &self.glass.transparency,
+                glass.transparency,
+                "How much the desktop or the theme's background shows through the window.",
+                true,
+            ))
+            .child(glass_row(
+                "Blur",
+                &self.glass.blur,
+                glass.blur,
+                blur_note,
+                blurrable,
+            ))
+            .child(glass_row(
+                "Opacity",
+                &self.glass.opacity,
+                glass.opacity,
+                "How solid the areas with text are. Text always stays readable (WCAG AA).",
+                true,
+            ))
             .child(interface_size_row(size))
             .child(div().pt_1().pb_1().child(ui::section_label("Fonts")))
             // Above the rows, so a picker opening below never covers it.
@@ -445,6 +453,105 @@ impl SettingsView {
             self.import_theme_paths(themes, cx);
         }
     }
+}
+
+/// The Appearance sliders, 0–100 % each (`themes::Glass`).
+pub(super) struct GlassSliders {
+    transparency: Entity<SliderState>,
+    blur: Entity<SliderState>,
+    opacity: Entity<SliderState>,
+    _changes: [Subscription; 3],
+}
+
+impl GlassSliders {
+    pub(super) fn new(cx: &mut Context<SettingsView>) -> Self {
+        let glass = cx.global::<themes::Themes>().glass;
+        let (transparency, a) = glass_slider(glass.transparency, |g, v| g.transparency = v, cx);
+        let (blur, b) = glass_slider(glass.blur, |g, v| g.blur = v, cx);
+        let (opacity, c) = glass_slider(glass.opacity, |g, v| g.opacity = v, cx);
+        Self {
+            transparency,
+            blur,
+            opacity,
+            _changes: [a, b, c],
+        }
+    }
+}
+
+/// One Appearance slider at `value` (0–1), setting its part of the glass
+/// with `set`. Dragging applies live; the file is written once, on release.
+fn glass_slider(
+    value: f32,
+    set: fn(&mut themes::Glass, f32),
+    cx: &mut Context<SettingsView>,
+) -> (Entity<SliderState>, Subscription) {
+    let slider = cx.new(|_| {
+        SliderState::new()
+            .min(0.)
+            .max(100.)
+            .step(1.)
+            .default_value((value * 100.).round())
+    });
+    let subscription = cx.subscribe(&slider, move |_, _, event: &SliderEvent, cx| {
+        let (value, persist) = match event {
+            SliderEvent::Change(value) => (value.start(), false),
+            SliderEvent::Release(value) => (value.start(), true),
+        };
+        let mut glass = cx.global::<themes::Themes>().glass;
+        set(&mut glass, value / 100.);
+        themes::set_glass(glass, persist, cx);
+    });
+    (slider, subscription)
+}
+
+/// A labelled 0–100 % slider with a line saying what it does.
+fn glass_row(
+    label: &'static str,
+    slider: &Entity<SliderState>,
+    value: f32,
+    note: &'static str,
+    enabled: bool,
+) -> Div {
+    let percent = (value * 100.).round();
+    v_flex()
+        .pb_2()
+        .gap_0p5()
+        .child(
+            h_flex()
+                .gap_3()
+                .child(
+                    div()
+                        .w(rems(120. / 16.))
+                        .text_sm()
+                        .text_color(ui::muted())
+                        .child(label),
+                )
+                .child(
+                    div().flex_1().child(
+                        Slider::new(slider)
+                            .horizontal()
+                            .disabled(!enabled)
+                            .accessibility_label(label),
+                    ),
+                )
+                .child(
+                    div()
+                        .w(rems(44. / 16.))
+                        .text_right()
+                        .text_size(ui::code_rems(14.))
+                        .font_family(ui::mono())
+                        .text_color(if enabled { ui::fg() } else { ui::faint() })
+                        .child(format!("{percent:.0}%")),
+                ),
+        )
+        .child(
+            div()
+                // Under the slider, past the label column and its gap.
+                .pl(rems(132. / 16.))
+                .text_xs()
+                .text_color(ui::faint())
+                .child(note),
+        )
 }
 
 /// Interface size: smaller and bigger a step at a time (also via the

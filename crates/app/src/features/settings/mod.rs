@@ -5,10 +5,9 @@
 use std::path::PathBuf;
 
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::slider::{SliderEvent, SliderState};
 use gpui_kit::*;
 
-use crate::{features::app_update, features::workspaces::TabLayout, shared::themes};
+use crate::{features::app_update, features::workspaces::TabLayout};
 
 mod agent_ui;
 mod app;
@@ -60,9 +59,8 @@ pub struct SettingsView {
     _load: Task<()>,
     /// Shared task for package, Gentle Shell and Pi commands.
     _job: Task<()>,
-    /// Window transparency, 0–100 %.
-    transparency: Entity<SliderState>,
-    _transparency: Subscription,
+    /// The Appearance sliders: transparency, blur, opacity.
+    glass: theme::GlassSliders,
     /// Pending background-helper policy command and its feedback.
     background: background::BackgroundUiState,
     /// Gentle Shell and Pi update progress and feedback.
@@ -127,22 +125,6 @@ impl SettingsView {
                 _ => {}
             },
         );
-        let percent = (cx.global::<themes::Themes>().transparency * 100.).round();
-        let transparency = cx.new(|_| {
-            SliderState::new()
-                .min(0.)
-                .max(100.)
-                .step(1.)
-                .default_value(percent)
-        });
-        // Drag re-tints live; the file is written once, on release.
-        let transparency_sub = cx.subscribe(&transparency, |_, _, event: &SliderEvent, cx| {
-            let (value, persist) = match event {
-                SliderEvent::Change(value) => (value.start(), false),
-                SliderEvent::Release(value) => (value.start(), true),
-            };
-            themes::set_transparency(value / 100., persist, cx);
-        });
         let setup = cx.new(crate::features::onboarding::OnboardingView::embedded);
         let setup_sub = cx.subscribe(&setup, |_, _, event, cx| {
             cx.emit(SettingsEvent::Setup(event.clone()));
@@ -159,8 +141,7 @@ impl SettingsView {
             package,
             _load: Task::ready(()),
             _job: Task::ready(()),
-            transparency,
-            _transparency: transparency_sub,
+            glass: theme::GlassSliders::new(cx),
             background: background::BackgroundUiState::default(),
             shell_update: upgrade::ShellUpdateUiState::default(),
             _app_update: cx.observe_global::<app_update::AppUpdate>(|_, cx| cx.notify()),
