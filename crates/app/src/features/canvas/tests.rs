@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gentle_core::canvas::{Doc, Kind};
+use gentle_core::canvas::{Controls, Doc, Fill, Kind, Pen};
 use gpui_kit::{
     Entity, Modifiers, MouseButton, Point, TestAppContext, VisualTestContext, point, px,
 };
@@ -157,6 +157,55 @@ fn the_page_is_saved_to_its_file_after_a_change(cx: &mut TestAppContext) {
     let doc = Doc::parse(&std::fs::read_to_string(&path).expect("saved")).unwrap();
     assert_eq!(doc.shapes.len(), 1);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+#[gpui::test]
+fn the_style_panel_offers_and_applies_only_what_shows(cx: &mut TestAppContext) {
+    let (view, cx, _) = open(cx);
+    let controls = |cx: &mut VisualTestContext| cx.update(|_, cx| view.read(cx).style_controls());
+    assert_eq!(controls(cx), Controls::INK, "the pen fills its loops");
+    cx.simulate_keystrokes("m");
+    assert_eq!(
+        controls(cx),
+        Controls::MARK,
+        "the highlighter has no pen type"
+    );
+
+    cx.simulate_keystrokes("r");
+    stroke(cx, &[point(px(100.), px(100.)), point(px(300.), px(200.))]);
+    cx.simulate_keystrokes("l");
+    stroke(cx, &[point(px(100.), px(400.)), point(px(300.), px(500.))]);
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    cx.run_until_parked();
+    assert_eq!(controls(cx), Controls::GEO);
+
+    view.update(cx, |v, cx| {
+        v.restyle(
+            |s| {
+                s.fill = Fill::Solid;
+                s.pen = Pen::Fountain;
+                s.size = 4;
+            },
+            cx,
+        )
+    });
+    let styles: Vec<_> = cx.update(|_, cx| {
+        view.read(cx)
+            .doc
+            .shapes
+            .iter()
+            .map(|s| (s.style.fill, s.style.pen, s.style.size))
+            .collect()
+    });
+    assert_eq!(
+        styles,
+        [(Fill::Solid, Pen::Pen, 4), (Fill::None, Pen::Pen, 4)],
+        "the rectangle fills, the line only grows"
+    );
 }
 
 #[gpui::test]

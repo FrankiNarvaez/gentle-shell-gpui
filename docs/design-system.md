@@ -367,6 +367,10 @@ The composer's bottom bar inside the box reads `📎 · model · effort · NN% �
 
 A terminal pane (`features/terminal/mod.rs`) states what happens to it in a chip at its bottom-right corner, 10 px in from the edges, over the grid: `Process exited` (`faint`) once the shell ends, and `Press ⌃C again to close` (`Ctrl+C` off macOS; `muted`, on a `panel` backing so it reads over the text) after a first Ctrl+C at an idle prompt. That hint lives exactly as long as the double press's window (`gentle_core::double_interrupt::WINDOW`, 700 ms): one `with_animation` over the window (`NamedInteger("close-hint", n)`, a new id per hint) fades it in over its first 15 % and out over its last 35 %, and the view drops it when the window ends, so it shows exactly while a second press would close the pane.
 
+### Canvas style panel
+
+A canvas tab's style panel (`features/canvas/chrome.rs`, top-right over the page, `popover_bg` with 14 px corners) offers only what changes the shapes it would touch: the current tool's and the selection's (`gentle_core::canvas::Kind::controls`). The Stroke / Fill tabs and the Fill row appear for rectangles, ellipses and the pen (closed ink loops fill); the Pen row for pen ink, never the highlighter; the 16 swatches and Size for everything but images (a note's color is its paper, a text's size its font); Opacity always. Restyling a mixed selection gives each shape only what shows on it, so a line never keeps a hidden fill.
+
 ### Conversation cards
 
 Tool cards (`render_card` in `features/session/view.rs`) and extension message cards (`features/session/view/cards.rs`) share a shape:
