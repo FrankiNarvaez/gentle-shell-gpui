@@ -315,7 +315,8 @@ impl Workspace {
             ),
             _ => (target, None),
         };
-        // A terminal whose shell exits (`exit`, Ctrl-D) closes its pane.
+        // A terminal whose shell exits (`exit`, Ctrl-D) closes its pane; a
+        // double Ctrl+C at its idle prompt closes it as ⌘W does.
         let subscriptions = item
             .view
             .clone()
@@ -326,8 +327,11 @@ impl Workspace {
                     &terminal,
                     window,
                     move |this, _, event: &crate::features::terminal::TerminalEvent, window, cx| {
-                        if *event == crate::features::terminal::TerminalEvent::Exited {
-                            this.close_pane_now(id, window, cx);
+                        use crate::features::terminal::TerminalEvent;
+                        match event {
+                            TerminalEvent::Exited => this.close_pane_now(id, window, cx),
+                            TerminalEvent::CloseRequested => this.close_pane(id, window, cx),
+                            TerminalEvent::TitleChanged => {}
                         }
                     },
                 )

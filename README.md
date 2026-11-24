@@ -145,6 +145,8 @@ The explorer starts at the focused pane's folder and lists one folder at a time,
 
 Your login shell in a real PTY (alacritty_terminal) with the Gentleman colors; ⌘⇧T opens a terminal tab.
 
+Ctrl+C still interrupts, and pressed twice within 700 ms at an idle prompt it also closes the pane, as ⌘W does: the first press shows "Press ⌃C again to close" in the pane's corner while the second would close it. Nothing running is ever closed on: a press that stops a command (`sleep 30`) never arms the close, any other key in between starts over, and holding the key doesn't count. The idle check asks the system: on macOS and Linux the shell must own the terminal's foreground and still be the shell (not `exec`'d into `tmux` or an editor; background jobs `&` don't count, as for ⌘W); on Windows it must have no child processes. A terminal on another backend (WSL, a command) can't be checked from here, so there Ctrl+C only interrupts.
+
 ---
 
 ### Files sidebar (⌘B) — Files, changes and branches beside the agent
