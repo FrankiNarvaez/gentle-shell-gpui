@@ -290,9 +290,6 @@ pub struct SavedState {
     /// Whether the vertical navigator uses its narrow icon rail.
     #[serde(default)]
     pub sidebar_compact: bool,
-    /// Whether resizing inward stops at the rail before hiding.
-    #[serde(default)]
-    pub sidebar_compact_first: bool,
 }
 
 // Read both spellings independently so a mixed-version file is not rejected
@@ -315,8 +312,6 @@ struct SavedStateOnDisk {
     files_sidebar_width: f32,
     #[serde(default)]
     sidebar_compact: bool,
-    #[serde(default)]
-    sidebar_compact_first: bool,
 }
 
 impl From<SavedStateOnDisk> for SavedState {
@@ -333,7 +328,6 @@ impl From<SavedStateOnDisk> for SavedState {
                 .unwrap_or_else(default_sidebar_width),
             files_sidebar_width: state.files_sidebar_width,
             sidebar_compact: state.sidebar_compact,
-            sidebar_compact_first: state.sidebar_compact_first,
         }
     }
 }
@@ -358,7 +352,6 @@ impl Default for SavedState {
             tabs_sidebar_width: default_sidebar_width(),
             files_sidebar_width: default_sidebar_width(),
             sidebar_compact: false,
-            sidebar_compact_first: false,
         }
     }
 }

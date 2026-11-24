@@ -126,11 +126,11 @@ impl Workspace {
                 .is_some_and(|revision| revision.get() == motion.revision)
     }
 
-    /// The width the panel is headed to: the rail while compact, else the saved
-    /// expanded width within the window's share.
+    /// The width the panel is headed to: the rail while it shows as the icon
+    /// rail, else the saved expanded width within the window's share.
     pub(super) fn sidebar_target_width(&self, side: Side, window: f32) -> f32 {
         match side {
-            Side::Tabs if self.sidebar_compact => COMPACT_SIDEBAR_WIDTH,
+            Side::Tabs if self.tabs_sidebar_rail() => COMPACT_SIDEBAR_WIDTH,
             Side::Tabs => shown_sidebar_width(self.tabs_sidebar_width, window),
             Side::Files => shown_sidebar_width(self.files_sidebar_width, window),
         }

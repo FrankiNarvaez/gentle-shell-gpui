@@ -75,7 +75,6 @@ fn sample() -> SavedState {
         tabs_sidebar_width: 300.,
         files_sidebar_width: 350.,
         sidebar_compact: true,
-        sidebar_compact_first: true,
     }
 }
 
@@ -106,12 +105,36 @@ fn restores_legacy_compact_rail_and_width() {
     }))
     .unwrap();
     assert!(state.sidebar_compact);
-    assert!(!state.sidebar_compact_first);
     assert_eq!(state.tabs_sidebar_width, 340.);
     assert_eq!(state.files_sidebar_width, 260.);
     let stored = serde_json::to_value(state).unwrap();
     assert_eq!(stored["sidebar_width"], 340.);
     assert!(stored.get("tabs_sidebar_width").is_none());
+}
+
+/// The drag preference this build no longer has: a file that still carries
+/// it loads with its workspace list and chosen mode intact, and the key is
+/// not written back.
+#[test]
+fn a_removed_drag_preference_still_loads() {
+    let dir = std::env::temp_dir().join(format!("gentle-ws-compact-first-{}", std::process::id()));
+    let path = dir.join("workspaces.json");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut json = serde_json::to_value(sample()).unwrap();
+    json["sidebar_compact_first"] = true.into();
+    std::fs::write(&path, json.to_string()).unwrap();
+
+    let state = load_from(&path).expect("loads despite the removed preference");
+    assert!(state.sidebar_compact);
+    assert_eq!(state.workspaces, sample().workspaces);
+    assert_eq!(state.tabs_sidebar_width, 300.);
+    assert!(
+        serde_json::to_value(&state)
+            .unwrap()
+            .get("sidebar_compact_first")
+            .is_none()
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -144,9 +167,7 @@ fn json_round_trip() {
     assert!(minimal.workspaces[0].sidebar_expanded);
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
     assert!(!minimal.sidebar_compact);
-    assert!(!minimal.sidebar_compact_first);
     assert!(back.sidebar_compact);
-    assert!(back.sidebar_compact_first);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
     // Both sidebar widths round-trip and legacy files default to 260.

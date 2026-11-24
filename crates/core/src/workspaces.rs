@@ -206,16 +206,17 @@ pub const SIDEBAR_MAX_SHARE: f32 = 0.4;
 /// Dragged narrower than this, a sidebar collapses; between this and the
 /// minimum it holds at the minimum, so a resize doesn't hide it by accident.
 pub const SIDEBAR_COLLAPSE_BELOW: f32 = 140.;
-/// Compact first: the expanded panel gives way to the rail only once the
+/// The compact sidebar: the expanded panel gives way to the rail only once the
 /// pointer is dragged this far, 90 px below the minimum. The 50 px band
 /// between this and [`SIDEBAR_EXPAND_ABOVE`] absorbs the few pixels a hand
 /// covers while a fast drag turns around, so crossing the floor no longer
-/// flips the mode on its own. It sits below [`SIDEBAR_COLLAPSE_BELOW`], so
-/// an expanded panel held at its minimum no longer hides by accident.
+/// flips between the rail and the panel on its own. It sits below
+/// [`SIDEBAR_COLLAPSE_BELOW`], so an expanded panel held at its minimum no
+/// longer hides by accident.
 pub const SIDEBAR_COMPACT_BELOW: f32 = 110.;
-/// Compact first: the rail grows back into the panel only once the pointer is
-/// dragged this far, clearly out of it, and not the moment it passes the
-/// minimum again.
+/// The compact sidebar: the rail grows back into the panel only once the
+/// pointer is dragged this far, clearly out of it, and not the moment it
+/// passes the minimum again.
 pub const SIDEBAR_EXPAND_ABOVE: f32 = 160.;
 
 /// A saved width as the app keeps it: between the minimum and the maximum,
@@ -270,12 +271,16 @@ pub struct SidebarGesture {
 }
 
 impl SidebarGesture {
+    /// The compact sidebar's gesture: `rail` is what the sidebar shows now
+    /// (the chosen compact mode, unless this drag expanded it), so crossing a
+    /// threshold moves between the rail and the expanded panel instead of
+    /// hiding.
     pub fn update_compact(
         &mut self,
         pointer: f32,
         window: f32,
         visible: bool,
-        compact: bool,
+        rail: bool,
         left_held: bool,
     ) -> Option<SidebarDrag> {
         use SidebarDrag::{Collapse, Compact, Expand, Reopen, ReopenExpanded, Width};
@@ -299,7 +304,7 @@ impl SidebarGesture {
         if pointer < HIDE_BELOW {
             self.collapsed = true;
             Some(Collapse)
-        } else if compact {
+        } else if rail {
             // Out of the rail only on a clear outward drag.
             (pointer >= SIDEBAR_EXPAND_ABOVE).then_some(Expand)
         } else if pointer < SIDEBAR_COMPACT_BELOW {

@@ -104,7 +104,7 @@ impl Workspace {
         &mut self,
         side: Side,
         open: bool,
-        compact: bool,
+        rail: bool,
         window_width: f32,
         cx: &mut Context<Self>,
     ) {
@@ -112,10 +112,17 @@ impl Workspace {
         let (allocation, _) = self.visible_sidebar_geometry(side, window_width, now);
         match side {
             Side::Tabs if open => {
-                self.set_sidebar_compact(compact, cx);
+                // Expanding the compact choice is the drag's doing, not a new
+                // mode: only reopening on the rail keeps it collapsed.
+                self.set_tabs_sidebar_peek(self.sidebar_compact && !rail, cx);
                 self.set_tab_layout(TabLayout::Vertical, cx);
             }
-            Side::Tabs => self.set_tab_layout(TabLayout::Horizontal, cx),
+            Side::Tabs => {
+                // Hiding falls back to the title bar; reopening shows the
+                // chosen mode rather than an expansion from before.
+                self.set_tabs_sidebar_peek(false, cx);
+                self.set_tab_layout(TabLayout::Horizontal, cx);
+            }
             Side::Files => self.toggle_sidebar(cx),
         }
         self.sidebar_motion_mut(side)
@@ -162,12 +169,12 @@ impl Workspace {
         let window_width = f32::from(window.viewport_size().width) / scale;
         let side = drag.side;
         let held = event.event.pressed_button == Some(MouseButton::Left);
-        let compact_gesture =
-            matches!(side, Side::Tabs) && (self.sidebar_compact_first || self.sidebar_compact);
+        let compact_gesture = matches!(side, Side::Tabs) && self.sidebar_compact;
+        let rail = self.tabs_sidebar_rail();
         let action = {
             let mut gesture = drag.gesture.borrow_mut();
             if compact_gesture {
-                gesture.update_compact(pointer, window_width, open, self.sidebar_compact, held)
+                gesture.update_compact(pointer, window_width, open, rail, held)
             } else {
                 gesture.update(pointer, window_width, open, held)
             }
@@ -221,13 +228,12 @@ impl Workspace {
         // Held width updates change the destination of an active slide, not
         // its interpolated start. Without a slide they still resize directly.
         match (side, action) {
-            (Side::Tabs, Some(Compact | Expand)) => {
-                self.set_sidebar_compact(action == Some(Compact), cx);
-            }
+            (Side::Tabs, Some(Compact)) => self.set_tabs_sidebar_peek(false, cx),
+            (Side::Tabs, Some(Expand)) => self.set_tabs_sidebar_peek(true, cx),
             (_, Some(Collapse | Reopen | ReopenExpanded)) => self.retarget_sidebar_drag(
                 side,
                 action != Some(Collapse),
-                compact_gesture && action == Some(Reopen),
+                action == Some(Reopen) && self.sidebar_compact,
                 window_width,
                 cx,
             ),
@@ -467,17 +473,19 @@ impl Render for Workspace {
                                             .ghost()
                                             .xsmall()
                                             .icon(Icon::new(
-                                                if vertical_tabs && !self.sidebar_compact {
+                                                if vertical_tabs && !self.tabs_sidebar_rail() {
                                                     IconName::PanelLeftClose
                                                 } else {
                                                     IconName::PanelLeftOpen
                                                 },
                                             ))
-                                            .tooltip(if vertical_tabs && !self.sidebar_compact {
-                                                "Collapse workspace sidebar"
-                                            } else {
-                                                "Expand workspace sidebar"
-                                            })
+                                            .tooltip(
+                                                if vertical_tabs && !self.tabs_sidebar_rail() {
+                                                    "Collapse workspace sidebar"
+                                                } else {
+                                                    "Expand workspace sidebar"
+                                                },
+                                            )
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.toggle_sidebar_compact(cx)
                                             })),

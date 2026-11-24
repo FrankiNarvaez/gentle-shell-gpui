@@ -341,7 +341,7 @@ mod tests {
                     tabs_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                     files_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                     sidebar_compact: false,
-                    sidebar_compact_first: false,
+                    tabs_sidebar_peek: false,
                     badge_picker: None,
                     open_menu: None,
                     workspace_rename: None,

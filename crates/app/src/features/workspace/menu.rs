@@ -345,10 +345,7 @@ impl Workspace {
             position,
             {
                 let compact = self.sidebar_compact;
-                let compact_first = self.sidebar_compact_first;
-                move |menu, _, _cx| {
-                    Self::empty_area_menu(menu, weak, layout, compact, compact_first)
-                }
+                move |menu, _, _cx| Self::empty_area_menu(menu, weak, layout, compact)
             },
             window,
             cx,

@@ -424,7 +424,9 @@ pub struct Workspace {
     files_sidebar_motion: sidebar_motion::SidebarMotion,
     tab_layout: TabLayout,
     sidebar_compact: bool,
-    sidebar_compact_first: bool,
+    /// The compact rail expanded for the current drag gesture. Not saved: the
+    /// chosen mode stays [`Self::sidebar_compact`].
+    tabs_sidebar_peek: bool,
     /// Width of the vertical tabs sidebar (px at 100 % interface size).
     tabs_sidebar_width: f32,
     /// Width of the right Files sidebar (px at 100 % interface size).
@@ -575,7 +577,7 @@ impl Workspace {
             files_sidebar_motion: Default::default(),
             tab_layout: saved.tab_layout,
             sidebar_compact: saved.sidebar_compact,
-            sidebar_compact_first: saved.sidebar_compact_first,
+            tabs_sidebar_peek: false,
             tabs_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
                 saved.tabs_sidebar_width,
             ),
