@@ -20,7 +20,7 @@ mod rows;
 mod sources;
 mod view;
 
-use commands::{command_row, screen_rows};
+use commands::{apply_binding_hints, command_row, screen_rows};
 pub use sources::switch_branch;
 use sources::{list_branches, walk_files};
 
@@ -55,6 +55,14 @@ pub enum PaletteAction {
     ClosePane,
     ReopenClosed,
     ToggleSidebar,
+    FocusComposer,
+    FocusFiles,
+    FocusChanges,
+    NextTab,
+    PrevTab,
+    FocusNextPane,
+    FocusPrevPane,
+    ActivateTab(usize),
     SetTabLayout(TabLayout),
     /// Send `/name` as a prompt in the active agent pane.
     Command(String),
@@ -198,6 +206,7 @@ impl PaletteView {
             }
         });
         let mut commands = screen_rows(input.tab_layout);
+        apply_binding_hints(&mut commands, window);
         commands.extend(input.commands.into_iter().filter_map(command_row));
 
         let root = input.root.clone();

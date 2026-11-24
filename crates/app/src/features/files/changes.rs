@@ -113,6 +113,7 @@ pub struct ChangesView {
     visible: bool,
     /// [`Self::open_diff`] came before the first read: run it once it lands.
     open_pending: bool,
+    focus: FocusHandle,
     _poll: Task<()>,
     _commit: Task<()>,
     _generate: Task<()>,
@@ -120,6 +121,12 @@ pub struct ChangesView {
 }
 
 impl EventEmitter<ChangesEvent> for ChangesView {}
+
+impl Focusable for ChangesView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
 
 impl ChangesView {
     pub fn new(root: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -131,6 +138,7 @@ impl ChangesView {
         });
         let stash_message =
             cx.new(|cx| InputState::new(window, cx).placeholder("Message (optional)"));
+        let focus = cx.focus_handle();
         // The primary button reads "Generate message" until a summary exists.
         let subscriptions = vec![cx.subscribe(&summary, |_, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
@@ -154,6 +162,7 @@ impl ChangesView {
             error: None,
             visible: true,
             open_pending: false,
+            focus,
             _poll: Task::ready(()),
             _commit: Task::ready(()),
             _generate: Task::ready(()),
@@ -1172,6 +1181,8 @@ impl Render for ChangesView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The sidebar slot paints the glass; no fill here.
         v_flex()
+            .track_focus(&self.focus)
+            .key_context("GentleChanges")
             .size_full()
             .min_h_0()
             .child(self.render_header(cx))

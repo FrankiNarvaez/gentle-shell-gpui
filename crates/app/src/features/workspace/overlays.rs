@@ -114,6 +114,21 @@ impl Workspace {
             PaletteAction::ClosePane => self.on_close_pane(&ClosePane, window, cx),
             PaletteAction::ReopenClosed => self.reopen_closed(window, cx),
             PaletteAction::ToggleSidebar => self.toggle_sidebar(cx),
+            PaletteAction::FocusComposer => self.on_focus_composer(&FocusComposer, window, cx),
+            PaletteAction::FocusFiles => self.on_focus_files(&FocusFiles, window, cx),
+            PaletteAction::FocusChanges => self.on_focus_changes(&FocusChanges, window, cx),
+            PaletteAction::NextTab => self.on_next_tab(&NextTab, window, cx),
+            PaletteAction::PrevTab => self.on_prev_tab(&PrevTab, window, cx),
+            PaletteAction::FocusNextPane => self.on_focus_next_pane(&FocusNextPane, window, cx),
+            PaletteAction::FocusPrevPane => self.on_focus_prev_pane(&FocusPrevPane, window, cx),
+            PaletteAction::ActivateTab(n) => {
+                let index = if n == 9 {
+                    self.space().tabs.len().saturating_sub(1)
+                } else {
+                    n.saturating_sub(1)
+                };
+                self.activate(index, window, cx);
+            }
             PaletteAction::SetTabLayout(layout) => self.set_tab_layout(layout, cx),
             PaletteAction::Agents => {
                 if let Some(tab) = tab {

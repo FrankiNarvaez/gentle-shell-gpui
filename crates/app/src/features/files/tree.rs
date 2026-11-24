@@ -345,6 +345,20 @@ impl FileTreeView {
         cx.notify();
     }
 
+    /// Show the Files tab and focus it.
+    pub fn focus_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tab(Tab::Files, window, cx);
+        self.focus.focus(window, cx);
+    }
+
+    /// Show the Changes tab and focus its list.
+    pub fn focus_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_tab(Tab::Changes, window, cx);
+        self.changes.update(cx, |changes, cx| {
+            changes.focus_handle(cx).focus(window, cx);
+        });
+    }
+
     fn refresh_git(&mut self, cx: &mut Context<Self>) {
         let job = self.git_job();
         cx.spawn(async move |this, cx| {

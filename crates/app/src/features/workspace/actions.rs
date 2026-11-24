@@ -211,6 +211,130 @@ impl Workspace {
         self.sidebar_visible
     }
 
+    pub fn show_sidebar(&mut self, cx: &mut Context<Self>) {
+        if !self.sidebar_visible {
+            self.sidebar_visible = true;
+            cx.emit(WorkspaceEvent::FilesVisibilityChanged(
+                self.files_sidebar_visible(),
+            ));
+            self.schedule_save(cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_activate_tab1(
+        &mut self,
+        _: &ActivateTab1,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(0, window, cx);
+    }
+
+    pub(super) fn on_activate_tab2(
+        &mut self,
+        _: &ActivateTab2,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(1, window, cx);
+    }
+
+    pub(super) fn on_activate_tab3(
+        &mut self,
+        _: &ActivateTab3,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(2, window, cx);
+    }
+
+    pub(super) fn on_activate_tab4(
+        &mut self,
+        _: &ActivateTab4,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(3, window, cx);
+    }
+
+    pub(super) fn on_activate_tab5(
+        &mut self,
+        _: &ActivateTab5,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(4, window, cx);
+    }
+
+    pub(super) fn on_activate_tab6(
+        &mut self,
+        _: &ActivateTab6,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(5, window, cx);
+    }
+
+    pub(super) fn on_activate_tab7(
+        &mut self,
+        _: &ActivateTab7,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(6, window, cx);
+    }
+
+    pub(super) fn on_activate_tab8(
+        &mut self,
+        _: &ActivateTab8,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activate(7, window, cx);
+    }
+
+    pub(super) fn on_activate_tab9(
+        &mut self,
+        _: &ActivateTab9,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let last = self.space().tabs.len().saturating_sub(1);
+        self.activate(last.min(8), window, cx);
+    }
+
+    pub(super) fn on_focus_composer(
+        &mut self,
+        _: &FocusComposer,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // The agent pane's focus handle is its composer; for other pane kinds
+        // this still focuses the active pane.
+        self.focus_active(window, cx);
+    }
+
+    pub(super) fn on_focus_files(
+        &mut self,
+        _: &FocusFiles,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_sidebar(cx);
+        cx.emit(WorkspaceEvent::FocusSidebar(SidebarFocus::Files));
+    }
+
+    pub(super) fn on_focus_changes(
+        &mut self,
+        _: &FocusChanges,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_sidebar(cx);
+        cx.emit(WorkspaceEvent::FocusSidebar(SidebarFocus::Changes));
+    }
+
     pub(super) fn on_open_providers(
         &mut self,
         _: &OpenProviders,

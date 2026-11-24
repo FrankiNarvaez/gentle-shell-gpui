@@ -93,11 +93,30 @@ actions!(
         OpenWorkspaces,
         OpenSettings,
         CloseOverlay,
-        Quit
+        Quit,
+        ActivateTab1,
+        ActivateTab2,
+        ActivateTab3,
+        ActivateTab4,
+        ActivateTab5,
+        ActivateTab6,
+        ActivateTab7,
+        ActivateTab8,
+        ActivateTab9,
+        FocusComposer,
+        FocusFiles,
+        FocusChanges
     ]
 );
 
 pub const SIDEBAR_WIDTH: f32 = 260.;
+
+/// Which tab of the right Files sidebar should receive focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SidebarFocus {
+    Files,
+    Changes,
+}
 
 /// What the window tells whoever embeds things in it (the sidebar's owner).
 pub enum WorkspaceEvent {
@@ -105,6 +124,8 @@ pub enum WorkspaceEvent {
     RootChanged(PathBuf),
     /// Whether the right-side Files panel is shown.
     FilesVisibilityChanged(bool),
+    /// Ask the sidebar owner to show the panel and focus one of its tabs.
+    FocusSidebar(SidebarFocus),
 }
 
 /// A window-level screen drawn over the active tab.

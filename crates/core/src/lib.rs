@@ -21,6 +21,7 @@ pub mod hydration;
 pub mod ides;
 pub mod input_style;
 pub mod interface_size;
+pub mod keyboard;
 pub mod markdown;
 pub mod music;
 pub mod notifications;

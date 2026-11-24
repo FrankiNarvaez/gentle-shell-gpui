@@ -10,9 +10,10 @@ use gpui_kit::component::{Theme, ThemeMode, TitleBar};
 use gpui_kit::*;
 
 use crate::features::workspace::{
-    ClosePane, CloseTab, FocusNextPane, FocusPrevPane, NewCanvasTab, NewTab, NewTerminalTab,
-    NextTab, PrevTab, Quit, ReopenClosed, SplitDown, SplitRight, TilePane, ToggleSidebar,
-    Workspace,
+    ActivateTab1, ActivateTab2, ActivateTab3, ActivateTab4, ActivateTab5, ActivateTab6,
+    ActivateTab7, ActivateTab8, ActivateTab9, ClosePane, CloseTab, FocusChanges, FocusComposer,
+    FocusFiles, FocusNextPane, FocusPrevPane, NewCanvasTab, NewTab, NewTerminalTab, NextTab,
+    PrevTab, Quit, ReopenClosed, SplitDown, SplitRight, TilePane, ToggleSidebar, Workspace,
 };
 use crate::{
     features::app_update, features::files, features::session, features::workspace,
@@ -178,6 +179,44 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("]"), FocusNextPane, None),
         KeyBinding::new(key!("["), FocusPrevPane, None),
         KeyBinding::new(key!("b"), ToggleSidebar, None),
+        // Go to tab N (9 = last tab).
+        KeyBinding::new(key!("1"), ActivateTab1, None),
+        KeyBinding::new(key!("2"), ActivateTab2, None),
+        KeyBinding::new(key!("3"), ActivateTab3, None),
+        KeyBinding::new(key!("4"), ActivateTab4, None),
+        KeyBinding::new(key!("5"), ActivateTab5, None),
+        KeyBinding::new(key!("6"), ActivateTab6, None),
+        KeyBinding::new(key!("7"), ActivateTab7, None),
+        KeyBinding::new(key!("8"), ActivateTab8, None),
+        KeyBinding::new(key!("9"), ActivateTab9, None),
+        // Focus chords. Off macOS never bind plain ctrl-letter globally.
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-l"
+            } else {
+                "ctrl-shift-l"
+            },
+            FocusComposer,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-b"
+            } else {
+                "ctrl-shift-b"
+            },
+            FocusFiles,
+            None,
+        ),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-g"
+            } else {
+                "ctrl-shift-g"
+            },
+            FocusChanges,
+            None,
+        ),
         KeyBinding::new(key!("q"), Quit, None),
         KeyBinding::new("escape", workspace::CloseOverlay, Some("GentleWorkspace")),
         KeyBinding::new("escape", session::Abort, Some(session::CONTEXT)),
@@ -219,6 +258,10 @@ fn set_menus(cx: &mut App) {
             MenuItem::action("Reopen Closed Pane", ReopenClosed),
             MenuItem::separator(),
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Focus Composer", FocusComposer),
+            MenuItem::action("Focus Files", FocusFiles),
+            MenuItem::action("Focus Git Changes", FocusChanges),
+            MenuItem::separator(),
             MenuItem::action("Configuration…", workspace::OpenSettings),
             MenuItem::separator(),
             MenuItem::action("Zoom In", ZoomIn),
