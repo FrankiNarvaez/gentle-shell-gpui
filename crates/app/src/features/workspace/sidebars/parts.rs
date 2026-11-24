@@ -477,51 +477,29 @@ impl Workspace {
                     ),
             )
             .child(
-                Button::new(("workspace-new-session", index))
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::new(IconName::Plus))
-                    .tooltip("New agent or terminal in this workspace")
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .dropdown_menu({
-                        let weak = cx.entity().downgrade();
-                        move |menu, _, _| {
-                            let mut menu = menu;
-                            for (kind, label) in [
-                                (PaneKind::Agent, "New agent"),
-                                (PaneKind::Terminal, "New terminal"),
-                            ] {
-                                let weak = weak.clone();
-                                menu = menu.item(
-                                    PopupMenuItem::new(label)
-                                        .icon(Icon::new(kind.icon()))
-                                        .on_click(move |_, window, cx| {
-                                            let _ = weak.update(cx, |this, cx| {
-                                                let Some(space) = this.spaces.get(index) else {
-                                                    return;
-                                                };
-                                                let name = space.name.clone();
-                                                cx.spawn_in(window, async move |this, cx| {
-                                                    let _ = this.update_in(cx, |this, window, cx| {
-                                                        if let Some(index) = this
-                                                            .spaces
-                                                            .iter()
-                                                            .position(|space| space.name == name)
-                                                        {
-                                                            this.open_workspace_tab(
-                                                                index, kind, window, cx,
-                                                            );
-                                                        }
-                                                    });
-                                                })
-                                                .detach();
-                                            });
-                                        }),
-                                );
-                            }
-                            menu
-                        }
-                    }),
+                h_flex()
+                    .id(("workspace-new-session", index))
+                    .flex_none()
+                    .size(rems(22. / 16.))
+                    .justify_center()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .hover(|d| d.bg(ui::surface_hover()))
+                    .when(!self.popups_open(), |d| {
+                        d.tooltip(|window, cx| {
+                            Tooltip::new("New agent or terminal in this workspace").build(window, cx)
+                        })
+                    })
+                    // Open the workspace-owned menu directly. Do not combine
+                    // a stopped mouse-down with Button's dropdown trigger.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_workspace_add_menu(index, event.position, window, cx);
+                        }),
+                    )
+                    .child(Icon::new(IconName::Plus).xsmall().text_color(ui::muted())),
             )
             .on_drag(
                 WorkspaceDrag {
