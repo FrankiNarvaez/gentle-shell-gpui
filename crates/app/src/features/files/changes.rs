@@ -131,7 +131,7 @@ impl ChangesView {
         });
         let stash_message =
             cx.new(|cx| InputState::new(window, cx).placeholder("Message (optional)"));
-        // The primary button reads "Generate message" until a summary exists.
+        // The primary button reads "Generate" until a summary exists.
         let subscriptions = vec![cx.subscribe(&summary, |_, _, event: &InputEvent, cx| {
             if let InputEvent::Change = event {
                 cx.notify();
@@ -1038,7 +1038,13 @@ impl ChangesView {
             .tree()
             .is_some_and(|t| t.entries.iter().any(|e| e.staged().is_some()));
         let writes = self.summary_text(cx).is_empty() && !self.amend;
-        let primary_label = if writes { "Generate message" } else { "Commit" };
+        // "Generate" alone keeps the footer inside the sidebar; the tooltip
+        // and the menu spell out "Generate message".
+        let (primary_label, primary_tip) = if writes {
+            ("Generate", "Generate message")
+        } else {
+            ("Commit", "Commit")
+        };
         let working = self.busy.is_some() || self.generating;
         let weak = cx.entity().downgrade();
         v_flex()
@@ -1064,8 +1070,13 @@ impl ChangesView {
                     .text_color(ui::muted())
                     .child(Textarea::new(&self.description).appearance(false)),
             )
+            // The sidebar is narrower than the row's full labels: "Write it"
+            // is the sparkles icon (its tooltip says what it does), the
+            // primary reads "Generate", and the labelled controls may shrink,
+            // ending in an ellipsis, so nothing spills past the panel's edge.
             .child(
                 h_flex()
+                    .min_w_0()
                     .pt_1()
                     .gap_1()
                     .child(
@@ -1073,7 +1084,6 @@ impl ChangesView {
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::Sparkles))
-                            .label("Write it")
                             .loading(self.generating)
                             .disabled(!ready || working || !staged)
                             .tooltip("Write the message from the staged diff with Gentle Shell")
@@ -1084,6 +1094,8 @@ impl ChangesView {
                             .ghost()
                             .xsmall()
                             .label("Amend")
+                            .min_w_0()
+                            .flex_shrink(1.)
                             .selected(self.amend)
                             .disabled(!ready || working)
                             .tooltip("Rewrite the last commit instead of making a new one")
@@ -1091,25 +1103,25 @@ impl ChangesView {
                                 cx.listener(|this, _, window, cx| this.toggle_amend(window, cx)),
                             ),
                     )
-                    .child(div().flex_1())
-                    .when_some(self.busy, |d, busy| {
-                        d.child(
-                            h_flex()
-                                .gap_1p5()
-                                .text_size(rems(11.5 / 16.))
-                                .text_color(ui::muted())
-                                .child(Spinner::new().xsmall().color(ui::accent()))
-                                .child(busy),
-                        )
-                    })
-                    .when(self.generating, |d| {
-                        d.child(
-                            div()
-                                .text_size(rems(11.5 / 16.))
-                                .text_color(ui::muted())
-                                .child("Writing…"),
-                        )
-                    })
+                    // The status fills only the space the buttons leave, so it
+                    // is what truncates first.
+                    .child(
+                        h_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .justify_end()
+                            .gap_1p5()
+                            .text_size(rems(11.5 / 16.))
+                            .text_color(ui::muted())
+                            .when_some(self.busy, |d, busy| {
+                                d.child(Spinner::new().xsmall().color(ui::accent()))
+                                    .child(div().min_w_0().truncate().child(busy))
+                            })
+                            .when(self.generating, |d| {
+                                d.child(div().min_w_0().truncate().child("Writing…"))
+                            }),
+                    )
                     // Secondary actions on the left, the primary last on the
                     // right (the design system's footer), its key in the
                     // tooltip rather than a cap on the button.
@@ -1117,11 +1129,15 @@ impl ChangesView {
                         DropdownButton::new("changes-commit")
                             .primary()
                             .small()
+                            .min_w_0()
+                            .flex_shrink(1.)
                             .disabled(!ready || working)
                             .button(
                                 Button::new("changes-commit-main")
                                     .label(primary_label)
-                                    .tooltip(format!("{primary_label} ({})", ui::shortcut("↵")))
+                                    .min_w_0()
+                                    .flex_shrink(1.)
+                                    .tooltip(format!("{primary_tip} ({})", ui::shortcut("↵")))
                                     .on_click(
                                         cx.listener(|this, _, window, cx| this.primary(window, cx)),
                                     ),

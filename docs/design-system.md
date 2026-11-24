@@ -409,6 +409,7 @@ A `gentle_ui` html page (`features/genui/html.rs`) uses the diagram card's shell
 | Destructive: `danger()` in confirmations (Discard, Delete), `danger().outline()` to stop agents. | `features/profiles/view/confirm.rs`, `features/session/agents.rs`. |
 | Inline confirm: `outline()`; cancel: `ghost()` with "Cancel". | Rename profile, custom model. |
 | Pill (`rounded(px(999.))`) only for the composer's send/stop and the welcome primary button. | `features/session/view/composer.rs` |
+| In a narrow panel the footer fits at 100 %: short labels, icon-only secondaries with a tooltip. Labelled buttons still get `.min_w_0().flex_shrink(1.)` so their labels end in an ellipsis instead of spilling past the edge, and a status line is the `flex_1().min_w_0()` spacer itself, so it truncates first. | Commit box in Changes (`features/files/changes.rs`). |
 
 Typical screen footer: `h_flex().px_4().py_3().gap_2().border_t_1().border_color(ui::border())`, with hints (`kbd`/`key_button` + `text_xs muted` text) or a status line on the left.
 
