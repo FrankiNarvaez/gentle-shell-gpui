@@ -826,19 +826,22 @@ impl CanvasView {
             )
             .on_click(cx.listener(move |this, _, _, cx| this.restyle(move |s| s.opacity = o, cx)))
         });
+        let ink = paint::color(style.color);
         let pens = Pen::ALL.into_iter().enumerate().map(|(i, p)| {
-            let icon = match p {
-                Pen::Pen => IconName::Signature,
-                Pen::Monoline => IconName::Spline,
-                Pen::Fountain => IconName::PenTool,
-            };
             option(
                 ("canvas-pen", i),
                 style.pen == p,
-                Icon::new(icon).size(px(14.)),
+                // The pen's own stroke, as it draws on the page.
+                canvas(
+                    |_, _, _| {},
+                    move |bounds, _, window, _| paint::pen_preview(p, ink, bounds, window),
+                )
+                .w(px(40.))
+                .h(px(18.)),
             )
             .tooltip(move |window, cx| {
-                gpui_kit::component::tooltip::Tooltip::new(p.name()).build(window, cx)
+                gpui_kit::component::tooltip::Tooltip::new(format!("{}: {}", p.name(), p.hint()))
+                    .build(window, cx)
             })
             .on_click(cx.listener(move |this, _, _, cx| this.restyle(move |s| s.pen = p, cx)))
         });

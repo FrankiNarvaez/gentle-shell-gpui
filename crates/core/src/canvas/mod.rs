@@ -144,6 +144,15 @@ impl Pen {
             Pen::Fountain => "Fountain pen",
         }
     }
+
+    /// What the pen does, in a few words.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Pen::Pen => "width follows speed",
+            Pen::Monoline => "one even width",
+            Pen::Fountain => "hairlines when fast, full swells when slow, tapered end",
+        }
+    }
 }
 
 /// Stroke widths (page units) of the six sizes.
