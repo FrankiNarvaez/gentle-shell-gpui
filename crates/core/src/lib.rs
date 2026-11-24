@@ -25,6 +25,7 @@ pub mod interface_size;
 pub mod markdown;
 pub mod music;
 pub mod notifications;
+pub mod preview;
 pub mod profiles;
 pub mod prompt_history;
 pub mod screen;
