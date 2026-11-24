@@ -32,13 +32,13 @@ fn shim_body(exe: &Path) -> String {
     // `start` returns to the prompt instead of waiting for the window; cmd.exe
     // would expand a `%` in the path.
     let exe = exe.to_string_lossy().replace('%', "%%");
-    format!("@echo off\r\nrem {MARKER}\r\nstart \"\" \"{exe}\" --cwd %*\r\n")
+    format!("@echo off\r\nrem {MARKER}\r\nif \"%~1\"==\"workspace\" goto workspace\r\nstart \"\" \"{exe}\" --cwd %*\r\nexit /b %errorlevel%\r\n:workspace\r\n\"{exe}\" %*\r\nexit /b %errorlevel%\r\n")
 }
 
 #[cfg(not(windows))]
 fn shim_body(exe: &Path) -> String {
     let exe = exe.to_string_lossy().replace('\'', "'\\''");
-    format!("#!/bin/sh\n# {MARKER}\n'{exe}' --cwd \"$@\" >/dev/null 2>&1 &\n")
+    format!("#!/bin/sh\n# {MARKER}\nif [ \"$1\" = workspace ]; then\n  exec '{exe}' \"$@\"\nfi\n'{exe}' --cwd \"$@\" >/dev/null 2>&1 &\n")
 }
 
 fn is_ours(path: &Path) -> bool {
