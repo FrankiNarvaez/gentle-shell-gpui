@@ -128,7 +128,7 @@ impl Workspace {
         )
         .separator()
         .item(
-            PopupMenuItem::new("Compact (icons only)")
+            PopupMenuItem::new("Compact sidebar")
                 .checked(compact)
                 .on_click(move |_, _, cx| {
                     let _ = workspace.update(cx, |this, cx| this.choose_compact_tabs(cx));
