@@ -61,8 +61,9 @@ pub fn unstage(toplevel: &Path, paths: &[String]) -> Result<(), String> {
     }
 }
 
-pub fn stage_all(toplevel: &Path) -> Result<(), String> {
-    run(toplevel, &["add", "-A"]).map(drop)
+/// Stage every tracked file's edits; untracked files stay out.
+pub fn stage_tracked(toplevel: &Path) -> Result<(), String> {
+    run(toplevel, &["add", "-u"]).map(drop)
 }
 
 pub fn unstage_all(toplevel: &Path) -> Result<(), String> {

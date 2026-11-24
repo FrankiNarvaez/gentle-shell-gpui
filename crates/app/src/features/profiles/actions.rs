@@ -1,9 +1,11 @@
 //! Store actions: writing `profiles.json`, Save, Use in this session, Make
 //! default, the repository pin, Publish, Export and Import, and the name and
 //! leave flows. On the RPC path the same actions are whole-store `set_config`
-//! writes guarded by the last `writeRevision`. Make default and Use in this
-//! session are Gentle Shell's `apply_profile` when it advertises it; otherwise
-//! Make default stays on the files.
+//! writes guarded by the last `writeRevision`, and Publish is the `pins`
+//! store's `repo` layer. Make default and Use in this session are Gentle
+//! Shell's `apply_profile` when it advertises it; otherwise Make default
+//! stays on the files. Clearing the session binding is its
+//! `clear_profile_binding` where advertised, else `/gentle:profiles clear`.
 
 use gentle_core::profiles::{
     PROFILE_EXPORT_FILE, PinRead, ProfileExport, ProfilesFile, Routing, create_profile,
@@ -13,17 +15,19 @@ use gentle_core::profiles::{
 };
 use gpui_kit::*;
 use pi_rpc::desktop_rpc::{
-    ApplyProfileResult, ConfigStore, ProfileApplyMode, ProfileNote, ProfileNoteLevel,
+    ApplyProfileResult, ClearBindingStatus, ConfigStore, ProfileApplyMode, ProfileNote,
+    ProfileNoteLevel,
 };
 
 use super::apply::{make_default, plan_make_default};
-use super::env::{ApplyAnswer, ProfileApply};
+use super::env::{ApplyAnswer, ConfigOutcome, ProfileApply};
 use super::files::{
     fallbacks_write, files_job_start, follow_fallbacks, profiles_write, read_orchestrator_settings,
     write_atomic,
 };
 use super::pins::{
-    clear_pin, follow_renamed_pin, local_pin_write, read_pin_status, renamed_pin_write, write_pin,
+    clear_pin, follow_renamed_pin, local_pin_write, read_pin_status, renamed_pin_write,
+    repo_pin_write, write_pin,
 };
 use super::{Backend, Confirm, Leave, NameMode, ProfilesEvent, ProfilesView, Tone};
 
@@ -373,12 +377,7 @@ impl ProfilesView {
     /// them again, so the screen and the next write follow what it left.
     fn refresh_after_shell_apply(&mut self, cx: &mut Context<Self>) {
         self.reread(&APPLIED_STORES, cx);
-        let Some(env) = self.env.clone() else { return };
-        self.run_io(
-            cx,
-            move || read_orchestrator_settings(&env.settings_path()),
-            |this, pi_default, _| this.pi_default = pi_default,
-        );
+        self.read_agents(false, cx);
     }
 
     pub(super) fn toggle_repo_pin(&mut self, cx: &mut Context<Self>) {
@@ -445,6 +444,29 @@ impl ProfilesView {
         let Some(name) = self.selected.clone() else {
             return;
         };
+        if self.is_rpc() {
+            self.save_then(cx, move |this, _, cx| {
+                let (write, declared) = match repo_pin_write(this.pin.as_ref(), &name) {
+                    Ok(write) => write,
+                    Err(error) => return this.say(error, Tone::Bad),
+                };
+                this.rpc_write(write, cx, move |this, result, _| {
+                    let message = if !result.changed {
+                        format!("The repository declaration ({DECLARATION}) already said that; nothing changed.")
+                    } else if declared {
+                        format!(
+                            "Removed the repository declaration ({DECLARATION}). This worktree falls back to the global routing; a clone pin still outranks it."
+                        )
+                    } else {
+                        format!(
+                            "Declared \"{name}\" for this worktree in {DECLARATION}. Subagent launches resolve it; commit the file to share the routing. A clone pin takes precedence over it."
+                        )
+                    };
+                    this.say(message, Tone::Good);
+                });
+            });
+            return;
+        }
         self.save_then(cx, move |this, _, cx| {
             this.say(
                 format!("Sent /gentle:profiles publish {name}. Refresh to see the declaration."),
@@ -457,12 +479,63 @@ impl ProfilesView {
     }
 
     pub(super) fn clear_session(&mut self, cx: &mut Context<Self>) {
+        if let Some(session) = self.session.clone()
+            && self.is_rpc()
+            && session.read(cx).binding_clear_supported()
+        {
+            match session.update(cx, |session, cx| session.clear_profile_binding(cx)) {
+                Ok(ticket) => {
+                    self.clearing = Some(ticket);
+                    self.say("Clearing this session's profile binding…", Tone::Info);
+                }
+                Err(failure) => self.say(failure.message(), Tone::Bad),
+            }
+            cx.notify();
+            return;
+        }
         if let Some(session) = self.session.clone() {
             session.update(cx, |session, cx| session.set_session_profile(None, cx));
         }
         self.say("Sent /gentle:profiles clear.", Tone::Info);
         cx.emit(ProfilesEvent::RunCommand("/gentle:profiles clear".into()));
         cx.notify();
+    }
+
+    /// Gentle Shell answered `clear_profile_binding`. The session's binding
+    /// itself follows from the tab ([`SessionView::session_profile`]).
+    ///
+    /// [`SessionView::session_profile`]: crate::features::session::SessionView::session_profile
+    pub(super) fn binding_cleared(&mut self, outcome: ConfigOutcome) {
+        let (message, tone) = match outcome {
+            ConfigOutcome::Cleared(result) => match result.status {
+                ClearBindingStatus::Cleared => (
+                    match result.binding.profile {
+                        Some(profile) => format!(
+                            "Cleared the session binding. This session is back on \"{profile}\"."
+                        ),
+                        None => "Cleared the session binding. This session is back on the routing without a session profile.".to_string(),
+                    },
+                    Tone::Good,
+                ),
+                ClearBindingStatus::Unchanged => (
+                    "This session had no profile binding to clear.".to_string(),
+                    Tone::Info,
+                ),
+                ClearBindingStatus::NotCleared => (
+                    "Gentle Shell could not confirm the clear; run /gentle:profiles in the terminal to see why.".to_string(),
+                    Tone::Bad,
+                ),
+            },
+            ConfigOutcome::Failed(failure) => (
+                format!("The session binding was not cleared: {}", failure.message()),
+                Tone::Bad,
+            ),
+            _ => (
+                "The answer to the clear did not match it.".to_string(),
+                Tone::Bad,
+            ),
+        };
+        self.say(message, tone);
     }
 
     /// Leaving the shown profile with unsaved edits asks first.

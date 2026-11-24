@@ -93,7 +93,10 @@ impl Workspace {
             PaletteAction::Sessions => self.open_sessions(window, cx),
             PaletteAction::Profiles => self.open_profiles(window, cx),
             PaletteAction::Usage => self.open_usage(window, cx),
-            PaletteAction::Memory => self.open_memory(window, cx),
+            PaletteAction::Memory => {
+                let cwd = self.active_cwd(cx);
+                self.open_memory(cwd, Default::default(), window, cx)
+            }
             PaletteAction::Docs => self.open_docs(window, cx),
             PaletteAction::History => {
                 let cwd = self.active_cwd(cx);
@@ -103,6 +106,8 @@ impl Workspace {
             PaletteAction::Settings => self.open_settings(window, cx),
             PaletteAction::Setup => self.open_onboarding(None, window, cx),
             PaletteAction::Welcome => self.open_welcome(None, window, cx),
+            PaletteAction::InstallGsd => self.install_gsd(window, cx),
+            PaletteAction::OpenExplorer => self.open_explorer(window, cx),
             PaletteAction::NewTab => self.on_new_tab(&NewTab, window, cx),
             PaletteAction::NewTerminalTab => self.on_new_terminal_tab(&NewTerminalTab, window, cx),
             PaletteAction::NewCanvasTab => self.on_new_canvas_tab(&NewCanvasTab, window, cx),
@@ -152,6 +157,70 @@ impl Workspace {
             PaletteAction::OpenFile(path) => self.open_file(path, window, cx),
             PaletteAction::SwitchBranch(branch) => self.confirm_switch_branch(branch, window, cx),
         }
+    }
+
+    /// The folder explorer (⌘O / Ctrl+O), from the focused pane's folder.
+    pub(super) fn open_explorer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((Overlay::Explorer(_), _)) = &self.overlay {
+            self.close_overlay(window, cx);
+            return;
+        }
+        let dir = self.active_cwd(cx);
+        let view = cx.new(|cx| ExplorerView::new(dir, window, cx));
+        let subscription = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, event: &ExplorerEvent, window, cx| {
+                this.close_overlay(window, cx);
+                match event {
+                    ExplorerEvent::OpenAgent(folder) => {
+                        this.show_folder(folder.clone(), window, cx)
+                    }
+                    ExplorerEvent::OpenTerminal(folder) => {
+                        this.show_folder(folder.clone(), window, cx);
+                        this.open_tab(PaneKind::Terminal, folder.clone(), None, None, window, cx);
+                    }
+                    ExplorerEvent::OpenFile(path) => this.open_file(path.clone(), window, cx),
+                    ExplorerEvent::Close => {}
+                }
+            },
+        );
+        self.overlay = Some((Overlay::Explorer(view), subscription));
+        cx.notify();
+    }
+
+    /// Show the workspace rooted at `folder`, creating it (a new workspace
+    /// opens with an agent tab). `gsd <folder>` and the explorer both land here.
+    pub(super) fn show_folder(
+        &mut self,
+        folder: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let folder = workspaces::root_key(folder);
+        let index = match workspaces::find_root(self.spaces.iter().map(|s| &s.root), &folder) {
+            Some(index) => index,
+            None => self.push_space(None, folder),
+        };
+        self.switch_workspace(index, window, cx);
+    }
+
+    /// Palette → Install `gsd` command; the result arrives as a notification.
+    fn install_gsd(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        cx.spawn_in(window, async move |_, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::platform::gsd::install() })
+                .await;
+            let _ = cx.update(|window, cx| {
+                let note = match result {
+                    Ok(message) => Notification::success(message),
+                    Err(message) => Notification::error(message),
+                };
+                window.push_notification(note, cx);
+            });
+        })
+        .detach();
     }
 
     /// Play an effort level's surge over the window; another change
@@ -483,9 +552,16 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn open_memory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let cwd = self.active_cwd(cx);
-        let view = cx.new(|cx| MemoryView::new(cwd, window, cx));
+    /// The Memory screen for `cwd`'s project, or on `target`'s project and
+    /// memory (a session's Engram status).
+    pub(super) fn open_memory(
+        &mut self,
+        cwd: PathBuf,
+        target: gentle_core::engram::MemoryTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.new(|cx| MemoryView::new(cwd, target, window, cx));
         let subscription = cx.subscribe_in(
             &view,
             window,
@@ -530,7 +606,7 @@ impl Workspace {
                 }
                 ProvidersEvent::Changed => {
                     for tab in this.sessions() {
-                        tab.update(cx, |session, cx| session.reload_models(window, cx));
+                        tab.update(cx, |session, cx| session.reload_credentials(window, cx));
                     }
                 }
                 ProvidersEvent::Terminal(cwd, command) => {

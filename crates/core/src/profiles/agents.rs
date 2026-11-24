@@ -53,18 +53,67 @@ pub fn parse_agent_name(content: &str) -> Option<String> {
     })
 }
 
+/// `CORE_MODEL_AGENT_NAMES`: listed first, the rest alphabetically.
+pub const CORE_AGENTS: [&str; 3] = ["jd-judge-a", "jd-judge-b", "jd-fix-agent"];
+
+/// `orderDiscoverableAgents` over names: each name once, the core agents
+/// first in their order, the rest sorted case-insensitively (then exactly).
+pub fn order_agent_names(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut unique: Vec<String> = Vec::new();
+    for name in names {
+        if !unique.contains(&name) {
+            unique.push(name);
+        }
+    }
+    let mut ordered: Vec<String> = CORE_AGENTS
+        .iter()
+        .filter(|core| unique.iter().any(|name| name == *core))
+        .map(|core| core.to_string())
+        .collect();
+    let mut rest: Vec<String> = unique
+        .into_iter()
+        .filter(|name| !CORE_AGENTS.contains(&name.as_str()))
+        .collect();
+    rest.sort_by(|a, b| {
+        a.to_lowercase()
+            .cmp(&b.to_lowercase())
+            .then_with(|| a.cmp(b))
+    });
+    ordered.extend(rest);
+    ordered
+}
+
 /// `modelAssignmentNames`: provider review roles, then discovered agents.
 pub fn assignment_names(agents: &[AgentEntry]) -> Vec<String> {
+    assignment_names_of(agents.iter().map(|agent| agent.name.as_str()))
+}
+
+/// `modelAssignmentNames` over agent names already in discovery order.
+pub fn assignment_names_of<'a>(agents: impl IntoIterator<Item = &'a str>) -> Vec<String> {
     let mut names: Vec<String> = PROVIDER_REVIEW_ROLES
         .iter()
         .map(|s| s.to_string())
         .collect();
     for agent in agents {
-        if !names.contains(&agent.name) {
-            names.push(agent.name.clone());
+        if !names.iter().any(|name| name == agent) {
+            names.push(agent.to_string());
         }
     }
     names
+}
+
+/// The assignment names when Gentle Shell reports its agent definitions
+/// (`list_agent_definitions`): those names, plus the agents found in the
+/// roots that read does not cover (the built-in package agents, `~/.agents`,
+/// `<cwd>/.agents`), each once, in discovery order.
+pub fn reported_assignment_names(reported: &[String], uncovered: &[AgentEntry]) -> Vec<String> {
+    let ordered = order_agent_names(
+        reported
+            .iter()
+            .cloned()
+            .chain(uncovered.iter().map(|agent| agent.name.clone())),
+    );
+    assignment_names_of(ordered.iter().map(String::as_str))
 }
 
 /// `readFrontmatterRouting`.
@@ -192,5 +241,44 @@ mod tests {
             Some(("openai".into(), "gpt/x".into()))
         );
         assert_eq!(parse_model_ref("/x"), None);
+    }
+
+    #[test]
+    fn reported_names_join_the_uncovered_roots_in_discovery_order() {
+        let builtin = |name: &str| AgentEntry {
+            name: name.into(),
+            source: AgentSource::Builtin,
+            path: PathBuf::from(format!("/pkg/agents/{name}.md")),
+        };
+        // `list_agent_definitions` answers sorted by name; the core judges
+        // live in the package's built-in agents it does not read.
+        let reported = vec![
+            "Worker".to_string(),
+            "explore".into(),
+            "jd-fix-agent".into(),
+        ];
+        let uncovered = [
+            builtin("jd-judge-a"),
+            builtin("explore"),
+            builtin("jd-judge-b"),
+        ];
+        let names = reported_assignment_names(&reported, &uncovered);
+        let roles = PROVIDER_REVIEW_ROLES.len();
+        assert_eq!(
+            &names[roles..],
+            [
+                "jd-judge-a",
+                "jd-judge-b",
+                "jd-fix-agent",
+                "explore",
+                "Worker"
+            ]
+        );
+        assert_eq!(names[..roles], assignment_names(&[])[..]);
+        // Over files only it is the same rule `assignment_names` applies.
+        assert_eq!(
+            reported_assignment_names(&[], &uncovered),
+            assignment_names_of(["jd-judge-a", "jd-judge-b", "explore"])
+        );
     }
 }

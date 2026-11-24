@@ -69,9 +69,12 @@ the `background` and `solid` keys.
   3:1 or more. Pi's full format (`vars`, `colors` with `muted`, `dim`,
   `border`, `success`, `error`, `warning`, `toolTitle`, `userMessageBg`,
   `selectedBg`, …, and `export.pageBg`) also works when you want finer control.
+  The app keeps every theme at WCAG AA: a text color that reads below 4.5:1
+  (3:1 for `dim` and status colors) on its glass is brightened or darkened
+  just enough, so pick readable colors to keep exactly yours.
 - `solid`: `true` keeps every pane opaque at any transparency, in the
-  theme's own colors (like *Studio* or *Clay*), so the Transparency slider has no
-  visible effect on it.
+  theme's own colors (like *Studio* or *Clay*), so the Transparency and
+  Opacity sliders have no visible effect on it.
 - `background` (all optional):
   - `scene`: a built-in scene's name (see below) or a `.js` file beside the
     theme (plain file name, no folders). The examples name built-in scenes;

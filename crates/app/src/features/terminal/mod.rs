@@ -11,6 +11,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
@@ -22,9 +23,12 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vte::ansi::CursorShape;
+use gentle_core::double_interrupt::{self, DoubleInterrupt, Outcome};
+use gpui_kit::component::ActiveTheme as _;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::platform::shell_idle::ShellIdle;
 use crate::shared::ui;
 
 /// Font size and padding in px at 100 %; they follow the interface size.
@@ -45,6 +49,8 @@ pub enum TerminalEvent {
     TitleChanged,
     /// The shell process exited; the workspace closes the pane.
     Exited,
+    /// Ctrl+C twice at an idle prompt: close the pane like ⌘W would.
+    CloseRequested,
 }
 
 /// Forwards PTY/terminal events from the I/O thread to the view.
@@ -126,6 +132,14 @@ pub struct TerminalView {
     scroll_accum: f32,
     /// Dead-key / IME composition in progress.
     marked: Option<String>,
+    /// Tells whether the shell is idle at its prompt; `None` when it can't
+    /// be told (a backend's shell, a PTY that didn't start), and then a
+    /// double Ctrl+C never closes the pane.
+    shell_idle: Option<ShellIdle>,
+    /// A first Ctrl+C at an idle prompt, waiting for the second.
+    double_interrupt: DoubleInterrupt,
+    /// Counts the close hints shown, so each one runs its own fade.
+    close_hints: u64,
 }
 
 impl EventEmitter<TerminalEvent> for TerminalView {}
@@ -144,8 +158,9 @@ impl Drop for TerminalView {
     }
 }
 
+/// The local login shell: its program and arguments.
 #[cfg(unix)]
-fn login_shell() -> tty::Shell {
+fn login_shell() -> (String, Vec<String>) {
     let program = std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty() && Path::new(s).exists())
@@ -155,37 +170,50 @@ fn login_shell() -> tty::Shell {
                 .then(|| "/bin/zsh".to_string())
         })
         .unwrap_or_else(|| "/bin/sh".to_string());
-    tty::Shell::new(program, vec!["-l".to_string()])
+    (program, vec!["-l".to_string()])
 }
 
+/// The local login shell: its program and arguments.
 #[cfg(windows)]
-fn login_shell() -> tty::Shell {
+fn login_shell() -> (String, Vec<String>) {
     let program = std::env::var("COMSPEC")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "powershell.exe".to_string());
-    tty::Shell::new(program, Vec::new())
+    (program, Vec::new())
 }
 
+/// Starts the PTY and its I/O thread. Also a way to ask whether the shell is
+/// idle, for the local login shell only: a backend's shell (`wsl.exe`,
+/// `ssh`) runs its jobs where this machine can't see them.
 fn spawn_pty(
     cwd: &Path,
     term: Arc<FairMutex<Term<Listener>>>,
     listener: Listener,
     size: WindowSize,
-) -> anyhow::Result<EventLoopSender> {
+) -> anyhow::Result<(EventLoopSender, Option<ShellIdle>)> {
     // Where the project's agents run, the backend's login shell in the
     // project folder; there the folder is the backend's, so the PTY starts
     // from the user's home here.
-    let (shell, working_directory) = match crate::features::backend::terminal(cwd) {
+    let (shell, working_directory, local) = match crate::features::backend::terminal(cwd) {
         Some(argv) => (
             tty::Shell::new(argv[0].clone(), argv[1..].to_vec()),
             dirs::home_dir().unwrap_or_else(std::env::temp_dir),
+            None,
         ),
-        None if cwd.is_dir() => (login_shell(), cwd.to_path_buf()),
-        None => (
-            login_shell(),
-            dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf()),
-        ),
+        None => {
+            let (program, args) = login_shell();
+            let working_directory = if cwd.is_dir() {
+                cwd.to_path_buf()
+            } else {
+                dirs::home_dir().unwrap_or_else(|| cwd.to_path_buf())
+            };
+            (
+                tty::Shell::new(program.clone(), args),
+                working_directory,
+                Some(program),
+            )
+        }
     };
     let env = HashMap::from([
         ("TERM".to_string(), "xterm-256color".to_string()),
@@ -208,10 +236,11 @@ fn spawn_pty(
         options.escape_args = true;
     }
     let pty = tty::new(&options, size, 0)?;
+    let shell_idle = local.and_then(|program| ShellIdle::new(&pty, &program));
     let event_loop = EventLoop::new(term, listener, pty, true, false)?;
     let sender = event_loop.channel();
     event_loop.spawn();
-    Ok(sender)
+    Ok((sender, shell_idle))
 }
 
 fn mono_font() -> Font {
@@ -238,15 +267,17 @@ impl TerminalView {
             cell,
             dims,
         };
-        let (pty, error) = match spawn_pty(&cwd, term.clone(), listener, geometry.window_size()) {
-            Ok(sender) => (Some(sender), None),
-            Err(err) => (
-                None,
-                Some(SharedString::from(format!(
-                    "Could not start the shell: {err}"
-                ))),
-            ),
-        };
+        let (pty, shell_idle, error) =
+            match spawn_pty(&cwd, term.clone(), listener, geometry.window_size()) {
+                Ok((sender, shell_idle)) => (Some(sender), shell_idle, None),
+                Err(err) => (
+                    None,
+                    None,
+                    Some(SharedString::from(format!(
+                        "Could not start the shell: {err}"
+                    ))),
+                ),
+            };
 
         cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv().await {
@@ -280,6 +311,9 @@ impl TerminalView {
             selecting: false,
             scroll_accum: 0.,
             marked: None,
+            shell_idle,
+            double_interrupt: DoubleInterrupt::default(),
+            close_hints: 0,
         }
     }
 
@@ -468,6 +502,11 @@ impl TerminalView {
             (m.control && m.shift && key == "v")
                 || (cfg!(windows) && m.control && !m.alt && key == "v")
         };
+        // Any other key drops a first Ctrl+C waiting for its second.
+        let interrupt = !copy && self.marked.is_none() && keys::is_interrupt(ks);
+        if !interrupt && self.double_interrupt.reset() {
+            cx.notify();
+        }
         if copy {
             self.copy_selection(cx);
             cx.stop_propagation();
@@ -486,9 +525,45 @@ impl TerminalView {
         }
         let app_cursor = self.term.lock().mode().contains(TermMode::APP_CURSOR);
         if let Some(bytes) = keys::key_to_bytes(ks, app_cursor) {
+            // The interrupt always reaches the shell, the closing press too.
+            let outcome = if interrupt {
+                self.press_interrupt(event.is_held, cx)
+            } else {
+                Outcome::Interrupt
+            };
             self.input(bytes, cx);
             cx.stop_propagation();
+            if outcome == Outcome::Close {
+                cx.emit(TerminalEvent::CloseRequested);
+            }
         }
+    }
+
+    /// A Ctrl+C: at an idle prompt the first one shows the close hint for
+    /// [`double_interrupt::WINDOW`] and a second within it closes the pane.
+    /// The shell is asked before the interrupt goes out, so a press that
+    /// stops a running command never arms the close.
+    fn press_interrupt(&mut self, held: bool, cx: &mut Context<Self>) -> Outcome {
+        let idle = !held && !self.exited && self.shell_idle.as_ref().is_some_and(ShellIdle::idle);
+        let now = Instant::now();
+        let outcome = self.double_interrupt.press(now, idle, held);
+        if outcome == Outcome::Hint {
+            self.close_hints += 1;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(double_interrupt::WINDOW)
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.double_interrupt.armed() == Some(now) {
+                        this.double_interrupt.reset();
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
+        cx.notify();
+        outcome
     }
 
     fn grid_point(&self, position: Point<Pixels>) -> (GridPoint, Side) {
@@ -1066,7 +1141,38 @@ impl Render for TerminalView {
                         .child(ui::chip("Process exited", ui::faint())),
                 )
             })
+            .when(self.double_interrupt.armed().is_some(), |this| {
+                this.child(close_hint(self.close_hints, cx.theme().font_family.clone()))
+            })
     }
+}
+
+/// "Press ⌃C again to close" in the pane's corner for the double Ctrl+C
+/// window: on the pane's own surface so it reads over the text, in the
+/// interface's font (not the terminal's, where ⌃ draws as ^), fading in
+/// quickly and out as the window closes.
+fn close_hint(id: u64, font: SharedString) -> impl IntoElement {
+    let chord = if cfg!(target_os = "macos") {
+        "⌃C"
+    } else {
+        "Ctrl+C"
+    };
+    div()
+        .absolute()
+        .bottom(rems(PADDING / 16.))
+        .right(rems(PADDING / 16.))
+        .rounded_md()
+        .bg(ui::panel())
+        .font_family(font)
+        .child(ui::chip(
+            format!("Press {chord} again to close"),
+            ui::muted(),
+        ))
+        .with_animation(
+            ElementId::NamedInteger("close-hint".into(), id),
+            Animation::new(double_interrupt::WINDOW),
+            |el, t| el.opacity((t / 0.15).min((1. - t) / 0.35).clamp(0., 1.)),
+        )
 }
 
 #[cfg(test)]

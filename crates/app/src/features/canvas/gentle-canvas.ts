@@ -24,7 +24,7 @@ const SHAPES =
 	"line / arrow {x1, y1, x2, y2}; text {x, y (top-left), text}; note {x, y, w?=200, h?=200, text} (sticky note, yellow by default); " +
 	"ink {points: [[x, y], …], closed?} (freehand strokes, handwriting); image {x, y, w, h, path}. " +
 	"Style on any shape: color and fill_color (ink, red, orange, yellow, green, emerald, cyan, sky, blue, violet, pink, indigo, slate, light_slate, pale_slate, paper; they follow the light or dark theme), " +
-	"fill (none, semi, solid, pattern), size 0-5 (stroke width and font size; default 1), opacity (25, 50, 75, 100), pen (pen, monoline, fountain; ink only).";
+	"fill (none, semi, solid, pattern) and fill_color (rect, ellipse and closed ink only), size 0-5 (stroke width and font size; default 1), opacity (25, 50, 75, 100), pen (pen, monoline, fountain; ink only, not highlighter).";
 
 const OPS =
 	"ops, applied in order, all or nothing: " +

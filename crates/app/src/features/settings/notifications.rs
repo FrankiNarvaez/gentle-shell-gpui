@@ -65,18 +65,9 @@ pub(super) struct NotificationUiState {
 }
 
 impl SettingsView {
-    /// Write one change to Gentle Shell's notifications.json; the section
-    /// re-reads the file on the next render.
-    fn set_notification(&mut self, change: notifications::Change, cx: &mut Context<Self>) {
-        self.notifications.note = alerts::apply(change)
-            .err()
-            .map(|e| format!("Could not write notifications.json: {e}"));
-        cx.notify();
-    }
-
     /// Gentle Shell's notification policy, shared with the terminal.
     pub(super) fn notifications_section(&self, cx: &mut Context<Self>) -> Div {
-        let policy = alerts::policy();
+        let policy = self.notification_policy();
         let enabled = policy.enabled();
         let mut card = section(IconName::Bell, "Notifications")
             .child(row("File", policy.file.display().to_string()))

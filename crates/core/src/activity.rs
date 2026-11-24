@@ -176,6 +176,54 @@ pub fn task_for_run<'a>(
         .map(|t| t.summary.id.as_str())
 }
 
+/// A helper's in-run progress as the Desktop channel projects it
+/// (`list_subagents` / `agents_update`). Gentle Shell 5.0.0 adds `turns`,
+/// `toolCalls` and `activeTool`; an older owner sends none of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectedProgress<'a> {
+    pub active: bool,
+    /// The closed step label (`running`, `answered`, `completed`…).
+    pub step: &'a str,
+    pub turns: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub active_tool: Option<&'a str>,
+}
+
+/// What the Agents panel shows of a helper's progress.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Progress {
+    pub turns: Option<u64>,
+    pub tool_calls: Option<u64>,
+    pub step: Option<String>,
+}
+
+/// One source for a helper's progress: the structured projection when it
+/// carries the counts (its `activeTool` is the step while a tool runs), and
+/// the `gentle-agents` widget's entry for the same task only for an owner
+/// that predates them. Once a helper ended, the closed terminal step is the
+/// final word either way.
+pub fn helper_progress(projected: ProjectedProgress<'_>, widget: Option<&TaskSummary>) -> Progress {
+    if projected.turns.is_some() || projected.tool_calls.is_some() {
+        let step = match projected.active_tool.filter(|_| projected.active) {
+            Some(tool) => format!("running {tool}"),
+            None => projected.step.to_string(),
+        };
+        return Progress {
+            turns: projected.turns,
+            tool_calls: projected.tool_calls,
+            step: Some(step),
+        };
+    }
+    Progress {
+        turns: widget.map(|summary| summary.turns),
+        tool_calls: widget.map(|summary| summary.tool_calls),
+        step: widget
+            .filter(|_| projected.active)
+            .and_then(|summary| summary.last_step.clone())
+            .or_else(|| Some(projected.step.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +300,73 @@ mod tests {
         let (a, b) = PAYLOAD.split_at(40);
         assert!(parse(&[a.to_string(), b.to_string()]).is_some());
         assert!(parse(&[r#"{"schema":"other/v1","tasks":[]}"#.to_string()]).is_none());
+    }
+
+    /// The 5.0.0 `agents_update` entry of a running helper, from the spec.
+    fn running(
+        turns: Option<u64>,
+        tool_calls: Option<u64>,
+        tool: Option<&str>,
+    ) -> ProjectedProgress<'_> {
+        ProjectedProgress {
+            active: true,
+            step: "running",
+            turns,
+            tool_calls,
+            active_tool: tool,
+        }
+    }
+
+    #[test]
+    fn structured_progress_leads_and_the_widget_is_only_the_fallback() {
+        let widget = parse(&[PAYLOAD.to_string()]).unwrap().tasks[0]
+            .summary
+            .clone();
+
+        // 5.0.0: the projection's counts and running tool, even with a widget.
+        assert_eq!(
+            helper_progress(running(Some(4), Some(9), Some("grep")), Some(&widget)),
+            Progress {
+                turns: Some(4),
+                tool_calls: Some(9),
+                step: Some("running grep".into()),
+            }
+        );
+        // Between tools the closed step stands.
+        assert_eq!(
+            helper_progress(running(Some(4), Some(9), None), None)
+                .step
+                .as_deref(),
+            Some("running")
+        );
+        // A finished helper's terminal reason is final, whatever tool lingers.
+        let done = ProjectedProgress {
+            active: false,
+            step: "completed",
+            ..running(Some(6), Some(12), Some("read"))
+        };
+        assert_eq!(
+            helper_progress(done, Some(&widget)).step.as_deref(),
+            Some("completed")
+        );
+
+        // An older owner: the widget's counts and live step, as before.
+        assert_eq!(
+            helper_progress(running(None, None, None), Some(&widget)),
+            Progress {
+                turns: Some(2),
+                tool_calls: Some(3),
+                step: Some("reading lib/auth.ts".into()),
+            }
+        );
+        // Neither source has counts: none are invented.
+        assert_eq!(
+            helper_progress(running(None, None, None), None),
+            Progress {
+                turns: None,
+                tool_calls: None,
+                step: Some("running".into()),
+            }
+        );
     }
 }

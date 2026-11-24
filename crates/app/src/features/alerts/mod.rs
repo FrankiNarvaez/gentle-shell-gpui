@@ -27,7 +27,7 @@ mod sound;
 mod tones;
 
 pub use gentle_core::alert_timing::ContextLatch;
-pub use policy::{apply, policy};
+pub use policy::{apply, policy, policy_file};
 
 /// Context-usage threshold (percent). Gentle Shell fixes it in
 /// `lib/context-threshold.ts`; notifications.json has no key for it.

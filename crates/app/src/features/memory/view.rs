@@ -17,10 +17,13 @@ impl Render for MemoryView {
             .selected
             .and_then(|id| self.items.iter().find(|o| o.id == id))
             .cloned();
-        let list =
-            v_flex()
-                .gap_0p5()
-                .children(self.items.iter().enumerate().map(|(i, o)| {
+        // The rows are the scroll area's own children, so `list_scroll` can
+        // bring the memory the screen opened on into view.
+        let rows: Vec<AnyElement> =
+            self.items
+                .iter()
+                .enumerate()
+                .map(|(i, o)| {
                     let id = o.id;
                     let active = self.selected == Some(id);
                     let row =
@@ -70,8 +73,9 @@ impl Render for MemoryView {
                             .unwrap_or_default()
                     ),
                             ));
-                    ui::appear(("memory-row", i), div().child(row))
-                }));
+                    ui::appear(("memory-row", i), div().child(row)).into_any_element()
+                })
+                .collect();
 
         let body: AnyElement = if let Some(error) = &self.error {
             div()
@@ -136,8 +140,12 @@ impl Render for MemoryView {
                         .h_full()
                         .flex_shrink_0()
                         .overflow_y_scroll()
+                        .track_scroll(&self.list_scroll)
+                        .flex()
+                        .flex_col()
+                        .gap_0p5()
                         .p_2()
-                        .child(list),
+                        .children(rows),
                 )
                 .child(
                     v_flex()

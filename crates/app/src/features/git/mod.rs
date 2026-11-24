@@ -17,12 +17,14 @@ mod refs;
 mod snapshot;
 
 pub use changes::{
-    commit, discard, last_commit_message, push, stage, stage_all, staged_diff, stash_push, unstage,
-    unstage_all, work_tree,
+    commit, discard, last_commit_message, push, stage, stage_tracked, staged_diff, stash_push,
+    unstage, unstage_all, work_tree,
 };
 pub use gentle_core::git::log::{Commit, Graph};
 pub use gentle_core::git::refs::{RefEntry, RefsSnapshot, Worktree};
-pub use gentle_core::git::status::{EntryKind, GitSnapshot, StatusEntry, WorkTree};
+pub use gentle_core::git::status::{
+    ChangeGroup, EntryKind, GitSnapshot, StatusEntry, WorkTree, change_groups,
+};
 pub use log::{History, Scope, history};
 pub use refs::{
     StashAction, add_worktree, checkout_remote, prune_worktrees, refs_snapshot, remove_worktree,
@@ -138,13 +140,35 @@ mod tests {
         assert_eq!(work_tree(&top).unwrap().entries[0].staged(), Some('A'));
         unstage_all(&top).unwrap();
         assert_eq!(work_tree(&top).unwrap().entries[0].unstaged(), Some('?'));
-        stage_all(&top).unwrap();
+        stage(&top, &["a file.txt".into()]).unwrap();
         assert!(commit(&top, "", "", false).is_err());
         commit(&top, "feat: first", "Body line.", false).unwrap();
         assert_eq!(
             last_commit_message(&top),
             Some(("feat: first".into(), "Body line.".into()))
         );
+
+        // The Unstaged group's "Stage all": tracked edits only, new files stay.
+        std::fs::write(dir.join("a file.txt"), "edit\n").unwrap();
+        std::fs::write(dir.join("loose.txt"), "x\n").unwrap();
+        stage_tracked(&top).unwrap();
+        let sides: Vec<_> = work_tree(&top)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| (e.path.clone(), e.staged(), e.unstaged()))
+            .collect();
+        assert_eq!(
+            sides,
+            vec![
+                ("a file.txt".to_string(), Some('M'), None),
+                ("loose.txt".to_string(), None, Some('?')),
+            ]
+        );
+        unstage_all(&top).unwrap();
+        discard(&top, &work_tree(&top).unwrap().entries[0], false).unwrap();
+        std::fs::remove_file(dir.join("loose.txt")).unwrap();
+        assert!(work_tree(&top).unwrap().entries.is_empty());
 
         // Staged and unstaged halves of one file, then a rename.
         std::fs::write(dir.join("a file.txt"), "two\n").unwrap();

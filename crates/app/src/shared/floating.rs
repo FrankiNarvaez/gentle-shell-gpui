@@ -1,13 +1,17 @@
-//! The card that floats over the window: the design canvas and the devices
-//! panel share its geometry, drag and resize affordances, and shadow.
+//! The card that floats over the window: the design canvas, web pages and
+//! the devices panel share its geometry, drag and resize affordances, and
+//! shadow. Web pages and devices can also dock as a column at the window's
+//! right ([`Mode`]).
 //!
 //! Each panel keeps its own [`CardState`] and draws its own header and body;
-//! this module owns where the card is, how a drag moves or resizes it, and
-//! the bands and full-window layer that make the drag follow the pointer.
+//! this module owns where the card is, how a drag moves or resizes it, the
+//! bands and full-window layer that make the drag follow the pointer, and
+//! the docked column's width and the divider that changes it.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::shared::ui;
@@ -26,6 +30,14 @@ pub const HEADER: f32 = 38.;
 pub const GRIP: f32 = 6.;
 /// The body's corner radius: the card's 18 px less the grip inset.
 pub const BODY_RADIUS: f32 = 12.;
+
+/// Where a panel sits: a column at the window's right, or a card floating
+/// over the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mode {
+    Docked,
+    Floating,
+}
 
 /// The card's place, anchored to the window's bottom-right so it stays put
 /// when the window resizes: margins from the right and bottom, and its size.
@@ -153,6 +165,22 @@ impl CardState {
             DragKind::Resize(edges) => cursor_for(edges),
         })
     }
+
+    /// A resize (not a move) is under way.
+    pub fn resizing(&self) -> bool {
+        matches!(
+            self.drag,
+            Some(Drag {
+                kind: DragKind::Resize(_),
+                ..
+            })
+        )
+    }
+
+    /// The card's size when not maximized.
+    pub fn size(&self) -> (f32, f32) {
+        (self.frame.w, self.frame.h)
+    }
 }
 
 /// The card element placed where [`CardState`] says. `card` must already be
@@ -238,6 +266,17 @@ pub fn grips<V: 'static>(
     .enumerate()
     .map(|(index, (edges, cursor))| {
         let band = div().id((prefix, index)).absolute().cursor(cursor);
+        // A straight edge shows the divider handle on hover; corners don't.
+        let side = u8::from(edges.left || edges.right) + u8::from(edges.top || edges.bottom) == 1;
+        let band = if side {
+            band.group("floating-grip")
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(divider_handle("floating-grip", edges.left || edges.right))
+        } else {
+            band
+        };
         let band = match (edges.left, edges.top, edges.right, edges.bottom) {
             (true, false, false, false) => {
                 band.left_0().top(px(corner)).bottom(px(corner)).w(px(GRIP))
@@ -283,27 +322,107 @@ pub fn drag_layer<V: 'static>(
     on_up: impl Fn(&mut V, &mut Context<V>) + Clone + 'static,
 ) -> Option<AnyElement> {
     let cursor = state.cursor()?;
+    Some(pointer_layer(cursor, cx, prefix, on_move, on_up))
+}
+
+/// A layer over the whole window that follows the mouse with `cursor` until
+/// the button is released (see [`drag_layer`]).
+pub fn pointer_layer<V: 'static>(
+    cursor: CursorStyle,
+    cx: &mut Context<V>,
+    prefix: &'static str,
+    on_move: impl Fn(&mut V, Point<Pixels>, &mut Context<V>) + Clone + 'static,
+    on_up: impl Fn(&mut V, &mut Context<V>) + Clone + 'static,
+) -> AnyElement {
     let end = on_up.clone();
-    Some(
-        div()
-            .id((prefix, 64usize))
-            .absolute()
-            .inset_0()
-            .occlude()
-            .cursor(cursor)
-            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+    div()
+        .id((prefix, 64usize))
+        .absolute()
+        .inset_0()
+        .occlude()
+        .cursor(cursor)
+        .on_mouse_move(
+            cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
                 on_move(this, event.position, cx)
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| end(this, cx)),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(move |this, _, _, cx| on_up(this, cx)),
-            )
-            .into_any_element(),
-    )
+            }),
+        )
+        .on_mouse_up(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| end(this, cx)),
+        )
+        .on_mouse_up_out(
+            MouseButton::Left,
+            cx.listener(move |this, _, _, cx| on_up(this, cx)),
+        )
+        .into_any_element()
+}
+
+/// The 2 × 40 px handle a divider shows in `petal()` while its `group` is
+/// hovered (see the split dividers in `workspace/view.rs`); `vertical` for a
+/// divider between side-by-side areas.
+pub fn divider_handle(group: &'static str, vertical: bool) -> Div {
+    div()
+        .flex_none()
+        .rounded_full()
+        .bg(ui::border_strong())
+        .opacity(0.0)
+        .group_hover(group, |s| s.opacity(1.0).bg(ui::petal()))
+        .when(vertical, |d| d.w(px(2.)).h(px(40.)))
+        .when(!vertical, |d| d.h(px(2.)).w(px(40.)))
+}
+
+/// The gap between the window body's columns (`gap_1p5`, 6 px at 100 %),
+/// where a docked column's divider sits.
+const COLUMN_GAP: Rems = Rems(0.375);
+/// The most of its room a docked column may take, and the width the
+/// conversation keeps beside it, when the room allows.
+const DOCK_MAX_SHARE: f32 = 0.7;
+const CONVERSATION_MIN: f32 = 280.;
+
+/// A docked column's width from the one asked for (saved or dragged to),
+/// when it shares `room` px with the conversation (`0` when not measured
+/// yet): at least a card's minimum width; at most [`DOCK_MAX_SHARE`] of the
+/// room, leaving the conversation [`CONVERSATION_MIN`], unless that is below
+/// the minimum.
+pub fn dock_width(asked: f32, room: f32) -> f32 {
+    let asked = if asked.is_finite() { asked } else { MIN_W };
+    if room <= 0. {
+        return asked.max(MIN_W);
+    }
+    let max = (room * DOCK_MAX_SHARE)
+        .min(room - CONVERSATION_MIN)
+        .max(MIN_W);
+    asked.clamp(MIN_W, max)
+}
+
+/// The divider along a docked column's left side, in the gap before it (the
+/// column must be `relative`): drag it to change the width. It shows its
+/// handle on hover, like the split dividers.
+pub fn dock_divider<V: 'static>(
+    id: &'static str,
+    cx: &mut Context<V>,
+    on_start: impl Fn(&mut V, Point<Pixels>, &mut Context<V>) + 'static,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .group("dock-divider")
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(-COLUMN_GAP)
+        .w(COLUMN_GAP)
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor(CursorStyle::ResizeLeftRight)
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                on_start(this, event.position, cx);
+            }),
+        )
+        .child(divider_handle("dock-divider", true))
 }
 
 pub fn cursor_for(edges: Edges) -> CursorStyle {
@@ -471,8 +590,25 @@ pub fn docked(sizes: &[(f32, f32)], (aw, ah): (f32, f32), title_bar: f32) -> Vec
 #[cfg(test)]
 mod tests {
     use super::{
-        DOCK_MARGIN, DragKind, Edges, Frame, MIN_H, MIN_W, TITLE_BAR, docked, dragged, fitted,
+        DOCK_MARGIN, DragKind, Edges, Frame, MIN_H, MIN_W, TITLE_BAR, dock_width, docked, dragged,
+        fitted,
     };
+
+    #[test]
+    fn a_docked_column_keeps_a_card_wide_and_the_conversation_room() {
+        assert_eq!(dock_width(480., 1400.), 480.);
+        // Never narrower than a card, never more than 70 % of the room.
+        assert_eq!(dock_width(100., 1400.), MIN_W);
+        assert_eq!(dock_width(5000., 1000.), 700.);
+        // The conversation keeps its width when 70 % would squeeze it.
+        assert_eq!(dock_width(5000., 800.), 520.);
+        // A room too narrow for both still gets a usable card.
+        assert_eq!(dock_width(480., 400.), MIN_W);
+        assert_eq!(dock_width(f32::NAN, 1400.), MIN_W);
+        // Not measured yet: what was asked, if a card fits in it.
+        assert_eq!(dock_width(480., 0.), 480.);
+        assert_eq!(dock_width(10., 0.), MIN_W);
+    }
 
     const AREA: (f32, f32) = (1400., 900.);
     const FRAME: Frame = Frame {

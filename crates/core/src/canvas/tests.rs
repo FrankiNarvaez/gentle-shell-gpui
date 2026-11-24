@@ -256,3 +256,109 @@ fn only_strokes_that_come_back_close_into_loops() {
     let arc = &circle[..20];
     assert!(!geom::closes_loop(arc, 12.));
 }
+
+#[test]
+fn only_shapes_with_an_inside_take_a_fill_and_only_pen_ink_a_pen() {
+    let ink = |highlighter, closed| Kind::Ink {
+        points: vec![[0., 0.], [10., 10.]],
+        highlighter,
+        closed,
+    };
+    let rect = Rect {
+        x: 0.,
+        y: 0.,
+        w: 10.,
+        h: 10.,
+    };
+    let fills = |k: Kind| (k.controls().fill, k.controls().pen);
+    assert_eq!(fills(ink(false, true)), (true, true));
+    assert_eq!(fills(ink(false, false)), (false, true));
+    // The highlighter draws the same whatever the pen type.
+    assert_eq!(fills(ink(true, true)), (false, false));
+    let label = String::new;
+    assert_eq!(
+        fills(Kind::Rect {
+            rect,
+            label: label()
+        }),
+        (true, false)
+    );
+    assert_eq!(
+        fills(Kind::Ellipse {
+            rect,
+            label: label()
+        }),
+        (true, false)
+    );
+    assert_eq!(
+        fills(Kind::Line {
+            a: [0., 0.],
+            b: [1., 1.]
+        }),
+        (false, false)
+    );
+    assert_eq!(
+        fills(Kind::Arrow {
+            a: [0., 0.],
+            b: [1., 1.]
+        }),
+        (false, false)
+    );
+    let note = Kind::Note {
+        rect,
+        text: label(),
+    };
+    assert_eq!(note.controls(), Controls::MARK);
+    let image = Kind::Image {
+        rect,
+        path: label(),
+    };
+    assert_eq!(
+        image.controls(),
+        Controls {
+            opacity: true,
+            ..Controls::default()
+        }
+    );
+}
+
+#[test]
+fn a_style_adopts_only_what_its_shape_shows() {
+    let from = Style {
+        color: Color::Red,
+        fill_color: Some(Color::Blue),
+        fill: Fill::Pattern,
+        opacity: 50,
+        size: 4,
+        pen: Pen::Fountain,
+    };
+    let mut line = Style::default();
+    line.adopt(&from, Controls::MARK);
+    assert_eq!(
+        line,
+        Style {
+            color: Color::Red,
+            opacity: 50,
+            size: 4,
+            ..Style::default()
+        }
+    );
+    let mut image = Style::default();
+    image.adopt(&from, Controls::IMAGE);
+    assert_eq!(
+        image,
+        Style {
+            opacity: 50,
+            ..Style::default()
+        }
+    );
+    let mut rect = Style::default();
+    rect.adopt(&from, Controls::GEO);
+    assert_eq!(
+        rect,
+        Style {
+            pen: Pen::Pen,
+            ..from
+        }
+    );
+}
