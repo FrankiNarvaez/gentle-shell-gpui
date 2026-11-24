@@ -206,6 +206,17 @@ pub const SIDEBAR_MAX_SHARE: f32 = 0.4;
 /// Dragged narrower than this, a sidebar collapses; between this and the
 /// minimum it holds at the minimum, so a resize doesn't hide it by accident.
 pub const SIDEBAR_COLLAPSE_BELOW: f32 = 140.;
+/// Compact first: the expanded panel gives way to the rail only once the
+/// pointer is dragged this far, 90 px below the minimum. The 50 px band
+/// between this and [`SIDEBAR_EXPAND_ABOVE`] absorbs the few pixels a hand
+/// covers while a fast drag turns around, so crossing the floor no longer
+/// flips the mode on its own. It sits below [`SIDEBAR_COLLAPSE_BELOW`], so
+/// an expanded panel held at its minimum no longer hides by accident.
+pub const SIDEBAR_COMPACT_BELOW: f32 = 110.;
+/// Compact first: the rail grows back into the panel only once the pointer is
+/// dragged this far, clearly out of it, and not the moment it passes the
+/// minimum again.
+pub const SIDEBAR_EXPAND_ABOVE: f32 = 160.;
 
 /// A saved width as the app keeps it: between the minimum and the maximum,
 /// the default when it isn't a number.
@@ -289,8 +300,10 @@ impl SidebarGesture {
             self.collapsed = true;
             Some(Collapse)
         } else if compact {
-            (pointer >= SIDEBAR_MIN_WIDTH).then_some(Expand)
-        } else if pointer < SIDEBAR_COLLAPSE_BELOW {
+            // Out of the rail only on a clear outward drag.
+            (pointer >= SIDEBAR_EXPAND_ABOVE).then_some(Expand)
+        } else if pointer < SIDEBAR_COMPACT_BELOW {
+            // Into the rail only on a clear inward drag.
             Some(Compact)
         } else {
             Some(Width(shown_sidebar_width(pointer, window)))
@@ -351,6 +364,29 @@ impl SidebarSlide {
     }
 }
 
+/// The same reversible ease-out-quint transition between two widths (px at
+/// 100 % interface size), so a rail and an expanded panel trade places
+/// instead of jumping.
+#[derive(Clone, Copy)]
+pub struct SidebarWidthSlide {
+    from: f32,
+    to: f32,
+}
+
+impl SidebarWidthSlide {
+    pub fn new(from: f32, to: f32) -> Self {
+        Self { from, to }
+    }
+
+    pub fn width(self, elapsed: f32) -> f32 {
+        let t = (elapsed / SidebarSlide::SECONDS).clamp(0., 1.);
+        if t == 1. {
+            return self.to;
+        }
+        self.to + (self.from - self.to) * (1. - t).powi(5)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,7 +396,7 @@ mod tests {
         use SidebarDrag::{Collapse, Compact, Expand, Reopen};
         let mut drag = SidebarGesture::default();
         assert_eq!(
-            drag.update_compact(139., 1000., true, false, true),
+            drag.update_compact(SIDEBAR_COMPACT_BELOW - 30., 1000., true, false, true),
             Some(Compact)
         );
         assert_eq!(drag.update_compact(141., 1000., true, true, true), None);
@@ -399,7 +435,7 @@ mod tests {
         );
         let mut released = SidebarGesture::default();
         assert_eq!(
-            released.update_compact(139., 1000., true, false, true),
+            released.update_compact(SIDEBAR_COMPACT_BELOW - 30., 1000., true, false, true),
             Some(Compact)
         );
         assert_eq!(
@@ -407,6 +443,128 @@ mod tests {
             None
         );
         assert_eq!(released.update_compact(200., 1000., true, true, true), None);
+    }
+
+    #[test]
+    fn compact_thresholds_absorb_pointer_jitter() {
+        use SidebarDrag::{Compact, Expand, Width};
+        // Entering the rail needs a clear push past the minimum: a pointer
+        // only a little below the hold floor keeps the expanded panel.
+        for pointer in [199., SIDEBAR_EXPAND_ABOVE, SIDEBAR_COMPACT_BELOW + 1.] {
+            let mut drag = SidebarGesture::default();
+            assert_eq!(
+                drag.update_compact(pointer, 1200., true, false, true),
+                Some(Width(SIDEBAR_MIN_WIDTH)),
+                "pointer {pointer}"
+            );
+        }
+        // Jitter around the entry threshold keeps the rail.
+        let mut drag = SidebarGesture::default();
+        assert_eq!(
+            drag.update_compact(SIDEBAR_COMPACT_BELOW - 1., 1200., true, false, true),
+            Some(Compact)
+        );
+        for pointer in [
+            SIDEBAR_COMPACT_BELOW,
+            SIDEBAR_COMPACT_BELOW + 1.,
+            SIDEBAR_COMPACT_BELOW - 5.,
+            SIDEBAR_COMPACT_BELOW + 5.,
+        ] {
+            assert_eq!(
+                drag.update_compact(pointer, 1200., true, true, true),
+                None,
+                "pointer {pointer}"
+            );
+        }
+        // Jitter around the exit threshold keeps the expanded panel.
+        assert_eq!(
+            drag.update_compact(SIDEBAR_EXPAND_ABOVE + 10., 1200., true, true, true),
+            Some(Expand)
+        );
+        for pointer in [
+            SIDEBAR_EXPAND_ABOVE - 1.,
+            SIDEBAR_EXPAND_ABOVE + 1.,
+            SIDEBAR_EXPAND_ABOVE - 10.,
+            SIDEBAR_EXPAND_ABOVE + 5.,
+        ] {
+            assert_eq!(
+                drag.update_compact(pointer, 1200., true, false, true),
+                Some(Width(SIDEBAR_MIN_WIDTH)),
+                "pointer {pointer}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_fast_pointer_jumps_land_in_the_mode_under_the_pointer() {
+        use SidebarDrag::{Collapse, Compact, Expand, Reopen, Width};
+        // A fling from the panel deep into the collapse zone still enters the
+        // rail, and a fling the other way restores the panel.
+        let mut drag = SidebarGesture::default();
+        assert_eq!(
+            drag.update_compact(400., 1200., true, false, true),
+            Some(Width(400.))
+        );
+        assert_eq!(
+            drag.update_compact(SIDEBAR_COMPACT_BELOW - 30., 1200., true, false, true),
+            Some(Compact)
+        );
+        assert_eq!(
+            drag.update_compact(400., 1200., true, true, true),
+            Some(Expand)
+        );
+        // A single event that skips the whole band picks the mode the pointer
+        // is in, whichever side it came from.
+        let mut fast = SidebarGesture::default();
+        assert_eq!(
+            fast.update_compact(200., 1200., true, false, true),
+            Some(Width(SIDEBAR_MIN_WIDTH))
+        );
+        assert_eq!(
+            fast.update_compact(1000., 1200., true, false, true),
+            Some(Width(SIDEBAR_MAX_WIDTH))
+        );
+        // Hiding still happens below 24 px, and the same held drag still
+        // reopens it (the rail once past the minimum).
+        assert_eq!(
+            fast.update_compact(20., 1200., true, false, true),
+            Some(Collapse)
+        );
+        assert_eq!(fast.update_compact(23., 1200., false, true, true), None);
+        assert_eq!(
+            fast.update_compact(48., 1200., false, true, true),
+            Some(Reopen)
+        );
+        // Leaving the rail happens on a single fast event too.
+        let mut out = SidebarGesture::default();
+        assert_eq!(
+            out.update_compact(SIDEBAR_COMPACT_BELOW - 30., 1200., true, false, true),
+            Some(Compact)
+        );
+        assert_eq!(
+            out.update_compact(SIDEBAR_EXPAND_ABOVE + 10., 1200., true, true, true),
+            Some(Expand)
+        );
+    }
+
+    #[test]
+    fn sidebar_width_slide_lands_on_both_ends_and_reverses_in_flight() {
+        let into_rail = SidebarWidthSlide::new(345., 48.);
+        assert_eq!(into_rail.width(0.), 345.);
+        let midway = into_rail.width(0.05);
+        assert!(midway < 345. && midway > 48., "{midway}");
+        // Ease-out: most of the distance goes early, so the frame after a
+        // change already looks like it is moving.
+        assert!(into_rail.width(0.11) < midway, "{} ", into_rail.width(0.11));
+        assert_eq!(into_rail.width(SidebarSlide::SECONDS), 48.);
+        assert_eq!(into_rail.width(10.), 48.);
+        // A reversal starts from what is on screen, never from an end.
+        let back = SidebarWidthSlide::new(midway, 345.);
+        assert_eq!(back.width(0.), midway);
+        assert!(back.width(0.05) > midway);
+        assert_eq!(back.width(SidebarSlide::SECONDS), 345.);
+        // Nothing to animate is a still width.
+        assert_eq!(SidebarWidthSlide::new(345., 345.).width(0.1), 345.);
     }
 
     #[test]

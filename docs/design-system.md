@@ -256,7 +256,7 @@ Presentation utilities in the same module: `split_path` (prefix `~/a/b/` and lea
 | Function | Duration | Curve | Effect | Typical use |
 | --- | --- | --- | --- | --- |
 | `appear(id, el)` | 220 ms | `ease_out_quint` | Opacity 0→1 and relative `top` from 6 px to 0 | First appearance: rows, Settings content, usage cards. |
-| Workspace sidebar slide | 220 ms | Ease-out quint | Clips a full-width sidebar while animating its allocated width and adjacent gap; reverses from the current fraction. | Tab and Files sidebar visibility, immediate with reduced motion. Resizing an open sidebar follows the pointer directly. |
+| Workspace sidebar slide | 220 ms | Ease-out quint | Clips a full-width sidebar while animating its allocated width and adjacent gap; reverses from the current fraction. The same curve and duration carry the vertical sidebar between the 48 px rail and its expanded width during a drag. | Tab and Files sidebar visibility and the vertical sidebar's rail ⇄ expanded change, immediate with reduced motion. Resizing an open sidebar follows the pointer directly. |
 | `appear_after(id, delay, rise, el)` | `delay` + 420 ms | ease-out-quint computed by hand (the wait stays linear) | Opacity and relative `top` from `rise` px | Staggered entrances (welcome, onboarding steps). |
 | `pop_in(id, el)` | 340 ms | `spring` | Opacity and relative `top` from 12 px | Screens, dialogs, palette. |
 | `popover_in(id, el)` | 300 ms | `spring` | Opacity only, without changing the measured size | Content inside an `island` or a popover. |

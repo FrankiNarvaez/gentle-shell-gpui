@@ -211,6 +211,13 @@ impl Workspace {
             self.sidebar_motion_mut(side).active_drag = Default::default();
             cx.notify();
         }
+        // The width the drag shows now, before this event decides where the
+        // panel is headed: a rail or an expanded panel moves there instead of
+        // jumping, while a plain resize keeps following the pointer.
+        let width_before = matches!(side, Side::Tabs).then(|| {
+            self.sidebar_geometry(Side::Tabs, window_width, std::time::Instant::now())
+                .0
+        });
         // Held width updates change the destination of an active slide, not
         // its interpolated start. Without a slide they still resize directly.
         match (side, action) {
@@ -225,6 +232,11 @@ impl Workspace {
                 cx,
             ),
             _ => {}
+        }
+        if let Some(before) =
+            width_before.filter(|_| matches!(action, Some(Compact | Expand | Width(_))))
+        {
+            self.animate_sidebar_width(Side::Tabs, window_width, before, cx.reduce_motion());
         }
         // Gestural changes can retarget the motion without invalidating this drag.
         drag_revision.set(match side {
@@ -676,7 +688,8 @@ mod tests {
 
     #[test]
     fn compact_drag_keeps_the_width_from_before_the_gesture() {
-        for pointers in [&[190., 130.][..], &[130.][..]] {
+        let rail_pointer = gentle_core::workspaces::SIDEBAR_COMPACT_BELOW - 10.;
+        for pointers in [&[190., rail_pointer][..], &[rail_pointer][..]] {
             let mut gesture = SidebarGesture::default();
             let start = 345.;
             let mut saved = start;

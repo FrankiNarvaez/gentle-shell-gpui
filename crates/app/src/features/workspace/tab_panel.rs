@@ -1092,6 +1092,9 @@ mod tests {
             assert_eq!(width(ws), 345.);
             ws.toggle_sidebar_compact(cx);
             assert_eq!(width(ws), 48.);
+            // The Compact / Expand button still changes the width at once: the
+            // transition belongs to the drag gesture only.
+            assert!(!ws.tabs_sidebar_motion.width_moving());
             ws.resize_tab_sidebar(420., cx);
             ws.toggle_sidebar_compact(cx);
             assert_eq!(width(ws), 345.);
@@ -1221,6 +1224,183 @@ mod tests {
                 );
             });
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn compact_first_rail_entry_and_exit_are_continuous(cx: &mut TestAppContext) {
+        use gentle_core::workspaces::{
+            SIDEBAR_COMPACT_BELOW, SIDEBAR_EXPAND_ABOVE, SIDEBAR_MIN_WIDTH,
+        };
+        use gpui::{
+            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+            VisualTestContext, point, px,
+        };
+        let (handle, _ws) = rendered_sidebar_window(cx, false);
+        let mut visual = VisualTestContext::from_window(handle, cx);
+        let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
+        let pos = |x: f32| point(px((6. + x) * scale), px(100. * scale));
+        // The row's allocation and the surface painted inside it stay one width.
+        let frame = |visual: &mut VisualTestContext| {
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            let row = visual.debug_bounds("tabs-slide-row").unwrap();
+            let surface = visual.debug_bounds("tabs-slide-surface").unwrap();
+            let width = f32::from(row.size.width) / scale;
+            let painted = f32::from(surface.size.width.min(row.size.width)) / scale;
+            assert!(
+                (painted - width).abs() < 1.,
+                "{width} allocated, {painted} painted"
+            );
+            width
+        };
+        let move_to = |visual: &mut VisualTestContext, x: f32| {
+            visual.update(|window, cx| {
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position: pos(x),
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::none(),
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            });
+        };
+        const RAIL: f32 = 48.;
+        let before_drag = frame(&mut visual);
+        assert!(
+            before_drag >= SIDEBAR_MIN_WIDTH,
+            "expanded width {before_drag}"
+        );
+        visual.update(|window, cx| {
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: pos(before_drag + 2.),
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        // Pick the edge up; the row keeps its width.
+        move_to(&mut visual, before_drag - 1.);
+        let expanded = frame(&mut visual);
+        assert!(
+            (expanded - before_drag).abs() < 3. && expanded >= SIDEBAR_MIN_WIDTH,
+            "picking up the edge jumped {before_drag} → {expanded}"
+        );
+        let distance = expanded - RAIL;
+        // Into the rail, only once the pointer is well past the minimum.
+        move_to(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
+        let entering = frame(&mut visual);
+        assert!(
+            (entering - expanded).abs() < distance / 2.,
+            "entering the rail jumped {expanded} → {entering}"
+        );
+        // It keeps closing frame after frame: never in one step, never past 48.
+        let mut last = entering;
+        for step in 0..3 {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            let width = frame(&mut visual);
+            assert!(
+                width <= last + 0.5 && width >= RAIL - 0.5,
+                "closing frame {step}: {last} → {width}"
+            );
+            last = width;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(240));
+        let rail = frame(&mut visual);
+        assert!((rail - RAIL).abs() < 0.5, "rail width {rail}");
+        // Out of the rail, only once the pointer is clearly dragged out.
+        move_to(&mut visual, SIDEBAR_EXPAND_ABOVE + 10.);
+        let leaving = frame(&mut visual);
+        assert!(
+            (leaving - rail).abs() < distance / 2.,
+            "leaving the rail jumped {rail} → {leaving}"
+        );
+        let mut last = leaving;
+        for step in 0..3 {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+            let width = frame(&mut visual);
+            assert!(
+                width >= last - 0.5 && width <= expanded + 0.5,
+                "opening frame {step}: {last} → {width}"
+            );
+            last = width;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(240));
+        let reopened = frame(&mut visual);
+        assert!(
+            (reopened - expanded).abs() < 0.5,
+            "expanded width {reopened}"
+        );
+        visual.update(|window, cx| {
+            window.dispatch_event(
+                MouseUpEvent {
+                    button: MouseButton::Left,
+                    position: pos(SIDEBAR_EXPAND_ABOVE + 10.),
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+    }
+
+    /// The same rail change with reduced motion: no transition at all.
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn compact_first_rail_change_is_immediate_with_reduced_motion(cx: &mut TestAppContext) {
+        use gentle_core::workspaces::SIDEBAR_COMPACT_BELOW;
+        use gpui::{
+            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, VisualTestContext,
+            point, px,
+        };
+        let (handle, _ws) = rendered_sidebar_window(cx, false);
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let mut visual = VisualTestContext::from_window(handle, cx);
+        let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
+        let pos = |x: f32| point(px((6. + x) * scale), px(100. * scale));
+        let width = |visual: &mut VisualTestContext| {
+            visual.update(|window, cx| window.draw(cx).clear(cx));
+            let row = visual.debug_bounds("tabs-slide-row").unwrap();
+            f32::from(row.size.width) / scale
+        };
+        let move_to = |visual: &mut VisualTestContext, x: f32| {
+            visual.update(|window, cx| {
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position: pos(x),
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::none(),
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+            });
+        };
+        let expanded = width(&mut visual);
+        visual.update(|window, cx| {
+            window.dispatch_event(
+                MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: pos(expanded + 2.),
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                    first_mouse: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+        });
+        move_to(&mut visual, expanded - 1.);
+        assert!((width(&mut visual) - expanded).abs() < 3.);
+        move_to(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
+        assert_eq!(width(&mut visual), 48.);
     }
 
     fn sorted(ids: Vec<usize>) -> Vec<usize> {
