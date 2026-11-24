@@ -477,11 +477,11 @@ impl Workspace {
                     ),
             )
             .child(
-                Button::new(("workspace-new-agent", index))
+                Button::new(("workspace-new-session", index))
                     .ghost()
                     .xsmall()
                     .icon(Icon::new(IconName::Plus))
-                    .tooltip("New session in this workspace")
+                    .tooltip("New agent or terminal in this workspace")
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .dropdown_menu({
                         let weak = cx.entity().downgrade();
@@ -490,8 +490,6 @@ impl Workspace {
                             for (kind, label) in [
                                 (PaneKind::Agent, "New agent"),
                                 (PaneKind::Terminal, "New terminal"),
-                                (PaneKind::Canvas, "New canvas"),
-                                (PaneKind::Tower, "New tower"),
                             ] {
                                 let weak = weak.clone();
                                 menu = menu.item(
