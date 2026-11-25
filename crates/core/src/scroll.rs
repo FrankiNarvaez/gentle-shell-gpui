@@ -21,8 +21,9 @@ const CARD_LINES: usize = 6;
 /// `USER_SLACK`).
 const BUBBLE_FOLD: usize = 10;
 const BUBBLE_LINES: usize = 8;
-/// A file's card in the bubble's strip: 64 px of card, at [`DEFAULT_SCALE`].
-const FILE_CARD: f32 = 3.8;
+/// A sent message's attachment strip: one row of 120 px tiles, images and
+/// files alike, at [`DEFAULT_SCALE`].
+const STRIP: f32 = 7.;
 
 /// The wrapped lines `text` takes, roughly.
 fn text_lines(text: &str) -> f32 {
@@ -52,7 +53,7 @@ fn user_text(text: &str) -> f32 {
 pub fn item_weight(item: &Item) -> f32 {
     match item {
         // The bubble's padding and the row gap, then its text (and the
-        // strip of image and file cards above it). The paths' block the
+        // strip of image and file tiles above it). The paths' block the
         // prompt carries weighs nothing: the bubble shows cards, not the
         // block. A message with no block weighs what it always did, blank
         // text included; one that is only a block has no text to weigh.
@@ -66,8 +67,11 @@ pub fn item_weight(item: &Item) -> f32 {
                 user_text(body)
             };
             3.8 + text
-                + if images.is_empty() { 0. } else { 7. }
-                + if files.is_empty() { 0. } else { FILE_CARD }
+                + if images.is_empty() && files.is_empty() {
+                    0.
+                } else {
+                    STRIP
+                }
         }
         Item::Assistant { .. } if !crate::transcript::assistant_visible(item) => 0.,
         Item::Assistant {
@@ -387,11 +391,12 @@ mod tests {
         assert!(item_weight(&user(BUBBLE_FOLD - 1)) < item_weight(&user(BUBBLE_FOLD)));
     }
 
-    /// S9: a prompt's files weigh their cards, and the `Attached files:`
-    /// block the prompt carries weighs nothing — the bubble shows cards, not
-    /// the paths — even with thirty of them.
+    /// S9, S13: a prompt's files weigh their tile row, and the `Attached
+    /// files:` block the prompt carries weighs nothing — the bubble shows
+    /// tiles, not the paths — even with thirty of them. Images and file
+    /// tiles share one row, so having both weighs one row.
     #[test]
-    fn a_prompt_with_files_weighs_its_cards_not_the_block() {
+    fn a_prompt_with_files_weighs_its_tiles_not_the_block() {
         let user = |text: &str| Item::User {
             text: text.into(),
             images: Vec::new(),
@@ -399,11 +404,26 @@ mod tests {
         let block: String = (0..30).map(|i| format!("- /work/file-{i}.pdf\n")).collect();
         let plain = user("look");
         let with_files = user(&format!("look\n\nAttached files:\n{block}"));
-        assert_eq!(item_weight(&with_files), item_weight(&plain) + FILE_CARD);
-        // A prompt of files only is its cards: no line of text under them,
+        assert_eq!(item_weight(&with_files), item_weight(&plain) + STRIP);
+        let with_image = |text: &str| match user(text) {
+            Item::User { text, .. } => Item::User {
+                text,
+                images: vec![crate::transcript::UserImage::new(
+                    "image/png",
+                    "aGk=".into(),
+                )],
+            },
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            item_weight(&with_image(&format!("look\n\nAttached files:\n{block}"))),
+            item_weight(&with_image("look")),
+            "images and file tiles share one row"
+        );
+        // A prompt of files only is its tiles: no line of text under them,
         // though a message with no text at all still weighs its blank line.
         let only = user(&format!("Attached files:\n{block}"));
-        assert_eq!(item_weight(&only), 3.8 + FILE_CARD);
+        assert_eq!(item_weight(&only), 3.8 + STRIP);
         assert_eq!(item_weight(&user("")), item_weight(&plain));
         // The block's lines never count: thirty paths weigh one card, not
         // thirty lines of text.

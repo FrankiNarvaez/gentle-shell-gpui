@@ -19,9 +19,9 @@ use gpui_kit::*;
 
 use super::activity::{ChipPopoverOptions, chip_popover};
 use super::dialogs::checkbox_box;
-use super::{NARROW, TINY, file_tile, image_tile, number_badge};
+use super::{FileStrip, NARROW, TINY, file_tile, image_tile, number_badge};
 use crate::features::session::SessionView;
-use crate::features::session::attachments::{self, AttachedFile, PastedText};
+use crate::features::session::attachments::{self, PastedText};
 use crate::shared::kisses::{HEART, LIPS, noise, paint_sprite};
 use crate::shared::ui;
 use gentle_core::input_style::InputStyle;
@@ -249,8 +249,8 @@ impl SessionView {
         )
     }
 
-    /// 64px tiles of what waits to be sent: numbered image thumbnails, file
-    /// cards, then pasted-text cards; each with ×.
+    /// The strip's tiles: numbered image thumbnails, then the files in the
+    /// same tile, each with its ×.
     fn render_attachments(&self, cx: &mut Context<Self>) -> Option<Div> {
         if self.attachments.is_empty() && self.files.is_empty() && self.pasted.is_empty() {
             return None;
@@ -265,18 +265,33 @@ impl SessionView {
                     rems(64. / 16.),
                     rems(64. / 16.),
                 )
+                .debug_selector(move || format!("composer-image-{ix}"))
                 .child(number_badge(ix + 1))
-                .child(remove_button(
-                    ("attachment-remove", ix),
-                    cx.listener(move |this, _, _, cx| this.remove_attachment(ix, cx)),
-                ))
+                .child(
+                    remove_button(
+                        ("attachment-remove", ix),
+                        cx.listener(move |this, _, _, cx| this.remove_attachment(ix, cx)),
+                    )
+                    .debug_selector(move || format!("attachment-remove-{ix}")),
+                )
             })
             .collect();
         let files = self.files.iter().enumerate().map(|(ix, file)| {
-            file_card(file).child(remove_button(
-                ("file-remove", ix),
-                cx.listener(move |this, _, _, cx| this.remove_file(ix, cx)),
-            ))
+            let tip: SharedString = format!(
+                "{} ({})",
+                file.path.display(),
+                attachments::human_size(file.bytes)
+            )
+            .into();
+            file_tile(("file-tile", ix), &file.name, tip, FileStrip::Composer)
+                .debug_selector(move || format!("composer-file-{ix}"))
+                .child(
+                    remove_button(
+                        ("file-remove", ix),
+                        cx.listener(move |this, _, _, cx| this.remove_file(ix, cx)),
+                    )
+                    .debug_selector(move || format!("file-remove-{ix}")),
+                )
         });
         let pastes = self.pasted.iter().enumerate().map(|(ix, paste)| {
             pasted_card(ix + 1, paste).child(remove_button(
@@ -1045,45 +1060,6 @@ fn pasted_card(n: usize, paste: &PastedText) -> Div {
                         .text_size(rems(11. / 16.))
                         .text_color(ui::muted())
                         .child(lines),
-                ),
-        )
-}
-
-/// A file waiting to be sent: a page with its glyph, then its name and size.
-/// The agent gets its path in the prompt, not its contents.
-fn file_card(file: &AttachedFile) -> Div {
-    h_flex()
-        .relative()
-        .flex_shrink_0()
-        .h(rems(64. / 16.))
-        .pl(rems(7. / 16.))
-        .pr(rems(30. / 16.))
-        .gap_2p5()
-        .rounded_lg()
-        .border_1()
-        .border_color(ui::border_strong())
-        .bg(ui::surface())
-        .child(file_tile())
-        .child(
-            v_flex()
-                .min_w_0()
-                .max_w(rems(180. / 16.))
-                .gap_0p5()
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(ui::fg())
-                        .child(file.name.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(rems(11. / 16.))
-                        .text_color(ui::muted())
-                        .child(attachments::human_size(file.bytes)),
                 ),
         )
 }

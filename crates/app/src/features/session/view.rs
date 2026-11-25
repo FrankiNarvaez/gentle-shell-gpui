@@ -2723,7 +2723,7 @@ fn message_body(text: &str) -> &str {
 }
 
 /// A user message: its images (numbered in the order they were sent) over
-/// the text, with the files it attached as cards beside them, a long text
+/// the text, the files it attached as the same tiles beside them, a long text
 /// folded unless `open`, with its `toggle`. `None` is an image that could not
 /// be decoded. The text is selectable and copies with the platform
 /// shortcut, like an answer's; `ix` keys its selection. Images its Markdown
@@ -2759,16 +2759,21 @@ fn user_bubble(
                         .flex_wrap()
                         .items_center()
                         .gap_2()
-                        .children(images.into_iter().enumerate().map(|(ix, image)| {
+                        .children(images.into_iter().enumerate().map(|(n, image)| {
                             image_tile(image, rems(160. / 16.), rems(120. / 16.))
-                                .child(number_badge(ix + 1))
+                                .debug_selector(move || format!("user-image-{ix}-{n}"))
+                                .child(number_badge(n + 1))
                         }))
-                        .children(
-                            files
-                                .iter()
-                                .enumerate()
-                                .map(|(n, path)| sent_file_card(ix, n, path)),
-                        ),
+                        .children(files.iter().enumerate().map(|(n, path)| {
+                            let (_, name) = ui::split_path(std::path::Path::new(&path[..]));
+                            file_tile(
+                                ("user-file", ix * 64 + n),
+                                &name,
+                                path.clone(),
+                                FileStrip::Bubble,
+                            )
+                            .debug_selector(move || format!("user-file-{ix}-{n}"))
+                        })),
                 )
             })
             .when(!markdown.trim().is_empty(), |this| {
@@ -2799,70 +2804,122 @@ fn user_bubble(
     )
 }
 
-/// The page glyph of a file's card: a rounded, sunken tile, as the
-/// composer's cards show it.
-pub(super) fn file_tile() -> Div {
-    div()
-        .flex_shrink_0()
-        .w(rems(38. / 16.))
-        .h(rems(48. / 16.))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded_md()
-        .border_1()
-        .border_color(ui::border())
-        .bg(ui::well())
-        .child(Icon::new(IconName::File).small().text_color(ui::muted()))
+/// The strip a file tile is drawn in: a sent bubble's, whose tiles are its
+/// image thumbnails' size, or the composer's squares.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FileStrip {
+    Bubble,
+    Composer,
 }
 
-/// A file a sent prompt attached: the composer's file card without the ×
-/// (it is sent already) or its size, with the folder the prompt named it
-/// under its name and the whole path in a tooltip.
-fn sent_file_card(ix: usize, n: usize, path: &SharedString) -> impl IntoElement {
-    let (folder, name) = ui::split_path(std::path::Path::new(&path[..]));
-    let tip = path.clone();
-    h_flex()
-        .id(("user-file", ix * 64 + n))
-        .debug_selector(move || format!("user-file-{ix}-{n}"))
+impl FileStrip {
+    /// The strip's tile size, which is its image tile's own.
+    fn bounds(self) -> (Rems, Rems) {
+        match self {
+            Self::Bubble => (rems(160. / 16.), rems(120. / 16.)),
+            Self::Composer => (rems(64. / 16.), rems(64. / 16.)),
+        }
+    }
+
+    /// What a tile in the strip says, sized for it: the glyph, the extension in
+    /// short caps and the name, with the tile's own padding.
+    fn text(self) -> TileText {
+        match self {
+            Self::Bubble => TileText {
+                glyph: rems(30. / 16.),
+                pad: rems(8. / 16.),
+                caps: rems(11. / 16.),
+                name: rems(11. / 16.),
+            },
+            Self::Composer => TileText {
+                glyph: rems(18. / 16.),
+                pad: rems(3. / 16.),
+                caps: rems(8. / 16.),
+                name: rems(10. / 16.),
+            },
+        }
+    }
+}
+
+/// A file tile's type scale ([`FileStrip::text`]).
+struct TileText {
+    /// The page glyph in the middle.
+    glyph: Rems,
+    /// Space around the name.
+    pad: Rems,
+    /// The extension's short caps, under the glyph.
+    caps: Rems,
+    /// The name along the bottom.
+    name: Rems,
+}
+
+/// A file in an attachment strip: a tile the size of the strip's image
+/// thumbnails, its glyph and its extension in short caps in the middle and its
+/// name on one line at the bottom (a long one is cut in the middle, so the
+/// extension stays readable), with `tip` in a tooltip. Images keep their `#N`
+/// badge; a file has none.
+pub(super) fn file_tile(
+    id: impl Into<ElementId>,
+    name: &str,
+    tip: SharedString,
+    strip: FileStrip,
+) -> Stateful<Div> {
+    let (width, height) = strip.bounds();
+    let text = strip.text();
+    v_flex()
+        .id(id)
+        .relative()
         .flex_shrink_0()
-        .h(rems(64. / 16.))
-        .pl(rems(7. / 16.))
-        .pr(rems(11. / 16.))
-        .gap_2p5()
+        .w(width)
+        .h(height)
+        .overflow_hidden()
         .rounded_lg()
         .border_1()
         .border_color(ui::border_strong())
-        .bg(ui::surface())
+        .bg(ui::well())
         .tooltip(move |window, cx| ui::tooltip(tip.clone()).build(window, cx))
-        .child(file_tile())
         .child(
             v_flex()
-                .min_w_0()
-                .max_w(rems(180. / 16.))
-                .gap_0p5()
+                .flex_1()
+                .items_center()
+                .justify_center()
+                .gap_1()
                 .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(ui::fg())
-                        .child(name),
+                    Icon::new(IconName::File)
+                        .size(text.glyph)
+                        .text_color(ui::muted()),
                 )
-                .when(!folder.is_empty(), |this| {
-                    this.child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_size(rems(11. / 16.))
-                            .text_color(ui::faint())
-                            .child(folder),
-                    )
-                }),
+                .children(extension_caps(name).map(|ext| {
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_size(text.caps)
+                        .text_color(ui::faint())
+                        .child(ext)
+                })),
         )
+        .child(
+            div()
+                .w_full()
+                .px(text.pad)
+                .pb(text.pad)
+                .text_size(text.name)
+                .text_color(ui::fg())
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis_middle()
+                .child(name.to_string()),
+        )
+}
+
+/// A file's extension in short caps (`PDF`, `TXT`) for its tile: what follows
+/// the name's last dot, when the name has a stem before it and the extension
+/// is short enough to read as one. `None` for a file with none (a dotfile, a
+/// name without a dot, a dotted version number), whose tile shows only its
+/// glyph.
+fn extension_caps(name: &str) -> Option<String> {
+    let (stem, ext) = name.rsplit_once('.')?;
+    let short = !ext.is_empty() && ext.chars().count() <= 6;
+    (short && !stem.is_empty()).then(|| ext.to_uppercase())
 }
 
 /// An image source that fails at once, without loading anything: the
@@ -3026,11 +3083,31 @@ fn working_indicator(
 #[cfg(test)]
 mod tests {
     use super::{
-        BubbleText, USER_LINES, USER_SLACK, command_language, follows_step, head_slice,
-        language_for_path, line_count, parse_diff_line, tail_slice,
+        BubbleText, USER_LINES, USER_SLACK, command_language, extension_caps, follows_step,
+        head_slice, language_for_path, line_count, parse_diff_line, tail_slice,
     };
     use gentle_core::transcript::{Block, Item, ToolStatus};
     use gpui_kit::AppContext as _;
+
+    /// S13: a tile names a file's kind in short caps, and shows only the glyph
+    /// for a file whose name has no extension to name.
+    #[test]
+    fn a_file_tile_names_its_extension_in_short_caps() {
+        assert_eq!(extension_caps("report.pdf").as_deref(), Some("PDF"));
+        assert_eq!(extension_caps("test.txt").as_deref(), Some("TXT"));
+        assert_eq!(extension_caps("notes.md").as_deref(), Some("MD"));
+        assert_eq!(extension_caps("Makefile"), None, "no dot, no caps");
+        assert_eq!(
+            extension_caps(".gitignore"),
+            None,
+            "a dotfile has no extension"
+        );
+        assert_eq!(
+            extension_caps("backup.2024-01-02"),
+            None,
+            "a long tail is not a kind"
+        );
+    }
 
     struct CardWrapFixture(gpui_kit::Entity<super::SessionView>);
 

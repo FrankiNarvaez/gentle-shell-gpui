@@ -757,12 +757,11 @@ fn prompts<'a>(messages: &[&str], cx: &'a mut TestAppContext) -> &'a mut VisualT
     cx
 }
 
-/// S9: a sent prompt's files show as cards beside the images, named under
-/// their folder, and never as the `Attached files:` block in the text: the
-/// bubble reads as what was typed (and copies as it), so a long block adds no
-/// lines.
+/// S9: a sent prompt's files show as tiles beside the images, and never as
+/// the `Attached files:` block in the text: the bubble reads as what was typed
+/// (and copies as it), so a long block adds no lines.
 #[gpui::test]
-fn sent_files_show_as_cards_and_stay_out_of_the_text(cx: &mut TestAppContext) {
+fn sent_files_show_as_tiles_and_stay_out_of_the_text(cx: &mut TestAppContext) {
     use gpui_kit::px;
 
     let message =
@@ -793,6 +792,151 @@ fn a_files_only_prompt_shows_cards_without_an_empty_text(cx: &mut TestAppContext
     assert!(
         cx.debug_bounds("user-text-0").is_none(),
         "no empty text block"
+    );
+}
+
+/// S13: a strip is even. In a sent bubble an image and two files (one with a
+/// folder, one at the root) are tiles of the same size, on the image's row.
+#[gpui::test]
+fn a_sent_strip_is_one_row_of_equal_tiles(cx: &mut TestAppContext) {
+    use gpui_kit::AppContext as _;
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let text = "Mira\n\nAttached files:\n- ~/Documents/documento.pdf\n- test.txt";
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            view.transcript
+                .items
+                .push(gentle_core::transcript::Item::User {
+                    text: text.to_string(),
+                    images: vec![gentle_core::transcript::UserImage::new(
+                        "image/png",
+                        "iVBORw0KGgo=".into(),
+                    )],
+                });
+            view.sync_view(cx);
+            view
+        });
+        Selectable(session)
+    });
+    cx.run_until_parked();
+
+    let image = bounds(cx, "user-image-0-0");
+    let with_folder = bounds(cx, "user-file-0-0");
+    let at_root = bounds(cx, "user-file-0-1");
+    assert_eq!(
+        image.size, with_folder.size,
+        "a file tile is the image tile's size"
+    );
+    assert_eq!(image.size, at_root.size, "both files, the same tile");
+    assert_eq!(
+        (image.origin.y, image.bottom()),
+        (with_folder.origin.y, with_folder.bottom()),
+        "the files sit on the image's row"
+    );
+    assert_eq!(
+        (image.origin.y, image.bottom()),
+        (at_root.origin.y, at_root.bottom())
+    );
+}
+
+/// S13: the composer's strip is even the same way: an attached image and two
+/// files draw tiles of one size, on one row.
+#[gpui::test]
+fn the_composer_strip_is_one_row_of_equal_tiles(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let image = Attachment::from_bytes("a.png", PNG.to_vec()).unwrap();
+    let file = |name: &str, path: &str, bytes: u64| {
+        Ok(Loaded::File(AttachedFile {
+            name: name.to_string(),
+            path: std::path::PathBuf::from(path),
+            bytes,
+        }))
+    };
+    view.update_in(cx, |view, window, cx| {
+        view.attach(
+            vec![
+                Ok(Loaded::Image(image)),
+                file("documento.pdf", "/Users/me/Documents/documento.pdf", 2048),
+                file("test.txt", "/Users/me/test.txt", 12),
+            ],
+            window,
+            cx,
+        );
+    });
+
+    let image = bounds(cx, "composer-image-0");
+    let with_folder = bounds(cx, "composer-file-0");
+    let at_root = bounds(cx, "composer-file-1");
+    assert_eq!(
+        image.size, with_folder.size,
+        "a file tile is the image tile's size"
+    );
+    assert_eq!(image.size, at_root.size, "both files, the same tile");
+    assert_eq!(
+        (image.origin.y, image.bottom()),
+        (with_folder.origin.y, with_folder.bottom()),
+        "the files sit on the image's row"
+    );
+    assert_eq!(
+        (image.origin.y, image.bottom()),
+        (at_root.origin.y, at_root.bottom())
+    );
+}
+
+/// S13: a file tile keeps the × its card had, in the same corner an image's ×
+/// sits in, and it removes that file.
+#[gpui::test]
+fn a_composer_file_tile_keeps_its_remove_button(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let image = Attachment::from_bytes("a.png", PNG.to_vec()).unwrap();
+    let file = |name: &str, path: &str| {
+        Ok(Loaded::File(AttachedFile {
+            name: name.to_string(),
+            path: std::path::PathBuf::from(path),
+            bytes: 12,
+        }))
+    };
+    view.update_in(cx, |view, window, cx| {
+        view.attach(
+            vec![
+                Ok(Loaded::Image(image)),
+                file("documento.pdf", "/work/documento.pdf"),
+                file("test.txt", "/work/test.txt"),
+            ],
+            window,
+            cx,
+        );
+    });
+
+    let corner = |tile: gpui_kit::Bounds<gpui_kit::Pixels>,
+                  remove: gpui_kit::Bounds<gpui_kit::Pixels>| {
+        (remove.left() - tile.left(), remove.top() - tile.top())
+    };
+    let on_image = bounds(cx, "attachment-remove-0");
+    let image_tile = bounds(cx, "composer-image-0");
+    let on_file = bounds(cx, "file-remove-0");
+    let file_tile = bounds(cx, "composer-file-0");
+    assert_eq!(
+        corner(image_tile, on_image),
+        corner(file_tile, on_file),
+        "a file's × sits where an image's does"
+    );
+    assert!(
+        file_tile.contains(&on_file.center()),
+        "the × is inside the tile"
+    );
+
+    click(cx, "file-remove-0");
+    assert_eq!(
+        files(&view, cx),
+        vec![std::path::PathBuf::from("/work/test.txt")],
+        "the × removes its own file"
     );
 }
 
