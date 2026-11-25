@@ -3,10 +3,14 @@
 //! send, driven by simulated clicks.
 
 // Not a glob: GPUI exports a `test` attribute that would shadow `#[test]`.
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use gentle_core::commands::Screen;
 use gpui_kit::{
     AppContext as _, Context, Entity, FileDropEvent, InteractiveElement as _, IntoElement,
     Modifiers, MouseButton, ParentElement as _, Render, StatefulInteractiveElement as _,
-    Styled as _, TestAppContext, VisualTestContext, Window,
+    Styled as _, Subscription, TestAppContext, VisualTestContext, Window,
     component::{WindowExt as _, h_flex, v_flex},
     div, point, px,
 };
@@ -1666,4 +1670,356 @@ fn dragging_a_file_out_of_the_tree_attaches_it(cx: &mut TestAppContext) {
         "a folder is refused, so it adds no card"
     );
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// ── The `/` menu (S2, S3) ──────────────────────────────────────────────────
+
+/// A tab whose `/` menu offers `names`, and the screens it asked its window
+/// to open, in order.
+struct SlashTab {
+    view: Entity<SessionView>,
+    screens: Rc<RefCell<Vec<Screen>>>,
+    _opened: Subscription,
+}
+
+impl SlashTab {
+    /// The screens the window was asked to open.
+    fn opened(&self) -> Vec<Screen> {
+        self.screens.borrow().clone()
+    }
+}
+
+fn slash_tab<'a>(
+    names: &[&str],
+    cx: &'a mut TestAppContext,
+) -> (SlashTab, &'a mut VisualTestContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, _| {
+        view.commands = names
+            .iter()
+            .map(|name| ((*name).to_string(), format!("what /{name} does")))
+            .collect();
+    });
+    let screens: Rc<RefCell<Vec<Screen>>> = Rc::default();
+    let opened = screens.clone();
+    let opened = cx.cx.update(|cx| {
+        cx.subscribe(&view, move |_, event: &super::SessionEvent, _| {
+            if let super::SessionEvent::OpenScreen(screen) = event {
+                opened.borrow_mut().push(*screen);
+            }
+        })
+    });
+    (
+        SlashTab {
+            view,
+            screens,
+            _opened: opened,
+        },
+        cx,
+    )
+}
+
+/// Put `text` in the composer as typing it leaves it: focused, with the `/`
+/// menu up for it.
+fn type_in_composer(view: &Entity<SessionView>, cx: &mut VisualTestContext, text: &str) {
+    cx.update(|window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.set_value(text, window, cx);
+        });
+    });
+    cx.run_until_parked();
+}
+
+/// The prompts the conversation holds: what a send would have added.
+fn sent_prompts(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> usize {
+    view.read_with(cx, |view, _| {
+        view.transcript
+            .items
+            .iter()
+            .filter(|item| matches!(item, gentle_core::transcript::Item::User { .. }))
+            .count()
+    })
+}
+
+/// The composer's inline tokens as `(id, text, range)`.
+fn composer_tokens(
+    view: &Entity<SessionView>,
+    cx: &mut VisualTestContext,
+) -> Vec<(String, String, std::ops::Range<usize>)> {
+    view.read_with(cx, |view, cx| {
+        view.composer
+            .read(cx)
+            .tokens()
+            .iter()
+            .map(|span| {
+                (
+                    span.token().id().to_string(),
+                    span.token().text().to_string(),
+                    span.range(),
+                )
+            })
+            .collect()
+    })
+}
+
+/// S2: one Enter on the highlighted command opens its screen, as sending the
+/// command does: it neither fills the text in to wait for a second press nor
+/// sends anything twice. Tab still only fills it in.
+#[gpui::test]
+fn enter_opens_a_highlighted_native_screen_once(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["skill:architecture-docs", "gentle:profiles"], cx);
+    type_in_composer(&tab.view, cx, "/gentle:pro");
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert_eq!(
+        tab.opened(),
+        vec![Screen::Profiles],
+        "one press opens the screen, once"
+    );
+    assert_eq!(
+        composer_text(&tab.view, cx),
+        "",
+        "the command left the composer, as a sent one does"
+    );
+    assert_eq!(sent_prompts(&tab.view, cx), 0, "nothing was sent to Pi");
+    assert!(
+        tab.view.read_with(cx, |view, cx| !view.slash_menu_open(cx)),
+        "the menu is gone with the text"
+    );
+
+    // The screen is open and the composer is empty: another Enter sends
+    // nothing more, so one press can never dispatch twice.
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(tab.opened(), vec![Screen::Profiles], "and only once");
+}
+
+/// S2: Tab completes a command with a native screen without opening it, and
+/// Enter fills in a command that has none (a built-in runs on the next
+/// press, as before).
+#[gpui::test]
+fn tab_completes_without_opening_and_other_commands_still_only_fill_in(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["gentle:profiles"], cx);
+    type_in_composer(&tab.view, cx, "/gentle:pro");
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert_eq!(composer_text(&tab.view, cx), "/gentle:profiles ");
+    assert!(tab.opened().is_empty(), "Tab completes, it does not open");
+
+    type_in_composer(&tab.view, cx, "/comp");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&tab.view, cx),
+        "/compact ",
+        "a built-in is filled in, not run"
+    );
+    assert!(tab.opened().is_empty());
+    assert_eq!(sent_prompts(&tab.view, cx), 0);
+}
+
+/// S2: a command typed in full still opens its screen on one Enter, as it did.
+#[gpui::test]
+fn a_command_typed_in_full_still_opens_on_enter(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["gentle:profiles"], cx);
+    type_in_composer(&tab.view, cx, "/gentle:profiles");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(tab.opened(), vec![Screen::Profiles]);
+    assert_eq!(composer_text(&tab.view, cx), "");
+}
+
+/// S3: picking a skill leaves its own `/skill:name` in the prompt as one
+/// inline reference marked for the composer, the caret after it for the
+/// instructions; nothing opens and nothing is sent.
+#[gpui::test]
+fn picking_a_skill_inserts_its_reference_and_waits_for_instructions(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["skill:architecture-docs", "gentle:profiles"], cx);
+    type_in_composer(&tab.view, cx, "/skill:arch");
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    assert_eq!(composer_text(&tab.view, cx), "/skill:architecture-docs ");
+    assert_eq!(
+        composer_tokens(&tab.view, cx),
+        vec![(
+            "skill-reference".to_string(),
+            "/skill:architecture-docs".to_string(),
+            0.."/skill:architecture-docs".len(),
+        )],
+        "the command itself, kept as one marked reference"
+    );
+    let cursor = tab
+        .view
+        .read_with(cx, |view, cx| view.composer.read(cx).cursor());
+    assert_eq!(
+        cursor,
+        "/skill:architecture-docs ".len(),
+        "the caret waits where the instructions go"
+    );
+    assert!(tab.opened().is_empty(), "a skill opens nothing");
+    assert_eq!(sent_prompts(&tab.view, cx), 0, "and nothing is sent");
+    assert!(tab.view.read_with(cx, |view, cx| !view.slash_menu_open(cx)));
+
+    // Typed at the caret: the instructions follow the reference, which stays
+    // one reference in the prompt.
+    tab.view.update_in(cx, |view, window, cx| {
+        view.composer.update(cx, |state, cx| {
+            state.replace("summarize the ADRs", window, cx)
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&tab.view, cx),
+        "/skill:architecture-docs summarize the ADRs"
+    );
+    assert_eq!(composer_tokens(&tab.view, cx).len(), 1);
+}
+
+/// S2 and S3: a click on a row does what Enter on it does, so the pointer and
+/// the keyboard leave the composer in the same state.
+#[gpui::test]
+fn clicking_a_row_does_what_enter_does(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["skill:architecture-docs", "gentle:profiles"], cx);
+
+    type_in_composer(&tab.view, cx, "/skill:arch");
+    let row = bounds(cx, "slash-command-0").center();
+    cx.simulate_mouse_down(row, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(row, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(composer_text(&tab.view, cx), "/skill:architecture-docs ");
+    assert_eq!(composer_tokens(&tab.view, cx).len(), 1);
+    assert!(tab.opened().is_empty());
+
+    type_in_composer(&tab.view, cx, "/gentle:pro");
+    let row = bounds(cx, "slash-command-0").center();
+    cx.simulate_mouse_down(row, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(row, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(tab.opened(), vec![Screen::Profiles]);
+    assert_eq!(composer_text(&tab.view, cx), "");
+}
+
+/// S3: the reference keeps its marking when the composer is rebuilt from its
+/// text — removing a paste card takes that chip out and leaves the skill's.
+#[gpui::test]
+fn removing_a_paste_card_keeps_the_skill_reference_marked(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["skill:architecture-docs"], cx);
+    type_in_composer(&tab.view, cx, "/skill:arch");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+
+    let item = gpui_kit::ClipboardItem::new_string("fn main() {}\n".repeat(8));
+    tab.view.update_in(cx, |view, window, cx| {
+        view.paste_clipboard(&item, window, cx)
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&tab.view, cx),
+        "/skill:architecture-docs [Pasted text #1] "
+    );
+
+    tab.view
+        .update_in(cx, |view, window, cx| view.remove_pasted(0, window, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&tab.view, cx),
+        "/skill:architecture-docs ",
+        "the paste's card and token went"
+    );
+    assert_eq!(
+        composer_tokens(&tab.view, cx),
+        vec![(
+            "skill-reference".to_string(),
+            "/skill:architecture-docs".to_string(),
+            0.."/skill:architecture-docs".len(),
+        )],
+        "the skill keeps its marking through the rebuild"
+    );
+}
+
+/// S3: a prompt recalled with ↑ keeps the marking of the skill it invokes,
+/// and leaves a lookalike the backend never listed as plain text.
+#[gpui::test]
+fn a_recalled_prompt_keeps_its_skill_reference_marked(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["skill:architecture-docs"], cx);
+    tab.view.update(cx, |view, _| {
+        view.prompt_history
+            .record("/skill:architecture-docs summarize the ADRs");
+    });
+    type_in_composer(&tab.view, cx, "draft");
+
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&tab.view, cx),
+        "/skill:architecture-docs summarize the ADRs"
+    );
+    assert_eq!(
+        composer_tokens(&tab.view, cx),
+        vec![(
+            "skill-reference".to_string(),
+            "/skill:architecture-docs".to_string(),
+            0.."/skill:architecture-docs".len(),
+        )],
+        "the recalled command is still the known skill's reference"
+    );
+}
+
+/// S3: a command that only looks like a skill stays plain — one the backend
+/// never listed, a listed one with more letters after it, and one glued to
+/// the word before it.
+#[gpui::test]
+fn lookalike_commands_stay_plain_through_a_rebuild(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["skill:architecture-docs"], cx);
+    for prompt in [
+        "/skill:unknown-thing summarize",
+        "/skill:architecture-docsx summarize",
+        "see/skill:architecture-docs",
+        "/skills:architecture-docs",
+    ] {
+        tab.view.update(cx, |view, _| {
+            view.prompt_history.record(prompt);
+        });
+        type_in_composer(&tab.view, cx, "draft");
+        cx.simulate_keystrokes("up");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&tab.view, cx), prompt);
+        assert!(
+            composer_tokens(&tab.view, cx).is_empty(),
+            "{prompt} is no known skill's reference"
+        );
+        // Back to the draft, ready for the next prompt.
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&tab.view, cx), "draft");
+    }
+}
+
+/// A long paste keeps its own `#N` chip (the token the skill reference shares
+/// the renderer with) and still goes out expanded.
+#[gpui::test]
+fn a_long_paste_keeps_its_chip(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let pasted = "fn main() {}\n".repeat(8);
+    let item = gpui_kit::ClipboardItem::new_string(pasted);
+    let kept = view.update_in(cx, |view, window, cx| {
+        view.paste_clipboard(&item, window, cx)
+    });
+    cx.run_until_parked();
+    assert!(kept, "eight lines are a long paste");
+    assert_eq!(composer_text(&view, cx), "[Pasted text #1] ");
+    assert_eq!(
+        composer_tokens(&view, cx),
+        vec![(
+            "pasted-text".to_string(),
+            "[Pasted text #1]".to_string(),
+            0.."[Pasted text #1]".len(),
+        )]
+    );
 }

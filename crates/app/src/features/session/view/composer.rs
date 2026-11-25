@@ -22,6 +22,7 @@ use super::dialogs::checkbox_box;
 use super::{FileStrip, NARROW, TINY, file_tile, image_tile, number_badge};
 use crate::features::session::SessionView;
 use crate::features::session::attachments::{self, PastedText};
+use crate::features::session::submit::SKILL_TOKEN_ID;
 use crate::shared::kisses::{HEART, LIPS, noise, paint_sprite};
 use crate::shared::ui;
 use gentle_core::input_style::InputStyle;
@@ -328,16 +329,19 @@ impl SessionView {
                 Textarea::new(&self.composer)
                     .appearance(false)
                     .disabled(!ready)
-                    // Pasted texts' tokens, as file-icon `#N` chips.
+                    // A pasted text's `#N` chip, or — in the theme's own
+                    // accent — the `/skill:name` the prompt invokes.
                     .token(|token, _, _| {
-                        let chip = InputToken::new(token)
-                            .icon(IconName::FileText)
-                            .text_color(ui::info());
+                        let (tint, icon) = if token.token().id().as_ref() == SKILL_TOKEN_ID {
+                            (ui::accent(), IconName::Zap)
+                        } else {
+                            (ui::info(), IconName::FileText)
+                        };
+                        let chip = InputToken::new(token).icon(icon).text_color(tint);
                         if token.is_selected() {
                             chip
                         } else {
-                            chip.bg(ui::info().opacity(0.12))
-                                .border_color(ui::info().opacity(0.22))
+                            chip.bg(tint.opacity(0.12)).border_color(tint.opacity(0.22))
                         }
                     })
                     .on_paste(move |item, window, cx| {

@@ -2,6 +2,7 @@
 //! commands run here, prompts with their image attachments and long pastes.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -334,6 +335,48 @@ impl SessionView {
         self.pasted.clear();
     }
 
+    /// A `/` menu row with a native screen, picked: the screen opens on this
+    /// one press, and the command leaves the composer as a sent one does. It
+    /// never becomes a prompt — not even with a file or an image waiting
+    /// beside the text: the person asked for the screen, not the model.
+    pub(super) fn open_screen_command(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = format!("/{name}");
+        self.composer
+            .update(cx, |state, cx| state.set_value("", window, cx));
+        self.prompt_history.record(&text);
+        self.pasted.clear();
+        self.intercept(&text, cx);
+        cx.notify();
+    }
+
+    /// The reference a picked skill leaves in the composer: `/skill:name` as
+    /// one inline token, marked in the theme's accent (see the composer's
+    /// token renderer), a space after it and the caret there, ready for the
+    /// instructions that follow. The text is the command itself, so sending
+    /// the prompt invokes the skill; a skill opens nothing, so nothing is
+    /// opened or sent here.
+    pub(super) fn insert_skill_reference(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = format!("/{name} ");
+        let end = text.len();
+        // Marked by the same rule a recalled prompt is: the command is one
+        // this tab's backend lists as a skill.
+        self.set_composer_text(text, end, window, cx);
+        self.composer
+            .update(cx, |state, cx| state.focus(window, cx));
+        // The whole text was replaced: no paste's token is left in it.
+        self.pasted.clear();
+    }
+
     /// Attach what was dropped or picked and warn about the rest: images wait
     /// as thumbnails, files as cards, both in the strip above the composer.
     /// Nothing is typed into the text, and a file or image already waiting is
@@ -566,9 +609,10 @@ impl SessionView {
         cx.notify();
     }
 
-    /// Put `text` in the composer with the pastes' tokens as chips and the
-    /// cursor at byte `cursor`. Setting the value clears the undo history,
-    /// so undo can't bring back the token of a paste that is gone.
+    /// Put `text` in the composer with the pastes' tokens as chips, the known
+    /// skills' references marked and the cursor at byte `cursor`. Setting the
+    /// value clears the undo history, so undo can't bring back the token of a
+    /// paste that is gone.
     fn set_composer_text(
         &mut self,
         text: String,
@@ -578,6 +622,10 @@ impl SessionView {
     ) {
         let position = position_at(&text, cursor);
         let chips = attachments::find_tokens(&text);
+        // A skill's reference keeps its marking through a rebuild (a paste
+        // card removed, a prompt recalled): the command is still the one the
+        // prompt invokes.
+        let references = self.skill_references(&text);
         let mut content = InputContent::new(text);
         for (range, n) in chips {
             if (1..=self.pasted.len()).contains(&n) {
@@ -587,10 +635,47 @@ impl SessionView {
                     .unwrap_or(content);
             }
         }
+        for (range, token) in references {
+            content = content.clone().with_token(range, token).unwrap_or(content);
+        }
         self.composer.update(cx, |state, cx| {
             state.set_value(content, window, cx);
             state.set_cursor_position(position, window, cx);
         });
+    }
+
+    /// The known skills' references in `text`, each with the token marking it:
+    /// a `/skill:name` that this tab's backend lists as a skill, alone between
+    /// whitespace (or the ends of the text). A command that only looks like
+    /// one — a name no skill has, a longer name, one glued to the word before
+    /// it — is left as plain text, as is one for an unknown skill.
+    fn skill_references(&self, text: &str) -> Vec<(Range<usize>, InlineToken)> {
+        let skills: Vec<String> = self
+            .commands()
+            .into_iter()
+            .map(|command| format!("/{}", command.name))
+            .filter(|command| command.starts_with("/skill:"))
+            .collect();
+        if skills.is_empty() {
+            return Vec::new();
+        }
+        let mut references = Vec::new();
+        for (start, _) in text.match_indices("/skill:") {
+            if text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|before| !before.is_whitespace())
+            {
+                continue;
+            }
+            let rest = &text[start..];
+            let end = start + rest.find(char::is_whitespace).unwrap_or(rest.len());
+            let command = &text[start..end];
+            if skills.iter().any(|skill| skill == command) {
+                references.push((start..end, skill_reference(command)));
+            }
+        }
+        references
     }
 
     /// ↑ on the composer's first line recalls the prompt sent before, newest
@@ -733,6 +818,16 @@ fn after_check(
 /// after an emoji label.
 fn pasted_chip(n: usize) -> InlineToken {
     InlineToken::new("pasted-text", attachments::token(n)).with_label(format!("#{n}"))
+}
+
+/// The id of the inline token marking a skill the prompt invokes, so the
+/// composer draws it in the theme's accent instead of a paste's chip.
+pub(super) const SKILL_TOKEN_ID: &str = "skill-reference";
+
+/// The token a skill's reference is in the composer: its own `/skill:name`,
+/// kept as one editing unit and labeled as itself.
+fn skill_reference(command: &str) -> InlineToken {
+    InlineToken::new(SKILL_TOKEN_ID, command)
 }
 
 /// The editor position (line, UTF-16 column) of byte `offset` in `text`.
