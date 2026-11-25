@@ -23,7 +23,7 @@ use gentle_core::transcript::{UserImage, image_key};
 pub use gentle_core::attachments::{
     AttachedFile, PastedText, Rejection, chip_text, expand, file_name, find_tokens, human_size,
     is_long_paste, missing_files, needs_lead, present, rejection_warning, remove_token, renumber,
-    token, unprintable, with_files,
+    split_files, summary, token, unprintable, with_files,
 };
 
 /// Largest image accepted, before base64.

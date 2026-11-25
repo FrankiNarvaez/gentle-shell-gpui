@@ -10,6 +10,7 @@ use gpui_kit::*;
 
 use super::rail::preview;
 use super::{BubbleText, CardSpec, card_spec, follows_step, line_count};
+use crate::features::session::attachments;
 use crate::shared::ui;
 use gentle_core::scroll::{self, Estimate, RailMark};
 use gentle_core::transcript::{Block, Dirty, Item};
@@ -372,8 +373,12 @@ impl TranscriptList {
                     notices.iter().map(|(_, text)| line_count(text)).sum(),
                 )),
                 Item::User { text, .. } => {
-                    if !text.trim().is_empty() {
-                        self.marks.push((ix, preview(text)));
+                    // The rail and its tooltip show what was typed, never the
+                    // `Attached files:` block: a prompt of files only reads
+                    // as their names.
+                    let marks = attachments::summary(text);
+                    if !marks.trim().is_empty() {
+                        self.marks.push((ix, preview(&marks)));
                     }
                     Some(Prepared::Bubble(OnceCell::new()))
                 }

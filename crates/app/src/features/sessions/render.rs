@@ -50,7 +50,10 @@ impl SessionsView {
                 if session.name.is_some()
                     && let Some(first) = &session.first_message
                 {
-                    subtitle.push(gentle_core::text::first_line(first.trim(), 90));
+                    subtitle.push(gentle_core::text::first_line(
+                        &gentle_core::attachments::summary(first),
+                        90,
+                    ));
                 }
                 let mut meta = Vec::new();
                 if let Some(model) = &session.model {
@@ -79,7 +82,7 @@ impl SessionsView {
                 }
                 if entry.name.is_some() {
                     subtitle.push(gentle_core::text::first_line(
-                        entry.first_message.trim(),
+                        &gentle_core::attachments::summary(&entry.first_message),
                         90,
                     ));
                 }

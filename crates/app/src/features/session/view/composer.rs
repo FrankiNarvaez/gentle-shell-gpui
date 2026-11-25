@@ -19,7 +19,7 @@ use gpui_kit::*;
 
 use super::activity::{ChipPopoverOptions, chip_popover};
 use super::dialogs::checkbox_box;
-use super::{NARROW, TINY, image_tile, number_badge};
+use super::{NARROW, TINY, file_tile, image_tile, number_badge};
 use crate::features::session::SessionView;
 use crate::features::session::attachments::{self, AttachedFile, PastedText};
 use crate::shared::kisses::{HEART, LIPS, noise, paint_sprite};
@@ -1063,20 +1063,7 @@ fn file_card(file: &AttachedFile) -> Div {
         .border_1()
         .border_color(ui::border_strong())
         .bg(ui::surface())
-        .child(
-            div()
-                .flex_shrink_0()
-                .w(rems(38. / 16.))
-                .h(rems(48. / 16.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_md()
-                .border_1()
-                .border_color(ui::border())
-                .bg(ui::well())
-                .child(Icon::new(IconName::File).small().text_color(ui::muted())),
-        )
+        .child(file_tile())
         .child(
             v_flex()
                 .min_w_0()

@@ -168,6 +168,70 @@ pub fn with_files(
     }
 }
 
+/// The block [`with_files`] writes: its opening line.
+const FILES_HEADER: &str = "Attached files:";
+
+/// Out of a sent message, the text the person wrote and the paths of the
+/// `Attached files:` block it carries, in order: only the block
+/// [`with_files`] wrote comes out (the message's last lines, a `- ` path per
+/// line, after a blank line or at its very start). Anything else — a text
+/// that mentions the header, a block that is not last, a line without `- ` —
+/// stays in the body. The body has no trailing blank lines.
+pub fn split_files(message: &str) -> (&str, Vec<&str>) {
+    let trimmed = message.trim_end();
+    // Line starts, so the block's lines and the body stay slices of `trimmed`.
+    let mut starts = vec![0];
+    starts.extend(trimmed.match_indices('\n').map(|(at, _)| at + 1));
+    let line = |ix: usize| {
+        let start = starts[ix];
+        let end = starts.get(ix + 1).copied().unwrap_or(trimmed.len());
+        trimmed[start..end]
+            .trim_end_matches('\n')
+            .trim_end_matches('\r')
+    };
+    // The block's paths, from the last line up.
+    let mut files = Vec::new();
+    let mut ix = starts.len();
+    while ix > 0 {
+        let text = line(ix - 1);
+        match text.strip_prefix("- ").filter(|path| !path.is_empty()) {
+            Some(path) => files.push(path),
+            None => break,
+        }
+        ix -= 1;
+    }
+    // Before them, the header; and before it, the blank line the text ended
+    // on (nothing at all, when the message is only the block).
+    let Some(header) = ix.checked_sub(1).filter(|_| !files.is_empty()) else {
+        return (trimmed, Vec::new());
+    };
+    if line(header) != FILES_HEADER {
+        return (trimmed, Vec::new());
+    }
+    let body = match header.checked_sub(1) {
+        None => "",
+        Some(blank) if line(blank).is_empty() => trimmed[..starts[blank]].trim_end(),
+        Some(_) => return (trimmed, Vec::new()),
+    };
+    files.reverse();
+    (body, files)
+}
+
+/// How a sent message reads where its files have no cards (a preview, a
+/// title): its body, or the names of the files it attached when it carried
+/// no text of its own.
+pub fn summary(message: &str) -> String {
+    let (body, files) = split_files(message);
+    if !body.is_empty() {
+        return body.to_string();
+    }
+    files
+        .iter()
+        .map(|path| path.rsplit(['/', '\\']).next().unwrap_or(path))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The warning for the `files` `exists` says are gone from disk, naming each
 /// on its own line: nothing is sent until they are removed from the
 /// composer. `None` when they are all there.
@@ -532,6 +596,84 @@ mod tests {
                 "look\n\nAttached files:\n- C:\\proj\\src\\main.rs\n- C:\\Users\\x\\Downloads\\a.pdf"
             );
         }
+    }
+
+    /// S9: the block `with_files` writes splits back into the text and the
+    /// paths it names, so a sent message shows its files as cards while the
+    /// agent still received the block: any text, files with spaces and
+    /// unicode, files only, and a message without a block at all.
+    #[test]
+    fn a_sent_block_splits_back_into_text_and_paths() {
+        let cwd = Path::new("/work");
+        let files = [
+            named(
+                "Laboratorio 1.6.2 - Franki Jair.pdf",
+                "/Users/me/Documents/Comu 3/Laboratorio 1.6.2 - Franki Jair.pdf",
+            ),
+            named("notas 日本.txt", "/work/src/notas 日本.txt"),
+        ];
+        for text in ["Qué te envio?", "línea uno\n\nlínea dos", "  indented  "] {
+            let message = with_files(text, &files, cwd, None);
+            let (body, paths) = split_files(&message);
+            assert_eq!(body, text.trim_end(), "{message:?}");
+            assert_eq!(
+                paths,
+                vec![
+                    "/Users/me/Documents/Comu 3/Laboratorio 1.6.2 - Franki Jair.pdf",
+                    "src/notas 日本.txt",
+                ]
+            );
+        }
+        // A prompt of files only carries no text.
+        let only = with_files("", &files, cwd, None);
+        assert_eq!(split_files(&only).0, "");
+        assert_eq!(split_files(&only).1.len(), 2);
+        // One file, and a message that carries no block at all.
+        let one = with_files("look", &files[..1], cwd, None);
+        assert_eq!(
+            split_files(&one),
+            (
+                "look",
+                vec!["/Users/me/Documents/Comu 3/Laboratorio 1.6.2 - Franki Jair.pdf"]
+            )
+        );
+        assert_eq!(split_files("look\n\nmore"), ("look\n\nmore", Vec::new()));
+    }
+
+    /// S9: only the trailing block comes out of a message. Text that merely
+    /// mentions it, a block that is not last, a list without the header and a
+    /// header without the blank line before it stay in the body.
+    #[test]
+    fn only_a_trailing_block_leaves_the_text() {
+        for message in [
+            "see Attached files: above",
+            "Attached files:\n- a.pdf\nand then more",
+            "text\n\nAttached files:\na.pdf",
+            "- a.pdf\n- b.txt",
+            "text\nAttached files:\n- a.pdf",
+            "text\n\nAttached files:\n- a.pdf\nAttached files:\n- b.pdf",
+            "text\n\n- a.pdf",
+        ] {
+            assert_eq!(split_files(message), (message, Vec::new()), "{message:?}");
+        }
+    }
+
+    /// S9: where its files have no cards, a sent message reads as its body,
+    /// or as the names of its files when it carried no text.
+    #[test]
+    fn a_prompt_reads_as_its_text_or_its_file_names() {
+        let cwd = Path::new("/work");
+        let files = [
+            named("report.pdf", "/work/report.pdf"),
+            named("notes.txt", "/work/notes.txt"),
+        ];
+        assert_eq!(summary(&with_files("look", &files, cwd, None)), "look");
+        assert_eq!(
+            summary(&with_files("", &files, cwd, None)),
+            "report.pdf, notes.txt"
+        );
+        assert_eq!(summary("plain"), "plain");
+        assert_eq!(summary(""), "");
     }
 
     /// S11: several refused paths give one warning naming each, one per line;

@@ -765,6 +765,20 @@ impl SessionView {
         );
     }
 
+    /// The ↑ history of a resumed conversation: what was typed in it, in
+    /// order, without the `Attached files:` block a prompt carried. A prompt
+    /// that was only files is not recalled: recalling it and sending again
+    /// would name files already sent.
+    pub(super) fn seed_prompt_history(&mut self) {
+        let bodies = self.transcript.items.iter().filter_map(|item| match item {
+            gentle_core::transcript::Item::User { text, .. } => {
+                Some(attachments::split_files(text).0).filter(|body| !body.trim().is_empty())
+            }
+            _ => None,
+        });
+        self.prompt_history.seed(bodies);
+    }
+
     pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
         self.request(json!({"type": "get_state"}), cx, |this, result, _| {
             if let Some(state) = this.report(result) {
@@ -783,11 +797,7 @@ impl SessionView {
                 let messages = data["messages"].as_array().cloned().unwrap_or_default();
                 if !messages.is_empty() {
                     this.transcript.load_messages(&messages);
-                    this.prompt_history
-                        .seed(this.transcript.items.iter().filter_map(|item| match item {
-                            gentle_core::transcript::Item::User { text, .. } => Some(text.as_str()),
-                            _ => None,
-                        }));
+                    this.seed_prompt_history();
                     this.markdown.clear();
                     this.sync_todo_from_history();
                 }

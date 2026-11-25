@@ -719,6 +719,76 @@ fn user_bubble_shows_old_image_tokens_as_chips(cx: &mut TestAppContext) {
     assert_user_bubble_copy(cx, "see [Image #1]", "see 🖼 #1", None, 1.);
 }
 
+/// The transcript items of a view showing `messages` as sent prompts, drawn
+/// in a headless window.
+fn prompts<'a>(messages: &[&str], cx: &'a mut TestAppContext) -> &'a mut VisualTestContext {
+    use gpui_kit::AppContext as _;
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let messages: Vec<String> = messages.iter().map(|m| m.to_string()).collect();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            for text in messages {
+                view.transcript
+                    .items
+                    .push(gentle_core::transcript::Item::User {
+                        text,
+                        images: Vec::new(),
+                    });
+            }
+            view.sync_view(cx);
+            view
+        });
+        Selectable(session)
+    });
+    cx.run_until_parked();
+    cx
+}
+
+/// S9: a sent prompt's files show as cards beside the images, named under
+/// their folder, and never as the `Attached files:` block in the text: the
+/// bubble reads as what was typed (and copies as it), so a long block adds no
+/// lines.
+#[gpui::test]
+fn sent_files_show_as_cards_and_stay_out_of_the_text(cx: &mut TestAppContext) {
+    use gpui_kit::px;
+
+    let message =
+        "Qué te envio?\n\nAttached files:\n- /Users/me/Comu 3/Laboratorio 1.6.2.pdf\n- notes.txt";
+    assert_user_bubble_copy(cx, message, "Qué te envio?", Some(1.), 1.);
+
+    let cx = prompts(&[message], cx);
+    let bounds = cx.debug_bounds("user-text-0").expect("the sent prompt");
+    assert!(
+        bounds.size.height < px(40.),
+        "the text is one line, not the block's three: {}",
+        bounds.size.height
+    );
+    assert!(cx.debug_bounds("user-file-0-0").is_some(), "first card");
+    assert!(cx.debug_bounds("user-file-0-1").is_some(), "second card");
+    assert!(
+        cx.debug_bounds("user-file-0-2").is_none(),
+        "one card per file"
+    );
+}
+
+/// S9: a prompt that was only files shows their cards and no empty text
+/// block, as an image-only one does.
+#[gpui::test]
+fn a_files_only_prompt_shows_cards_without_an_empty_text(cx: &mut TestAppContext) {
+    let cx = prompts(&["Attached files:\n- report.pdf"], cx);
+    assert!(cx.debug_bounds("user-file-0-0").is_some(), "the card");
+    assert!(
+        cx.debug_bounds("user-text-0").is_none(),
+        "no empty text block"
+    );
+}
+
 /// Attaching an image types nothing into the composer, so the strip above it
 /// is the only list of what will be sent; removing one from the strip leaves
 /// the rest, in the strip's own order.
@@ -924,6 +994,46 @@ fn history_recall_leaves_a_waiting_image_in_the_strip(cx: &mut TestAppContext) {
         view.attachments.iter().map(|a| a.key).collect()
     });
     assert_eq!(sent, vec![key]);
+}
+
+/// S9: the ↑ history of a resumed conversation holds what was typed, never
+/// the `Attached files:` block a prompt carried; a prompt that was only
+/// files is not recalled at all.
+#[gpui::test]
+fn history_recall_leaves_the_file_block_out(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, _| {
+        for text in [
+            "look\n\nAttached files:\n- a.pdf",
+            "Attached files:\n- b.txt",
+            "plain",
+        ] {
+            view.transcript
+                .items
+                .push(gentle_core::transcript::Item::User {
+                    text: text.into(),
+                    images: Vec::new(),
+                });
+        }
+        view.seed_prompt_history();
+    });
+    cx.update(|window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.set_value("draft", window, cx);
+        });
+    });
+    let composer = |cx: &mut VisualTestContext| {
+        cx.run_until_parked();
+        view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string())
+    };
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "plain");
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "look", "the block is not recalled");
+    cx.simulate_keystrokes("up");
+    assert_eq!(composer(cx), "look", "a files-only prompt is not recalled");
 }
 
 /// ↑ and ↓ in the composer walk the prompts sent before and come back to

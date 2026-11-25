@@ -21,6 +21,8 @@ const CARD_LINES: usize = 6;
 /// `USER_SLACK`).
 const BUBBLE_FOLD: usize = 10;
 const BUBBLE_LINES: usize = 8;
+/// A file's card in the bubble's strip: 64 px of card, at [`DEFAULT_SCALE`].
+const FILE_CARD: f32 = 3.8;
 
 /// The wrapped lines `text` takes, roughly.
 fn text_lines(text: &str) -> f32 {
@@ -38,15 +40,22 @@ fn wrapped_lines<'a>(lines: impl Iterator<Item = &'a str>) -> f32 {
 /// other rows matters: [`estimate`] scales it by what measured rows show.
 pub fn item_weight(item: &Item) -> f32 {
     match item {
-        // The bubble's padding and the row gap, then its text (and image
-        // strip).
+        // The bubble's padding and the row gap, then its text (and the
+        // strip of image and file cards above it). The paths' block the
+        // prompt carries weighs nothing: the bubble shows cards, not the
+        // block.
         Item::User { text, images } => {
-            let text = if text.trim_end().lines().nth(BUBBLE_FOLD).is_some() {
-                wrapped_lines(text.lines().take(BUBBLE_LINES)) + 1.
+            let (body, files) = crate::attachments::split_files(text);
+            let text = if body.trim().is_empty() {
+                0.
+            } else if body.trim_end().lines().nth(BUBBLE_FOLD).is_some() {
+                wrapped_lines(body.lines().take(BUBBLE_LINES)) + 1.
             } else {
-                text_lines(text)
+                text_lines(body)
             };
-            3.8 + text + if images.is_empty() { 0. } else { 7. }
+            3.8 + text
+                + if images.is_empty() { 0. } else { 7. }
+                + if files.is_empty() { 0. } else { FILE_CARD }
         }
         Item::Assistant { .. } if !crate::transcript::assistant_visible(item) => 0.,
         Item::Assistant {
@@ -364,6 +373,27 @@ mod tests {
         assert_eq!(item_weight(&user(BUBBLE_FOLD + 1)), item_weight(&user(500)));
         assert!(item_weight(&user(500)) < item_weight(&user(BUBBLE_FOLD)));
         assert!(item_weight(&user(BUBBLE_FOLD - 1)) < item_weight(&user(BUBBLE_FOLD)));
+    }
+
+    /// S9: a prompt's files weigh their cards, and the `Attached files:`
+    /// block the prompt carries weighs nothing — the bubble shows cards, not
+    /// the paths — even with thirty of them.
+    #[test]
+    fn a_prompt_with_files_weighs_its_cards_not_the_block() {
+        let user = |text: &str| Item::User {
+            text: text.into(),
+            images: Vec::new(),
+        };
+        let block: String = (0..30).map(|i| format!("- /work/file-{i}.pdf\n")).collect();
+        let plain = user("look");
+        let with_files = user(&format!("look\n\nAttached files:\n{block}"));
+        assert_eq!(item_weight(&with_files), item_weight(&plain) + FILE_CARD);
+        // A prompt of files only is its cards: no line of text under them.
+        let only = user(&format!("Attached files:\n{block}"));
+        assert_eq!(item_weight(&only), item_weight(&user("")) + FILE_CARD);
+        // The block's lines never count: thirty paths weigh one card, not
+        // thirty lines of text.
+        assert!(item_weight(&only) < item_weight(&user(&block)));
     }
 
     #[test]

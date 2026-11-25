@@ -821,7 +821,7 @@ impl SessionView {
                 let open = self.expanded.contains(&key);
                 let toggle = self.bubble_toggle(shown, key, open, cx);
                 let bubble = user_bubble(ix, shown, images, open, toggle, &self.bubble_images);
-                if text.trim().is_empty() {
+                if shown.markdown.trim().is_empty() {
                     return bubble.into_any_element();
                 }
                 v_flex()
@@ -1237,7 +1237,7 @@ impl SessionView {
                     .tooltip("Copy message")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(Item::User { text, .. }) = this.transcript.items.get(ix) {
-                            this.copy_text(text.trim().to_string(), cx);
+                            this.copy_text(message_body(text).to_string(), cx);
                         }
                     })),
             )
@@ -2173,11 +2173,14 @@ impl CodeLine {
 
 /// A message as its bubble shows it: the Markdown it renders
 /// ([`gentle_core::markdown::sent_message`]; images are the numbered tiles
-/// above it) and a long one's folded start. Made once per message: every
-/// frame hands the text view the same strings, which it recognizes without
-/// parsing again.
+/// above it, and the files it attached are cards beside them) and a long
+/// one's folded start. Made once per message: every frame hands the text view
+/// the same strings, which it recognizes without parsing again.
 struct BubbleText {
     markdown: SharedString,
+    /// The paths of the files the prompt attached, as the agent was told
+    /// them: their block is out of `markdown` and they show as cards.
+    files: Vec<SharedString>,
     /// The first [`USER_LINES`] lines of `markdown` and how many more it
     /// has, when it is long enough to fold. Cut from the whole message's
     /// Markdown, so HTML closed past the fold still shows literally.
@@ -2186,7 +2189,8 @@ struct BubbleText {
 
 impl BubbleText {
     fn new(text: &str) -> Self {
-        let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(text));
+        let (body, files) = attachments::split_files(text);
+        let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(body));
         let lines = line_count(&markdown);
         let folded = (lines > USER_LINES + USER_SLACK).then(|| {
             let (head, _) = head_slice(&markdown, lines, USER_LINES);
@@ -2199,6 +2203,7 @@ impl BubbleText {
         });
         Self {
             markdown: markdown.into(),
+            files: files.into_iter().map(SharedString::from).collect(),
             folded,
         }
     }
@@ -2602,13 +2607,20 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         })
 }
 
-/// A user message: its images (numbered in the order they were sent)
-/// over the text, a long text folded unless
-/// `open`, with its `toggle`. `None` is an image that could not be decoded.
-/// The text is selectable and copies with the platform shortcut, like an
-/// answer's; `ix` keys its selection. Images its Markdown shows load only
-/// from `data:` URLs (decoded into `embedded`) and local files: one linked
-/// on the network shows nothing, so a message fetches nothing.
+/// What "Copy message" copies: the text the person typed, never the
+/// `Attached files:` block its prompt carried.
+fn message_body(text: &str) -> &str {
+    attachments::split_files(text).0.trim()
+}
+
+/// A user message: its images (numbered in the order they were sent) over
+/// the text, with the files it attached as cards beside them, a long text
+/// folded unless `open`, with its `toggle`. `None` is an image that could not
+/// be decoded. The text is selectable and copies with the platform
+/// shortcut, like an answer's; `ix` keys its selection. Images its Markdown
+/// shows load only from `data:` URLs (decoded into `embedded`) and local
+/// files: one linked on the network shows nothing, so a message fetches
+/// nothing.
 fn user_bubble(
     ix: usize,
     shown: &BubbleText,
@@ -2618,6 +2630,7 @@ fn user_bubble(
     embedded: &Arc<crate::features::files::EmbeddedImages>,
 ) -> Div {
     let markdown = shown.visible(open);
+    let files = &shown.files;
     // min_w_0 on both levels: without it the bubble's minimum width is its
     // unwrapped text, so in a narrow pane it overflows (clipped on the left).
     h_flex().w_full().min_w_0().justify_end().child(
@@ -2631,13 +2644,23 @@ fn user_bubble(
             .bg(ui::raised())
             .text_size(rems(14. / 16.))
             .text_color(ui::fg())
-            .when(!images.is_empty(), |this| {
-                this.child(h_flex().flex_wrap().gap_2().children(
-                    images.into_iter().enumerate().map(|(ix, image)| {
-                        image_tile(image, rems(160. / 16.), rems(120. / 16.))
-                            .child(number_badge(ix + 1))
-                    }),
-                ))
+            .when(!images.is_empty() || !files.is_empty(), |this| {
+                this.child(
+                    h_flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .children(images.into_iter().enumerate().map(|(ix, image)| {
+                            image_tile(image, rems(160. / 16.), rems(120. / 16.))
+                                .child(number_badge(ix + 1))
+                        }))
+                        .children(
+                            files
+                                .iter()
+                                .enumerate()
+                                .map(|(n, path)| sent_file_card(ix, n, path)),
+                        ),
+                )
             })
             .when(!markdown.trim().is_empty(), |this| {
                 this.child(
@@ -2665,6 +2688,72 @@ fn user_bubble(
                 toggle.map(|toggle| div().ml(rems(-12. / 16.)).mt(rems(-4. / 16.)).child(toggle)),
             ),
     )
+}
+
+/// The page glyph of a file's card: a rounded, sunken tile, as the
+/// composer's cards show it.
+pub(super) fn file_tile() -> Div {
+    div()
+        .flex_shrink_0()
+        .w(rems(38. / 16.))
+        .h(rems(48. / 16.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_md()
+        .border_1()
+        .border_color(ui::border())
+        .bg(ui::well())
+        .child(Icon::new(IconName::File).small().text_color(ui::muted()))
+}
+
+/// A file a sent prompt attached: the composer's file card without the ×
+/// (it is sent already) or its size, with the folder the prompt named it
+/// under its name and the whole path in a tooltip.
+fn sent_file_card(ix: usize, n: usize, path: &SharedString) -> impl IntoElement {
+    let (folder, name) = ui::split_path(std::path::Path::new(&path[..]));
+    let tip = path.clone();
+    h_flex()
+        .id(("user-file", ix * 64 + n))
+        .debug_selector(move || format!("user-file-{ix}-{n}"))
+        .flex_shrink_0()
+        .h(rems(64. / 16.))
+        .pl(rems(7. / 16.))
+        .pr(rems(11. / 16.))
+        .gap_2p5()
+        .rounded_lg()
+        .border_1()
+        .border_color(ui::border_strong())
+        .bg(ui::surface())
+        .tooltip(move |window, cx| ui::tooltip(tip.clone()).build(window, cx))
+        .child(file_tile())
+        .child(
+            v_flex()
+                .min_w_0()
+                .max_w(rems(180. / 16.))
+                .gap_0p5()
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(ui::fg())
+                        .child(name),
+                )
+                .when(!folder.is_empty(), |this| {
+                    this.child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_size(rems(11. / 16.))
+                            .text_color(ui::faint())
+                            .child(folder),
+                    )
+                }),
+        )
 }
 
 /// An image source that fails at once, without loading anything: the
