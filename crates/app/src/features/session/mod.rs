@@ -149,6 +149,9 @@ pub struct SessionView {
     kisses_blown: usize,
     /// The composer's text length last time, to tell typing from deleting.
     composer_len: usize,
+    /// The `@` file menu's files and highlight (see `view::path_menu`):
+    /// references are inline text, so nothing here becomes a tile.
+    path_menu: view::PathMenu,
     /// Images waiting to go with the next prompt, shown as the numbered
     /// thumbnails of its strip and sent in that order.
     attachments: Vec<attachments::Attachment>,
@@ -315,12 +318,14 @@ impl SessionView {
                     this.model_query_changed(cx);
                 }
             }),
-            // The model picker's and the `/` menu's ↑/↓/Enter must beat the
-            // focused search field and composer.
+            // The model picker's, the `@` file menu's and the `/` menu's
+            // ↑/↓/Enter must beat the focused search field and composer (and
+            // the `@` menu's arrows beat ↑/↓ prompt history).
             cx.intercept_keystrokes(move |event, window, cx| {
                 let consumed = weak
                     .update(cx, |this, cx| {
                         this.model_picker_key(&event.keystroke, window, cx)
+                            || this.path_menu_key(&event.keystroke, window, cx)
                             || this.history_key(&event.keystroke, window, cx)
                             || this.slash_menu_key(&event.keystroke, window, cx)
                     })
@@ -366,6 +371,7 @@ impl SessionView {
             kisses: Vec::new(),
             kisses_blown: 0,
             composer_len: 0,
+            path_menu: view::PathMenu::default(),
             attachments: Vec::new(),
             files: Vec::new(),
             checking_files: false,

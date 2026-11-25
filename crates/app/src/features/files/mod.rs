@@ -11,6 +11,7 @@ mod tree;
 mod viewer;
 
 pub use changes::{ChangesEvent, ChangesView};
+pub(crate) use listing::list_dir;
 pub use mermaid::{
     Diagrams as MermaidDiagrams, Job as MermaidJob, Renderer as DiagramRenderer,
     RendererState as DiagramRendererState, banner as mermaid_banner, dark as mermaid_dark,
@@ -87,8 +88,9 @@ pub fn init(cx: &mut App) {
     mermaid::init(cx);
 }
 
-/// The icon and tint for a file name in the tree.
-fn file_icon(name: &str) -> (IconName, Hsla) {
+/// The icon and tint for a file name in the tree, and in the composer's `@`
+/// menu.
+pub(crate) fn file_icon(name: &str) -> (IconName, Hsla) {
     let lower = name.to_lowercase();
     let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
     match (lower.as_str(), ext) {

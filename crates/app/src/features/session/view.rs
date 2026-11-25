@@ -32,6 +32,7 @@ mod dialogs;
 mod effort;
 mod live;
 mod model_picker;
+mod path_menu;
 mod paths;
 mod permissions;
 mod plan_limits;
@@ -45,6 +46,7 @@ pub(super) use activity::parse_rate_limit;
 pub(super) use cards::markdown_custom;
 pub(super) use live::{Live, RateLimit};
 use live::{Span, TICK, label_stamp, ticker_needed, track};
+pub(super) use path_menu::PathMenu;
 pub(super) use paths::PathLookup;
 pub(super) use transcript_list::TranscriptList;
 use transcript_list::{GroupRow, HeaderKey, Prepared, Row, Tail};
@@ -1957,6 +1959,9 @@ impl Render for SessionView {
         // A tab starts its backend once shown.
         self.ensure_started(window, cx);
         self.sync_view(cx);
+        // An `@` reference searches this tab's folder: its files are read once
+        // the composer holds one (see `path_menu`).
+        self.ensure_path_files(cx);
         self.watch_surfaces(window, cx);
         self.step_glide(window);
         // Timed effects (the composer's, answers fading) ask for each next
@@ -2110,7 +2115,16 @@ impl Render for SessionView {
                                 .rounded_b_xl()
                         })
                         .pb_2()
-                        .child(composer),
+                        .child(
+                            // The `@` menu opens over the composer, above it.
+                            v_flex()
+                                .flex_1()
+                                .min_w_0()
+                                .max_w(rems(720. / 16.))
+                                .gap_1p5()
+                                .children(self.render_path_menu(cx))
+                                .child(composer),
+                        ),
                 )
                 .children(strip)
             })

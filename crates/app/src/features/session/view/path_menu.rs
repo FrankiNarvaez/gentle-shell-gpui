@@ -1,0 +1,932 @@
+//! The `@` file menu over the composer: typing `@` searches the tab's folder
+//! the way a terminal would (ignore-aware, with the switcher's file ranking),
+//! Tab completes a folder prefix, Enter puts the file's `@path` into the
+//! sentence where the reference was typed — as plain text in the prompt, not
+//! as a tile, and without sending — and Esc closes the menu.
+//!
+//! The files are read off the UI thread, once per folder, and a folder the tab
+//! has left while the walk ran is dropped; a completion lands only when the
+//! composer still holds the text it was asked for and no newer Tab or Esc
+//! superseded it. Enter pressed while the folder is still being read waits for
+//! its files instead of sending the draft with the raw `@query`.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+
+use crate::features::files::{file_icon, list_dir};
+use crate::features::palette::{MAX_FILES, walk_files};
+use crate::features::session::SessionView;
+use crate::shared::ui;
+use gentle_core::fuzzy::{FileEntry, Needle, rank_files};
+use gentle_core::markdown::paths;
+
+/// Rows the menu lists; typing narrows them.
+const ROWS: usize = 8;
+/// The menu shows about eight rows; the rest scroll.
+const MENU_H: f32 = 256.;
+
+/// The `@` reference the caret sits in: where its `@` starts (a byte offset)
+/// and what was typed after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Mention {
+    at: usize,
+    query: String,
+}
+
+/// The reference the caret is in, or `None` when the caret isn't in one: the
+/// `@` opens a word (the text starts there, or a space comes before it) and
+/// nothing separates it from the caret. An address (`me@example.com`) is not
+/// a reference: its `@` follows a letter.
+fn mention_at(text: &str, caret: usize) -> Option<Mention> {
+    if caret > text.len() || !text.is_char_boundary(caret) {
+        return None;
+    }
+    let before = &text[..caret];
+    let start = before
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace())
+        .map_or(0, |(i, c)| i + c.len_utf8());
+    let query = before[start..].strip_prefix('@')?;
+    Some(Mention {
+        at: start,
+        query: query.to_string(),
+    })
+}
+
+/// What choosing the file at `path` puts in the composer: its `@path`, and a
+/// space when the reference ends the text, so the next word typed doesn't
+/// stick to it. Text after the reference is left exactly as it was.
+fn insertion(path: &str, at_end: bool) -> String {
+    if at_end {
+        format!("@{path} ")
+    } else {
+        format!("@{path}")
+    }
+}
+
+/// The query with its last segment completed from the names of its folder:
+/// the longest prefix the matching names share, plus `/` when one folder
+/// answers. `None` when nothing would be added (no match, or the prefix
+/// already typed).
+fn completed_query(query: &str, names: &[(String, bool)]) -> Option<String> {
+    let head_at = query.rfind(['/', '\\']).map_or(0, |i| i + 1);
+    let (folder, head) = query.split_at(head_at);
+    let lower = head.to_lowercase();
+    let matches: Vec<(&str, bool)> = names
+        .iter()
+        .filter(|(name, _)| name.to_lowercase().starts_with(&lower))
+        .map(|(name, dir)| (name.as_str(), *dir))
+        .collect();
+    let (first, folder_answers) = *matches.first()?;
+    let mut completed = matches.iter().fold(first.to_string(), |shared, (name, _)| {
+        common_prefix(&shared, name)
+    });
+    if matches.len() == 1 && folder_answers {
+        completed.push('/');
+    }
+    if completed.len() <= head.len() {
+        return None;
+    }
+    Some(format!("{folder}{completed}"))
+}
+
+/// The folder a reference's typed path names, under the tab's folder, or
+/// `None` when it would leave it (an absolute path, `~`, or a `..` segment):
+/// the search never looks outside the tab.
+fn under_cwd(cwd: &Path, query: &str) -> Option<PathBuf> {
+    if query.starts_with(['/', '\\', '~'])
+        || query.split(['/', '\\']).any(|segment| segment == "..")
+    {
+        return None;
+    }
+    let folder = query.rfind(['/', '\\']).map_or("", |i| &query[..i]);
+    Some(cwd.join(folder))
+}
+
+/// The longest prefix two names share.
+fn common_prefix(a: &str, b: &str) -> String {
+    a.chars()
+        .zip(b.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a)
+        .collect()
+}
+
+/// A row of the menu: a file under the tab's folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Row {
+    /// The path the reference names, relative to the tab's folder.
+    path: String,
+    name: String,
+    /// The folders above the file, shown muted before its name.
+    folder: String,
+}
+
+/// The rows `query` matches among `files`: the best names first, then the
+/// shorter paths, as the switcher ranks them.
+fn rows(files: &[FileEntry], query: &str) -> Vec<Row> {
+    let needle = Needle::new(query);
+    rank_files(files, &needle.lower, ROWS)
+        .into_iter()
+        .map(|i| {
+            let path = files[i].path.clone();
+            let (folder, name) = paths::split(&path);
+            let (folder, name) = (folder.to_string(), name.to_string());
+            Row { path, name, folder }
+        })
+        .collect()
+}
+
+/// A completion asked for, and the request it is: the text and caret it was
+/// asked about, the reference it completes, and which request it is (a newer
+/// one, or an Esc, supersedes it and its answer is dropped).
+#[derive(Clone)]
+struct Asked {
+    text: String,
+    caret: usize,
+    reference: Mention,
+    epoch: u64,
+}
+
+/// The menu's files and highlight: the folder they were read from, the
+/// highlight for the query it was moved on, and the text Esc closed it for.
+#[derive(Default)]
+pub(in crate::features::session) struct PathMenu {
+    /// Files under the tab's folder, with the folder they were read from.
+    index: Option<(PathBuf, Arc<Vec<FileEntry>>)>,
+    /// The folder whose walk is running, so it isn't asked twice.
+    walking: Option<PathBuf>,
+    /// The composer text Esc closed the menu for.
+    dismissed: Option<String>,
+    /// Completion requests so far: the latest one's answer may land, and an
+    /// Esc takes that away from it.
+    completions: u64,
+    /// The highlighted row, for `query` (another query starts at the top).
+    cursor: usize,
+    query: String,
+    scroll: ScrollHandle,
+}
+
+impl SessionView {
+    /// Read the tab folder's files for `@` search — once, off the UI thread,
+    /// the first time the composer holds a reference. An answer for a folder
+    /// the tab has left while the walk ran is dropped, and the menu asks for
+    /// the new folder on its next frame.
+    pub(in crate::features::session) fn ensure_path_files(&mut self, cx: &mut Context<Self>) {
+        if !self.composer.read(cx).value().contains('@') {
+            return;
+        }
+        let cwd = self.cwd.clone();
+        let asked = self.path_menu.index.as_ref().map(|(at, _)| at) == Some(&cwd)
+            || self.path_menu.walking.as_ref() == Some(&cwd);
+        if asked {
+            return;
+        }
+        self.path_menu.walking = Some(cwd.clone());
+        let root = cwd.clone();
+        let walking = cx.background_executor().spawn(async move {
+            walk_files(&root, MAX_FILES)
+                .into_iter()
+                .map(FileEntry::new)
+                .collect::<Vec<_>>()
+        });
+        cx.spawn(async move |this, cx| {
+            let files = walking.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.cwd != cwd {
+                    // The tab left that folder while the walk ran: its files
+                    // would name paths the prompt's folder doesn't have.
+                    this.path_menu.walking = None;
+                    return;
+                }
+                this.path_menu.index = Some((cwd, Arc::new(files)));
+                this.path_menu.walking = None;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The menu's rows for `query`, best match first. Empty while the folder
+    /// is still being read, and for a bare `@` (Tab completes that one).
+    fn path_rows(&self, query: &str) -> Vec<Row> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        match &self.path_menu.index {
+            Some((_, files)) => rows(files, query),
+            None => Vec::new(),
+        }
+    }
+
+    /// Whether the tab folder's files are read: the menu then shows what
+    /// `query` matches, a reference that matches nothing included.
+    fn path_files_ready(&self) -> bool {
+        self.path_menu
+            .index
+            .as_ref()
+            .is_some_and(|(at, _)| *at == self.cwd)
+    }
+
+    /// The highlighted row of the menu showing `count` rows for `query`.
+    fn path_cursor(&self, query: &str, count: usize) -> usize {
+        if self.path_menu.query == query {
+            self.path_menu.cursor.min(count.saturating_sub(1))
+        } else {
+            0
+        }
+    }
+
+    /// Put `insert` in place of the reference `at..end`, caret after it, and
+    /// leave the rest of the text as it was. Edited in place rather than
+    /// written from a string, so a long paste's chip keeps its span.
+    fn replace_mention(
+        &mut self,
+        at: usize,
+        end: usize,
+        insert: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.composer.update(cx, |state, cx| {
+            state.set_selected_range(at..end, cx);
+            state.replace(insert, window, cx);
+            state.focus(window, cx);
+        });
+    }
+
+    /// Choose the file at `path` as the reference `at..end`: its `@path`
+    /// goes into the sentence (plain text: no tile, nothing sent) and the
+    /// caret lands after it, in the text that followed.
+    fn choose_path(
+        &mut self,
+        at: usize,
+        end: usize,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.composer.read(cx).value().to_string();
+        let insert = insertion(path, end == text.len());
+        self.replace_mention(at, end, &insert, window, cx);
+        cx.notify();
+    }
+
+    /// Tab on a reference: read the folder of the segment being typed off the
+    /// UI thread, then complete it. The completion lands only while the
+    /// composer still holds the text and caret it was asked for.
+    fn complete_path(
+        &mut self,
+        mention: &Mention,
+        text: String,
+        caret: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(folder) = under_cwd(&self.cwd, &mention.query) else {
+            return false;
+        };
+        self.path_menu.completions += 1;
+        let asked = Asked {
+            text,
+            caret,
+            reference: mention.clone(),
+            epoch: self.path_menu.completions,
+        };
+        let reading = cx.background_executor().spawn(async move {
+            list_dir(&folder, false)
+                .into_iter()
+                .map(|entry| (entry.name, entry.is_dir))
+                .collect::<Vec<_>>()
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let names = reading.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.complete_landed(&asked, names, window, cx)
+            });
+        })
+        .detach();
+        true
+    }
+
+    /// Apply the completion read for `asked` when it is still the latest one
+    /// and the composer still holds the text and caret it was asked about: an
+    /// answer a newer Tab or an Esc superseded is dropped, as is one for text
+    /// the person has since typed over, and one that would add nothing.
+    fn complete_landed(
+        &mut self,
+        asked: &Asked,
+        names: Vec<(String, bool)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.path_menu.completions != asked.epoch {
+            return;
+        }
+        let current = {
+            let state = self.composer.read(cx);
+            state.value() == asked.text && state.cursor() == asked.caret
+        };
+        if !current {
+            return;
+        }
+        let Some(completed) = completed_query(&asked.reference.query, &names) else {
+            return;
+        };
+        let insert = format!("@{completed}");
+        self.replace_mention(asked.reference.at, asked.caret, &insert, window, cx);
+        cx.notify();
+    }
+
+    /// ↑/↓ move through the `@` menu, Tab completes the folder prefix being
+    /// typed, Enter puts the highlighted file's `@path` in the sentence
+    /// without sending, Esc closes the menu. Runs as a keystroke interceptor
+    /// before ↑/↓ history and the `/` menu, so the arrows are the menu's while
+    /// it is open. Enter also belongs to the menu while the folder's files are
+    /// still being read: sending then would post the raw `@query` instead of
+    /// the file it names.
+    pub(in crate::features::session) fn path_menu_key(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let m = &keystroke.modifiers;
+        if m.platform || m.control || m.alt || m.shift {
+            return false;
+        }
+        if !self.composer.focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let (text, caret) = {
+            let state = self.composer.read(cx);
+            (state.value().to_string(), state.cursor())
+        };
+        let Some(mention) = mention_at(&text, caret) else {
+            return false;
+        };
+        // Tab completes a folder the reference only names in part, whether or
+        // not the menu is listing anything yet.
+        if keystroke.key == "tab" {
+            return self.complete_path(&mention, text, caret, window, cx);
+        }
+        if self.path_menu.dismissed.as_deref() == Some(text.as_str()) {
+            return false;
+        }
+        // Esc closes the reference and cancels the completion still being
+        // read for it, so the next Esc is the composer's again.
+        if keystroke.key == "escape" {
+            if mention.query.is_empty() {
+                return false;
+            }
+            self.path_menu.dismissed = Some(text);
+            self.path_menu.completions += 1;
+            self.live.escape_closed = Some(std::time::Instant::now());
+            cx.notify();
+            return true;
+        }
+        let rows = self.path_rows(&mention.query);
+        if rows.is_empty() {
+            // Nothing to choose from yet: while the folder is still being
+            // read, Enter waits for its files (and sends nothing); a
+            // reference no file answers is the composer's, as it always was.
+            let waiting = keystroke.key == "enter"
+                && !mention.query.is_empty()
+                && under_cwd(&self.cwd, &mention.query).is_some()
+                && !self.path_files_ready();
+            if waiting {
+                self.ensure_path_files(cx);
+            }
+            return waiting;
+        }
+        let count = rows.len();
+        let cursor = self.path_cursor(&mention.query, count);
+        match keystroke.key.as_str() {
+            "up" | "down" => {
+                let next = if keystroke.key == "up" {
+                    (cursor + count - 1) % count
+                } else {
+                    (cursor + 1) % count
+                };
+                self.path_menu.query = mention.query.clone();
+                self.path_menu.cursor = next;
+                self.path_menu.scroll.scroll_to_item(next);
+            }
+            "enter" => {
+                let path = rows[cursor].path.clone();
+                self.choose_path(mention.at, caret, &path, window, cx);
+            }
+            _ => return false,
+        }
+        cx.notify();
+        true
+    }
+
+    /// The `@` menu: the files the reference under the caret matches, drawn
+    /// over the composer.
+    pub(super) fn render_path_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (text, caret) = {
+            let state = self.composer.read(cx);
+            (state.value().to_string(), state.cursor())
+        };
+        let mention = mention_at(&text, caret)?;
+        if self.path_menu.dismissed.as_deref() == Some(text.as_str()) {
+            return None;
+        }
+        let rows = self.path_rows(&mention.query);
+        if rows.is_empty() {
+            return None;
+        }
+        let cursor = self.path_cursor(&mention.query, rows.len());
+        let end = caret;
+        let at = mention.at;
+        Some(
+            ui::pop_in(
+                "path-menu",
+                v_flex()
+                    .debug_selector(|| "path-menu".into())
+                    .w_full()
+                    .p_1()
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(ui::border_strong())
+                    .bg(ui::surface())
+                    .shadow_lg()
+                    .font_family(cx.theme().font_family.clone())
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .items_center()
+                            .px_2()
+                            .pt_1()
+                            .pb_1()
+                            .child(ui::section_label("Files"))
+                            .child(
+                                div()
+                                    .text_size(rems(10. / 16.))
+                                    .text_color(ui::faint())
+                                    .child("↵ insert · tab folders"),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .id("path-list")
+                            .max_h(rems(MENU_H / 16.))
+                            .overflow_y_scroll()
+                            .track_scroll(&self.path_menu.scroll)
+                            .children(rows.into_iter().enumerate().map(|(i, row)| {
+                                let (icon, tint) = file_icon(&row.name);
+                                let path = row.path.clone();
+                                h_flex()
+                                    .id(("path-row", i))
+                                    .debug_selector(move || format!("path-row-{i}"))
+                                    .w_full()
+                                    .px_2()
+                                    .py_1p5()
+                                    .gap_2()
+                                    .rounded_lg()
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(ui::surface_hover()))
+                                    .when(i == cursor, |s| s.bg(ui::surface_hover()))
+                                    .child(Icon::new(icon).xsmall().text_color(tint))
+                                    .child(
+                                        h_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .font_family(ui::mono())
+                                            .text_size(ui::code_rems(12.))
+                                            .when(!row.folder.is_empty(), |line| {
+                                                line.child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .text_color(ui::faint())
+                                                        .child(SharedString::from(row.folder)),
+                                                )
+                                            })
+                                            .child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_color(ui::fg())
+                                                    .child(SharedString::from(row.name)),
+                                            ),
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.choose_path(at, end, &path, window, cx)
+                                    }))
+                            })),
+                    ),
+            )
+            .into_any_element(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use gpui_kit::{Entity, Keystroke, TestAppContext, VisualTestContext};
+
+    use super::{Mention, completed_query, mention_at, under_cwd};
+    use crate::features::session::SessionView;
+    use crate::features::session::attachments;
+
+    /// A folder of files for a test, named after the test so two tests never
+    /// share one.
+    fn folder(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gs-path-menu-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        for file in ["alpha.md", "beta.md", "src/main.rs"] {
+            std::fs::write(dir.join(file), "x").unwrap();
+        }
+        dir
+    }
+
+    /// A tab rooted at `cwd`, in a headless window that never starts a
+    /// backend.
+    fn tab(cx: &mut TestAppContext, cwd: PathBuf) -> (Entity<SessionView>, &mut VisualTestContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        cx.add_window_view(|window, cx| {
+            let mut view = SessionView::new(cwd, None, window, cx, false);
+            view.backend.started = true;
+            view
+        })
+    }
+
+    /// Put `text` in the composer with the caret at byte `caret`, focused as
+    /// typing it would leave it, leaving the folder's files still unread: the
+    /// window a quick key press falls into.
+    fn type_now(view: &Entity<SessionView>, cx: &mut VisualTestContext, text: &str, caret: usize) {
+        view.update_in(cx, |view, window, cx| {
+            view.composer.update(cx, |state, cx| {
+                state.focus(window, cx);
+                state.set_value(text, window, cx);
+                state.set_selected_range(caret..caret, cx);
+            });
+        });
+    }
+
+    /// The same, once the folder's files have landed.
+    fn type_at(view: &Entity<SessionView>, cx: &mut VisualTestContext, text: &str, caret: usize) {
+        type_now(view, cx, text, caret);
+        cx.run_until_parked();
+    }
+
+    /// A key dispatched as it is pressed, without letting the background
+    /// executor run: two of these arrive while what the first one started is
+    /// still in flight (the window `simulate_keystrokes` would park after
+    /// each one).
+    fn press(cx: &mut VisualTestContext, key: &str) {
+        let keystroke = cx
+            .update(|_, cx| Keystroke::parse_with_os(key, cx.platform_info().os))
+            .expect("a keystroke");
+        cx.update(|window, cx| window.dispatch_keystroke(keystroke, cx));
+    }
+
+    /// Enter as GPUI parses it, for the interceptor the window calls.
+    fn enter(cx: &mut VisualTestContext) -> Keystroke {
+        cx.update(|_, cx| Keystroke::parse_with_os("enter", cx.platform_info().os))
+            .expect("enter is a keystroke")
+    }
+
+    /// What the composer holds.
+    fn composer_text(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> String {
+        view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string())
+    }
+
+    /// Whether `selector` was drawn in the last frame.
+    fn drawn(cx: &mut VisualTestContext, selector: &'static str) -> bool {
+        cx.run_until_parked();
+        cx.debug_bounds(selector).is_some()
+    }
+
+    #[test]
+    fn a_reference_opens_a_word_and_never_an_address() {
+        let mention = |text: &str, caret: usize| mention_at(text, caret).map(|m| (m.at, m.query));
+
+        assert_eq!(mention("@sr", 3), Some((0, "sr".into())));
+        assert_eq!(mention("see @ma here", 7), Some((4, "ma".into())));
+        // An address' `@` follows a letter: not a reference.
+        assert_eq!(mention("mail me@example.com", 18), None);
+        assert_eq!(mention("mail me@exa", 11), None);
+        // A caret outside the reference names nothing.
+        assert_eq!(mention("see @ma", 3), None);
+        assert_eq!(mention("see @ma", 9), None, "past the text's end");
+        assert_eq!(mention("at@ 12 more", 3), None);
+        // Typed before the `@` of a word that starts with one.
+        assert_eq!(mention("@src/main.rs and", 7), Some((0, "src/ma".into())));
+    }
+
+    #[test]
+    fn tab_completes_the_longest_shared_prefix() {
+        let names = |list: &[(&str, bool)]| {
+            list.iter()
+                .map(|(name, dir)| (name.to_string(), *dir))
+                .collect::<Vec<_>>()
+        };
+        let icons = names(&[("src", true), ("styles", true), ("README.md", false)]);
+        // One folder answers: it is completed and opened.
+        assert_eq!(
+            completed_query("sr", &icons).as_deref(),
+            Some("src/"),
+            "a single folder gets its slash"
+        );
+        assert_eq!(
+            completed_query("src/main", &names(&[("main.rs", false)])).as_deref(),
+            Some("src/main.rs")
+        );
+        assert_eq!(
+            completed_query("src/co", &names(&[("components", true)])).as_deref(),
+            Some("src/components/")
+        );
+        // Two folders share only what was typed: nothing to add.
+        assert_eq!(completed_query("s", &icons), None);
+        assert_eq!(completed_query("zz", &icons), None);
+        assert_eq!(
+            completed_query("src/main.rs", &names(&[("main.rs", false)])),
+            None,
+            "a name typed in full adds nothing"
+        );
+    }
+
+    /// Enter pressed before the folder's files have been read waits for them
+    /// instead of sending the draft: the press is the menu's (consumed, so the
+    /// composer never sees it and cannot submit), the draft is untouched, and
+    /// the same key picks the file once the menu lists it.
+    #[gpui::test]
+    fn enter_waits_for_the_files_instead_of_sending_the_draft(cx: &mut TestAppContext) {
+        let dir = folder("enter-race");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_now(&view, cx, "look at @alp", 12);
+        let key = enter(cx);
+        let consumed = view.update_in(cx, |view, window, cx| view.path_menu_key(&key, window, cx));
+        assert!(consumed, "the loading picker takes Enter");
+        assert_eq!(
+            composer_text(&view, cx),
+            "look at @alp",
+            "the draft is untouched: nothing sent, nothing inserted"
+        );
+        assert!(
+            view.read_with(cx, |view, _| view.live.pending.is_none()),
+            "no prompt is in flight"
+        );
+
+        // The files land: the same key now picks the file.
+        assert!(drawn(cx, "path-menu"));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "look at @alpha.md ");
+
+        // A reference that matches no file is not the menu's: Enter is the
+        // composer's again, as it always was for `@word`.
+        type_at(&view, cx, "hello @zzzz", 12);
+        let key = enter(cx);
+        let consumed = view.update_in(cx, |view, window, cx| view.path_menu_key(&key, window, cx));
+        assert!(!consumed, "nothing to choose: Enter sends as typed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A completion read asked for before Esc never lands: Esc closes the
+    /// reference and drops the answer still being read.
+    #[gpui::test]
+    fn a_completion_asked_before_escape_never_lands(cx: &mut TestAppContext) {
+        let dir = folder("escape");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_now(&view, cx, "read @sr", 8);
+        press(cx, "tab");
+        press(cx, "escape");
+        cx.run_until_parked();
+
+        assert_eq!(
+            composer_text(&view, cx),
+            "read @sr",
+            "the completion asked before Esc was dropped"
+        );
+        assert!(!drawn(cx, "path-menu"), "and the menu stayed closed");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The folder a reference names is read under the tab's folder, never
+    /// outside it.
+    #[test]
+    fn a_reference_never_leaves_the_tabs_folder() {
+        let cwd = Path::new("/work");
+        assert_eq!(under_cwd(cwd, "sr"), Some(PathBuf::from("/work")));
+        assert_eq!(
+            under_cwd(cwd, "src/co"),
+            Some(PathBuf::from("/work/src")),
+            "the segment's folder, under the tab"
+        );
+        assert_eq!(under_cwd(cwd, "../etc"), None);
+        assert_eq!(under_cwd(cwd, "src/../../etc"), None);
+        assert_eq!(under_cwd(cwd, "/etc"), None);
+        assert_eq!(under_cwd(cwd, "~/docs"), None);
+    }
+
+    /// Enter puts the chosen file's `@path` into the sentence as plain text:
+    /// what the prompt would carry is that text, nothing became a tile and
+    /// nothing was sent.
+    #[gpui::test]
+    fn enter_writes_the_files_path_into_the_sentence(cx: &mut TestAppContext) {
+        let dir = folder("select");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_at(&view, cx, "look at @alp", 12);
+        assert!(drawn(cx, "path-menu"), "the reference lists its files");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        assert_eq!(composer_text(&view, cx), "look at @alpha.md ");
+        assert!(!drawn(cx, "path-menu"), "the menu closes on the choice");
+        let view_state = view.read_with(cx, |view, _| {
+            (
+                view.files.len(),
+                view.attachments.len(),
+                view.live.pending.is_none(),
+            )
+        });
+        assert_eq!(
+            view_state,
+            (0, 0, true),
+            "no tile, and the prompt was not sent"
+        );
+        let sent = view.read_with(cx, |view, cx| {
+            attachments::expand(&view.composer.read(cx).value(), &view.pasted)
+        });
+        assert_eq!(sent, "look at @alpha.md ", "the reference goes out as text");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The reference is replaced where it was typed: the words around it stay
+    /// exactly as they were.
+    #[gpui::test]
+    fn the_caret_replaces_only_the_reference(cx: &mut TestAppContext) {
+        let dir = folder("suffix");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_at(&view, cx, "compare @alp with bb.md", 12);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "compare @alpha.md with bb.md");
+        assert_eq!(
+            view.read_with(cx, |view, _| view.files.len()),
+            0,
+            "an inline reference is not an attachment"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Tab completes the folder prefix under the caret and types it, without
+    /// sending or listing a tile.
+    #[gpui::test]
+    fn tab_completes_a_folder_prefix(cx: &mut TestAppContext) {
+        let dir = folder("tab");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_at(&view, cx, "read @sr", 8);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "read @src/");
+        assert_eq!(view.read_with(cx, |view, _| view.files.len()), 0);
+        // The search stays inside the tab's folder.
+        type_at(&view, cx, "@../", 4);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "@../");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The arrows move the menu's highlight (not ↑/↓ history) and Enter picks
+    /// the highlighted file.
+    #[gpui::test]
+    fn arrows_move_the_menu_and_enter_picks_the_highlight(cx: &mut TestAppContext) {
+        let dir = folder("arrows");
+        let (view, cx) = tab(cx, dir.clone());
+        view.update(cx, |view, _| view.prompt_history.record("first"));
+
+        // Three files match `a`, `alpha.md` first (`src/main.rs` second): ↓
+        // moves the highlight onto the second, and Enter takes that one.
+        type_at(&view, cx, "@a", 2);
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "@a", "↓ did not recall history");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "@src/main.rs ");
+
+        // Closed, ↑ is ↑ history again.
+        cx.simulate_keystrokes("up");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "first");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A long paste's chip keeps its token while a reference beside it is
+    /// chosen.
+    #[gpui::test]
+    fn a_pastes_token_survives_the_insertion(cx: &mut TestAppContext) {
+        let dir = folder("paste");
+        let (view, cx) = tab(cx, dir.clone());
+        let token = attachments::token(1);
+        let text = format!("see @alp then {token}");
+        view.update(cx, |view, _| {
+            view.pasted
+                .push(attachments::PastedText::new("a\nb".into()));
+        });
+
+        type_at(&view, cx, &text, 8);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            composer_text(&view, cx),
+            format!("see @alpha.md then {token}")
+        );
+        assert_eq!(
+            view.read_with(cx, |view, _| view.pasted.len()),
+            1,
+            "the paste is still there, and still its own card"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A completion read for text that has been typed over since is dropped:
+    /// the composer is never rewritten from a stale answer.
+    #[gpui::test]
+    fn a_completion_for_text_that_changed_is_dropped(cx: &mut TestAppContext) {
+        let dir = folder("stale");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_at(&view, cx, "@src", 4);
+        let names = vec![("main.rs".to_string(), false)];
+        let asked = super::Asked {
+            text: "@nope".into(),
+            caret: 3,
+            reference: Mention {
+                at: 0,
+                query: "sr".into(),
+            },
+            epoch: view.read_with(cx, |view, _| view.path_menu.completions),
+        };
+        view.update_in(cx, |view, window, cx| {
+            view.complete_landed(&asked, names, window, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "@src", "the answer was stale");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A path with spaces goes in whole, and the caret lands past it: the
+    /// reference is whitespace-free (prose never opens one), so a spaced
+    /// path is written by choosing it, not by typing it.
+    #[test]
+    fn a_path_with_spaces_goes_in_whole() {
+        assert_eq!(
+            super::insertion("my dir/file.txt", false),
+            "@my dir/file.txt",
+            "the path goes in as it is on disk"
+        );
+        assert_eq!(super::insertion("src/main.rs", true), "@src/main.rs ");
+        // The space ends a reference, so ordinary prose never opens one.
+        assert_eq!(mention_at("see @my dir/file", 16), None);
+    }
+
+    /// The menu's rows come from the tab's own folder, ranked as the
+    /// switcher ranks files.
+    #[gpui::test]
+    fn the_menu_lists_files_of_the_tab_folder(cx: &mut TestAppContext) {
+        let dir = folder("rows");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_at(&view, cx, "@main", 5);
+        assert!(drawn(cx, "path-menu"));
+        let shown = view.read_with(cx, |view, _| {
+            view.path_rows("main")
+                .into_iter()
+                .map(|row| row.path)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(shown, vec!["src/main.rs".to_string()]);
+        // Outside the tab's folder nothing is offered.
+        assert!(view.read_with(cx, |view, _| view.path_rows("zzz").is_empty()));
+        assert!(view.read_with(cx, |view, _| view.path_rows("").is_empty()));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}
