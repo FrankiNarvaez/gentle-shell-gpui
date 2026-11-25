@@ -359,22 +359,33 @@ impl SessionView {
     /// token renderer), a space after it and the caret there, ready for the
     /// instructions that follow. The text is the command itself, so sending
     /// the prompt invokes the skill; a skill opens nothing, so nothing is
-    /// opened or sent here.
+    /// opened or sent here. Only the `/query` at the caret is replaced; a query
+    /// gone from the caret (or no longer naming the row) picks nothing.
     pub(super) fn insert_skill_reference(
         &mut self,
         name: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = format!("/{name} ");
-        let end = text.len();
-        // Marked by the same rule a recalled prompt is: the command is one
-        // this tab's backend lists as a skill.
-        self.set_composer_text(text, end, window, cx);
+        let state = self.composer.read(cx);
+        let (text, cursor) = (state.value().to_string(), state.cursor());
+        let Some(query) = slash_query_at(&text, cursor) else {
+            return;
+        };
+        // The menu matched the row from that query with `contains`: stale now?
+        if !name.contains(&text[query.start + 1..query.end]) {
+            return;
+        }
+        let mut reference = format!("/{name}");
+        // The space after it is the one already there, when there is one.
+        if !text[query.end..].starts_with(char::is_whitespace) {
+            reference.push(' ');
+        }
+        let caret = query.start + reference.len();
+        let text = format!("{}{reference}{}", &text[..query.start], &text[query.end..]);
+        self.set_composer_text(text, caret, window, cx);
         self.composer
             .update(cx, |state, cx| state.focus(window, cx));
-        // The whole text was replaced: no paste's token is left in it.
-        self.pasted.clear();
     }
 
     /// Attach what was dropped or picked and warn about the rest: images wait
@@ -828,6 +839,17 @@ pub(super) const SKILL_TOKEN_ID: &str = "skill-reference";
 /// kept as one editing unit and labeled as itself.
 fn skill_reference(command: &str) -> InlineToken {
     InlineToken::new(SKILL_TOKEN_ID, command)
+}
+
+/// The `/query` the caret ends, from its `/`; None when the caret left it.
+fn slash_query_at(text: &str, cursor: usize) -> Option<Range<usize>> {
+    let caret = cursor.min(text.len());
+    let before = &text[..caret];
+    let start = before.rfind('/')?;
+    let query = &before[start..];
+    let word = before[..start].chars().next_back();
+    (!query.contains(char::is_whitespace) && word.is_none_or(char::is_whitespace))
+        .then_some(start..caret)
 }
 
 /// The editor position (line, UTF-16 column) of byte `offset` in `text`.

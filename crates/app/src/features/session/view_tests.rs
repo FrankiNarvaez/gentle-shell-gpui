@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gentle_core::commands::Screen;
+use gpui_kit::component::input::Position;
 use gpui_kit::{
     AppContext as _, Context, Entity, FileDropEvent, InteractiveElement as _, IntoElement,
     Modifiers, MouseButton, ParentElement as _, Render, StatefulInteractiveElement as _,
@@ -1722,11 +1723,13 @@ fn slash_tab<'a>(
 /// Put `text` in the composer as typing it leaves it: focused, with the `/`
 /// menu up for it.
 fn type_in_composer(view: &Entity<SessionView>, cx: &mut VisualTestContext, text: &str) {
+    let end = text.chars().map(char::len_utf16).sum::<usize>() as u32;
     cx.update(|window, cx| {
         let composer = view.read(cx).composer.clone();
         composer.update(cx, |state, cx| {
             state.focus(window, cx);
             state.set_value(text, window, cx);
+            state.set_cursor_position(Position::new(0, end), window, cx);
         });
     });
     cx.run_until_parked();
@@ -1903,6 +1906,45 @@ fn clicking_a_row_does_what_enter_does(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(tab.opened(), vec![Screen::Profiles]);
     assert_eq!(composer_text(&tab.view, cx), "");
+}
+
+/// S3: a pick replaces only the `/query` at the caret — `/skill:arch`, or the
+/// `/arch` the menu matched by name — leaving the prose and a paste's chip
+/// around it; with no query at the caret nothing is picked.
+#[gpui::test]
+fn picking_a_skill_replaces_only_the_query_at_the_caret(cx: &mut TestAppContext) {
+    let (tab, cx) = slash_tab(&["skill:architecture-docs"], cx);
+    let item = gpui_kit::ClipboardItem::new_string("fn main() {}\n".repeat(8));
+    let (prefix, rest, keep) = ("[Pasted text #1] ", "keep /skill:arch and this", "keep ");
+    let name = "/skill:architecture-docs";
+    let caret = format!("{prefix}{keep}/skill:arch").len() as u32;
+    tab.view.update_in(cx, |view, window, cx| {
+        view.paste_clipboard(&item, window, cx);
+        view.composer.update(cx, |state, cx| {
+            state.replace(rest, window, cx);
+            state.set_cursor_position(Position::new(0, caret), window, cx)
+        });
+        view.insert_skill_reference("skill:architecture-docs", window, cx);
+    });
+    let picked = format!("{prefix}{keep}{name} and this");
+    assert_eq!(composer_text(&tab.view, cx), picked);
+    let (tokens, start) = (composer_tokens(&tab.view, cx), prefix.len() + keep.len());
+    assert_eq!(tokens.len(), 2, "the paste's chip and the skill's");
+    assert_eq!(tokens[0].0, "pasted-text");
+    assert_eq!(tokens[1].0, "skill-reference");
+    assert_eq!(tokens[1].1, name);
+    assert_eq!(tokens[1].2, start..start + name.len());
+    // No query at the caret: nothing is picked.
+    type_in_composer(&tab.view, cx, "draft");
+    tab.view.update_in(cx, |view, window, cx| {
+        view.insert_skill_reference("skill:docs", window, cx)
+    });
+    assert_eq!(composer_text(&tab.view, cx), "draft");
+    type_in_composer(&tab.view, cx, "/arch");
+    cx.simulate_keystrokes("enter");
+    let completed = format!("{name} ");
+    assert_eq!(composer_text(&tab.view, cx), completed);
+    assert_eq!(composer_tokens(&tab.view, cx).len(), 1);
 }
 
 /// S3: the reference keeps its marking when the composer is rebuilt from its
