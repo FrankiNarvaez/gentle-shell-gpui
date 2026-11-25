@@ -698,11 +698,22 @@ mod tests {
             ),
             "look\n\nAttached files:\n- \\\\nas\\share\\x.pdf"
         );
-        let local = Backend::Local;
-        for backend in [None, Some(&local)] {
+        // A local backend uses the host's path semantics, not WSL's.
+        let root = std::env::current_dir().unwrap();
+        let cwd = root.join("proj");
+        let inside = cwd.join("src").join("main.rs");
+        let outside = root.join("Downloads").join("a.pdf");
+        let files = [
+            named("main.rs", inside.to_str().unwrap()),
+            named("a.pdf", outside.to_str().unwrap()),
+        ];
+        for backend in [None, Some(&Backend::Local)] {
             assert_eq!(
-                with_files("look", &files, cwd, backend),
-                "look\n\nAttached files:\n- C:\\proj\\src\\main.rs\n- C:\\Users\\x\\Downloads\\a.pdf"
+                with_files("look", &files, &cwd, backend),
+                format!(
+                    "look\n\nAttached files:\n- src/main.rs\n- {}",
+                    outside.display()
+                )
             );
         }
     }
