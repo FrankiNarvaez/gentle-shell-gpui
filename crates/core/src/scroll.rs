@@ -36,6 +36,17 @@ fn wrapped_lines<'a>(lines: impl Iterator<Item = &'a str>) -> f32 {
         .max(1) as f32
 }
 
+/// The lines a message's own text weighs, folded past [`BUBBLE_FOLD`] as the
+/// bubble draws it: blank text is the one line [`text_lines`] counts, and
+/// trailing blank lines count as they are.
+fn user_text(text: &str) -> f32 {
+    if text.trim_end().lines().nth(BUBBLE_FOLD).is_some() {
+        wrapped_lines(text.lines().take(BUBBLE_LINES)) + 1.
+    } else {
+        text_lines(text)
+    }
+}
+
 /// A row's size in "lines", from its content alone. Only its proportion to
 /// other rows matters: [`estimate`] scales it by what measured rows show.
 pub fn item_weight(item: &Item) -> f32 {
@@ -43,15 +54,16 @@ pub fn item_weight(item: &Item) -> f32 {
         // The bubble's padding and the row gap, then its text (and the
         // strip of image and file cards above it). The paths' block the
         // prompt carries weighs nothing: the bubble shows cards, not the
-        // block.
+        // block. A message with no block weighs what it always did, blank
+        // text included; one that is only a block has no text to weigh.
         Item::User { text, images } => {
             let (body, files) = crate::attachments::split_files(text);
-            let text = if body.trim().is_empty() {
+            let text = if files.is_empty() {
+                user_text(text)
+            } else if body.trim().is_empty() {
                 0.
-            } else if body.trim_end().lines().nth(BUBBLE_FOLD).is_some() {
-                wrapped_lines(body.lines().take(BUBBLE_LINES)) + 1.
             } else {
-                text_lines(body)
+                user_text(body)
             };
             3.8 + text
                 + if images.is_empty() { 0. } else { 7. }
@@ -388,12 +400,46 @@ mod tests {
         let plain = user("look");
         let with_files = user(&format!("look\n\nAttached files:\n{block}"));
         assert_eq!(item_weight(&with_files), item_weight(&plain) + FILE_CARD);
-        // A prompt of files only is its cards: no line of text under them.
+        // A prompt of files only is its cards: no line of text under them,
+        // though a message with no text at all still weighs its blank line.
         let only = user(&format!("Attached files:\n{block}"));
-        assert_eq!(item_weight(&only), item_weight(&user("")) + FILE_CARD);
+        assert_eq!(item_weight(&only), 3.8 + FILE_CARD);
+        assert_eq!(item_weight(&user("")), item_weight(&plain));
         // The block's lines never count: thirty paths weigh one card, not
         // thirty lines of text.
         assert!(item_weight(&only) < item_weight(&user(&block)));
+    }
+
+    /// T9: a message that carries no `Attached files:` block weighs what it
+    /// always did: blank text is the one line `text_lines` counts, and
+    /// trailing blank lines count as they are; images keep their strip.
+    #[test]
+    fn a_message_without_a_block_weighs_what_it_always_did() {
+        let user = |text: &str| Item::User {
+            text: text.into(),
+            images: Vec::new(),
+        };
+        // Weights are estimates in lines, good to a tenth.
+        let weigh = |weight: f32, expected: f32| {
+            assert!(
+                (weight - expected).abs() < 0.05,
+                "{weight} lines, want {expected}"
+            );
+        };
+        // The bubble's 3.8 lines plus the one line a blank message counts.
+        weigh(item_weight(&user("")), 4.8);
+        weigh(item_weight(&user("   ")), 4.8);
+        // Three lines: the text and the two blank lines its breaks draw.
+        weigh(item_weight(&user("trailing\n\n\n")), 6.8);
+        // An image-only message adds its strip above the same blank line.
+        let image_only = Item::User {
+            text: String::new(),
+            images: vec![crate::transcript::UserImage::new(
+                "image/png",
+                "aGk=".into(),
+            )],
+        };
+        weigh(item_weight(&image_only), 11.8);
     }
 
     #[test]

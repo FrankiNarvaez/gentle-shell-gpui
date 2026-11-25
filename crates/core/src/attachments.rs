@@ -266,8 +266,9 @@ pub fn rejection_warning(rejections: &[Rejection]) -> Option<String> {
 }
 
 /// A file's size as its card shows it: "12 B", "2.0 KB", "3.0 MB",
-/// "5.0 GB". The tenth shown never reads 1024.0: a size that would round to
-/// it shows in the next unit ("1.0 MB", "1.0 GB").
+/// "5.0 GB". One decimal, rounded as it always was; the tenth shown never
+/// reads 1024.0: a size that would round to it shows in the next unit
+/// ("1.0 MB", "1.0 GB").
 pub fn human_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -275,18 +276,20 @@ pub fn human_size(bytes: u64) -> String {
     if bytes < KB {
         return format!("{bytes} B");
     }
-    // Tenths of a unit, rounded half up: the digit the card's text shows, so
-    // the unit taken is the one that text will name.
-    let tenths = |unit: u64| (u128::from(bytes) * 10 + u128::from(unit / 2)) / u128::from(unit);
-    let [kilobytes, megabytes, gigabytes] = [KB, MB, GB].map(tenths);
-    let (tenths, unit) = if kilobytes < 10240 {
-        (kilobytes, "KB")
-    } else if megabytes < 10240 {
-        (megabytes, "MB")
-    } else {
-        (gigabytes, "GB")
-    };
-    format!("{}.{} {unit}", tenths / 10, tenths % 10)
+    // `{:.1}` rounds a tie to even, so a size the request did not touch
+    // reads as it always did (1280 B is "1.2 KB", not "1.3 KB"); the text
+    // it gives is also what tells a tier from reading 1024.0, which then
+    // hands the size to the next tier. GB is the last.
+    let tenths = |unit: u64| format!("{:.1}", bytes as f64 / unit as f64);
+    let kilobytes = tenths(KB);
+    if bytes < MB && kilobytes != "1024.0" {
+        return format!("{kilobytes} KB");
+    }
+    let megabytes = tenths(MB);
+    if bytes < GB && megabytes != "1024.0" {
+        return format!("{megabytes} MB");
+    }
+    format!("{} GB", tenths(GB))
 }
 
 // ── Tokens ─────────────────────────────────────────────────────────────────
@@ -638,6 +641,11 @@ mod tests {
             )
         );
         assert_eq!(split_files("look\n\nmore"), ("look\n\nmore", Vec::new()));
+        // Line endings that are CRLF split the same way.
+        assert_eq!(
+            split_files("hi\r\n\r\nAttached files:\r\n- a.pdf\r\n"),
+            ("hi", vec!["a.pdf"])
+        );
     }
 
     /// S9: only the trailing block comes out of a message. Text that merely
@@ -769,6 +777,25 @@ mod tests {
         assert_eq!(human_size(1024 * 1024 * 1024 - 1), "1.0 GB");
         assert_eq!(human_size(1073689395), "1023.9 MB");
         assert_eq!(human_size(1073689396), "1.0 GB");
+    }
+
+    /// T9: every size the request did not change reads as it always did:
+    /// one decimal, rounding a tie to even (1280 B is "1.2 KB", not "1.3
+    /// KB"). The GB tier and the never-"1024.0" rule of S11 stay.
+    #[test]
+    fn sizes_the_request_did_not_touch_keep_their_reading() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(5), "5 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(1024), "1.0 KB");
+        assert_eq!(human_size(1280), "1.2 KB");
+        assert_eq!(human_size(1536), "1.5 KB");
+        assert_eq!(human_size(3 * 1024 * 1024), "3.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024), "1.0 GB");
+        assert_eq!(human_size(5 * 1024 * 1024 * 1024), "5.0 GB");
+        // S11: just below a unit it reads as that unit, never as "1024.0".
+        assert_eq!(human_size(1024 * 1024 - 1), "1.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024 - 1), "1.0 GB");
     }
 
     #[test]
