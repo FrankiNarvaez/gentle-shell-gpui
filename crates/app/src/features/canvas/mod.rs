@@ -303,14 +303,17 @@ impl CanvasView {
 
     // ── Style ──────────────────────────────────────────────────────────────
 
-    /// Applies `change` to the style new shapes take and to the selection.
+    /// Applies `change` to the style new shapes take and to the selection;
+    /// each selected shape takes only what shows on it.
     fn restyle(&mut self, change: impl Fn(&mut Style), cx: &mut Context<Self>) {
         change(&mut self.style);
         if !self.selected.is_empty() {
             self.record();
             let ids = self.selected.clone();
             for s in self.doc.shapes.iter_mut().filter(|s| ids.contains(&s.id)) {
-                change(&mut s.style);
+                let mut next = s.style;
+                change(&mut next);
+                s.style.adopt(&next, s.kind.controls());
             }
             self.touched(&ids, cx);
         }
@@ -319,7 +322,7 @@ impl CanvasView {
 
     fn select(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
         if let Some(first) = ids.first().and_then(|id| self.doc.get(*id)) {
-            self.style = first.style;
+            self.style.adopt(&first.style, first.kind.controls());
         }
         self.selected = ids;
         cx.notify();

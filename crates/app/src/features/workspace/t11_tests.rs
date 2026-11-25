@@ -137,10 +137,6 @@ fn fixture<'a>(
                     ];
                     target.active = 1;
 
-                    let mut sidebar_open_spaces = HashMap::new();
-                    sidebar_open_spaces.insert("Alpha".into(), true);
-                    sidebar_open_spaces.insert("Beta".into(), true);
-
                     let mut workspace = Workspace {
                         spaces: vec![source, target],
                         current: 0,
@@ -151,7 +147,11 @@ fn fixture<'a>(
                         sidebar: None,
                         sidebar_visible: false,
                         tab_layout: TabLayout::Vertical,
-                        sidebar_open_spaces,
+                        tabs_sidebar_motion: Default::default(),
+                        files_sidebar_motion: Default::default(),
+                        sidebar_compact: false,
+                        tabs_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
+                        files_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         badge_picker: None,
                         open_menu: None,
                         workspace_rename: None,
@@ -168,6 +168,7 @@ fn fixture<'a>(
                         stages: Vec::new(),
                         next_stage: 1,
                         opened_outside: Default::default(),
+                        canvas_outside: Default::default(),
                         browser_dock_drag: None,
                         browser_dock_room: Default::default(),
                         resume_welcome: None,
@@ -209,6 +210,37 @@ fn highlight(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> Option<(us
 
 fn list_is_focused(host: &Entity<Workspace>, cx: &mut VisualTestContext) -> bool {
     cx.update(|window, cx| host.read(cx).tab_list_focus.is_focused(window))
+}
+
+#[gpui::test]
+fn t11_focus_reopens_a_collapsed_workspace_section(cx: &mut TestAppContext) {
+    let (host, cx, root, trace) = fixture(cx, "collapsed");
+    assert_eq!(active(&host, cx), (0, 11));
+    // Main's model folds a workspace's sessions in place. Fold both.
+    cx.update(|_, cx| {
+        host.update(cx, |w, _| {
+            w.spaces[0].sidebar_expanded = false;
+            w.spaces[1].sidebar_expanded = false;
+        })
+    });
+    assert!(!cx.update(|_, cx| host.read(cx).sidebar_space_open(0)));
+
+    cx.simulate_keystrokes("ctrl-space w");
+    cx.run_until_parked();
+    assert!(list_is_focused(&host, cx));
+
+    // The shown workspace opens so its highlighted tab is on screen; the other
+    // stays folded and focusing the list activates nothing.
+    assert!(cx.update(|_, cx| host.read(cx).sidebar_space_open(0)));
+    assert!(!cx.update(|_, cx| host.read(cx).sidebar_space_open(1)));
+    assert_eq!(highlight(&host, cx), Some((0, 0)));
+    assert_eq!(active(&host, cx), (0, 11));
+    assert_eq!(*trace.built.borrow(), [root.join("Alpha/twin")]);
+
+    // The reopened section is navigable: one step down stays in Alpha.
+    cx.simulate_keystrokes("down");
+    assert_eq!(highlight(&host, cx), Some((0, 1)));
+    assert_eq!(active(&host, cx), (0, 11));
 }
 
 #[gpui::test]

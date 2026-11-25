@@ -90,10 +90,12 @@ impl ModelInfo {
 /// The session's model, the ones it can switch to, and its thinking level.
 pub(super) struct Models {
     pub(super) current: Option<ModelInfo>,
+    /// Agent-home default reported by this backend's Desktop channel.
+    pub(super) default: Option<String>,
     pub(super) available: Vec<ModelInfo>,
     /// `get_available_models` answered since the backend started.
     pub(super) loaded: bool,
-    /// Bumped whenever `available` is replaced.
+    /// Bumped whenever `available` is replaced or the default changes.
     pub(super) rev: u64,
     pub(super) thinking: String,
     /// What the current model accepts (`get_available_thinking_levels`), low
@@ -105,6 +107,7 @@ impl Default for Models {
     fn default() -> Self {
         Self {
             current: None,
+            default: None,
             available: Vec::new(),
             loaded: false,
             rev: 0,
@@ -121,6 +124,20 @@ impl Default for Models {
 #[derive(Default)]
 pub(super) struct Usage {
     pub(super) context_percent: Option<f64>,
+    pub(super) context_tokens: Option<u64>,
+    pub(super) context_window: Option<u64>,
+    /// The displayed token count and percentage came from compaction's estimate.
+    pub(super) context_estimated: bool,
+    /// Invalidates stats requests when newer context information arrives.
+    pub(super) context_revision: u64,
+    /// A snapshot already in flight when a compaction estimate arrived.
+    pub(super) context_stale_snapshot: Option<String>,
+    /// The current backend's stats request completed, even if empty or failed.
+    pub(super) context_stats_received: bool,
+    #[cfg(test)]
+    pub(super) context_test_ready: bool,
+    pub(super) context_details_open: bool,
+    pub(super) context_ring_hovered: bool,
     pub(super) cost: f64,
     /// A compaction (manual or automatic) is running.
     pub(super) compacting: bool,
@@ -128,6 +145,27 @@ pub(super) struct Usage {
     pub(super) auto_compaction: Option<bool>,
     /// Context usage crossed the alert threshold.
     pub(super) context_latch: crate::features::alerts::ContextLatch,
+}
+
+impl Usage {
+    pub(super) fn reset_context(&mut self) {
+        self.context_stats_received = false;
+        self.context_revision = self.context_revision.wrapping_add(1);
+        self.context_estimated = false;
+        self.context_stale_snapshot = None;
+        self.context_percent = None;
+        self.context_tokens = None;
+        self.context_window = None;
+        self.context_details_open = false;
+        self.context_ring_hovered = false;
+        self.context_latch.rearm();
+    }
+
+    pub(super) fn context_visible(&self, ready: bool) -> bool {
+        #[cfg(test)]
+        let ready = ready || self.context_test_ready;
+        ready && self.context_stats_received
+    }
 }
 
 pub(super) struct Dialog {
@@ -249,7 +287,7 @@ pub(in crate::features::session) mod desktop {
     #[cfg(test)]
     mod live_tests;
     pub(in crate::features::session) mod output;
-    /// The screens' one-shot reads, in `state/desktop/reads.rs`.
+    /// One-shot reads, in `state/desktop/reads.rs`.
     pub(in crate::features::session) mod reads;
     pub(in crate::features::session) mod review;
     pub(in crate::features::session) mod sections;
@@ -358,8 +396,11 @@ pub(in crate::features::session) mod desktop {
         design: design::Design,
         /// The config stores the Profiles screen reads and writes.
         config: config::Config,
-        /// The screens' one-shot reads (sessions, stats, update status).
+        /// The screens' one-shot reads and the model pickers' default.
         reads: reads::Reads,
+        /// A refresh is owed when capability negotiation or an earlier read finishes.
+        model_default_requested: bool,
+        model_default_read: Option<reads::ReadTicket>,
         /// Gentle Shell's session state (`session_snapshot`), when offered.
         sections: sections::Sections,
         /// The snapshot in flight asked for [`sections::SECTIONS`].
@@ -392,6 +433,8 @@ pub(in crate::features::session) mod desktop {
                 design: design::Design::new(),
                 config: config::Config::default(),
                 reads: reads::Reads::default(),
+                model_default_requested: false,
+                model_default_read: None,
                 sections: sections::Sections::default(),
                 snapshot_sections: false,
                 output: output::Output::default(),
@@ -416,6 +459,8 @@ pub(in crate::features::session) mod desktop {
             self.design.reset(&mut self.session);
             self.config.reset(&mut self.session);
             self.reads.reset();
+            self.model_default_requested = false;
+            self.model_default_read = None;
             self.sections.reset();
             self.snapshot_sections = false;
             self.output.reset();
@@ -1007,6 +1052,45 @@ pub(in crate::features::session) mod desktop {
             handled: bool,
         ) -> reads::Applied {
             self.reads.outer(&mut self.session, generation, handled)
+        }
+
+        /// Ask at the next queue pump, once the capability is known.
+        pub(in crate::features::session) fn request_model_default(&mut self) {
+            self.model_default_requested = true;
+        }
+
+        /// Collect a finished read, or queue an owed one. `Some(None)` clears
+        /// the default; `None` means there is no result to apply yet.
+        pub(in crate::features::session) fn sync_model_default(
+            &mut self,
+        ) -> Option<Option<String>> {
+            if let Some(ticket) = self.model_default_read {
+                let outcome = self.reads.take(ticket)?;
+                self.model_default_read = None;
+                if !self.model_default_requested {
+                    return Some(match outcome {
+                        reads::ReadOutcome::ModelDefault(model) => model,
+                        _ => None,
+                    });
+                }
+                // A refresh asked for after this read started supersedes it.
+            }
+            if !self.model_default_requested {
+                return None;
+            }
+            match self.reads_support(DesktopMethod::ListAgentDefinitions) {
+                reads::ReadSupport::NotReady => None,
+                reads::ReadSupport::Legacy => {
+                    self.model_default_requested = false;
+                    Some(None)
+                }
+                reads::ReadSupport::Rpc => {
+                    self.model_default_requested = false;
+                    self.model_default_read =
+                        self.reads_enqueue(reads::ReadRequest::ModelDefault).ok();
+                    self.model_default_read.is_none().then_some(None)
+                }
+            }
         }
 
         /// The answer to `ticket`, once, if it arrived.
@@ -3072,10 +3156,11 @@ pub(in crate::features::session) mod desktop {
             /// for the seed, which never closes anything: `Stopped` closes
             /// design cards another tab may own, so only a `stop` event (or an
             /// event with the canvas not running) does. A running canvas opens
-            /// its loopback URL, except the one already shown on a plain
-            /// `open` or seed; a `refresh` always reloads. A running canvas
-            /// without a URL navigates nowhere. Any other URL is refused, and
-            /// the report does not repeat it.
+            /// its loopback URL; the one already shown opens again only on an
+            /// `open` event ([`CanvasNotice::Reopen`]: no page shows it any
+            /// more), never on a seed; a `refresh` always reloads. A running
+            /// canvas without a URL navigates nowhere. Any other URL is
+            /// refused, and the report does not repeat it.
             fn canvas_notice(
                 &mut self,
                 transition: Option<DesignTransition>,
@@ -3099,7 +3184,15 @@ pub(in crate::features::session) mod desktop {
                 }
                 let refreshed = transition == Some(DesignTransition::Refresh);
                 if !refreshed && self.shown.as_deref() == Some(url) {
-                    return Applied::default();
+                    if transition != Some(DesignTransition::Open) {
+                        return Applied::default();
+                    }
+                    return Applied {
+                        notice: Some(CanvasNotice::Reopen {
+                            url: url.to_string(),
+                        }),
+                        ..Applied::default()
+                    };
                 }
                 self.shown = Some(url.to_string());
                 Applied {
@@ -6114,6 +6207,11 @@ mod tests {
         matches!(notice, Some(CanvasNotice::Stopped))
     }
 
+    /// Whether `notice` opens `url` again, without printing it on failure.
+    fn reopens(notice: &Option<CanvasNotice>, url: &str) -> bool {
+        matches!(notice, Some(CanvasNotice::Reopen { url: shown }) if shown == url)
+    }
+
     #[test]
     fn design_seed_asks_once_with_the_url_and_waits_for_pending() {
         let (mut design, mut session) = design_ready(&["design_canvas"]);
@@ -6409,7 +6507,7 @@ mod tests {
     }
 
     #[test]
-    fn design_does_not_reopen_the_url_it_already_shows() {
+    fn design_reopens_the_url_it_already_shows_only_on_a_new_open() {
         let other = "http://127.0.0.1:4100/tok-s3cret/d/pricing/";
         let (mut design, mut session) = design_ready(&["design_canvas"]);
         let seeded = seed_design(
@@ -6419,16 +6517,17 @@ mod tests {
         );
         assert!(opens(&seeded.notice, CANVAS_URL, false));
 
-        // The same URL opened again would only reload the page.
+        // Its page was closed (no client connected), so Gentle Shell sends a
+        // new `open`: a reopen, which the card inside the app leaves alone
+        // and the browser outside the app opens again.
+        let mut closed = canvas_json(true, Some(CANVAS_URL));
+        closed["connectedClients"] = 0.into();
         let again = design.apply(
             &mut session,
-            &desktop_widget(design_event_lines(
-                1,
-                "open",
-                canvas_json(true, Some(CANVAS_URL)),
-            )),
+            &desktop_widget(design_event_lines(1, "open", closed)),
         );
-        assert!(again.notice.is_none() && again.report.is_none());
+        assert!(reopens(&again.notice, CANVAS_URL));
+        assert!(again.report.is_none());
 
         // A refresh is asked for: it still reloads.
         let refreshed = design.apply(

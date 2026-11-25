@@ -29,23 +29,6 @@ impl Workspace {
         self.spaces.len() - 1
     }
 
-    /// Give workspace `index` an agent tab when it has none. Restored tabs
-    /// stay unbuilt until shown.
-    pub(super) fn ensure_open(
-        &mut self,
-        index: usize,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.spaces[index].tabs.is_empty() {
-            let previous = self.current;
-            self.current = index;
-            let root = self.spaces[index].root.clone();
-            self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-            self.current = previous;
-        }
-    }
-
     pub(super) fn switch_workspace(
         &mut self,
         index: usize,
@@ -74,15 +57,6 @@ impl Workspace {
         self.current = index;
         if let Some(active) = tab_to_activate(self.space(), tab) {
             self.activate(active, window, cx);
-        } else {
-            // Only an empty workspace needs a default tab. Opening it already
-            // builds and activates it; never do that before a requested tab.
-            self.ensure_open(index, window, cx);
-        }
-        if changed {
-            // A search in the previous project must not hide this one's tabs.
-            self.tab_search
-                .update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.space_mut().last_active = workspaces::now();
         if changed {
@@ -103,6 +77,51 @@ impl Workspace {
         self.switch_workspace(index, window, cx);
     }
 
+    /// Open a new tab in a specific workspace, using its root rather than
+    /// the working directory of a previously focused agent.
+    pub(super) fn open_workspace_tab(
+        &mut self,
+        index: usize,
+        kind: PaneKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(space) = self.spaces.get_mut(index) else {
+            return;
+        };
+        space.sidebar_expanded = true;
+        let root = space.root.clone();
+        if index != self.current {
+            self.switch_workspace(index, window, cx);
+        }
+        self.open_tab(kind, root, None, None, window, cx);
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
+    pub(super) fn pick_workspace_folder(
+        &mut self,
+        name: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some("Create workspace".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(Ok(Some(mut paths))) = paths.await else {
+                return;
+            };
+            let Some(path) = paths.pop() else { return };
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.create_workspace(name, path, window, cx)
+            });
+        })
+        .detach();
+    }
     /// Point the shown workspace at another folder: the sidebar re-roots on
     /// [`WorkspaceEvent::RootChanged`] and new tabs open there. Open tabs
     /// keep their own folders.

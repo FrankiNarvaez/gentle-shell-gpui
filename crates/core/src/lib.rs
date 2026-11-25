@@ -49,4 +49,5 @@ pub mod version;
 pub mod vim_keys;
 pub mod web;
 pub mod web_browsers;
+pub mod workspace_commands;
 pub mod workspaces;

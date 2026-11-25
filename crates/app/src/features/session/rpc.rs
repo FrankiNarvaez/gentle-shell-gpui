@@ -221,11 +221,14 @@ impl SessionView {
     }
 
     /// Send the next queued config request once the channel is free, then
-    /// the screens' next queued read: both queues wait for the same slot.
+    /// collect the default model and pump the reads queue. Both queues share one slot.
     pub(super) fn sync_config(&mut self, cx: &mut Context<Self>) {
         let applied = self.desktop.config_pump();
         if !applied.sends.is_empty() || applied.report.is_some() {
             self.apply_config(applied, cx);
+        }
+        if let Some(default) = self.desktop.sync_model_default() {
+            self.set_model_default(default, cx);
         }
         self.sync_reads(cx);
     }
@@ -267,21 +270,44 @@ impl SessionView {
     /// island (the feed's list wins over tool results while it reports one)
     /// and the context meter. The phase, a pending question and Pi's
     /// built-in commands are read from the sections where they are drawn.
+    #[cfg(test)]
     pub(super) fn sync_sections(&mut self, cx: &mut Context<Self>) {
+        self.sync_sections_if_context(true, cx);
+    }
+
+    pub(super) fn sync_sections_if_context(
+        &mut self,
+        context_changed: bool,
+        cx: &mut Context<Self>,
+    ) {
         if !self.desktop.take_sections_changed() {
             return;
         }
         let sections = self.desktop.sections();
         let todo = sections.todo();
-        let context = sections
-            .context()
-            .map(|context| context.and_then(|context| context.percent));
+        let context = sections.context().map(|context| {
+            context.map(|context| (context.percent, context.tokens, context.window))
+        });
         let question = sections.question_pending();
         if let Some(tasks) = todo {
             self.todo.apply(tasks);
         }
-        if let Some(percent) = context {
-            self.set_context_percent(percent, cx);
+        if context_changed && let Some(context) = context {
+            let (percent, tokens, window) = context.unwrap_or((None, None, None));
+            self.usage.context_window = window;
+            if self.usage.context_estimated && percent.is_none() && tokens.is_none() {
+                let estimated_percent = self
+                    .usage
+                    .context_tokens
+                    .zip(window.filter(|w| *w > 0))
+                    .map(|(tokens, window)| tokens as f64 * 100.0 / window as f64);
+                self.set_context_percent(estimated_percent, cx);
+            } else {
+                self.usage.context_revision = self.usage.context_revision.wrapping_add(1);
+                self.usage.context_estimated = false;
+                self.usage.context_tokens = tokens;
+                self.set_context_percent(percent, cx);
+            }
         }
         if question {
             // Mention the question once its grace ran out, unless the app
@@ -766,6 +792,7 @@ impl SessionView {
     }
 
     pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
+        self.set_model_default(None, cx);
         self.request(json!({"type": "get_state"}), cx, |this, result, _| {
             if let Some(state) = this.report(result) {
                 this.models.current = ModelInfo::parse(&state["model"]);
@@ -794,10 +821,10 @@ impl SessionView {
             }
         });
         self.refresh_stats(cx);
+        self.refresh_model_default(cx);
     }
 
-    /// Re-read the session's model and thinking level after something other
-    /// than the picker moved them (a profile Gentle Shell applied).
+    /// Re-read the model, thinking level and default after a profile apply.
     fn refresh_model(&mut self, cx: &mut Context<Self>) {
         self.request(json!({"type": "get_state"}), cx, |this, result, _| {
             if let Some(state) = this.report(result) {
@@ -807,22 +834,63 @@ impl SessionView {
         });
         self.refresh_thinking_levels(cx);
         self.refresh_stats(cx);
+        self.refresh_model_default(cx);
+    }
+
+    fn refresh_model_default(&mut self, cx: &mut Context<Self>) {
+        self.desktop.request_model_default();
+        self.sync_config(cx);
+    }
+
+    pub(super) fn set_model_default(&mut self, default: Option<String>, cx: &mut Context<Self>) {
+        if self.models.default != default {
+            self.models.default = default;
+            self.models.rev += 1;
+            self.sync_chrome(cx);
+            cx.notify();
+        }
     }
 
     /// Pi's `get_session_stats`: the cost (its authority, also with the
     /// session feed) and the context use, which the feed's `context` section
     /// (the same `getContextUsage()` read) keeps current between reads.
     pub(super) fn refresh_stats(&mut self, cx: &mut Context<Self>) {
+        self.usage.context_revision = self.usage.context_revision.wrapping_add(1);
+        let revision = self.usage.context_revision;
         self.request(
             json!({"type": "get_session_stats"}),
             cx,
-            |this, result, cx| {
-                if let Ok(stats) = result {
-                    this.usage.cost = stats["cost"].as_f64().unwrap_or(0.0);
-                    this.set_context_percent(stats["contextUsage"]["percent"].as_f64(), cx);
-                }
+            move |this, result, cx| {
+                this.apply_stats_at(revision, result, cx);
             },
         );
+    }
+
+    #[cfg(test)]
+    pub(super) fn apply_stats(&mut self, result: Result<Value>, cx: &mut Context<Self>) {
+        self.apply_stats_at(self.usage.context_revision, result, cx);
+    }
+
+    pub(super) fn apply_stats_at(
+        &mut self,
+        revision: u64,
+        result: Result<Value>,
+        cx: &mut Context<Self>,
+    ) {
+        self.usage.context_stats_received = true;
+        if let Ok(stats) = result {
+            self.usage.cost = stats["cost"].as_f64().unwrap_or(0.0);
+            let percent = stats["contextUsage"]["percent"].as_f64();
+            if revision == self.usage.context_revision
+                && (!self.usage.context_estimated || percent.is_some())
+            {
+                if self.usage.context_estimated {
+                    self.usage.context_tokens = None;
+                    self.usage.context_estimated = false;
+                }
+                self.set_context_percent(percent, cx);
+            }
+        }
     }
 
     /// The context meter's number, and the alert when it crosses the
@@ -987,6 +1055,9 @@ impl SessionView {
             return;
         }
         self.usage.compacting = true;
+        self.usage.context_details_open = false;
+        self.usage.context_ring_hovered = false;
+        cx.notify();
         let mut command = json!({"type": "compact"});
         if let Some(instructions) = instructions {
             command["customInstructions"] = instructions.into();

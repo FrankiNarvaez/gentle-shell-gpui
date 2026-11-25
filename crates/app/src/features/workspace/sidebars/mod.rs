@@ -8,6 +8,7 @@ use super::view::new_tab_menu;
 use super::*;
 
 mod accordion;
+mod compact;
 mod parts;
 
 actions!(
@@ -152,7 +153,11 @@ pub(super) fn saved_title(pane: &SavedPane) -> SharedString {
 impl Workspace {
     /// The left sidebar's content.
     pub(super) fn render_tab_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        self.render_accordion_sidebar(cx)
+        if self.sidebar_compact {
+            self.render_compact_sidebar(cx)
+        } else {
+            self.render_accordion_sidebar(cx)
+        }
     }
 
     pub(super) fn sidebar_spaces(&self) -> Vec<SpaceEntry> {
@@ -255,18 +260,16 @@ impl Workspace {
 
     /// Whether the Accordion shows workspace `index`'s tabs.
     pub(super) fn sidebar_space_open(&self, index: usize) -> bool {
-        self.spaces.get(index).is_some_and(|space| {
-            self.sidebar_open_spaces
-                .get(&space.name)
-                .copied()
-                .unwrap_or(index == self.current)
-        })
+        self.spaces
+            .get(index)
+            .is_some_and(|space| space.sidebar_expanded)
     }
 
     pub(super) fn toggle_sidebar_space(&mut self, index: usize, cx: &mut Context<Self>) {
         let open = !self.sidebar_space_open(index);
-        if let Some(space) = self.spaces.get(index) {
-            self.sidebar_open_spaces.insert(space.name.clone(), open);
+        if let Some(space) = self.spaces.get_mut(index) {
+            space.sidebar_expanded = open;
+            self.schedule_save(cx);
             cx.notify();
         }
     }
@@ -305,19 +308,22 @@ impl Workspace {
                 this.open_tab_menu(actions, event.position, window, cx);
             }),
         );
-        if space != self.current {
-            return row.into_any_element();
-        }
-        row.on_drag(
+        let row = row.on_drag(
             TabDrag {
                 tab: id,
                 title: tab.title.clone(),
             },
             |drag, _, _, cx| cx.new(|_| DragChip(drag.title.clone())),
-        )
-        .drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
-        .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| this.move_tab(drag.tab, index, cx)))
-        .into_any_element()
+        );
+        if space == self.current {
+            row.drag_over::<TabDrag>(|style, _, _, _| style.bg(ui::petal().opacity(0.18)))
+                .on_drop(cx.listener(move |this, drag: &TabDrag, _, cx| {
+                    this.move_tab(drag.tab, index, cx);
+                }))
+                .into_any_element()
+        } else {
+            row.into_any_element()
+        }
     }
 
     /// Focus the vertical tab sidebar and highlight the active tab.
@@ -327,10 +333,14 @@ impl Workspace {
         if self.tab_layout != TabLayout::Vertical {
             self.set_tab_layout(TabLayout::Vertical, cx);
         }
-        if let Some(space) = self.spaces.get(self.current) {
-            self.sidebar_open_spaces
-                .entry(space.name.clone())
-                .or_insert(true);
+        // A folded workspace would hide the highlighted tab: the list only
+        // walks rows of open sections. Open the shown one, as a chevron click
+        // does, so the keyboard never lands on a row that isn't on screen.
+        if !self.sidebar_space_open(self.current)
+            && let Some(space) = self.spaces.get_mut(self.current)
+        {
+            space.sidebar_expanded = true;
+            self.schedule_save(cx);
         }
         if self.tab_list_highlight.is_none() {
             self.tab_list_highlight = Some((self.current, self.space().active));
