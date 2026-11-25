@@ -280,6 +280,28 @@ pub fn split_files(message: &str) -> (&str, Vec<&str>) {
     (body, files)
 }
 
+/// Transcript display text; never used to build the outbound prompt.
+pub fn mixed_attachment_text(message: &str, images: usize) -> &str {
+    static NOTE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^\[Image: original [1-9][0-9]*x[1-9][0-9]*, displayed at [1-9][0-9]*x[1-9][0-9]*\. Multiply coordinates by [0-9]+\.[0-9]{2} to map to original image\.\]$").expect("valid image resize note")
+    });
+    let mut prefix = message;
+    for _ in 0..images {
+        let Some((rest, last)) = prefix.trim_end().rsplit_once('\n') else {
+            break;
+        };
+        if !NOTE.is_match(last) {
+            break;
+        }
+        prefix = rest.trim_end();
+    }
+    if prefix.len() < message.len() && !split_files(prefix).1.is_empty() {
+        prefix
+    } else {
+        message
+    }
+}
+
 /// How a sent message reads where its files have no cards (a preview, a
 /// title): its body, or the names of the files it attached when it carried
 /// no text of its own.
@@ -591,6 +613,20 @@ mod tests {
     /// S4: files are sent as paths in a short block after the text, relative
     /// to the agent's folder when they are inside it, else absolute; a
     /// prompt with only files is the block alone.
+    #[test]
+    fn resize_notes_following_a_mixed_attachment_block_are_display_metadata() {
+        let original = "What are these files?\n\nAttached files:\n- AGENTS.md";
+        let notes = "[Image: original 3840x2160, displayed at 2000x1125. Multiply coordinates by 1.92 to map to original image.]\n[Image: original 2400x1334, displayed at 2000x1112. Multiply coordinates by 1.20 to map to original image.]";
+        let echoed = format!("{original}\n\n{notes}");
+        assert_eq!(
+            split_files(mixed_attachment_text(&echoed, 2)),
+            ("What are these files?", vec!["AGENTS.md"])
+        );
+        assert_eq!(mixed_attachment_text(&echoed, 0), echoed);
+        let prose = format!("{echoed}\nKeep this paragraph.");
+        assert_eq!(mixed_attachment_text(&prose, 2), prose);
+    }
+
     #[test]
     fn files_are_sent_as_paths_after_the_text() {
         let cwd = Path::new("/work");

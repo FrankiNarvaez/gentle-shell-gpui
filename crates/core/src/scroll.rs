@@ -58,7 +58,8 @@ pub fn item_weight(item: &Item) -> f32 {
         // block. A message with no block weighs what it always did, blank
         // text included; one that is only a block has no text to weigh.
         Item::User { text, images } => {
-            let (body, files) = crate::attachments::split_files(text);
+            let visible = crate::attachments::mixed_attachment_text(text, images.len());
+            let (body, files) = crate::attachments::split_files(visible);
             let text = if files.is_empty() {
                 user_text(text)
             } else if body.trim().is_empty() {

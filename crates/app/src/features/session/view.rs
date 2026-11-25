@@ -814,12 +814,19 @@ impl SessionView {
     ) -> AnyElement {
         match item {
             Item::User { text, images } => {
-                let images = images.iter().map(|i| self.image_cache.get(i)).collect();
+                let images: Vec<_> = images.iter().map(|i| self.image_cache.get(i)).collect();
                 let computed;
                 let shown = match self.list.prepared(ix) {
-                    Some(Prepared::Bubble(cell)) => cell.get_or_init(|| BubbleText::new(text)),
+                    Some(Prepared::Bubble(cell)) => cell.get_or_init(|| {
+                        BubbleText::new(gentle_core::attachments::mixed_attachment_text(
+                            text,
+                            images.len(),
+                        ))
+                    }),
                     _ => {
-                        computed = BubbleText::new(text);
+                        computed = BubbleText::new(
+                            gentle_core::attachments::mixed_attachment_text(text, images.len()),
+                        );
                         &computed
                     }
                 };
@@ -1242,8 +1249,15 @@ impl SessionView {
                     .icon(Icon::new(IconName::Copy))
                     .tooltip("Copy message")
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(Item::User { text, .. }) = this.transcript.items.get(ix) {
-                            this.copy_text(message_body(text).to_string(), cx);
+                        if let Some(Item::User { text, images }) = this.transcript.items.get(ix) {
+                            this.copy_text(
+                                message_body(gentle_core::attachments::mixed_attachment_text(
+                                    text,
+                                    images.len(),
+                                ))
+                                .to_string(),
+                                cx,
+                            );
                         }
                     })),
             )
