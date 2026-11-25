@@ -45,4 +45,5 @@ pub mod usage;
 pub mod version;
 pub mod web;
 pub mod web_browsers;
+pub mod workspace_commands;
 pub mod workspaces;

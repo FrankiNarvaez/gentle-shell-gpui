@@ -62,11 +62,13 @@ impl SessionView {
             }
             Incoming::Exited(code) => {
                 self.backend.status = BackendStatus::Exited(code);
+                self.usage.compacting = false;
                 self.transcript.interrupt();
                 self.extension.dialogs.clear();
                 // Nothing the dead backend said or numbered applies any more.
                 self.desktop.reset();
                 self.permission.reset(self.desktop.session());
+                self.set_model_default(None, cx);
             }
         }
     }
@@ -81,9 +83,32 @@ impl SessionView {
         }
         match event["type"].as_str() {
             Some("queue_update") => self.activity.queued = queued_count(event),
-            Some("compaction_start") => self.usage.compacting = true,
+            Some("compaction_start") => {
+                self.usage.compacting = true;
+                self.usage.context_details_open = false;
+                self.usage.context_ring_hovered = false;
+            }
             Some("compaction_end") => {
                 self.usage.compacting = false;
+                self.usage.context_revision = self.usage.context_revision.wrapping_add(1);
+                if event["aborted"] != true
+                    && event["cancelled"] != true
+                    && event["success"] != false
+                    && event["errorMessage"].is_null()
+                    && let Some(tokens) = event["result"]["estimatedTokensAfter"].as_u64()
+                {
+                    self.usage.context_stale_snapshot =
+                        self.desktop.session().pending().and_then(|(id, method)| {
+                            (method == DesktopMethod::GetSnapshot).then(|| id.to_string())
+                        });
+                    self.usage.context_tokens = Some(tokens);
+                    self.usage.context_percent = self
+                        .usage
+                        .context_window
+                        .filter(|window| *window > 0)
+                        .map(|window| tokens as f64 * 100.0 / window as f64);
+                    self.usage.context_estimated = true;
+                }
                 self.refresh_stats(cx);
             }
             Some("session_info_changed") => {
@@ -304,6 +329,19 @@ impl SessionView {
     /// channel (probe, sequencing, resync, and every benign foreign record).
     fn handle_desktop_ui(&mut self, request: &UiRequest, cx: &mut Context<Self>) {
         let decoded = decode_widget(request);
+        // An unrelated delta leaves the merged context untouched; it is not
+        // fresh context data and must not replace a compaction estimate.
+        let context_changed = match &decoded {
+            Ok(Some(DesktopRecord::Event(event))) if event.event == "session_snapshot" => event
+                .session_snapshot()
+                .is_ok_and(|snapshot| snapshot.sections.context.is_some()),
+            Ok(Some(DesktopRecord::Event(_))) => false,
+            Ok(Some(DesktopRecord::Response(response))) => {
+                response.request_id() != self.usage.context_stale_snapshot.as_deref()
+                    || response.request_id().is_none()
+            }
+            _ => true,
+        };
         let pending = self.desktop.session().pending().map(|(_, method)| method);
         match route_desktop_widget(&decoded, pending) {
             DesktopRoute::Permission => {
@@ -458,7 +496,7 @@ impl SessionView {
             DesktopRoute::Channel => {
                 let applied = self.desktop.ui(request);
                 self.apply_desktop(applied, cx);
-                self.sync_sections(cx);
+                self.sync_sections_if_context(context_changed, cx);
                 self.sync_permission_capabilities(cx);
                 self.sync_supervision(cx);
                 self.sync_design(cx);
@@ -1084,6 +1122,15 @@ mod tests {
             Some(CanvasNotice::Stopped)
         );
         assert_eq!(design_canvas(&json!({})), None);
+        // `GENTLE_DESIGN_OPEN_BROWSER=0` kept the system browser closed: the
+        // canvas still shows, in the app.
+        assert_eq!(
+            design_canvas(&json!({"url": "http://x", "opened": false, "browserDisabled": true})),
+            Some(CanvasNotice::Open {
+                url: "http://x".into(),
+                refreshed: false,
+            })
+        );
     }
 
     #[test]
