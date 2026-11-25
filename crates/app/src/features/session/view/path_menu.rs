@@ -168,9 +168,22 @@ fn rows(files: &[FileEntry], query: &str, separator: char) -> Vec<Row> {
         .into_iter()
         .map(|i| {
             let path = files[i].path.clone();
-            let (folder, name) = paths::split(&path);
+            // The reference the mention writes reads as typed (`/`), on every
+            // platform: a Windows walker spells `src\main.rs`, so its `\`
+            // becomes `/` here. A `\` on Unix is a character a name can
+            // hold, so it is left as it is.
+            let spelled = if separator == '\\' {
+                path.replace('\\', "/")
+            } else {
+                path.clone()
+            };
+            let (folder, name) = paths::split(&spelled);
             let (folder, name) = (folder.to_string(), name.to_string());
-            Row { path, name, folder }
+            Row {
+                path: spelled,
+                name,
+                folder,
+            }
         })
         .collect()
 }
@@ -951,8 +964,8 @@ mod tests {
                 .into_iter()
                 .map(|row| row.path)
                 .collect::<Vec<_>>(),
-            vec!["src\\main.rs".to_string()],
-            "the typed slash is the platform's separator"
+            vec!["src/main.rs".to_string()],
+            "the typed slash matches the walker's separator, and the row reads as typed"
         );
         assert!(
             super::rows(&windows, "src/ma", '/').is_empty(),
