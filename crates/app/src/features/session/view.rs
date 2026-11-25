@@ -82,6 +82,12 @@ const USER_SLACK: usize = 2;
 const NARROW: f32 = 520.;
 const TINY: f32 = 420.;
 
+/// The agent tab as one drop target: files dropped anywhere on it attach
+/// (S10), whoever dragged them.
+pub(super) const DROP_TARGET: &str = "session-drop-target";
+/// The veil the tab wears while files are dragged over it.
+pub(super) const DROP_VEIL: &str = "drop-veil";
+
 /// Bring the Markdown rendered for `key` up to `shown` (the text as the
 /// conversation shows it, with `drawn` Mermaid diagrams as images),
 /// appending when it only grew (streaming). Blocks not drawn yet have no
@@ -1960,15 +1966,42 @@ impl Render for SessionView {
             let obscured = !self.web_shown || self.slash_menu_open(cx);
             self.genui.set_obscured(obscured, cx);
         }
+        // Files over the tab: the veil while the drag is still live. GPUI has
+        // no drag-leave hook, so `drop_over` follows every drag move instead
+        // and this also asks for a drag at all: a drop, a release elsewhere
+        // and a cancelled drag all end it (see `follow_file_drag`).
+        let drop_over = self.drop_over && cx.has_active_drag();
+        if !drop_over {
+            self.drop_over = false;
+        }
         let main = v_flex()
             .relative()
             .flex_1()
             .min_w_0()
             .h_full()
-            .drag_over::<ExternalPaths>(|style, _, _, _| style.bg(ui::surface_hover()))
+            .debug_selector(|| DROP_TARGET.into())
+            // The whole tab is the target, for a drag from Finder and one
+            // from the file tree alike (S10, S12).
+            .on_drag_move::<ExternalPaths>(cx.listener(
+                |this, event: &DragMoveEvent<ExternalPaths>, _, cx| {
+                    this.follow_file_drag(event.bounds.contains(&event.event.position), cx);
+                },
+            ))
+            .on_drag_move::<crate::features::files::FileDrag>(cx.listener(
+                |this, event: &DragMoveEvent<crate::features::files::FileDrag>, _, cx| {
+                    this.follow_file_drag(event.bounds.contains(&event.event.position), cx);
+                },
+            ))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.attach_paths(paths.paths().to_vec(), window, cx);
             }))
+            // A row dragged out of the file tree attaches by the same route,
+            // with the same rules (a folder is refused, S12).
+            .on_drop(cx.listener(
+                |this, drag: &crate::features::files::FileDrag, window, cx| {
+                    this.attach_paths(vec![drag.path.clone()], window, cx);
+                },
+            ))
             .child(
                 canvas(
                     move |bounds, _, cx| {
@@ -2074,7 +2107,10 @@ impl Render for SessionView {
                     .flatten(),
                 |this, island| this.child(island),
             )
-            .children(self.genui.render_templates(self.live_slots.cover(), cx));
+            .children(self.genui.render_templates(self.live_slots.cover(), cx))
+            // Last, so it lies over the conversation and the composer both.
+            // No `occlude()`: a drop anywhere on the tab must still reach it.
+            .children(drop_over.then(|| self.render_drop_veil()));
 
         h_flex()
             .key_context(CONTEXT)
@@ -2089,6 +2125,79 @@ impl Render for SessionView {
             .child(main)
             .children(self.render_agents_panel(cx))
             .children(self.genui.render_pinned(cx))
+    }
+}
+
+// ── The drop target ────────────────────────────────────────────────────────
+
+impl SessionView {
+    /// Follow a drag of files over the tab: `over` says whether the pointer is
+    /// inside it. GPUI has no drag-leave hook, so every drag move of a file
+    /// drag sets this, and the veil also asks for a drag still being live (see
+    /// [`Render`]): a drop, a release elsewhere, a cancelled drag and a drag
+    /// that leaves the tab all take it down.
+    fn follow_file_drag(&mut self, over: bool, cx: &mut Context<Self>) {
+        if self.drop_over != over {
+            self.drop_over = over;
+            cx.notify();
+        }
+    }
+
+    /// The tab itself as the target (S10), in place of the `surface_hover` tint
+    /// that reads as a card: one veil over the conversation and the composer,
+    /// no card and no border, the inbox tray and two lines of words centred.
+    /// The same layer serves a drag from Finder and one from the file tree
+    /// (S12).
+    fn render_drop_veil(&self) -> AnyElement {
+        // The veil fades in (`ui::veil`: no travel); the icon and the words
+        // pop in over it, and with reduced motion both are just there.
+        let veil = ui::veil(DROP_VEIL).map_element(|veil| veil.debug_selector(|| DROP_VEIL.into()));
+        let words = ui::pop_in(
+            "drop-veil-words",
+            v_flex()
+                .items_center()
+                .child(
+                    Icon::new(IconName::Inbox)
+                        .with_size(px(44.))
+                        .text_color(ui::petal()),
+                )
+                .child(
+                    div()
+                        .mt(rems(14. / 16.))
+                        .text_size(rems(20. / 16.))
+                        .line_height(rems(28. / 16.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(ui::fg())
+                        .child("Drop files here"),
+                )
+                .child(
+                    div()
+                        .mt(rems(5. / 16.))
+                        .text_size(rems(13. / 16.))
+                        .line_height(rems(19. / 16.))
+                        .text_color(ui::muted())
+                        .child("Files and images · folders aren’t attached"),
+                ),
+        );
+        div()
+            .absolute()
+            .inset_0()
+            .child(veil)
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .pb(rems(8. / 16.))
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .child(words),
+            )
+            // The composer's orbit and the conversation's indicators draw on
+            // their own layer over this view: hidden while the veil is up.
+            .child(self.live_slots.cover())
+            .into_any_element()
     }
 }
 

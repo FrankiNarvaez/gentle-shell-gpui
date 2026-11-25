@@ -3,13 +3,20 @@
 //! send, driven by simulated clicks.
 
 // Not a glob: GPUI exports a `test` attribute that would shadow `#[test]`.
-use gpui_kit::{Entity, Modifiers, TestAppContext, VisualTestContext};
+use gpui_kit::{
+    AppContext as _, Context, Entity, FileDropEvent, InteractiveElement as _, IntoElement,
+    Modifiers, MouseButton, ParentElement as _, Render, StatefulInteractiveElement as _,
+    Styled as _, TestAppContext, VisualTestContext, Window,
+    component::{h_flex, v_flex},
+    div, point, px,
+};
 use pi_rpc::desktop_rpc::{PROMPT_COMMAND, SCHEMA, WIDGET_KEY};
 use pi_rpc::{UiMethod, UiRequest};
 use serde_json::{Value, json};
 
 use super::attachments::{AttachedFile, Attachment, Loaded};
 use super::{AgentsTab, SessionView};
+use crate::features::files::FileDrag;
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
 const JPEG: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10];
@@ -1140,4 +1147,218 @@ fn change_cwd_drops_a_pending_resume(cx: &mut TestAppContext) {
         assert!(view.backend.pending_session.is_none());
         assert!(!view.has_conversation());
     });
+}
+
+// ── The drop target (S10) ──────────────────────────────────────────────────
+
+/// The drawn bounds of `selector`, after a frame.
+fn bounds(
+    cx: &mut VisualTestContext,
+    selector: &'static str,
+) -> gpui_kit::Bounds<gpui_kit::Pixels> {
+    cx.run_until_parked();
+    cx.debug_bounds(selector)
+        .unwrap_or_else(|| panic!("nothing drawn as {selector}"))
+}
+
+/// A tab's attached file paths.
+fn files(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> Vec<std::path::PathBuf> {
+    view.read_with(cx, |view, _| {
+        view.files.iter().map(|file| file.path.clone()).collect()
+    })
+}
+
+/// S10: files dragged over the tab veil it — one layer over the conversation
+/// and the composer, icon and words in the middle — the drop attaches them and
+/// takes the veil down, and a drag that leaves the tab (or ends without
+/// dropping) leaves no veil behind. Nothing about the veil stops the drop.
+#[gpui::test]
+fn a_file_drag_veils_the_tab_and_the_drop_attaches(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let dir = std::env::temp_dir().join(format!("gs-drop-veil-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("report.pdf");
+    std::fs::write(&report, b"%PDF-1.7\n").unwrap();
+    let dragged = || gpui_kit::ExternalPaths(vec![report.clone()].into());
+
+    let pane = bounds(cx, super::view::DROP_TARGET);
+    cx.simulate_event(FileDropEvent::Entered {
+        position: pane.center(),
+        paths: dragged(),
+    });
+    let veil = bounds(cx, super::view::DROP_VEIL);
+    assert_eq!(
+        (veil.origin, veil.size),
+        (pane.origin, pane.size),
+        "the veil covers the whole tab, the composer included"
+    );
+
+    // A drag that ends without a drop takes the veil with it.
+    cx.simulate_event(FileDropEvent::Exited);
+    assert!(
+        cx.debug_bounds(super::view::DROP_VEIL).is_none(),
+        "no veil once the drag leaves"
+    );
+
+    // A drag that moves off the tab, the window still there, clears it too.
+    cx.simulate_event(FileDropEvent::Entered {
+        position: pane.center(),
+        paths: dragged(),
+    });
+    assert!(cx.debug_bounds(super::view::DROP_VEIL).is_some());
+    cx.simulate_event(FileDropEvent::Pending {
+        position: point(pane.origin.x + pane.size.width + px(200.), pane.center().y),
+    });
+    assert!(
+        cx.debug_bounds(super::view::DROP_VEIL).is_none(),
+        "a drag off the tab takes the veil with it"
+    );
+    cx.simulate_event(FileDropEvent::Ended);
+
+    // Dropped on the tab: attached, and the veil goes with the drop.
+    cx.simulate_event(FileDropEvent::Entered {
+        position: pane.center(),
+        paths: dragged(),
+    });
+    assert!(cx.debug_bounds(super::view::DROP_VEIL).is_some());
+    cx.simulate_event(FileDropEvent::Submit {
+        position: pane.center(),
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds(super::view::DROP_VEIL).is_none(),
+        "the veil goes once the files are dropped"
+    );
+    assert_eq!(files(&view, cx), vec![report], "the drop attached the file");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A tab beside sources of file-tree drags, as the tree's rows are: these
+/// tests start the drag there and land it on the tab.
+struct DragHost {
+    tab: Entity<SessionView>,
+    file: FileDrag,
+    folder: FileDrag,
+}
+
+impl Render for DragHost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .size_full()
+            .child(
+                v_flex()
+                    .w(px(120.))
+                    .h_full()
+                    .child(drag_row("file-tree-like-file", self.file.clone()))
+                    .child(drag_row("file-tree-like-folder", self.folder.clone())),
+            )
+            .child(div().flex_1().h_full().child(self.tab.clone()))
+    }
+}
+
+/// A row that drags `drag`, as the tree's own rows do.
+fn drag_row(selector: &'static str, drag: FileDrag) -> impl IntoElement {
+    div()
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .h(px(24.))
+        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+}
+
+/// A window with the tab beside a file row and a folder row it can be dragged
+/// from.
+fn drag_host(
+    cx: &mut TestAppContext,
+    file: std::path::PathBuf,
+    folder: std::path::PathBuf,
+) -> (Entity<DragHost>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let cwd = std::env::temp_dir();
+    let mut built = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+        let tab = cx.new(|cx| {
+            let mut tab = SessionView::new(cwd, None, window, cx, false);
+            tab.backend.started = true;
+            tab
+        });
+        let host = cx.new(|_| DragHost {
+            tab,
+            file: FileDrag::new(file, "report.pdf", false),
+            folder: FileDrag::new(folder, "notes", true),
+        });
+        built = Some(host.clone());
+        // The window's root, so a warning (a refused folder) can be shown.
+        gpui_kit::base::Root::new(host, window, cx)
+    });
+    (built.expect("the drag host was built"), cx)
+}
+
+/// Drag from the row drawn as `from` to the middle of the tab, in steps, as a
+/// hand would, and let go.
+fn drag_onto_the_tab(cx: &mut VisualTestContext, from: &'static str) {
+    let start = bounds(cx, from).center();
+    let to = bounds(cx, super::view::DROP_TARGET).center();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    for step in 1..=6 {
+        let t = step as f32 / 6.;
+        let at = point(
+            start.x + (to.x - start.x) * t,
+            start.y + (to.y - start.y) * t,
+        );
+        cx.simulate_mouse_move(at, Some(MouseButton::Left), Modifiers::none());
+        cx.run_until_parked();
+    }
+}
+
+/// S12: a file dragged out of the tree onto the tab raises the same veil a
+/// drag from Finder does and attaches like it; a folder row is refused there
+/// too, so it adds no card.
+#[gpui::test]
+fn dragging_a_file_out_of_the_tree_attaches_it(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("gs-tree-drag-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("report.pdf");
+    std::fs::write(&report, b"%PDF-1.7\n").unwrap();
+    let notes = dir.join("notes");
+    std::fs::create_dir_all(&notes).unwrap();
+    let (host, cx) = drag_host(cx, report.clone(), notes);
+
+    drag_onto_the_tab(cx, "file-tree-like-file");
+    assert!(
+        cx.debug_bounds(super::view::DROP_VEIL).is_some(),
+        "the tree's drag raises the tab's veil"
+    );
+    let target = bounds(cx, super::view::DROP_TARGET).center();
+    cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds(super::view::DROP_VEIL).is_none(),
+        "the veil goes with the drop"
+    );
+    let tab = host.read_with(cx, |host, _| host.tab.clone());
+    assert_eq!(
+        files(&tab, cx),
+        vec![report],
+        "dropping the dragged file attached it"
+    );
+
+    drag_onto_the_tab(cx, "file-tree-like-folder");
+    assert!(
+        cx.debug_bounds(super::view::DROP_VEIL).is_some(),
+        "the folder drag raises it too: the tab refuses on the rules, not the target"
+    );
+    let target = bounds(cx, super::view::DROP_TARGET).center();
+    cx.simulate_mouse_up(target, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        files(&tab, cx),
+        vec![dir.join("report.pdf")],
+        "a folder is refused, so it adds no card"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
 }

@@ -20,14 +20,66 @@ pub use mermaid::{
 pub use tree::{FileTreeEvent, FileTreeView, REVEAL};
 pub use viewer::{EmbeddedImages, FileView, offline_image};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::App;
-
-use gpui_kit::Hsla;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::{Icon, Sizable as _, h_flex};
+use gpui_kit::{
+    Context, Hsla, IntoElement, ParentElement as _, Render, SharedString, Styled as _, Window,
+};
 
 use crate::shared::ui;
+
+/// A row dragged out of the file tree, the payload the agent tab takes
+/// (S12): dropped on one it attaches like a path dropped from Finder, so a
+/// folder is refused there the same way. The tree keeps its own gestures (a
+/// click opens or toggles, the context menu renames).
+#[derive(Clone)]
+pub struct FileDrag {
+    pub path: PathBuf,
+    /// The row's name, for the ghost under the pointer.
+    pub name: SharedString,
+    pub is_dir: bool,
+}
+
+impl FileDrag {
+    pub fn new(path: PathBuf, name: impl Into<SharedString>, is_dir: bool) -> Self {
+        Self {
+            path,
+            name: name.into(),
+            is_dir,
+        }
+    }
+}
+
+/// What follows the pointer: the row's glyph and name, the chip a tab or a
+/// workspace wears while dragged.
+impl Render for FileDrag {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .gap_1p5()
+            .px_2()
+            .py_1()
+            .rounded_lg()
+            .bg(ui::raised())
+            .border_1()
+            .border_color(ui::petal().opacity(0.5))
+            .shadow_lg()
+            .text_xs()
+            .text_color(ui::fg())
+            .child(
+                Icon::new(if self.is_dir {
+                    IconName::Folder
+                } else {
+                    IconName::File
+                })
+                .small()
+                .text_color(ui::petal()),
+            )
+            .child(self.name.clone())
+    }
+}
 
 /// The icon and tint for a file name in the tree.
 /// Key bindings and the diagram renderer's state.

@@ -201,6 +201,9 @@ pub struct SessionView {
     chrome: Option<Chrome>,
     /// The pane's own width, measured each frame; narrow layouts adapt to it.
     pane_width: std::rc::Rc<std::cell::Cell<f32>>,
+    /// Files are being dragged over this tab: it wears its drop veil (see
+    /// [`SessionView::follow_file_drag`]).
+    drop_over: bool,
     focus_handle: FocusHandle,
     _io: Task<()>,
     _subscriptions: Vec<Subscription>,
@@ -370,6 +373,7 @@ impl SessionView {
             models: state::Models::default(),
             usage: state::Usage::default(),
             pane_width: std::rc::Rc::new(std::cell::Cell::new(10_000.)),
+            drop_over: false,
             commands: Vec::new(),
             prompt_history: Default::default(),
             skill_dirs: Vec::new(),
