@@ -1967,11 +1967,13 @@ impl Render for SessionView {
             self.genui.set_obscured(obscured, cx);
         }
         // Files over the tab: the veil while the drag is still live. GPUI has
-        // no drag-leave hook, so `drop_over` follows every drag move instead
-        // and this also asks for a drag at all: a drop, a release elsewhere
-        // and a cancelled drag all end it (see `follow_file_drag`).
-        let drop_over = self.drop_over && cx.has_active_drag();
-        if !drop_over {
+        // no drag-leave hook, so `drop_over` follows every drag move of a file
+        // drag (`follow_file_drag`) and this frame is its other writer: it
+        // clears the flag once no drag is live at all, so a drop, a release
+        // elsewhere, a cancelled drag and a drag that left the window all take
+        // the veil down.
+        let veil = self.drop_over && cx.has_active_drag();
+        if !veil {
             self.drop_over = false;
         }
         let main = v_flex()
@@ -2110,7 +2112,7 @@ impl Render for SessionView {
             .children(self.genui.render_templates(self.live_slots.cover(), cx))
             // Last, so it lies over the conversation and the composer both.
             // No `occlude()`: a drop anywhere on the tab must still reach it.
-            .children(drop_over.then(|| self.render_drop_veil()));
+            .children(veil.then(|| self.render_drop_veil()));
 
         h_flex()
             .key_context(CONTEXT)
@@ -2133,9 +2135,9 @@ impl Render for SessionView {
 impl SessionView {
     /// Follow a drag of files over the tab: `over` says whether the pointer is
     /// inside it. GPUI has no drag-leave hook, so every drag move of a file
-    /// drag sets this, and the veil also asks for a drag still being live (see
-    /// [`Render`]): a drop, a release elsewhere, a cancelled drag and a drag
-    /// that leaves the tab all take it down.
+    /// drag writes `drop_over` here, and the frame's other writer clears it
+    /// once no drag is live: a drop, a release elsewhere, a cancelled drag and
+    /// a drag that leaves the tab all take the veil down.
     fn follow_file_drag(&mut self, over: bool, cx: &mut Context<Self>) {
         if self.drop_over != over {
             self.drop_over = over;
@@ -2766,13 +2768,12 @@ fn user_bubble(
                         }))
                         .children(files.iter().enumerate().map(|(n, path)| {
                             let (_, name) = ui::split_path(std::path::Path::new(&path[..]));
-                            file_tile(
-                                ("user-file", ix * 64 + n),
-                                &name,
-                                path.clone(),
-                                FileStrip::Bubble,
-                            )
-                            .debug_selector(move || format!("user-file-{ix}-{n}"))
+                            // Named by what it names, so no count of files
+                            // can make one message's tile an id the next
+                            // message's file has too (S14/R2).
+                            let id = format!("user-file-{ix}-{n}");
+                            file_tile(id.clone(), &name, path.clone(), FileStrip::Bubble)
+                                .debug_selector(move || id.clone())
                         })),
                 )
             })

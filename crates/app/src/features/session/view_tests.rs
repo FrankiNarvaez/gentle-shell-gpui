@@ -7,7 +7,7 @@ use gpui_kit::{
     AppContext as _, Context, Entity, FileDropEvent, InteractiveElement as _, IntoElement,
     Modifiers, MouseButton, ParentElement as _, Render, StatefulInteractiveElement as _,
     Styled as _, TestAppContext, VisualTestContext, Window,
-    component::{h_flex, v_flex},
+    component::{WindowExt as _, h_flex, v_flex},
     div, point, px,
 };
 use pi_rpc::desktop_rpc::{PROMPT_COMMAND, SCHEMA, WIDGET_KEY};
@@ -52,6 +52,51 @@ fn tab(cx: &mut TestAppContext) -> (Entity<SessionView>, &mut VisualTestContext)
         view.backend.started = true;
         view
     })
+}
+
+/// The same tab in a window with the app's root, so a warning it raises is
+/// shown (and can be counted): [`warnings`].
+fn rooted_tab(cx: &mut TestAppContext) -> (Entity<SessionView>, &mut VisualTestContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let cwd = std::env::temp_dir();
+    let mut built = None;
+    let (_root, cx) = cx.add_window_view(|window, cx| {
+        let tab = cx.new(|cx| {
+            let mut view = SessionView::new(cwd, None, window, cx, false);
+            view.backend.started = true;
+            view
+        });
+        built = Some(tab.clone());
+        gpui_kit::base::Root::new(tab, window, cx)
+    });
+    (built.expect("the tab was built"), cx)
+}
+
+/// The warnings the window is showing: what a refusal raises.
+fn warnings(cx: &mut VisualTestContext) -> usize {
+    cx.update(|window, cx| window.notifications(cx).len())
+}
+
+/// What the composer holds.
+fn composer_text(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> String {
+    view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string())
+}
+
+/// Put `text` in the composer, as typing it would.
+fn type_text(view: &Entity<SessionView>, cx: &mut VisualTestContext, text: &str) {
+    view.update_in(cx, |view, window, cx| {
+        view.composer
+            .update(cx, |state, cx| state.set_value(text, window, cx));
+    });
+    cx.run_until_parked();
+}
+
+/// Press Enter: the send path the composer's key and its button share.
+fn press_enter(view: &Entity<SessionView>, cx: &mut VisualTestContext) {
+    view.update_in(cx, |view, window, cx| view.submit(window, cx));
 }
 
 /// A tab whose channel is probed with `methods`, and whose job and helper
@@ -855,6 +900,7 @@ fn the_composer_strip_is_one_row_of_equal_tiles(cx: &mut TestAppContext) {
         Ok(Loaded::File(AttachedFile {
             name: name.to_string(),
             path: std::path::PathBuf::from(path),
+            canonical: std::path::PathBuf::from(path),
             bytes,
         }))
     };
@@ -899,6 +945,7 @@ fn a_composer_file_tile_keeps_its_remove_button(cx: &mut TestAppContext) {
         Ok(Loaded::File(AttachedFile {
             name: name.to_string(),
             path: std::path::PathBuf::from(path),
+            canonical: std::path::PathBuf::from(path),
             bytes: 12,
         }))
     };
@@ -1014,6 +1061,7 @@ fn a_prompt_names_its_files_as_the_tabs_backend_reads_them(cx: &mut TestAppConte
     let attached = |name: &str, path: &str| AttachedFile {
         name: name.to_string(),
         path: std::path::PathBuf::from(path),
+        canonical: std::path::PathBuf::from(path),
         bytes: 0,
     };
     view.update(cx, |view, _| view.cwd = std::path::PathBuf::from("/work"));
@@ -1042,7 +1090,7 @@ fn a_prompt_names_its_files_as_the_tabs_backend_reads_them(cx: &mut TestAppConte
     );
 }
 
-/// S11: attaching the same file twice keeps one card, whatever route it came
+/// S11, S14/R4: attaching the same file twice keeps one card, whatever route it came
 /// by (its path for a file, its bytes for an image), and removing the card
 /// lets it be attached again.
 #[gpui::test]
@@ -1080,11 +1128,54 @@ fn attaching_the_same_file_twice_keeps_one_card(cx: &mut TestAppContext) {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// S11: a file gone from disk when the prompt would be sent stops the send
-/// and names it; the card stays so the user can remove it.
+/// S14/R4: one file reached by another spelling is one tile — `./` in its
+/// path, a symlink to it — and the tile, the tooltip and the prompt still
+/// name the path as it was attached.
+#[gpui::test]
+fn another_spelling_of_one_file_keeps_one_tile(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let dir = std::env::temp_dir().join(format!("gs-attach-spelled-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("report.pdf");
+    std::fs::write(&report, b"%PDF-1.7\n").unwrap();
+    let dotted = dir.join("./report.pdf");
+
+    view.update_in(cx, |view, window, cx| {
+        view.attach_paths(vec![dotted.clone(), report.clone()], window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        files(&view, cx),
+        vec![dotted.clone()],
+        "`./report.pdf` and `report.pdf` are one tile, named as it was attached"
+    );
+
+    view.update_in(cx, |view, _, cx| view.remove_file(0, cx));
+    #[cfg(unix)]
+    {
+        let link = dir.join("report-link.pdf");
+        std::os::unix::fs::symlink(&report, &link).unwrap();
+        view.update_in(cx, |view, window, cx| {
+            view.attach_paths(vec![report.clone(), link.clone()], window, cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            files(&view, cx),
+            vec![report],
+            "a symlink to an attached file is the same file"
+        );
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// S11, S14/R3-2: a file gone from disk when the prompt would be sent stops
+/// the send on the path Enter takes, and names it; the text and the tile stay
+/// so the user can remove it. A second Enter while the check is in flight is
+/// dropped, so one send is stopped once.
 #[gpui::test]
 fn a_file_gone_before_sending_stops_the_send(cx: &mut TestAppContext) {
-    let (view, cx) = tab(cx);
+    let (view, cx) = rooted_tab(cx);
     let dir = std::env::temp_dir().join(format!("gs-attach-gone-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -1096,24 +1187,94 @@ fn a_file_gone_before_sending_stops_the_send(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert_eq!(view.read_with(cx, |view, _| view.files.len()), 1);
+
+    // The file is there: Enter finds nothing to refuse and clears nothing,
+    // since this tab never started a backend to send to.
+    type_text(&view, cx, "send the report");
+    press_enter(&view, cx);
+    cx.run_until_parked();
+    assert_eq!(warnings(cx), 0, "a file that is there stops nothing");
     assert_eq!(
-        view.read_with(cx, |view, _| view.gone_files_warning()),
-        None,
-        "a file that is there stops nothing"
+        composer_text(&view, cx),
+        "send the report",
+        "with no backend the text stays where it was"
     );
+    assert_eq!(view.read_with(cx, |view, _| view.files.len()), 1);
 
     std::fs::remove_file(&report).unwrap();
+    press_enter(&view, cx);
+    // A second Enter arrives while the check is in flight: it starts no send.
+    press_enter(&view, cx);
+    cx.run_until_parked();
     assert_eq!(
-        view.read_with(cx, |view, _| view.gone_files_warning())
-            .as_deref(),
-        Some("report.pdf is no longer there; remove it from the attachments to send."),
-        "the send is stopped by a warning naming the file"
+        warnings(cx),
+        1,
+        "the send is stopped once, with a warning naming the file"
+    );
+    assert_eq!(
+        composer_text(&view, cx),
+        "send the report",
+        "nothing was cleared: the text is still there to send"
     );
     assert_eq!(
         view.read_with(cx, |view, _| view.files.len()),
         1,
-        "the card stays, for the user to remove it"
+        "the tile stays, for the user to remove it"
     );
+    assert_eq!(files(&view, cx), vec![report], "and it is still that file");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// T12/S14: the press that asked the disk is the press that may still send.
+/// Removing the file's tile while the check runs ends that press: nothing is
+/// sent, cleared or remembered, and no warning explains a change the user
+/// made (Enter again starts the check over).
+#[gpui::test]
+fn a_composer_changed_while_the_files_are_checked_sends_nothing(cx: &mut TestAppContext) {
+    let (view, cx) = rooted_tab(cx);
+    let dir = std::env::temp_dir().join(format!("gs-attach-changed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("report.pdf");
+    std::fs::write(&report, b"%PDF-1.7\n").unwrap();
+
+    view.update_in(cx, |view, window, cx| {
+        view.attach_paths(vec![report], window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(files(&view, cx).len(), 1);
+
+    type_text(&view, cx, "send the report");
+    let history = view.read_with(cx, |view, _| view.prompt_history.clone());
+    press_enter(&view, cx);
+    // While the disk is asked, the tile goes.
+    view.update(cx, |view, cx| view.remove_file(0, cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+        warnings(cx),
+        0,
+        "the user changed it: nothing to warn about"
+    );
+    assert_eq!(
+        composer_text(&view, cx),
+        "send the report",
+        "nothing was cleared"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.prompt_history.clone()),
+        history,
+        "nothing was remembered"
+    );
+    assert!(
+        files(&view, cx).is_empty(),
+        "the tile the user removed stays removed"
+    );
+    assert!(
+        !view.read_with(cx, |view, _| view.checking_files),
+        "and the next Enter may ask the disk again"
+    );
+
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -1338,7 +1499,7 @@ fn a_file_drag_veils_the_tab_and_the_drop_attaches(cx: &mut TestAppContext) {
         "the veil covers the whole tab, the composer included"
     );
 
-    // A drag that ends without a drop takes the veil with it.
+    // A drag that leaves the window takes the veil with it.
     cx.simulate_event(FileDropEvent::Exited);
     assert!(
         cx.debug_bounds(super::view::DROP_VEIL).is_none(),
@@ -1441,8 +1602,8 @@ fn drag_host(
     (built.expect("the drag host was built"), cx)
 }
 
-/// Drag from the row drawn as `from` to the middle of the tab, in steps, as a
-/// hand would, and let go.
+/// Drag from the row drawn as `from` toward the middle of the tab, in steps,
+/// as a hand would; the caller lets go (a `mouse_up` on the target).
 fn drag_onto_the_tab(cx: &mut VisualTestContext, from: &'static str) {
     let start = bounds(cx, from).center();
     let to = bounds(cx, super::view::DROP_TARGET).center();

@@ -1990,6 +1990,18 @@ mod drag_tests {
         cx.run_until_parked();
     }
 
+    /// What the tree handed the target so far: each drag's path, name and
+    /// whether it is a folder.
+    fn dropped(host: &Entity<Host>, cx: &mut VisualTestContext) -> Vec<(PathBuf, String, bool)> {
+        host.read_with(cx, |host, _| {
+            host.dropped
+                .borrow()
+                .iter()
+                .map(|drag| (drag.path.clone(), drag.name.to_string(), drag.is_dir))
+                .collect()
+        })
+    }
+
     /// S12: a row dragged out of the tree carries its path, file or folder, so
     /// an agent tab can take it as a drop.
     #[gpui::test]
@@ -1998,29 +2010,17 @@ mod drag_tests {
         let (host, cx) = host(cx, dir.clone());
 
         drag(cx, "file-tree-row-report.pdf");
-        let dropped = host.read_with(cx, |host, _| {
-            host.dropped
-                .borrow()
-                .iter()
-                .map(|drag| (drag.path.clone(), drag.name.to_string(), drag.is_dir))
-                .collect::<Vec<_>>()
-        });
+        let carried = dropped(&host, cx);
         assert_eq!(
-            dropped,
+            carried,
             vec![(dir.join("report.pdf"), "report.pdf".to_string(), false)],
             "the file row dragged its path"
         );
 
         drag(cx, "file-tree-row-notes");
-        let dropped = host.read_with(cx, |host, _| {
-            host.dropped
-                .borrow()
-                .iter()
-                .map(|drag| (drag.path.clone(), drag.name.to_string(), drag.is_dir))
-                .collect::<Vec<_>>()
-        });
+        let carried = dropped(&host, cx);
         assert_eq!(
-            dropped,
+            carried,
             vec![
                 (dir.join("report.pdf"), "report.pdf".to_string(), false),
                 (dir.join("notes"), "notes".to_string(), true),

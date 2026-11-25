@@ -155,6 +155,15 @@ pub struct SessionView {
     /// Regular files waiting to go with the next prompt, shown as cards in
     /// the same strip and sent as paths in the prompt's `message`.
     files: Vec<attachments::AttachedFile>,
+    /// The attached files are being checked against the disk, off the UI
+    /// thread, before the prompt is sent (see `submit`): a second Enter while
+    /// one runs starts nothing, so a press sends once. Every answer clears it
+    /// before it decides, whatever it decides (a composer the user changed
+    /// while the check was out included), so it can never keep the next Enter
+    /// from asking the disk again. It is a field of this view, so a view
+    /// dropped while its check is out takes the flag with it: nothing else
+    /// holds or inherits it.
+    checking_files: bool,
     /// Long pastes waiting to go with the next prompt, each sent in place
     /// of its `[Pasted text #N]` token: the N-th is `pasted[N - 1]`.
     pasted: Vec<attachments::PastedText>,
@@ -201,8 +210,11 @@ pub struct SessionView {
     chrome: Option<Chrome>,
     /// The pane's own width, measured each frame; narrow layouts adapt to it.
     pane_width: std::rc::Rc<std::cell::Cell<f32>>,
-    /// Files are being dragged over this tab: it wears its drop veil (see
-    /// [`SessionView::follow_file_drag`]).
+    /// Files are being dragged over this tab: it wears its drop veil. Written
+    /// in two places: [`SessionView::follow_file_drag`], from every drag move
+    /// of a file drag, and the frame itself, which clears it once no drag is
+    /// live any more (a drop, a release elsewhere, a cancelled drag, a drag
+    /// that left the window), since GPUI has no drag-leave hook.
     drop_over: bool,
     focus_handle: FocusHandle,
     _io: Task<()>,
@@ -356,6 +368,7 @@ impl SessionView {
             composer_len: 0,
             attachments: Vec::new(),
             files: Vec::new(),
+            checking_files: false,
             pasted: Vec::new(),
             image_cache: attachments::ImageCache::default(),
             extension: state::ExtensionUi::default(),

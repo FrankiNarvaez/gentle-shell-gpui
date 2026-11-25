@@ -6,6 +6,7 @@
 //! and the filesystem: they stay in the app
 //! (`features/session/attachments.rs`), which calls this module.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -20,8 +21,14 @@ use crate::backend::Backend;
 pub struct AttachedFile {
     /// The file's name, as its card and the sent prompt name it.
     pub name: String,
-    /// The file as it was dropped or picked.
+    /// The file as it was dropped or picked: what its card, its tooltip and
+    /// the prompt name it by.
     pub path: PathBuf,
+    /// [`AttachedFile::path`] with symlinks and `.`/`..` resolved, as far as
+    /// the disk could (the path itself when it could not): two spellings of one
+    /// file are one attachment, while the prompt still names `path`. A hard
+    /// link keeps a path of its own: only the file's inode would tell.
+    pub canonical: PathBuf,
     /// Its size in bytes, as its card shows it.
     pub bytes: u64,
 }
@@ -44,9 +51,17 @@ pub enum Rejection {
         name: String,
         error: String,
     },
-    /// The path has a line break in it; the prompt's `Attached files:` block
-    /// names one file per line and could not carry it.
+    /// The line the prompt would name the file on has a line break in it —
+    /// LF, CR, VT, FF, NEL, or a Unicode line or paragraph separator — and
+    /// the `Attached files:` block names one file per line: it could not
+    /// carry it.
     LineBreak {
+        name: String,
+    },
+    /// The line the prompt would name the file on has another control
+    /// character in it (a NUL, a tab, an escape), which would garble the
+    /// block.
+    ControlCharacter {
         name: String,
     },
     /// The path has no UTF-8 spelling, so no line of the prompt could name
@@ -78,6 +93,12 @@ impl fmt::Display for Rejection {
                     "{name} has a line break in its path; rename it to attach it."
                 )
             }
+            Self::ControlCharacter { name } => {
+                write!(
+                    f,
+                    "{name} has a control character in its path; rename it to attach it."
+                )
+            }
             Self::NotUtf8 { name } => {
                 write!(f, "{name} is not valid UTF-8; rename it to attach it.")
             }
@@ -94,22 +115,42 @@ pub fn file_name(path: &Path) -> String {
 }
 
 /// Why `path` can't be named in a prompt's `Attached files:` block, which
-/// names one file per line: a line break in its text, or bytes with no UTF-8
-/// spelling. `None` for a path the block can carry.
-pub fn unprintable(path: &Path) -> Option<Rejection> {
+/// names one file per line: the line the prompt would carry has a line break
+/// or another control character in it, or the file's own part of the path has
+/// no UTF-8 spelling. `None` for a path the block can carry.
+///
+/// Judged on that line, not on the whole on-disk path (S14/R3-1): a folder
+/// above the file that the block never names — it names a file inside `cwd`
+/// by what is below it — can't stop the attach.
+pub fn unprintable(path: &Path, cwd: &Path, backend: Option<&Backend>) -> Option<Rejection> {
     let name = file_name(path);
-    // Searched as bytes: a non-UTF-8 path has no text to search in.
-    let line_break = path
-        .as_os_str()
-        .as_encoded_bytes()
-        .iter()
-        .any(|byte| matches!(byte, b'\n' | b'\r'));
-    if line_break {
+    let (named, named_cwd) = in_backend(path, cwd, backend);
+    let line = relative(&named, &named_cwd);
+    if line.chars().any(is_line_break) {
         return Some(Rejection::LineBreak { name });
     }
-    path.to_str()
+    if line.chars().any(char::is_control) {
+        return Some(Rejection::ControlCharacter { name });
+    }
+    // Whether the block names the file relatively is the same question in
+    // either spelling (a backend rewrites the folder and the path alike), so
+    // the file's own bytes are read here: a byte with no UTF-8 spelling would
+    // reach the prompt as U+FFFD wherever the text comes from.
+    suffix(path, cwd)
+        .unwrap_or(path)
+        .to_str()
         .is_none()
         .then_some(Rejection::NotUtf8 { name })
+}
+
+/// Whether `c` ends the line it is on: the control characters that are line
+/// breaks (LF, CR, VT, FF, NEL) and the Unicode line and paragraph
+/// separators. Every other control character is [`char::is_control`]'s.
+fn is_line_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+    )
 }
 
 /// Where a prompt names `path`, a path on this computer: as `backend` reads
@@ -117,9 +158,23 @@ pub fn unprintable(path: &Path) -> Option<Rejection> {
 /// inside it, else absolute. A path the backend can't reach, and a tab with
 /// no backend yet, keep this computer's spelling.
 fn message_path(path: &Path, cwd: &Path, backend: Option<&Backend>) -> String {
+    let (path, cwd) = in_backend(path, cwd, backend);
+    relative(&path, &cwd)
+}
+
+/// `path` and `cwd` in one spelling: both as `backend` reads them, or both as
+/// this computer does when it can't reach either.
+fn in_backend<'a>(
+    path: &'a Path,
+    cwd: &'a Path,
+    backend: Option<&Backend>,
+) -> (Cow<'a, Path>, Cow<'a, Path>) {
     match backend.and_then(|backend| mapped(path, cwd, backend)) {
-        Some((path, cwd)) => relative(Path::new(&path), Path::new(&cwd)),
-        None => relative(path, cwd),
+        Some((path, cwd)) => (
+            Cow::Owned(PathBuf::from(path)),
+            Cow::Owned(PathBuf::from(cwd)),
+        ),
+        None => (Cow::Borrowed(path), Cow::Borrowed(cwd)),
     }
 }
 
@@ -132,16 +187,24 @@ fn mapped(path: &Path, cwd: &Path, backend: &Backend) -> Option<(String, String)
     ))
 }
 
+/// `path` inside `cwd` and below it: the rest of it; `None` when `path` is
+/// `cwd` itself or outside it.
+fn suffix<'a>(path: &'a Path, cwd: &Path) -> Option<&'a Path> {
+    path.strip_prefix(cwd)
+        .ok()
+        .filter(|rest| !rest.as_os_str().is_empty())
+}
+
 /// `path` inside `cwd`: the rest of it with `/` separators; else `path` as it
 /// is.
 fn relative(path: &Path, cwd: &Path) -> String {
-    match path.strip_prefix(cwd) {
-        Ok(rest) if !rest.as_os_str().is_empty() => rest
+    match suffix(path, cwd) {
+        Some(rest) => rest
             .components()
             .map(|part| part.as_os_str().to_string_lossy())
             .collect::<Vec<_>>()
             .join("/"),
-        _ => path.display().to_string(),
+        None => path.display().to_string(),
     }
 }
 
@@ -202,15 +265,15 @@ pub fn split_files(message: &str) -> (&str, Vec<&str>) {
     }
     // Before them, the header; and before it, the blank line the text ended
     // on (nothing at all, when the message is only the block).
-    let Some(header) = ix.checked_sub(1).filter(|_| !files.is_empty()) else {
+    let Some(header_ix) = ix.checked_sub(1).filter(|_| !files.is_empty()) else {
         return (trimmed, Vec::new());
     };
-    if line(header) != FILES_HEADER {
+    if line(header_ix) != FILES_HEADER {
         return (trimmed, Vec::new());
     }
-    let body = match header.checked_sub(1) {
+    let body = match header_ix.checked_sub(1) {
         None => "",
-        Some(blank) if line(blank).is_empty() => trimmed[..starts[blank]].trim_end(),
+        Some(blank_ix) if line(blank_ix).is_empty() => trimmed[..starts[blank_ix]].trim_end(),
         Some(_) => return (trimmed, Vec::new()),
     };
     files.reverse();
@@ -266,20 +329,21 @@ pub fn rejection_warning(rejections: &[Rejection]) -> Option<String> {
 }
 
 /// A file's size as its card shows it: "12 B", "2.0 KB", "3.0 MB",
-/// "5.0 GB". One decimal, rounded as it always was; the tenth shown never
-/// reads 1024.0: a size that would round to it shows in the next unit
-/// ("1.0 MB", "1.0 GB").
+/// "5.0 GB", "1.0 TB". One decimal, rounded as it always was; the tenth
+/// shown never reads 1024.0: a size that would round to it shows in the next
+/// unit ("1.0 MB", "1.0 GB", "1.0 TB"). TB is the last unit.
 pub fn human_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
     const GB: u64 = MB * 1024;
+    const TB: u64 = GB * 1024;
     if bytes < KB {
         return format!("{bytes} B");
     }
     // `{:.1}` rounds a tie to even, so a size the request did not touch
     // reads as it always did (1280 B is "1.2 KB", not "1.3 KB"); the text
     // it gives is also what tells a tier from reading 1024.0, which then
-    // hands the size to the next tier. GB is the last.
+    // hands the size to the next tier.
     let tenths = |unit: u64| format!("{:.1}", bytes as f64 / unit as f64);
     let kilobytes = tenths(KB);
     if bytes < MB && kilobytes != "1024.0" {
@@ -289,7 +353,11 @@ pub fn human_size(bytes: u64) -> String {
     if bytes < GB && megabytes != "1024.0" {
         return format!("{megabytes} MB");
     }
-    format!("{} GB", tenths(GB))
+    let gigabytes = tenths(GB);
+    if bytes < TB && gigabytes != "1024.0" {
+        return format!("{gigabytes} GB");
+    }
+    format!("{} TB", tenths(TB))
 }
 
 // ── Tokens ─────────────────────────────────────────────────────────────────
@@ -505,6 +573,7 @@ mod tests {
         AttachedFile {
             name: path.rsplit('/').next().unwrap().to_string(),
             path: PathBuf::from(path),
+            canonical: PathBuf::from(path),
             bytes: 0,
         }
     }
@@ -514,6 +583,7 @@ mod tests {
         AttachedFile {
             name: name.to_string(),
             path: PathBuf::from(path),
+            canonical: PathBuf::from(path),
             bytes: 0,
         }
     }
@@ -727,22 +797,71 @@ mod tests {
         );
     }
 
-    /// S11: the block names one file per line, so a path with a line break in
-    /// it (or one with no UTF-8 spelling) is refused when attached, by name,
-    /// instead of breaking the block.
+    /// S11, S14: the block names one file per line, so a path whose line in it
+    /// carries a line break (CR, LF, VT, FF, NEL, the Unicode line and
+    /// paragraph separators) or any other control character is refused when
+    /// attached, by name, instead of breaking the block; so is one with no
+    /// UTF-8 spelling.
     #[test]
     fn paths_the_block_cannot_carry_are_refused() {
-        assert_eq!(unprintable(Path::new("/work/src/main.rs")), None);
+        let cwd = Path::new("/work");
+        assert_eq!(unprintable(Path::new("/work/src/main.rs"), cwd, None), None);
         assert_eq!(
-            unprintable(Path::new("/work/a\nb.txt")),
+            unprintable(Path::new("/work/a\nb.txt"), cwd, None),
             Some(Rejection::LineBreak {
                 name: "a\nb.txt".to_string()
             })
         );
-        assert_eq!(
-            unprintable(Path::new("/work/a\rb.txt")).map(|r| r.to_string()),
-            Some("a\rb.txt has a line break in its path; rename it to attach it.".to_string())
-        );
+        for separator in ['\r', '\u{0b}', '\u{0c}', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let path = PathBuf::from(format!("/work/a{separator}b.txt"));
+            let rejection = unprintable(&path, cwd, None).expect("a line break");
+            assert!(
+                matches!(rejection, Rejection::LineBreak { .. }),
+                "{separator:?}: {rejection:?}"
+            );
+            // The wording a line break always had keeps naming the file.
+            assert_eq!(
+                rejection.to_string(),
+                format!("a{separator}b.txt has a line break in its path; rename it to attach it.")
+            );
+        }
+        // Other control characters garble the line rather than end it.
+        for control in ['\0', '\t', '\u{1b}', '\u{7f}'] {
+            let path = PathBuf::from(format!("/work/a{control}b.txt"));
+            assert_eq!(
+                unprintable(&path, cwd, None).map(|r| r.to_string()),
+                Some(format!(
+                    "a{control}b.txt has a control character in its path; rename it to attach it."
+                ))
+            );
+        }
+    }
+
+    /// S14/R3-1: what is judged is the line the prompt would carry, not the
+    /// whole on-disk path: a printable file inside a folder whose own path an
+    /// unprintable character or a byte with no UTF-8 spelling makes
+    /// unprintable still attaches, named by its relative path.
+    #[test]
+    fn a_printable_file_in_an_unprintable_folder_attaches() {
+        let cwd = Path::new("/work/two\nlines");
+        let file = Path::new("/work/two\nlines/src/main.rs");
+        assert_eq!(unprintable(file, cwd, None), None);
+        assert_eq!(message_path(file, cwd, None), "src/main.rs");
+        // The file's own name still decides: a line break in it is refused.
+        let bad = Path::new("/work/two\nlines/a\nb.txt");
+        assert!(matches!(
+            unprintable(bad, cwd, None),
+            Some(Rejection::LineBreak { .. })
+        ));
+        // Outside the folder the whole path is the line, so it is judged.
+        assert!(matches!(
+            unprintable(
+                Path::new("/work/two\nlines/a.txt"),
+                Path::new("/work"),
+                None
+            ),
+            Some(Rejection::LineBreak { .. })
+        ));
     }
 
     #[cfg(unix)]
@@ -750,13 +869,54 @@ mod tests {
     fn a_path_without_a_utf8_spelling_is_refused() {
         use std::ffi::OsStr;
         use std::os::unix::ffi::OsStrExt;
-        let path = Path::new("/work").join(OsStr::from_bytes(b"bad\xffname.txt"));
-        let rejection = unprintable(&path).expect("no UTF-8 spelling");
+        let cwd = Path::new("/work");
+        let path = cwd.join(OsStr::from_bytes(b"bad\xffname.txt"));
+        // A tab that knows its backend keeps refusing it too: a path with no
+        // spelling of its own has none through the backend either.
+        for backend in [None, Some(&Backend::Local)] {
+            let rejection = unprintable(&path, cwd, backend).expect("no UTF-8 spelling");
+            assert!(
+                matches!(rejection, Rejection::NotUtf8 { .. }),
+                "{rejection:?}"
+            );
+            assert!(rejection.to_string().contains("is not valid UTF-8"));
+        }
+        // A folder above it with no UTF-8 spelling of its own is not the
+        // file's problem when the block names the file relatively.
+        let folder = cwd.join(OsStr::from_bytes(b"bad\xfffolder"));
+        let inside = folder.join("notes.txt");
+        for backend in [None, Some(&Backend::Local)] {
+            assert_eq!(unprintable(&inside, &folder, backend), None);
+        }
+        assert_eq!(message_path(&inside, &folder, None), "notes.txt");
+        let rejection = unprintable(&inside, cwd, None).expect("no UTF-8 spelling");
         assert!(
             matches!(rejection, Rejection::NotUtf8 { .. }),
             "{rejection:?}"
         );
-        assert!(rejection.to_string().contains("is not valid UTF-8"));
+        assert_eq!(
+            rejection.to_string(),
+            "notes.txt is not valid UTF-8; rename it to attach it."
+        );
+    }
+
+    /// S14/R3-1: the line the block would carry is judged, so a break in a
+    /// folder the block names counts: a file that is the folder itself is
+    /// named by the whole path, and one below a subfolder whose own name
+    /// carries a separator is named by that relative line.
+    #[test]
+    fn a_line_break_in_a_folder_the_block_names_is_refused() {
+        let cwd = Path::new("/w\nx");
+        assert_eq!(
+            unprintable(cwd, cwd, None).map(|rejection| rejection.to_string()),
+            Some("w\nx has a line break in its path; rename it to attach it.".to_string())
+        );
+        let separator = '\u{2028}';
+        let path = PathBuf::from(format!("/a\nb/sub{separator}dir/ok.txt"));
+        assert_eq!(
+            unprintable(&path, Path::new("/a\nb"), None).map(|rejection| rejection.to_string()),
+            Some("ok.txt has a line break in its path; rename it to attach it.".to_string())
+        );
     }
 
     /// S11: sizes reach GB, and the tenth a card shows never reads 1024.0: a
@@ -777,6 +937,20 @@ mod tests {
         assert_eq!(human_size(1024 * 1024 * 1024 - 1), "1.0 GB");
         assert_eq!(human_size(1073689395), "1023.9 MB");
         assert_eq!(human_size(1073689396), "1.0 GB");
+    }
+
+    /// S14/R3-3: the sizes reach TB, and 1 TiB reads as one TB, never as
+    /// "1024.0 GB"; the tiers below keep their text.
+    #[test]
+    fn sizes_reach_terabytes() {
+        const GB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(human_size(GB), "1.0 GB");
+        assert_eq!(human_size(2 * GB), "2.0 GB");
+        assert_eq!(human_size(1024 * GB - 1), "1.0 TB");
+        assert_eq!(human_size((1u64 << 40) - 1), "1.0 TB");
+        assert_eq!(human_size(1024 * GB), "1.0 TB");
+        assert_eq!(human_size(5 * 1024 * GB), "5.0 TB");
+        assert_eq!(human_size(1536 * GB), "1.5 TB");
     }
 
     /// T9: every size the request did not change reads as it always did:

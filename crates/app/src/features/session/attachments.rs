@@ -86,10 +86,16 @@ pub enum Loaded {
 /// Read a path: an image attaches from its bytes ([`Attachment`]: sniffed,
 /// capped at [`MAX_IMAGE_BYTES`]); any other regular file attaches by path
 /// ([`AttachedFile`]); a folder is refused ([`Rejection::Folder`]), and so is
-/// a path that can't be read ([`Rejection::Unreadable`]) or named in the
-/// prompt's block ([`Rejection::LineBreak`], [`Rejection::NotUtf8`]).
-pub fn load_path(path: &Path) -> Result<Loaded, Rejection> {
-    if let Some(rejection) = unprintable(path) {
+/// a path the prompt could not name ([`unprintable`], which judges the line
+/// the prompt would carry: `cwd` as `backend` reads it) or one that can't be
+/// read ([`Rejection::Unreadable`]). Reading a path is disk work: the tab runs
+/// this off the UI thread, when the paths are dropped, pasted or picked.
+pub fn load_path(
+    path: &Path,
+    cwd: &Path,
+    backend: Option<&gentle_core::backend::Backend>,
+) -> Result<Loaded, Rejection> {
+    if let Some(rejection) = unprintable(path, cwd, backend) {
         return Err(rejection);
     }
     let name = file_name(path);
@@ -105,6 +111,7 @@ pub fn load_path(path: &Path) -> Result<Loaded, Rejection> {
         return Ok(Loaded::File(AttachedFile {
             name,
             path: path.to_path_buf(),
+            canonical: canonical(path),
             bytes: metadata.len(),
         }));
     }
@@ -116,6 +123,14 @@ pub fn load_path(path: &Path) -> Result<Loaded, Rejection> {
     }
     let bytes = std::fs::read(path).map_err(unreadable)?;
     Attachment::from_bytes(&name, bytes).map(Loaded::Image)
+}
+
+/// `path` with links and `.`/`..` resolved, as far as the disk allows: the
+/// spelling two attachments of one file share ([`AttachedFile::canonical`]).
+/// Read here, off the UI thread, with the file; a path the disk can't resolve
+/// (the file is gone) keeps the spelling it came in with.
+fn canonical(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// Whether a path is an image, judged by its first bytes rather than its
@@ -391,18 +406,22 @@ mod tests {
         let pdf = dir.join("report.pdf");
         std::fs::write(&pdf, b"%PDF-1.7\n").unwrap();
 
-        let Loaded::File(file) = load_path(&notes).unwrap() else {
+        let Loaded::File(file) = load_path(&notes, &dir, None).unwrap() else {
             panic!("notes.txt is a file");
         };
         assert_eq!(file.name, "notes.txt");
         assert_eq!(file.path, notes);
+        assert_eq!(file.canonical, std::fs::canonicalize(&notes).unwrap());
         assert_eq!(file.bytes, 5);
         assert_eq!(human_size(file.bytes), "5 B");
-        assert!(matches!(load_path(&pdf).unwrap(), Loaded::File(_)));
+        assert!(matches!(
+            load_path(&pdf, &dir, None).unwrap(),
+            Loaded::File(_)
+        ));
 
         let png = dir.join("shot.PNG");
         std::fs::write(&png, PNG).unwrap();
-        let Loaded::Image(image) = load_path(&png).unwrap() else {
+        let Loaded::Image(image) = load_path(&png, &dir, None).unwrap() else {
             panic!("a PNG is still an image");
         };
         assert_eq!(image.mime_type(), "image/png");
@@ -418,7 +437,7 @@ mod tests {
         let dir = temp_dir("folder");
         let folder = dir.join("shots");
         std::fs::create_dir_all(&folder).unwrap();
-        let error = load_path(&folder).unwrap_err();
+        let error = load_path(&folder, &dir, None).unwrap_err();
         assert_eq!(
             error,
             Rejection::Folder {
@@ -440,13 +459,16 @@ mod tests {
         let text = dir.join("notes.txt");
         std::fs::write(&text, "hi").unwrap();
 
-        let Loaded::Image(loaded) = load_path(&png).unwrap() else {
+        let Loaded::Image(loaded) = load_path(&png, &dir, None).unwrap() else {
             panic!("a PNG is an image");
         };
         assert_eq!(loaded.mime_type(), "image/png");
-        assert!(matches!(load_path(&text).unwrap(), Loaded::File(_)));
         assert!(matches!(
-            load_path(&dir.join("missing.png")),
+            load_path(&text, &dir, None).unwrap(),
+            Loaded::File(_)
+        ));
+        assert!(matches!(
+            load_path(&dir.join("missing.png"), &dir, None),
             Err(Rejection::Unreadable { .. })
         ));
         // Judged by content: a misnamed PNG attaches, a `.png` text doesn't.
@@ -456,7 +478,7 @@ mod tests {
         std::fs::write(&fake, "not an image").unwrap();
         assert!(is_image_file(&png).unwrap());
         assert!(is_image_file(&misnamed).unwrap());
-        let Loaded::Image(misnamed) = load_path(&misnamed).unwrap() else {
+        let Loaded::Image(misnamed) = load_path(&misnamed, &dir, None).unwrap() else {
             panic!("a misnamed PNG is still an image");
         };
         assert_eq!(misnamed.mime_type(), "image/png");
@@ -481,7 +503,7 @@ mod tests {
             std::fs::remove_dir_all(&dir).unwrap();
             return;
         }
-        let rejection = load_path(&shot).unwrap_err();
+        let rejection = load_path(&shot, &dir, None).unwrap_err();
         assert!(
             matches!(rejection, Rejection::Unreadable { .. }),
             "{rejection:?}"
@@ -496,8 +518,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// S11: a path the prompt's block can't carry (one with a line break) is
-    /// refused when it is attached, by name, instead of breaking the block.
+    /// S11, S14/R3-1: a path the prompt's block can't carry (one with a line
+    /// break) is refused when it is attached, by name, instead of breaking the
+    /// block; a printable file in a folder whose own name has one still
+    /// attaches, since the block names the file, not the folder.
     #[cfg(unix)]
     #[test]
     fn paths_with_a_line_break_are_refused() {
@@ -505,11 +529,24 @@ mod tests {
         let odd = dir.join("a\nb.txt");
         std::fs::write(&odd, "hi").unwrap();
         assert_eq!(
-            load_path(&odd).unwrap_err(),
+            load_path(&odd, &dir, None).unwrap_err(),
             Rejection::LineBreak {
                 name: "a\nb.txt".to_string()
             }
         );
+        assert_eq!(
+            load_path(&odd, &dir, None).unwrap_err().to_string(),
+            "a\nb.txt has a line break in its path; rename it to attach it."
+        );
+
+        let two_lines = dir.join("two\nlines");
+        std::fs::create_dir_all(&two_lines).unwrap();
+        let inside = two_lines.join("notes.txt");
+        std::fs::write(&inside, "hi").unwrap();
+        let Loaded::File(file) = load_path(&inside, &two_lines, None).unwrap() else {
+            panic!("a printable file in a folder with a line break in its name");
+        };
+        assert_eq!(file.path, inside);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
