@@ -4,11 +4,14 @@
 //! sentence where the reference was typed — as plain text in the prompt, not
 //! as a tile, and without sending — and Esc closes the menu.
 //!
-//! The files are read off the UI thread, once per folder, and a folder the tab
-//! has left while the walk ran is dropped; a completion lands only when the
-//! composer still holds the text it was asked for and no newer Tab or Esc
-//! superseded it. Enter pressed while the folder is still being read waits for
-//! its files instead of sending the draft with the raw `@query`.
+//! The files are read off the UI thread, once per folder, and only the folder
+//! the tab is in now is ever offered — drawn, picked or completed: an index or
+//! a read for a folder the tab has left is dropped, and a folder whose real
+//! path leaves the tab (a symlink out) is never listed. A completion lands only
+//! when the composer still holds the text it was asked for and no newer Tab or
+//! Esc superseded it; the typed `/` is looked up as the platform spells paths.
+//! Enter pressed while the folder is still being read waits for its files
+//! instead of sending the draft with the raw `@query`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -108,6 +111,23 @@ fn under_cwd(cwd: &Path, query: &str) -> Option<PathBuf> {
     Some(cwd.join(folder))
 }
 
+/// The names in `folder` when it really is inside `cwd`, read off the UI
+/// thread (blocking I/O): a folder reached through a symlink that leaves the
+/// tab lists nothing, so the search never shows what is outside it.
+fn read_folder(cwd: PathBuf, folder: PathBuf) -> Option<Vec<(String, bool)>> {
+    let root = cwd.canonicalize().ok()?;
+    let dir = folder.canonicalize().ok()?;
+    if !dir.starts_with(&root) {
+        return None;
+    }
+    Some(
+        list_dir(&dir, false)
+            .into_iter()
+            .map(|entry| (entry.name, entry.is_dir))
+            .collect(),
+    )
+}
+
 /// The longest prefix two names share.
 fn common_prefix(a: &str, b: &str) -> String {
     a.chars()
@@ -127,10 +147,22 @@ struct Row {
     folder: String,
 }
 
+/// `query` with its typed `/` spelled as `separator` — the platform's, which
+/// is how a walker spells its paths (a Windows one yields `src\main.rs`). A
+/// `\` is only a separator where the platform says so: on Unix it is a
+/// character a file's name can hold, so it is left exactly as typed.
+fn native(query: &str, separator: char) -> String {
+    if separator == '/' {
+        return query.to_string();
+    }
+    query.replace('/', &separator.to_string())
+}
+
 /// The rows `query` matches among `files`: the best names first, then the
-/// shorter paths, as the switcher ranks them.
-fn rows(files: &[FileEntry], query: &str) -> Vec<Row> {
-    let needle = Needle::new(query);
+/// shorter paths, as the switcher ranks them. `separator` is the platform's
+/// path separator, which the query's typed `/` stands for.
+fn rows(files: &[FileEntry], query: &str, separator: char) -> Vec<Row> {
+    let needle = Needle::new(&native(query, separator));
     rank_files(files, &needle.lower, ROWS)
         .into_iter()
         .map(|i| {
@@ -150,6 +182,8 @@ struct Asked {
     text: String,
     caret: usize,
     reference: Mention,
+    /// The folder it was asked in: one the tab has left is not applied.
+    folder: PathBuf,
     epoch: u64,
 }
 
@@ -213,14 +247,15 @@ impl SessionView {
     }
 
     /// The menu's rows for `query`, best match first. Empty while the folder
-    /// is still being read, and for a bare `@` (Tab completes that one).
+    /// is still being read, for a bare `@` (Tab completes that one), and for
+    /// an index read in a folder the tab has since left.
     fn path_rows(&self, query: &str) -> Vec<Row> {
         if query.is_empty() {
             return Vec::new();
         }
         match &self.path_menu.index {
-            Some((_, files)) => rows(files, query),
-            None => Vec::new(),
+            Some((at, files)) if *at == self.cwd => rows(files, query, std::path::MAIN_SEPARATOR),
+            _ => Vec::new(),
         }
     }
 
@@ -260,17 +295,23 @@ impl SessionView {
         });
     }
 
-    /// Choose the file at `path` as the reference `at..end`: its `@path`
-    /// goes into the sentence (plain text: no tile, nothing sent) and the
-    /// caret lands after it, in the text that followed.
+    /// Choose the file at `path` — a row drawn for `folder`, as byte
+    /// `at..end` of the text — as the reference: its `@path` goes into the
+    /// sentence (plain text: no tile, nothing sent) and the caret lands after
+    /// it, in the text that followed. A row drawn in a folder the tab has
+    /// left names a path that isn't here, so it picks nothing.
     fn choose_path(
         &mut self,
         at: usize,
         end: usize,
         path: &str,
+        folder: &Path,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if folder != self.cwd {
+            return;
+        }
         let text = self.composer.read(cx).value().to_string();
         let insert = insertion(path, end == text.len());
         self.replace_mention(at, end, &insert, window, cx);
@@ -296,14 +337,13 @@ impl SessionView {
             text,
             caret,
             reference: mention.clone(),
+            folder: self.cwd.clone(),
             epoch: self.path_menu.completions,
         };
-        let reading = cx.background_executor().spawn(async move {
-            list_dir(&folder, false)
-                .into_iter()
-                .map(|entry| (entry.name, entry.is_dir))
-                .collect::<Vec<_>>()
-        });
+        let cwd = self.cwd.clone();
+        let reading = cx
+            .background_executor()
+            .spawn(async move { read_folder(cwd, folder) });
         cx.spawn_in(window, async move |this, cx| {
             let names = reading.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -321,13 +361,16 @@ impl SessionView {
     fn complete_landed(
         &mut self,
         asked: &Asked,
-        names: Vec<(String, bool)>,
+        names: Option<Vec<(String, bool)>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.path_menu.completions != asked.epoch {
+        if self.path_menu.completions != asked.epoch || asked.folder != self.cwd {
             return;
         }
+        let Some(names) = names else {
+            return;
+        };
         let current = {
             let state = self.composer.read(cx);
             state.value() == asked.text && state.cursor() == asked.caret
@@ -419,7 +462,8 @@ impl SessionView {
             }
             "enter" => {
                 let path = rows[cursor].path.clone();
-                self.choose_path(mention.at, caret, &path, window, cx);
+                let folder = self.cwd.clone();
+                self.choose_path(mention.at, caret, &path, &folder, window, cx);
             }
             _ => return false,
         }
@@ -445,6 +489,9 @@ impl SessionView {
         let cursor = self.path_cursor(&mention.query, rows.len());
         let end = caret;
         let at = mention.at;
+        // The folder the rows were read in: a click after the tab moved on
+        // picks nothing (see `choose_path`).
+        let drawn_in = self.cwd.clone();
         Some(
             ui::pop_in(
                 "path-menu",
@@ -482,6 +529,7 @@ impl SessionView {
                             .children(rows.into_iter().enumerate().map(|(i, row)| {
                                 let (icon, tint) = file_icon(&row.name);
                                 let path = row.path.clone();
+                                let drawn_in = drawn_in.clone();
                                 h_flex()
                                     .id(("path-row", i))
                                     .debug_selector(move || format!("path-row-{i}"))
@@ -519,7 +567,7 @@ impl SessionView {
                                             ),
                                     )
                                     .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.choose_path(at, end, &path, window, cx)
+                                        this.choose_path(at, end, &path, &drawn_in, window, cx)
                                     }))
                             })),
                     ),
@@ -538,21 +586,58 @@ mod tests {
     use super::{Mention, completed_query, mention_at, under_cwd};
     use crate::features::session::SessionView;
     use crate::features::session::attachments;
+    use gentle_core::fuzzy::FileEntry;
 
-    /// A folder of files for a test, named after the test so two tests never
-    /// share one.
-    fn folder(tag: &str) -> PathBuf {
+    /// A folder of `files` for a test, named after the test so two tests
+    /// never share one.
+    fn folder_with(tag: &str, files: &[&str]) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "gs-path-menu-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(dir.join("src")).unwrap();
-        for file in ["alpha.md", "beta.md", "src/main.rs"] {
-            std::fs::write(dir.join(file), "x").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        for file in files {
+            let path = dir.join(file);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, "x").unwrap();
         }
         dir
+    }
+
+    /// The folder most tests read.
+    fn folder(tag: &str) -> PathBuf {
+        folder_with(tag, &["alpha.md", "beta.md", "src/main.rs"])
+    }
+
+    /// The rows the menu would list for `query`, as paths.
+    fn row_paths(
+        view: &Entity<SessionView>,
+        cx: &mut VisualTestContext,
+        query: &str,
+    ) -> Vec<String> {
+        view.read_with(cx, |view, _| {
+            view.path_rows(query)
+                .into_iter()
+                .map(|row| row.path)
+                .collect()
+        })
+    }
+
+    /// A folder symlink, as the platform makes one (Windows needs developer
+    /// mode or the right to create one, so the caller copes with a refusal).
+    fn link_folder(target: &std::path::Path, at: &std::path::Path) -> std::io::Result<()> {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(target, at)
+        }
+        #[cfg(windows)]
+        {
+            std::os::windows::fs::symlink_dir(target, at)
+        }
     }
 
     /// A tab rooted at `cwd`, in a headless window that never starts a
@@ -724,6 +809,139 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// A folder moved away from while its files are still being read: the
+    /// files of the folder the tab left are never offered (drawn or picked),
+    /// and the new folder's files are once they land.
+    #[gpui::test]
+    fn the_files_of_a_folder_the_tab_left_are_never_offered(cx: &mut TestAppContext) {
+        let a = folder("cwd-a");
+        let b = folder_with("cwd-b", &["gamma.md"]);
+        let (view, cx) = tab(cx, a.clone());
+
+        type_at(&view, cx, "@alp", 4);
+        assert_eq!(row_paths(&view, cx, "alp"), vec!["alpha.md".to_string()]);
+
+        // The tab moves to B while B's files are still unread: A's index is
+        // still in hand, and it must not answer for B.
+        view.update(cx, |view, cx| {
+            view.cwd = b.clone();
+            cx.notify();
+        });
+        assert!(
+            row_paths(&view, cx, "alp").is_empty(),
+            "the folder the tab left offers nothing"
+        );
+        assert!(row_paths(&view, cx, "gam").is_empty(), "B is unread as yet");
+        assert!(!drawn(cx, "path-menu"), "and the menu is closed");
+
+        // B's files land: they are the ones offered, and only they.
+        assert_eq!(row_paths(&view, cx, "gam"), vec!["gamma.md".to_string()]);
+        assert!(row_paths(&view, cx, "alp").is_empty());
+        std::fs::remove_dir_all(&a).unwrap();
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
+    /// A click on a drawn row inserts the file it shows; the choice itself
+    /// belongs to the folder it was drawn in, so one made after the tab moved
+    /// on picks nothing.
+    #[gpui::test]
+    fn a_choice_from_another_folder_picks_nothing(cx: &mut TestAppContext) {
+        let a = folder("click-a");
+        let b = folder_with("click-b", &["gamma.md"]);
+        let (view, cx) = tab(cx, a.clone());
+
+        // The click's own path: a row drawn for A inserts A's file.
+        type_at(&view, cx, "see @alp", 8);
+        let row = cx
+            .debug_bounds("path-row-0")
+            .expect("the menu lists A's file")
+            .center();
+        cx.simulate_click(row, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "see @alpha.md ");
+
+        // The tab moves on: the same choice, made for the folder it was drawn
+        // in, picks nothing.
+        type_at(&view, cx, "see @alp", 8);
+        view.update(cx, |view, _| view.cwd = b.clone());
+        view.update_in(cx, |view, window, cx| {
+            view.choose_path(4, 8, "alpha.md", &a, window, cx)
+        });
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "see @alp");
+        std::fs::remove_dir_all(&a).unwrap();
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
+    /// A completion read for the folder the tab has left never lands.
+    #[gpui::test]
+    fn a_completion_from_another_folder_never_lands(cx: &mut TestAppContext) {
+        let a = folder("complete-a");
+        let b = folder_with("complete-b", &["gamma.md"]);
+        let (view, cx) = tab(cx, a.clone());
+
+        type_now(&view, cx, "read @sr", 8);
+        press(cx, "tab");
+        view.update(cx, |view, _| view.cwd = b.clone());
+        cx.run_until_parked();
+        assert_eq!(
+            composer_text(&view, cx),
+            "read @sr",
+            "the read was for the folder the tab left"
+        );
+        std::fs::remove_dir_all(&a).unwrap();
+        std::fs::remove_dir_all(&b).unwrap();
+    }
+
+    /// A reference typed (and completed) with `/` finds the paths a Windows
+    /// walker spells with `\\`, while a `\` on Unix stays the character a file
+    /// name can hold.
+    #[test]
+    fn a_reference_spelled_with_slashes_finds_native_paths() {
+        let windows = [FileEntry::new("src\\main.rs".to_string())];
+        assert_eq!(
+            super::rows(&windows, "src/ma", '\\')
+                .into_iter()
+                .map(|row| row.path)
+                .collect::<Vec<_>>(),
+            vec!["src\\main.rs".to_string()],
+            "the typed slash is the platform's separator"
+        );
+        assert!(
+            super::rows(&windows, "src/ma", '/').is_empty(),
+            "on Unix that spelling is not a path a walker yields"
+        );
+        assert_eq!(super::native("a\\b/ma", '/'), "a\\b/ma", "kept as typed");
+        assert_eq!(super::native("a/b\\c", '\\'), "a\\b\\c");
+    }
+
+    /// A folder reached through a symlink that leaves the tab lists nothing:
+    /// the completion never shows what is outside the tab's folder.
+    #[test]
+    fn a_folder_outside_the_tabs_folder_lists_nothing() {
+        let tab = folder("symlink-tab");
+        let outside = folder_with("symlink-outside", &["secret.md"]);
+
+        // A folder that isn't the tab's is not listed, wherever it is...
+        assert!(
+            super::read_folder(tab.clone(), outside.clone()).is_none(),
+            "a folder outside the tab lists nothing"
+        );
+        // ...nor one a link inside the tab walks out to.
+        if link_folder(&outside, &tab.join("link")).is_ok() {
+            assert!(
+                super::read_folder(tab.clone(), tab.join("link")).is_none(),
+                "a link out of the tab is not listed"
+            );
+        }
+        assert!(
+            super::read_folder(tab.clone(), tab.join("src")).is_some(),
+            "a folder inside it is"
+        );
+        std::fs::remove_dir_all(&tab).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
+    }
+
     /// The folder a reference names is read under the tab's folder, never
     /// outside it.
     #[test]
@@ -883,10 +1101,11 @@ mod tests {
                 at: 0,
                 query: "sr".into(),
             },
+            folder: view.read_with(cx, |view, _| view.cwd.clone()),
             epoch: view.read_with(cx, |view, _| view.path_menu.completions),
         };
         view.update_in(cx, |view, window, cx| {
-            view.complete_landed(&asked, names, window, cx)
+            view.complete_landed(&asked, Some(names), window, cx)
         });
         cx.run_until_parked();
         assert_eq!(composer_text(&view, cx), "@src", "the answer was stale");
