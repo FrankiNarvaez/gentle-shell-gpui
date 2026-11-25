@@ -59,8 +59,19 @@ pub fn item_weight(item: &Item) -> f32 {
         // text included; one that is only a block has no text to weigh.
         Item::User { text, images } => {
             let visible = crate::attachments::mixed_attachment_text(text, images.len());
+            let skill = crate::attachments::parse_skill_block(visible);
+            let visible = skill
+                .as_ref()
+                .map_or(visible, |skill| skill.args.unwrap_or_default());
             let (body, files) = crate::attachments::split_files(visible);
-            let text = if files.is_empty() {
+            let text = if skill.is_some() {
+                // Only the skill row and the typed args are visible by default.
+                1.5 + if body.trim().is_empty() {
+                    0.
+                } else {
+                    user_text(body)
+                }
+            } else if files.is_empty() {
                 user_text(text)
             } else if body.trim().is_empty() {
                 0.
@@ -362,6 +373,21 @@ mod tests {
         let known = HashMap::from([(0, 40.)]);
         let e = estimate(&weights, &known, 0, 0., 100.);
         assert_eq!(e.tops, vec![0., 40., 240.]);
+    }
+
+    #[test]
+    fn collapsed_skill_weight_ignores_loaded_body() {
+        for separator in ["\n", "\n\n"] {
+            for body in ["short".to_string(), "long body\n".repeat(80)] {
+                let item = Item::User {
+                    text: format!(
+                        "<skill name=\"impeccable\" location=\"/x\">\n{body}\n</skill>{separator}test"
+                    ),
+                    images: vec![],
+                };
+                assert_eq!(item_weight(&item), 3.8 + 1.5 + 1.);
+            }
+        }
     }
 
     #[test]

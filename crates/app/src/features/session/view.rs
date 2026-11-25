@@ -2823,6 +2823,11 @@ fn user_bubble(
 ) -> Div {
     let markdown = shown.visible(open);
     let files = &shown.files;
+    let skill_body = skill
+        .as_ref()
+        .filter(|(open, _)| *open)
+        .and(shown.skill.as_ref())
+        .map(|skill| skill.body.clone());
     // min_w_0 on both levels: without it the bubble's minimum width is its
     // unwrapped text, so in a narrow pane it overflows (clipped on the left).
     h_flex().w_full().min_w_0().justify_end().child(
@@ -2836,25 +2841,12 @@ fn user_bubble(
             .bg(ui::raised())
             .text_size(rems(14. / 16.))
             .text_color(ui::fg())
-            .when_some(skill, |this, (skill_open, row)| {
-                let body = shown.skill.as_ref().map(|skill| skill.body.clone());
+            .when_some(skill.map(|(_, row)| row), |this, row| {
                 this.child(
                     // The row's own padding, undone so its label lines up
                     // with the text.
                     div().ml(rems(-12. / 16.)).child(row),
                 )
-                .when_some(body.filter(|_| skill_open), |this, body| {
-                    this.child(
-                        div()
-                            .debug_selector(move || format!("skill-body-{ix}"))
-                            .child(
-                                TextView::markdown(("skill-body", ix), body)
-                                    .selectable(true)
-                                    .style(ui::prose_style())
-                                    .list_style(ui::prose_list_style()),
-                            ),
-                    )
-                })
             })
             .when(!images.is_empty() || !files.is_empty(), |this| {
                 this.child(
@@ -2902,7 +2894,19 @@ fn user_bubble(
             // The toggle's own padding, undone so its label lines up with the text.
             .children(
                 toggle.map(|toggle| div().ml(rems(-12. / 16.)).mt(rems(-4. / 16.)).child(toggle)),
-            ),
+            )
+            .when_some(skill_body, |this, body| {
+                this.child(
+                    div()
+                        .debug_selector(move || format!("skill-body-{ix}"))
+                        .child(
+                            TextView::markdown(("skill-body", ix), body)
+                                .selectable(true)
+                                .style(ui::prose_style())
+                                .list_style(ui::prose_list_style()),
+                        ),
+                )
+            }),
     )
 }
 
@@ -3673,6 +3677,16 @@ mod tests {
     /// the loaded body waits behind the fold, and Copy message yields the
     /// command. A message that only looks like a skill block is plain text.
     #[test]
+    fn impeccable_skill_bubble_shows_only_its_name_and_test() {
+        let block = "<skill name=\"impeccable\" location=\"/x/SKILL.md\">\n# Impeccable\n\nDesign polished interfaces.\n</skill>";
+        for separator in ["\n", "\n\n"] {
+            let bubble = BubbleText::new(&format!("{block}{separator}test"));
+            assert_eq!(bubble.skill.as_ref().unwrap().name, "impeccable");
+            assert_eq!(bubble.visible(false), "test");
+        }
+    }
+
+    #[test]
     fn a_skill_message_collapses_to_its_name_and_args() {
         let bubble = BubbleText::new(SKILL_MESSAGE);
         let skill = bubble.skill.as_ref().unwrap();
@@ -3743,6 +3757,11 @@ mod tests {
         assert!(
             cx.debug_bounds("skill-body-0").is_some(),
             "open shows the body"
+        );
+        assert!(
+            cx.debug_bounds("user-text-0").unwrap().origin.y
+                < cx.debug_bounds("skill-body-0").unwrap().origin.y,
+            "the typed args stay above the loaded body"
         );
     }
 

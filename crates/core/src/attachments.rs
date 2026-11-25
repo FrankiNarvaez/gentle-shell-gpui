@@ -332,7 +332,7 @@ impl SkillBlock<'_> {
 pub fn parse_skill_block(message: &str) -> Option<SkillBlock<'_>> {
     static BLOCK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
-            r#"^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n</skill>(?:\n\n([\s\S]+))?$"#,
+            r#"^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n</skill>(?:\n\n?([\s\S]+))?$"#,
         )
         .expect("valid skill block")
     });
@@ -862,6 +862,19 @@ mod tests {
         assert_eq!(block.reference(), "/skill:docs summarize the ADRs");
     }
 
+    #[test]
+    fn impeccable_skill_accepts_both_arg_separators() {
+        let block = "<skill name=\"impeccable\" location=\"/x/SKILL.md\">\n# Impeccable\n\nDesign polished interfaces.\n</skill>";
+        for separator in ["\n", "\n\n"] {
+            let message = format!("{block}{separator}test");
+            let parsed = parse_skill_block(&message).unwrap();
+            assert_eq!(parsed.name, "impeccable");
+            assert_eq!(parsed.body, "# Impeccable\n\nDesign polished interfaces.");
+            assert_eq!(parsed.args, Some("test"));
+            assert_eq!(typed(&message), "/skill:impeccable test");
+        }
+    }
+
     /// S1: a block alone has no args and reads as just the command.
     #[test]
     fn a_skill_block_without_args_parses() {
@@ -873,9 +886,11 @@ mod tests {
     /// S1: args keep their own line breaks, blank lines included.
     #[test]
     fn skill_args_keep_their_newlines() {
-        let message = format!("{SKILL}\n\nline one\n\nline three\n");
-        let block = parse_skill_block(&message).unwrap();
-        assert_eq!(block.args, Some("line one\n\nline three\n"));
+        for separator in ["\n", "\n\n"] {
+            let message = format!("{SKILL}{separator}line one\n\nline three\n");
+            let block = parse_skill_block(&message).unwrap();
+            assert_eq!(block.args, Some("line one\n\nline three\n"));
+        }
     }
 
     /// S1: only a whole message that is one block parses: plain text, a
@@ -887,7 +902,7 @@ mod tests {
             "plain text",
             "",
             &format!("before\n{SKILL}"),
-            &format!("{SKILL}\nno blank line before args"),
+            &format!("{SKILL}no newline before args"),
             &format!(" {SKILL}"),
             "<skill name=\"docs\">\nbody\n</skill>",
             "<skill name=\"docs\" location=\"/x\">\nbody",
