@@ -1373,6 +1373,44 @@ fn live_skill_echo_matches_only_the_idle_pending_command(cx: &mut TestAppContext
     });
 }
 
+/// S1: a confirmed live skill row weighs by its visible content, not its
+/// hidden body; the same wrapper unconfirmed weighs as ordinary text.
+#[gpui::test]
+fn confirmed_skill_rows_weigh_independent_of_body(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let echo =
+        |body: &str| format!("<skill name=\"docs\" location=\"/x\">\n{body}\n</skill>\n\nlook");
+    view.update(cx, |view, cx| {
+        let big = "line\n".repeat(30_000);
+        let rows = [
+            (echo("short"), true),
+            (echo(&big), true),
+            (echo(&big), false),
+        ];
+        for (ix, (text, confirmed)) in rows.into_iter().enumerate() {
+            if confirmed {
+                view.live.expect_reply("/skill:docs look", Vec::new(), ix);
+            }
+            view.transcript.apply(&serde_json::json!({
+                "type": "message_start",
+                "message": {"role": "user", "content": text},
+            }));
+            view.sync_view(cx);
+            view.live.reply_failed();
+        }
+        let weight = |ix| view.list.weight(ix).unwrap();
+        assert_eq!(weight(0), weight(1));
+        assert!(weight(2) > weight(1) * 2.);
+        // Re-deriving a later item keeps the earlier confirmation.
+        view.transcript.apply(&serde_json::json!({
+            "type": "message_start",
+            "message": {"role": "user", "content": "x"},
+        }));
+        view.sync_view(cx);
+        assert_eq!(view.list.weight(1), view.list.weight(0));
+    });
+}
+
 /// S2: a resumed wrapper is ordinary text in history.
 #[gpui::test]
 fn history_recall_keeps_resumed_skill_text(cx: &mut TestAppContext) {

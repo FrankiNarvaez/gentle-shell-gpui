@@ -450,6 +450,19 @@ impl TranscriptList {
         self.state.remeasure_items(rows);
     }
 
+    #[cfg(test)]
+    pub(in crate::features::session) fn weight(&self, ix: usize) -> Option<f32> {
+        self.weights.get(ix).copied()
+    }
+
+    /// Item `ix` is a confirmed live skill invocation: weigh it collapsed.
+    pub(super) fn confirm_skill(&mut self, ix: usize, item: &Item, command: &str) {
+        if let Some(weight) = self.weights.get_mut(ix) {
+            *weight = scroll::item_weight_confirmed(item, Some(command));
+            self.stale = true;
+        }
+    }
+
     /// Whether item `ix` sits folded to its quiet one-line step row; a
     /// change re-lays the estimate (the row's weight moved).
     pub(super) fn set_step_collapsed(&mut self, ix: usize, collapsed: bool) {

@@ -51,6 +51,14 @@ fn user_text(text: &str) -> f32 {
 /// A row's size in "lines", from its content alone. Only its proportion to
 /// other rows matters: [`estimate`] scales it by what measured rows show.
 pub fn item_weight(item: &Item) -> f32 {
+    item_weight_confirmed(item, None)
+}
+
+/// [`item_weight`] for a row the app confirmed as the live invocation of
+/// `skill` (the command it sent): its body is collapsed, so only the skill
+/// row and the typed args weigh. Without a matching confirmation the text is
+/// ordinary.
+pub fn item_weight_confirmed(item: &Item, skill: Option<&str>) -> f32 {
     match item {
         // The bubble's padding and the row gap, then its text (and the
         // strip of image and file tiles above it). The paths' block the
@@ -59,8 +67,19 @@ pub fn item_weight(item: &Item) -> f32 {
         // text included; one that is only a block has no text to weigh.
         Item::User { text, images } => {
             let visible = crate::attachments::mixed_attachment_text(text, images.len());
+            let block = skill.and_then(|c| crate::attachments::parse_skill_block(visible, c));
+            let visible = block
+                .as_ref()
+                .map_or(visible, |b| b.args.unwrap_or_default());
             let (body, files) = crate::attachments::split_files(visible);
-            let text = if files.is_empty() {
+            let text = if block.is_some() {
+                // Only the skill row and the typed args show by default.
+                1.5 + if body.trim().is_empty() {
+                    0.
+                } else {
+                    user_text(body)
+                }
+            } else if files.is_empty() {
                 user_text(text)
             } else if body.trim().is_empty() {
                 0.
@@ -362,6 +381,23 @@ mod tests {
         let known = HashMap::from([(0, 40.)]);
         let e = estimate(&weights, &known, 0, 0., 100.);
         assert_eq!(e.tops, vec![0., 40., 240.]);
+    }
+
+    /// S1: a confirmed live invocation weighs its collapsed row and args,
+    /// whatever the hidden body; the same wrapper unconfirmed is ordinary text.
+    #[test]
+    fn confirmed_skill_weight_ignores_body_but_unconfirmed_does_not() {
+        let wrap = |body: &str| Item::User {
+            text: format!("<skill name=\"docs\" location=\"/x\">\n{body}\n</skill>\n\ntest"),
+            images: vec![],
+        };
+        let (small, big) = (wrap("short"), wrap(&"long body\n".repeat(80)));
+        let weight = |item: &Item, cmd| item_weight_confirmed(item, cmd);
+        assert_eq!(weight(&small, Some("/skill:docs test")), 3.8 + 1.5 + 1.);
+        assert_eq!(weight(&big, Some("/skill:docs test")), 3.8 + 1.5 + 1.);
+        assert_eq!(weight(&big, Some("/skill:docs other")), item_weight(&big));
+        assert_eq!(weight(&big, None), item_weight(&big));
+        assert!(item_weight(&big) > item_weight(&small));
     }
 
     #[test]

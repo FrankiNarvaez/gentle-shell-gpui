@@ -224,6 +224,12 @@ impl SessionView {
             self.sync_markdown(from, cx);
             self.track_live(from);
             self.list.prepare(&self.transcript.items, from);
+            // Confirmed skill rows stay weighed collapsed when re-derived.
+            for (&ix, (command, _)) in &self.live.skills {
+                if let Some(item) = self.transcript.items.get(ix).filter(|_| ix >= from) {
+                    self.list.confirm_skill(ix, item, command);
+                }
+            }
             // Steps fold to their quiet line by default; keep the list's
             // estimate weights in step (a running step that fails opens).
             let items = self.transcript.items.get(from..).unwrap_or_default();
@@ -456,6 +462,8 @@ impl SessionView {
                 let bubble = BubbleText::from_prompt(text, &pending.text);
                 if bubble.skill.is_some() {
                     let command = gentle_core::attachments::typed(&pending.text).into_owned();
+                    self.list
+                        .confirm_skill(pending.base, &items[pending.base], &pending.text);
                     self.live.skills.insert(pending.base, (command, bubble));
                 }
             }
