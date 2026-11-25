@@ -65,6 +65,13 @@ fn fold_key(ix: usize, sub: usize, slot: usize) -> usize {
     (ix << 16) | (sub << 2) | slot
 }
 
+/// The fold key of the skill row of the message you sent at item `ix`: sub 1
+/// keeps it apart from the message's own "more lines" fold (sub 0), which a
+/// user item never gives another use.
+fn skill_key(ix: usize) -> usize {
+    fold_key(ix, 1, OUTPUT)
+}
+
 /// The fold key of the run of finished steps that starts at item `start`
 /// (sub 1 keeps it apart from the step's own fold).
 fn group_key(start: usize) -> usize {
@@ -835,8 +842,10 @@ impl SessionView {
                 let key = fold_key(ix, 0, OUTPUT);
                 let open = self.expanded.contains(&key);
                 let toggle = self.bubble_toggle(shown, key, open, cx);
-                let bubble = user_bubble(ix, shown, images, open, toggle, &self.bubble_images);
-                if shown.markdown.trim().is_empty() {
+                let skill = self.skill_row(ix, shown, cx);
+                let bubble =
+                    user_bubble(ix, shown, images, open, toggle, skill, &self.bubble_images);
+                if shown.markdown.trim().is_empty() && shown.skill.is_none() {
                     return bubble.into_any_element();
                 }
                 v_flex()
@@ -1257,7 +1266,7 @@ impl SessionView {
                                     text,
                                     images.len(),
                                 ))
-                                .to_string(),
+                                .into_owned(),
                                 cx,
                             );
                         }
@@ -1706,6 +1715,24 @@ impl SessionView {
         Some(self.fold_toggle(key, label, open, cx))
     }
 
+    /// The row of a skill's expansion in a message you sent: the skill's
+    /// name and a chevron, and whether its body is open. `None` for a
+    /// message that is not one.
+    fn skill_row(
+        &self,
+        ix: usize,
+        shown: &BubbleText,
+        cx: &mut Context<Self>,
+    ) -> Option<(bool, Stateful<Div>)> {
+        let skill = shown.skill.as_ref()?;
+        let key = skill_key(ix);
+        let open = self.expanded.contains(&key);
+        Some((
+            open,
+            self.fold_toggle(key, skill.name.to_string(), open, cx),
+        ))
+    }
+
     fn fold_toggle(
         &self,
         key: usize,
@@ -1882,12 +1909,14 @@ impl SessionView {
                 let key = fold_key(base, 0, OUTPUT);
                 let open = self.expanded.contains(&key);
                 let toggle = self.bubble_toggle(shown, key, open, cx);
+                let skill = self.skill_row(base, shown, cx);
                 let bubble = user_bubble(
                     base,
                     shown,
                     pending.images.iter().cloned().map(Some).collect(),
                     open,
                     toggle,
+                    skill,
                     &self.bubble_images,
                 );
                 self.list
@@ -2324,10 +2353,27 @@ struct BubbleText {
     /// has, when it is long enough to fold. Cut from the whole message's
     /// Markdown, so HTML closed past the fold still shows literally.
     folded: Option<(SharedString, usize)>,
+    /// The skill the harness expanded in this message: `markdown` is then
+    /// only the args the user typed after it.
+    skill: Option<SkillText>,
+}
+
+/// A skill's expansion in a sent message: shown as its name, with the loaded
+/// content behind a fold.
+struct SkillText {
+    name: SharedString,
+    /// The loaded content, as Markdown that shows it as written.
+    body: SharedString,
 }
 
 impl BubbleText {
     fn new(text: &str) -> Self {
+        let block = gentle_core::attachments::parse_skill_block(text);
+        let skill = block.as_ref().map(|block| SkillText {
+            name: block.name.to_string().into(),
+            body: gentle_core::markdown::sent_message(block.body).into(),
+        });
+        let text = block.map_or(text, |block| block.args.unwrap_or_default());
         let (body, files) = attachments::split_files(text);
         let markdown = gentle_core::markdown::sent_message(&attachments::chip_text(body));
         let lines = line_count(&markdown);
@@ -2344,6 +2390,7 @@ impl BubbleText {
             markdown: markdown.into(),
             files: files.into_iter().map(SharedString::from).collect(),
             folded,
+            skill,
         }
     }
 
@@ -2747,14 +2794,19 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
 }
 
 /// What "Copy message" copies: the text the person typed, never the
-/// `Attached files:` block its prompt carried.
-fn message_body(text: &str) -> &str {
-    attachments::split_files(text).0.trim()
+/// `Attached files:` block its prompt carried nor a skill's loaded body (it
+/// is the `/skill:name args` command).
+fn message_body(text: &str) -> std::borrow::Cow<'_, str> {
+    match gentle_core::attachments::typed(text) {
+        std::borrow::Cow::Borrowed(text) => text.trim().into(),
+        owned => owned,
+    }
 }
 
 /// A user message: its images (numbered in the order they were sent) over
 /// the text, the files it attached as the same tiles beside them, a long text
-/// folded unless `open`, with its `toggle`. `None` is an image that could not
+/// folded unless `open`, with its `toggle`; a skill's expansion is its `skill`
+/// row (open or not, and the row), the loaded body below it when open. `None` is an image that could not
 /// be decoded. The text is selectable and copies with the platform
 /// shortcut, like an answer's; `ix` keys its selection. Images its Markdown
 /// shows load only from `data:` URLs (decoded into `embedded`) and local
@@ -2766,6 +2818,7 @@ fn user_bubble(
     images: Vec<Option<Arc<Image>>>,
     open: bool,
     toggle: Option<Stateful<Div>>,
+    skill: Option<(bool, Stateful<Div>)>,
     embedded: &Arc<crate::features::files::EmbeddedImages>,
 ) -> Div {
     let markdown = shown.visible(open);
@@ -2783,6 +2836,26 @@ fn user_bubble(
             .bg(ui::raised())
             .text_size(rems(14. / 16.))
             .text_color(ui::fg())
+            .when_some(skill, |this, (skill_open, row)| {
+                let body = shown.skill.as_ref().map(|skill| skill.body.clone());
+                this.child(
+                    // The row's own padding, undone so its label lines up
+                    // with the text.
+                    div().ml(rems(-12. / 16.)).child(row),
+                )
+                .when_some(body.filter(|_| skill_open), |this, body| {
+                    this.child(
+                        div()
+                            .debug_selector(move || format!("skill-body-{ix}"))
+                            .child(
+                                TextView::markdown(("skill-body", ix), body)
+                                    .selectable(true)
+                                    .style(ui::prose_style())
+                                    .list_style(ui::prose_list_style()),
+                            ),
+                    )
+                })
+            })
             .when(!images.is_empty() || !files.is_empty(), |this| {
                 this.child(
                     h_flex()
@@ -3296,6 +3369,7 @@ mod tests {
                         Vec::new(),
                         true,
                         None,
+                        None,
                         &Default::default(),
                     ))
             }
@@ -3403,6 +3477,7 @@ mod tests {
                         Vec::new(),
                         true,
                         None,
+                        None,
                         &Default::default(),
                     )))
             }
@@ -3458,6 +3533,7 @@ mod tests {
                         &super::BubbleText::new("hello `café` world"),
                         Vec::new(),
                         true,
+                        None,
                         None,
                         &Default::default(),
                     ))
@@ -3589,6 +3665,85 @@ mod tests {
         let (head, hidden) = BubbleText::new(&gap).folded.unwrap();
         assert!(head.ends_with("line 6"), "{head}");
         assert_eq!(hidden, USER_SLACK + 4);
+    }
+
+    const SKILL_MESSAGE: &str = "<skill name=\"docs\" location=\"/x/SKILL.md\">\nLoaded body.\n</skill>\n\nsummarize the ADRs";
+
+    /// S1: a skill's expansion shows as its name and the args the user typed;
+    /// the loaded body waits behind the fold, and Copy message yields the
+    /// command. A message that only looks like a skill block is plain text.
+    #[test]
+    fn a_skill_message_collapses_to_its_name_and_args() {
+        let bubble = BubbleText::new(SKILL_MESSAGE);
+        let skill = bubble.skill.as_ref().unwrap();
+        assert_eq!(skill.name, "docs");
+        assert!(skill.body.contains("Loaded body."));
+        assert_eq!(bubble.markdown, "summarize the ADRs");
+        assert_eq!(
+            super::message_body(SKILL_MESSAGE),
+            "/skill:docs summarize the ADRs"
+        );
+
+        let bare = BubbleText::new(
+            "<skill name=\"docs\" location=\"/x/SKILL.md\">\nLoaded body.\n</skill>",
+        );
+        assert!(bare.skill.is_some());
+        assert!(bare.markdown.trim().is_empty());
+        assert_eq!(
+            super::message_body(
+                "<skill name=\"docs\" location=\"/x/SKILL.md\">\nLoaded body.\n</skill>"
+            ),
+            "/skill:docs"
+        );
+
+        let lookalike = BubbleText::new("see <skill name=\"a\" location=\"b\">\nx\n</skill>");
+        assert!(lookalike.skill.is_none());
+        assert!(lookalike.markdown.contains("skill name"));
+        assert_eq!(
+            super::message_body("plain\n\nAttached files:\n- a.pdf"),
+            "plain"
+        );
+    }
+
+    /// S1: the body is drawn only once the skill row is open.
+    #[gpui::test]
+    fn a_skill_bubble_shows_its_body_only_when_open(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{InteractiveElement as _, ParentElement as _, Render, Styled as _};
+        struct Bubble(bool);
+        impl Render for Bubble {
+            fn render(
+                &mut self,
+                _: &mut gpui_kit::Window,
+                _: &mut gpui_kit::Context<Self>,
+            ) -> impl gpui_kit::IntoElement {
+                gpui_kit::div().size_full().child(super::user_bubble(
+                    0,
+                    &super::BubbleText::new(SKILL_MESSAGE),
+                    Vec::new(),
+                    false,
+                    None,
+                    Some((self.0, gpui_kit::div().id("skill-toggle").child("docs"))),
+                    &Default::default(),
+                ))
+            }
+        }
+        cx.update(gpui_kit::init);
+        let (view, cx) = cx.add_window_view(|_, _| Bubble(false));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("user-text-0").is_some(), "the args show");
+        assert!(
+            cx.debug_bounds("skill-body-0").is_none(),
+            "the body is folded"
+        );
+        view.update(cx, |view, cx| {
+            view.0 = true;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("skill-body-0").is_some(),
+            "open shows the body"
+        );
     }
 
     #[test]

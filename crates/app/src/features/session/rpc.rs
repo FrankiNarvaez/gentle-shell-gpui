@@ -766,17 +766,21 @@ impl SessionView {
     }
 
     /// The ↑ history of a resumed conversation: what was typed in it, in
-    /// order, without the `Attached files:` block a prompt carried. A prompt
-    /// that was only files is not recalled: recalling it and sending again
-    /// would name files already sent.
+    /// order, without the `Attached files:` block a prompt carried; a skill
+    /// is recalled as the `/skill:name args` command, not its loaded body. A
+    /// prompt that was only files is not recalled: recalling it and sending
+    /// again would name files already sent.
     pub(super) fn seed_prompt_history(&mut self) {
-        let bodies = self.transcript.items.iter().filter_map(|item| match item {
-            gentle_core::transcript::Item::User { text, .. } => {
-                Some(attachments::split_files(text).0).filter(|body| !body.trim().is_empty())
-            }
-            _ => None,
-        });
-        self.prompt_history.seed(bodies);
+        let bodies: Vec<_> = (self.transcript.items.iter())
+            .filter_map(|item| match item {
+                gentle_core::transcript::Item::User { text, .. } => {
+                    Some(gentle_core::attachments::typed(text))
+                        .filter(|body| !body.trim().is_empty())
+                }
+                _ => None,
+            })
+            .collect();
+        self.prompt_history.seed(bodies.iter().map(|body| &**body));
     }
 
     pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {

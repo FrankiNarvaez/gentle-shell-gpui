@@ -302,10 +302,74 @@ pub fn mixed_attachment_text(message: &str, images: usize) -> &str {
     }
 }
 
+/// A skill the harness expanded in a sent message: the whole message is
+/// `<skill name="N" location="L">\nBODY\n</skill>` and, when the user typed
+/// any, `\n\nARGS` after it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillBlock<'a> {
+    pub name: &'a str,
+    pub location: &'a str,
+    /// The skill's loaded content.
+    pub body: &'a str,
+    /// What the user typed after `/skill:name`.
+    pub args: Option<&'a str>,
+}
+
+impl SkillBlock<'_> {
+    /// The command the user typed: `/skill:name args`, or `/skill:name`.
+    pub fn reference(&self) -> String {
+        match self.args {
+            Some(args) => format!("/skill:{} {args}", self.name),
+            None => format!("/skill:{}", self.name),
+        }
+    }
+}
+
+/// The skill block `message` is, as the harness writes it (Pi's
+/// `parseSkillBlock`). Only a message that is exactly one block, plus
+/// optional trailing args, parses; anything else, including text that merely
+/// mentions `<skill name=`, is `None` and shows as it is.
+pub fn parse_skill_block(message: &str) -> Option<SkillBlock<'_>> {
+    static BLOCK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r#"^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n</skill>(?:\n\n([\s\S]+))?$"#,
+        )
+        .expect("valid skill block")
+    });
+    let caps = BLOCK.captures(message)?;
+    Some(SkillBlock {
+        name: caps.get(1)?.as_str(),
+        location: caps.get(2)?.as_str(),
+        body: caps.get(3)?.as_str(),
+        args: caps.get(4).map(|args| args.as_str()),
+    })
+}
+
+/// What the person typed in a sent message: the `/skill:name args` command
+/// for a message the harness expanded from a skill (never its loaded body),
+/// else its text without the `Attached files:` block. No trailing blank
+/// lines.
+pub fn typed(message: &str) -> Cow<'_, str> {
+    match parse_skill_block(message) {
+        Some(block) => {
+            let args = split_files(block.args.unwrap_or_default()).0.trim();
+            if args.is_empty() {
+                Cow::Owned(format!("/skill:{}", block.name))
+            } else {
+                Cow::Owned(format!("/skill:{} {args}", block.name))
+            }
+        }
+        None => Cow::Borrowed(split_files(message).0),
+    }
+}
+
 /// How a sent message reads where its files have no cards (a preview, a
 /// title): its body, or the names of the files it attached when it carried
-/// no text of its own.
+/// no text of its own; a skill's expansion reads as the command typed.
 pub fn summary(message: &str) -> String {
+    if parse_skill_block(message).is_some() {
+        return typed(message).into_owned();
+    }
     let (body, files) = split_files(message);
     if !body.is_empty() {
         return body.to_string();
@@ -781,6 +845,78 @@ mod tests {
         ] {
             assert_eq!(split_files(message), (message, Vec::new()), "{message:?}");
         }
+    }
+
+    const SKILL: &str = "<skill name=\"docs\" location=\"/x/docs/SKILL.md\">\nReferences are relative.\n\n# Docs\n</skill>";
+
+    /// S1: the harness's expansion of `/skill:name args` parses into its
+    /// name, location, body and the args the user typed.
+    #[test]
+    fn a_skill_block_with_args_parses() {
+        let message = format!("{SKILL}\n\nsummarize the ADRs");
+        let block = parse_skill_block(&message).unwrap();
+        assert_eq!(block.name, "docs");
+        assert_eq!(block.location, "/x/docs/SKILL.md");
+        assert_eq!(block.body, "References are relative.\n\n# Docs");
+        assert_eq!(block.args, Some("summarize the ADRs"));
+        assert_eq!(block.reference(), "/skill:docs summarize the ADRs");
+    }
+
+    /// S1: a block alone has no args and reads as just the command.
+    #[test]
+    fn a_skill_block_without_args_parses() {
+        let block = parse_skill_block(SKILL).unwrap();
+        assert_eq!(block.args, None);
+        assert_eq!(block.reference(), "/skill:docs");
+    }
+
+    /// S1: args keep their own line breaks, blank lines included.
+    #[test]
+    fn skill_args_keep_their_newlines() {
+        let message = format!("{SKILL}\n\nline one\n\nline three\n");
+        let block = parse_skill_block(&message).unwrap();
+        assert_eq!(block.args, Some("line one\n\nline three\n"));
+    }
+
+    /// S1: only a whole message that is one block parses: plain text, a
+    /// block after other text or before more blocks, a malformed block and
+    /// text that merely types `<skill name=` stay as they are.
+    #[test]
+    fn anything_but_one_whole_skill_block_is_left_alone() {
+        for message in [
+            "plain text",
+            "",
+            &format!("before\n{SKILL}"),
+            &format!("{SKILL}\nno blank line before args"),
+            &format!(" {SKILL}"),
+            "<skill name=\"docs\">\nbody\n</skill>",
+            "<skill name=\"docs\" location=\"/x\">\nbody",
+            "<skill name=\"\" location=\"/x\">\nbody\n</skill>",
+            "I typed <skill name=\"a\" location=\"b\">\nx\n</skill> myself",
+            "use <skill name= literally",
+        ] {
+            assert!(parse_skill_block(message).is_none(), "{message:?}");
+        }
+    }
+
+    /// S1: what the person typed, for Copy message and ↑ recall, is the
+    /// command for a skill message — never the loaded body — and the text
+    /// without its file block for any other. A preview reads the same way.
+    #[test]
+    fn a_skill_message_reads_as_the_command_that_was_typed() {
+        let with_args = format!("{SKILL}\n\nsummarize the ADRs");
+        assert_eq!(typed(&with_args), "/skill:docs summarize the ADRs");
+        assert_eq!(summary(&with_args), "/skill:docs summarize the ADRs");
+        assert_eq!(typed(SKILL), "/skill:docs");
+        assert_eq!(summary(SKILL), "/skill:docs");
+        let with_files = format!("{SKILL}\n\nlook\n\nAttached files:\n- a.pdf");
+        assert_eq!(typed(&with_files), "/skill:docs look");
+        // Other messages are as before: the body without the file block.
+        assert_eq!(typed("look\n\nAttached files:\n- a.pdf"), "look");
+        assert_eq!(typed("Attached files:\n- a.pdf"), "");
+        assert_eq!(typed("plain"), "plain");
+        let lookalike = "use <skill name=\"a\" location=\"b\">\nx\n</skill>";
+        assert_eq!(typed(lookalike), lookalike);
     }
 
     /// S9: where its files have no cards, a sent message reads as its body,
