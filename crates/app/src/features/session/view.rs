@@ -44,8 +44,8 @@ mod transcript_list;
 
 pub(super) use activity::parse_rate_limit;
 pub(super) use cards::markdown_custom;
+use live::{ConfirmedSkill, Span, TICK, label_stamp, ticker_needed, track};
 pub(super) use live::{Live, RateLimit};
-use live::{Span, TICK, label_stamp, ticker_needed, track};
 pub(super) use path_menu::PathMenu;
 pub(super) use paths::PathLookup;
 pub(super) use transcript_list::TranscriptList;
@@ -68,7 +68,7 @@ fn fold_key(ix: usize, sub: usize, slot: usize) -> usize {
 /// The fold key of the skill row of the message you sent at item `ix`: sub 1
 /// keeps it apart from the message's own "more lines" fold (sub 0), which a
 /// user item never gives another use.
-fn skill_key(ix: usize) -> usize {
+pub(in crate::features::session) fn skill_key(ix: usize) -> usize {
     fold_key(ix, 1, OUTPUT)
 }
 
@@ -219,17 +219,26 @@ impl SessionView {
                 self.live.open_spans = 0;
                 self.live.answer_done.clear();
                 self.live.rail_hover = None;
+                // Keyed by item index: a rebuilt transcript has other items.
+                self.live.skills.clear();
             }
             let from = dirty.from.min(self.transcript.items.len());
             self.sync_markdown(from, cx);
             self.track_live(from);
             self.list.prepare(&self.transcript.items, from);
-            // Confirmed skill rows stay weighed collapsed when re-derived.
-            for (&ix, (command, _)) in &self.live.skills {
-                if let Some(item) = self.transcript.items.get(ix).filter(|_| ix >= from) {
-                    self.list.confirm_skill(ix, item, command);
+            // Items from `from` on were re-weighed as ordinary text: a
+            // confirmed skill row stays weighed collapsed (same `original`
+            // the first confirmation used), and a confirmation whose item
+            // changed or went away is dropped.
+            let items = &self.transcript.items;
+            self.live.skills.retain(|&ix, skill| {
+                let same =
+                    matches!(items.get(ix), Some(Item::User { text, .. }) if *text == skill.echo);
+                if same && ix >= from {
+                    self.list.confirm_skill(ix, &items[ix], &skill.original);
                 }
-            }
+                same || ix < from
+            });
             // Steps fold to their quiet line by default; keep the list's
             // estimate weights in step (a running step that fails opens).
             let items = self.transcript.items.get(from..).unwrap_or_default();
@@ -453,18 +462,30 @@ impl SessionView {
         let ready = self.backend.is_ready();
         let items = &self.transcript.items;
         let dialogs = !self.extension.dialogs.is_empty();
-        if let Some(pending) = &mut self.live.pending {
+        let live = &mut self.live;
+        if let Some(pending) = &mut live.pending {
             pending.started |= running;
-            if let Some(Item::User { text, images }) = items.get(pending.base)
-                && !self.live.skills.contains_key(&pending.base)
+            // Confirm the echo of a skill command sent while idle. The parse
+            // runs before any bubble is built, so a pending prompt that is not
+            // a skill invocation costs one prefix check per pass.
+            if pending.idle
+                && let Some(item @ Item::User { text, images }) = items.get(pending.base)
+                && !live
+                    .skills
+                    .get(&pending.base)
+                    .is_some_and(|s| s.echo == *text)
             {
-                let text = gentle_core::attachments::mixed_attachment_text(text, images.len());
-                let bubble = BubbleText::from_prompt(text, &pending.text);
-                if bubble.skill.is_some() {
-                    let command = gentle_core::attachments::typed(&pending.text).into_owned();
-                    self.list
-                        .confirm_skill(pending.base, &items[pending.base], &pending.text);
-                    self.live.skills.insert(pending.base, (command, bubble));
+                let shown = gentle_core::attachments::mixed_attachment_text(text, images.len());
+                if gentle_core::attachments::parse_skill_block(shown, &pending.text).is_some() {
+                    self.list.confirm_skill(pending.base, item, &pending.text);
+                    live.skills.insert(
+                        pending.base,
+                        ConfirmedSkill {
+                            echo: text.clone(),
+                            original: pending.text.clone(),
+                            bubble: BubbleText::from_prompt(shown, &pending.text),
+                        },
+                    );
                 }
             }
             let answered = items
@@ -843,8 +864,8 @@ impl SessionView {
             Item::User { text, images } => {
                 let images: Vec<_> = images.iter().map(|i| self.image_cache.get(i)).collect();
                 let computed;
-                let shown = match (self.live.skills.get(&ix), self.list.prepared(ix)) {
-                    (Some((_, bubble)), _) => bubble,
+                let shown = match (self.live.confirmed(ix, item), self.list.prepared(ix)) {
+                    (Some(skill), _) => &skill.bubble,
                     (_, Some(Prepared::Bubble(cell))) => cell.get_or_init(|| {
                         BubbleText::new(gentle_core::attachments::mixed_attachment_text(
                             text,
@@ -1272,27 +1293,33 @@ impl SessionView {
             .invisible()
             .group_hover("user", |s| s.visible())
             .child(
-                Button::new(("copy-message", ix))
-                    .ghost()
-                    .xsmall()
-                    .text_color(ui::faint())
-                    .icon(Icon::new(IconName::Copy))
-                    .tooltip("Copy message")
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some((original, _)) = this.live.skills.get(&ix) {
-                            return this.copy_text(original.clone(), cx);
-                        }
-                        if let Some(Item::User { text, images }) = this.transcript.items.get(ix) {
-                            this.copy_text(
-                                message_body(gentle_core::attachments::mixed_attachment_text(
-                                    text,
-                                    images.len(),
-                                ))
-                                .into_owned(),
-                                cx,
-                            );
-                        }
-                    })),
+                div()
+                    .debug_selector(move || format!("copy-message-{ix}"))
+                    .child(
+                        Button::new(("copy-message", ix))
+                            .ghost()
+                            .xsmall()
+                            .text_color(ui::faint())
+                            .icon(Icon::new(IconName::Copy))
+                            .tooltip("Copy message")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                let Some(item @ Item::User { text, images }) =
+                                    this.transcript.items.get(ix)
+                                else {
+                                    return;
+                                };
+                                let copied = match this.live.confirmed(ix, item) {
+                                    Some(skill) => message_body(&skill.original),
+                                    None => message_body(
+                                        gentle_core::attachments::mixed_attachment_text(
+                                            text,
+                                            images.len(),
+                                        ),
+                                    ),
+                                };
+                                this.copy_text(copied.to_string(), cx);
+                            })),
+                    ),
             )
     }
 
@@ -1764,6 +1791,7 @@ impl SessionView {
     ) -> Stateful<Div> {
         h_flex()
             .id(("fold", key))
+            .debug_selector(move || format!("fold-{key}"))
             .gap_1()
             .px_3()
             .py_0p5()
@@ -2819,14 +2847,11 @@ fn status_footer(status: ToolStatus, duration: Option<Duration>) -> Div {
         })
 }
 
-/// What "Copy message" copies: the text the person typed, never the
-/// `Attached files:` block its prompt carried nor a skill's loaded body (it
-/// is the `/skill:name args` command).
-fn message_body(text: &str) -> std::borrow::Cow<'_, str> {
-    match gentle_core::attachments::typed(text) {
-        std::borrow::Cow::Borrowed(text) => text.trim().into(),
-        owned => owned,
-    }
+/// The text of a user message without the `Attached files:` block its prompt
+/// carried. For a confirmed live skill the caller passes the original
+/// `/skill:name args` command, so the loaded body is never copied.
+fn message_body(text: &str) -> &str {
+    gentle_core::attachments::typed(text).trim()
 }
 
 /// A user message: its images (numbered in the order they were sent) over

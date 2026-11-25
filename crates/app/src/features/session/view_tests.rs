@@ -1353,24 +1353,193 @@ fn history_recall_leaves_the_file_block_out(cx: &mut TestAppContext) {
     assert_eq!(composer(cx), "look", "a files-only prompt is not recalled");
 }
 
+/// A skill echo with a body that contains its own closing tag.
+const ECHO: &str = "<skill name=\"docs\" location=\"/x\">\n```xml\n</skill>\n```\n</skill>\n\nlook";
+
+fn push_user(view: &mut SessionView, text: &str) {
+    view.transcript.apply(&serde_json::json!({
+        "type": "message_start",
+        "message": {"role": "user", "content": text},
+    }));
+}
+
+/// S1/S3 (R3-001): the echo confirms only when its prompt was sent idle and
+/// the pending text is the command that produced it.
 #[gpui::test]
 fn live_skill_echo_matches_only_the_idle_pending_command(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
-    let echo = "<skill name=\"docs\" location=\"/x\">\n```xml\n</skill>\n```\n</skill>\n\nlook";
     view.update(cx, |view, cx| {
-        for (ix, original) in [echo, "/skill:docs look"].into_iter().enumerate() {
-            view.live.expect_reply(original, Vec::new(), ix);
-            view.transcript
-                .items
-                .push(gentle_core::transcript::Item::User {
-                    text: echo.into(),
-                    images: Vec::new(),
-                });
+        for (ix, (original, idle)) in [
+            (ECHO, true),
+            ("/skill:docs look", false),
+            ("/skill:docs look", true),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            view.live.expect_reply(original, Vec::new(), ix, idle);
+            push_user(view, ECHO);
             view.sync_view(cx);
         }
         assert!(!view.live.skills.contains_key(&0));
-        assert_eq!(view.live.skills[&1].0, "/skill:docs look");
+        assert!(!view.live.skills.contains_key(&1));
+        assert_eq!(view.live.skills[&2].original, "/skill:docs look");
     });
+}
+
+/// S3 (R3-001): the real send path registers a pending reply as it did before
+/// skills collapsed (not while steering), and marks only an idle send as one
+/// whose echo may be confirmed.
+#[gpui::test]
+fn send_registers_the_pending_reply_unless_steering(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.transcript.running = true;
+        view.send_prompt_with("steer".into(), Vec::new(), cx);
+        assert!(
+            view.live.pending.is_none(),
+            "a steered prompt waits for nothing"
+        );
+
+        view.transcript.running = false;
+        view.send_prompt_with("one".into(), Vec::new(), cx);
+        assert!(
+            view.live
+                .pending
+                .as_ref()
+                .is_some_and(|p| p.idle && p.text == "one")
+        );
+
+        // Another prompt while the first is not picked up: still tracked as
+        // before, but its echo cannot be told apart.
+        view.send_prompt_with("/skill:docs look".into(), Vec::new(), cx);
+        assert!(
+            view.live
+                .pending
+                .as_ref()
+                .is_some_and(|p| !p.idle && p.text == "/skill:docs look")
+        );
+    });
+}
+
+/// S3 (R3-002): a confirmation never renders or copies for another item at
+/// its index; the transcript rebuilt by a refresh drops it.
+#[gpui::test]
+fn a_confirmation_is_only_for_its_own_echo(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.live
+            .expect_reply("/skill:docs look", Vec::new(), 0, true);
+        push_user(view, ECHO);
+        view.sync_view(cx);
+        assert!(view.live.confirmed(0, &view.transcript.items[0]).is_some());
+
+        // Truncated and refilled without a reset: another message at 0.
+        view.transcript.items.clear();
+        push_user(view, "something else");
+        assert!(view.live.confirmed(0, &view.transcript.items[0]).is_none());
+
+        view.transcript.items.clear();
+        view.transcript.apply(&serde_json::json!({
+            "type": "message_start",
+            "message": {"role": "user", "content": "something else"},
+        }));
+        view.sync_view(cx);
+        assert!(
+            view.live.skills.is_empty(),
+            "the stale confirmation is dropped"
+        );
+    });
+}
+
+/// S3 (R3-003): reloading the transcript clears confirmations but leaves an
+/// outstanding reply alone; an empty reload changes nothing.
+#[gpui::test]
+fn a_refresh_keeps_the_reply_in_flight(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.live
+            .expect_reply("/skill:docs look", Vec::new(), 0, true);
+        push_user(view, ECHO);
+        view.sync_view(cx);
+        assert_eq!(view.live.skills.len(), 1);
+
+        view.apply_messages(&[]);
+        view.sync_view(cx);
+        assert_eq!(
+            view.live.skills.len(),
+            1,
+            "an empty refresh changes nothing"
+        );
+        assert_eq!(view.transcript.items.len(), 1);
+
+        view.live.expect_reply("later prompt", Vec::new(), 1, true);
+        view.apply_messages(&[serde_json::json!({"role": "user", "content": "other"})]);
+        assert!(
+            view.live.pending.is_some(),
+            "the refresh does not cancel the reply"
+        );
+        view.sync_view(cx);
+        assert!(view.live.skills.is_empty());
+    });
+}
+
+/// S3 (R3-004): a confirmed skill that carried files keeps its collapsed
+/// weight when a later item re-derives it.
+#[gpui::test]
+fn a_confirmed_skill_with_files_keeps_its_weight(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let big = "line\n".repeat(30_000);
+    let echo = format!(
+        "<skill name=\"docs\" location=\"/x\">\n{big}\n</skill>\n\nlook\n\nAttached files:\n- a.pdf"
+    );
+    view.update(cx, |view, cx| {
+        view.live.expect_reply(
+            "/skill:docs look\n\nAttached files:\n- a.pdf",
+            Vec::new(),
+            0,
+            true,
+        );
+        push_user(view, &echo);
+        view.sync_view(cx);
+        let first = view.list.weight(0).unwrap();
+        assert!(first < 20., "{first}");
+        view.live.reply_failed();
+        push_user(view, "x");
+        view.sync_view(cx);
+        assert_eq!(view.list.weight(0), Some(first));
+    });
+}
+
+/// S3 (R3-006): Copy and the skill row, clicked on a confirmed live
+/// invocation, copy the command and expand the body.
+#[gpui::test]
+fn a_confirmed_skill_row_copies_its_command_and_expands(cx: &mut TestAppContext) {
+    let (view, cx) = rooted_tab(cx);
+    view.update(cx, |view, cx| {
+        view.live.expect_reply(
+            "/skill:docs look\n\nAttached files:\n- a.pdf",
+            Vec::new(),
+            0,
+            true,
+        );
+        push_user(view, &format!("{ECHO}\n\nAttached files:\n- a.pdf"));
+        view.sync_view(cx);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(!drawn(cx, "skill-body-0"));
+    let fold: &'static str =
+        Box::leak(format!("fold-{}", super::view::skill_key(0)).into_boxed_str());
+    click(cx, fold);
+    assert!(drawn(cx, "skill-body-0"), "the skill row expands the body");
+    let bounds = cx.debug_bounds("user-text-0").expect("the typed args");
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::none());
+    click(cx, "copy-message-0");
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some("/skill:docs look".into())
+    );
 }
 
 /// S1: a confirmed live skill row weighs by its visible content, not its
@@ -1389,7 +1558,8 @@ fn confirmed_skill_rows_weigh_independent_of_body(cx: &mut TestAppContext) {
         ];
         for (ix, (text, confirmed)) in rows.into_iter().enumerate() {
             if confirmed {
-                view.live.expect_reply("/skill:docs look", Vec::new(), ix);
+                view.live
+                    .expect_reply("/skill:docs look", Vec::new(), ix, true);
             }
             view.transcript.apply(&serde_json::json!({
                 "type": "message_start",

@@ -304,25 +304,16 @@ pub fn mixed_attachment_text(message: &str, images: usize) -> &str {
 
 /// A skill the harness expanded in a sent message: the whole message is
 /// `<skill name="N" location="L">\nBODY\n</skill>` and, when the user typed
-/// any, `\n\nARGS` after it.
+/// any, the args after it, separated by one or two line feeds (see
+/// [`parse_skill_block`]). The location is matched but not kept: nothing
+/// shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SkillBlock<'a> {
     pub name: &'a str,
-    pub location: &'a str,
     /// The skill's loaded content.
     pub body: &'a str,
     /// What the user typed after `/skill:name`.
     pub args: Option<&'a str>,
-}
-
-impl SkillBlock<'_> {
-    /// The command the user typed: `/skill:name args`, or `/skill:name`.
-    pub fn reference(&self) -> String {
-        match self.args {
-            Some(args) => format!("/skill:{} {args}", self.name),
-            None => format!("/skill:{}", self.name),
-        }
-    }
 }
 
 /// Match a live echo against the original submitted skill command.
@@ -335,6 +326,9 @@ pub fn parse_skill_block<'a>(message: &'a str, original: &str) -> Option<SkillBl
     let (envelope, args) = if args.is_empty() {
         (message, None)
     } else {
+        // The harness joins the envelope and the args with a blank line, but
+        // a transcript read back through Pi can carry a single line feed:
+        // both are accepted so the args stay visible either way.
         let prefix = message.strip_suffix(args)?.strip_suffix('\n')?;
         let envelope = prefix.strip_suffix('\n').unwrap_or(prefix);
         (envelope, Some(&message[message.len() - args.len()..]))
@@ -352,15 +346,14 @@ pub fn parse_skill_block<'a>(message: &'a str, original: &str) -> Option<SkillBl
     }
     Some(SkillBlock {
         name: echoed_name,
-        location: caps.get(2)?.as_str(),
         body: caps.get(3)?.as_str(),
         args,
     })
 }
 
 /// Sent text without the `Attached files:` block.
-pub fn typed(message: &str) -> Cow<'_, str> {
-    Cow::Borrowed(split_files(message).0)
+pub fn typed(message: &str) -> &str {
+    split_files(message).0
 }
 
 /// How a sent message reads where its files have no cards (a preview, a
@@ -847,16 +840,14 @@ mod tests {
     const SKILL: &str = "<skill name=\"docs\" location=\"/x/docs/SKILL.md\">\nReferences are relative.\n\n# Docs\n</skill>";
 
     /// S1: the harness's expansion of `/skill:name args` parses into its
-    /// name, location, body and the args the user typed.
+    /// name, body and the args the user typed.
     #[test]
     fn a_skill_block_with_args_parses() {
         let message = format!("{SKILL}\n\nsummarize the ADRs");
         let block = parse_skill_block(&message, "/skill:docs summarize the ADRs").unwrap();
         assert_eq!(block.name, "docs");
-        assert_eq!(block.location, "/x/docs/SKILL.md");
         assert_eq!(block.body, "References are relative.\n\n# Docs");
         assert_eq!(block.args, Some("summarize the ADRs"));
-        assert_eq!(block.reference(), "/skill:docs summarize the ADRs");
     }
 
     #[test]
@@ -868,7 +859,6 @@ mod tests {
             assert_eq!(parsed.name, "impeccable");
             assert_eq!(parsed.body, "# Impeccable\n\nDesign polished interfaces.");
             assert_eq!(parsed.args, Some("test"));
-            assert_eq!(parsed.reference(), "/skill:impeccable test");
         }
     }
 
@@ -877,7 +867,6 @@ mod tests {
     fn a_skill_block_without_args_parses() {
         let block = parse_skill_block(SKILL, "/skill:docs").unwrap();
         assert_eq!(block.args, None);
-        assert_eq!(block.reference(), "/skill:docs");
     }
 
     /// S1: args keep their own line breaks, blank lines included.

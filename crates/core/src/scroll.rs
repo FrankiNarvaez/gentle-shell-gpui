@@ -48,6 +48,9 @@ fn user_text(text: &str) -> f32 {
     }
 }
 
+/// What a confirmed skill invocation weighs for its collapsed skill row.
+pub const SKILL_ROW: f32 = 1.5;
+
 /// A row's size in "lines", from its content alone. Only its proportion to
 /// other rows matters: [`estimate`] scales it by what measured rows show.
 pub fn item_weight(item: &Item) -> f32 {
@@ -74,11 +77,12 @@ pub fn item_weight_confirmed(item: &Item, skill: Option<&str>) -> f32 {
             let (body, files) = crate::attachments::split_files(visible);
             let text = if block.is_some() {
                 // Only the skill row and the typed args show by default.
-                1.5 + if body.trim().is_empty() {
-                    0.
-                } else {
-                    user_text(body)
-                }
+                SKILL_ROW
+                    + if body.trim().is_empty() {
+                        0.
+                    } else {
+                        user_text(body)
+                    }
             } else if files.is_empty() {
                 user_text(text)
             } else if body.trim().is_empty() {
@@ -393,8 +397,11 @@ mod tests {
         };
         let (small, big) = (wrap("short"), wrap(&"long body\n".repeat(80)));
         let weight = |item: &Item, cmd| item_weight_confirmed(item, cmd);
-        assert_eq!(weight(&small, Some("/skill:docs test")), 3.8 + 1.5 + 1.);
-        assert_eq!(weight(&big, Some("/skill:docs test")), 3.8 + 1.5 + 1.);
+        assert_eq!(
+            weight(&small, Some("/skill:docs test")),
+            3.8 + SKILL_ROW + 1.
+        );
+        assert_eq!(weight(&big, Some("/skill:docs test")), 3.8 + SKILL_ROW + 1.);
         assert_eq!(weight(&big, Some("/skill:docs other")), item_weight(&big));
         assert_eq!(weight(&big, None), item_weight(&big));
         assert!(item_weight(&big) > item_weight(&small));
