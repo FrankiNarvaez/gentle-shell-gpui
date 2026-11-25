@@ -381,7 +381,11 @@ impl SessionView {
     /// Apply the completion read for `asked` when it is still the latest one
     /// and the composer still holds the text and caret it was asked about: an
     /// answer a newer Tab or an Esc superseded is dropped, as is one for text
-    /// the person has since typed over, and one that would add nothing.
+    /// the person has since typed over. A folder that answers and adds to the
+    /// prefix completes it; anything else (no such folder inside the tab, or
+    /// names that add nothing — a reference like `@ui/btn` that only ranks by
+    /// the index) leaves Tab its other job: filling the highlighted file from
+    /// the tab's own index, as Enter fills it.
     fn complete_landed(
         &mut self,
         asked: &Asked,
@@ -392,9 +396,6 @@ impl SessionView {
         if self.path_menu.completions != asked.epoch || asked.folder != self.cwd {
             return;
         }
-        let Some(names) = names else {
-            return;
-        };
         let current = {
             let state = self.composer.read(cx);
             state.value() == asked.text && state.cursor() == asked.caret
@@ -402,22 +403,23 @@ impl SessionView {
         if !current {
             return;
         }
-        let Some(completed) = completed_query(&asked.reference.query, &names) else {
-            // Nothing to add to the prefix: Tab's other job is the file the
-            // search found, filled as Enter fills it.
-            self.fill_highlighted(
-                &asked.reference.query,
-                asked.reference.at,
-                asked.caret,
-                &asked.folder,
-                window,
-                cx,
-            );
+        let completed = names
+            .as_deref()
+            .and_then(|names| completed_query(&asked.reference.query, names));
+        if let Some(completed) = completed {
+            let insert = format!("@{completed}");
+            self.replace_mention(asked.reference.at, asked.caret, &insert, window, cx);
+            cx.notify();
             return;
-        };
-        let insert = format!("@{completed}");
-        self.replace_mention(asked.reference.at, asked.caret, &insert, window, cx);
-        cx.notify();
+        }
+        self.fill_highlighted(
+            &asked.reference.query,
+            asked.reference.at,
+            asked.caret,
+            &asked.folder,
+            window,
+            cx,
+        );
     }
 
     /// ↑/↓ move through the `@` menu, Tab completes the folder prefix being
@@ -1100,6 +1102,69 @@ mod tests {
             "no tile, and nothing was sent"
         );
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A fuzzy match under a folder the typed prefix doesn't spell (`@ui/btn`
+    /// finds `src/ui/button.rs`) is filled by Tab as Enter fills it: the read
+    /// of `ui` finds no such folder, so the tab's own index row is used.
+    #[gpui::test]
+    fn tab_fills_a_file_whose_prefix_is_not_a_folder(cx: &mut TestAppContext) {
+        let dir = folder_with("tab-deep", &["alpha.md", "src/ui/button.rs"]);
+        let (view, cx) = tab(cx, dir.clone());
+
+        // The menu finds it by ranking, and Enter fills it.
+        type_at(&view, cx, "open @ui/btn", 12);
+        assert_eq!(
+            row_paths(&view, cx, "ui/btn"),
+            vec!["src/ui/button.rs".to_string()]
+        );
+
+        // Tab fills the same file, though `ui` is no folder here.
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "open @src/ui/button.rs ");
+        assert!(!drawn(cx, "path-menu"), "the menu closes on the choice");
+        assert_eq!(
+            view.read_with(cx, |view, _| (
+                view.files.len(),
+                view.attachments.len(),
+                view.live.pending.is_none()
+            )),
+            (0, 0, true),
+            "no tile, and nothing was sent"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A reference that leaves the tab through a link fills nothing: the read
+    /// is refused and no indexed row names anything outside the tab.
+    #[gpui::test]
+    fn tab_fills_nothing_for_a_link_that_leaves_the_tab(cx: &mut TestAppContext) {
+        let dir = folder_with("tab-link", &["alpha.md"]);
+        let outside = folder_with("tab-link-outside", &["secret.md"]);
+        if link_folder(&outside, &dir.join("link")).is_err() {
+            // Windows without the right to make one: the guard it exercises
+            // is the same code path, tested below without a link.
+            assert!(
+                super::read_folder(dir.clone(), outside.clone()).is_none(),
+                "a folder outside the tab lists nothing"
+            );
+            std::fs::remove_dir_all(&dir).unwrap();
+            std::fs::remove_dir_all(&outside).unwrap();
+            return;
+        }
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_at(&view, cx, "@link/secret", 12);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(
+            composer_text(&view, cx),
+            "@link/secret",
+            "nothing outside the tab is filled"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::remove_dir_all(&outside).unwrap();
     }
 
     /// Tab fills the row the arrows moved the highlight to: the second match,
