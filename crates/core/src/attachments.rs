@@ -10,6 +10,8 @@ use std::fmt;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
+use crate::backend::Backend;
+
 // ── Files ──────────────────────────────────────────────────────────────────
 
 /// A regular file waiting in the composer, sent to the agent by path: the
@@ -42,6 +44,16 @@ pub enum Rejection {
         name: String,
         error: String,
     },
+    /// The path has a line break in it; the prompt's `Attached files:` block
+    /// names one file per line and could not carry it.
+    LineBreak {
+        name: String,
+    },
+    /// The path has no UTF-8 spelling, so no line of the prompt could name
+    /// the file.
+    NotUtf8 {
+        name: String,
+    },
 }
 
 impl fmt::Display for Rejection {
@@ -60,13 +72,69 @@ impl fmt::Display for Rejection {
                 *bytes as f64 / (1024.0 * 1024.0)
             ),
             Self::Unreadable { name, error } => write!(f, "Could not read {name}: {error}"),
+            Self::LineBreak { name } => {
+                write!(
+                    f,
+                    "{name} has a line break in its path; rename it to attach it."
+                )
+            }
+            Self::NotUtf8 { name } => {
+                write!(f, "{name} is not valid UTF-8; rename it to attach it.")
+            }
         }
     }
 }
 
-/// Where a prompt names `path`: relative to `cwd` with `/` separators when it
-/// is inside it, else absolute.
-fn message_path(path: &Path, cwd: &Path) -> String {
+/// The file's name, as its card and the prompt name it: the last part of
+/// `path`, or the whole path when it has none.
+pub fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Why `path` can't be named in a prompt's `Attached files:` block, which
+/// names one file per line: a line break in its text, or bytes with no UTF-8
+/// spelling. `None` for a path the block can carry.
+pub fn unprintable(path: &Path) -> Option<Rejection> {
+    let name = file_name(path);
+    // Searched as bytes: a non-UTF-8 path has no text to search in.
+    let line_break = path
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'\n' | b'\r'));
+    if line_break {
+        return Some(Rejection::LineBreak { name });
+    }
+    path.to_str()
+        .is_none()
+        .then_some(Rejection::NotUtf8 { name })
+}
+
+/// Where a prompt names `path`, a path on this computer: as `backend` reads
+/// it, relative to `cwd` (read there too) with `/` separators when it is
+/// inside it, else absolute. A path the backend can't reach, and a tab with
+/// no backend yet, keep this computer's spelling.
+fn message_path(path: &Path, cwd: &Path, backend: Option<&Backend>) -> String {
+    match backend.and_then(|backend| mapped(path, cwd, backend)) {
+        Some((path, cwd)) => relative(Path::new(&path), Path::new(&cwd)),
+        None => relative(path, cwd),
+    }
+}
+
+/// Both ends of [`message_path`] as `backend` reads them, or `None` when it
+/// can't reach either.
+fn mapped(path: &Path, cwd: &Path, backend: &Backend) -> Option<(String, String)> {
+    Some((
+        backend.path(&path.to_string_lossy())?,
+        backend.path(&cwd.to_string_lossy())?,
+    ))
+}
+
+/// `path` inside `cwd`: the rest of it with `/` separators; else `path` as it
+/// is.
+fn relative(path: &Path, cwd: &Path) -> String {
     match path.strip_prefix(cwd) {
         Ok(rest) if !rest.as_os_str().is_empty() => rest
             .components()
@@ -79,13 +147,18 @@ fn message_path(path: &Path, cwd: &Path) -> String {
 
 /// `text` followed by the block naming `files`, one path per line; the block
 /// alone when `text` is blank. Contents stay out: the agent reads them.
-pub fn with_files(text: &str, files: &[AttachedFile], cwd: &Path) -> String {
+pub fn with_files(
+    text: &str,
+    files: &[AttachedFile],
+    cwd: &Path,
+    backend: Option<&Backend>,
+) -> String {
     if files.is_empty() {
         return text.to_string();
     }
     let block = files
         .iter()
-        .map(|file| format!("- {}", message_path(&file.path, cwd)))
+        .map(|file| format!("- {}", message_path(&file.path, cwd, backend)))
         .collect::<Vec<_>>()
         .join("\n");
     if text.trim().is_empty() {
@@ -95,17 +168,61 @@ pub fn with_files(text: &str, files: &[AttachedFile], cwd: &Path) -> String {
     }
 }
 
-/// A file's size as its card shows it: "12 B", "2.0 KB", "3.0 MB".
-pub fn human_size(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    let size = bytes as f64;
-    if size < KB {
-        format!("{bytes} B")
-    } else if size < KB * KB {
-        format!("{:.1} KB", size / KB)
-    } else {
-        format!("{:.1} MB", size / KB / KB)
+/// The warning for the `files` `exists` says are gone from disk, naming each
+/// on its own line: nothing is sent until they are removed from the
+/// composer. `None` when they are all there.
+pub fn missing_files(files: &[AttachedFile], exists: impl Fn(&Path) -> bool) -> Option<String> {
+    let gone = files
+        .iter()
+        .filter(|file| !exists(&file.path))
+        .map(|file| {
+            format!(
+                "{} is no longer there; remove it from the attachments to send.",
+                file.name
+            )
+        })
+        .collect::<Vec<_>>();
+    (!gone.is_empty()).then(|| gone.join("\n"))
+}
+
+/// The one warning a set of refused paths gives, naming each on its own
+/// line: a single refusal keeps the text it always had. `None` when nothing
+/// was refused.
+pub fn rejection_warning(rejections: &[Rejection]) -> Option<String> {
+    match rejections {
+        [] => None,
+        [one] => Some(one.to_string()),
+        many => Some(
+            many.iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
     }
+}
+
+/// A file's size as its card shows it: "12 B", "2.0 KB", "3.0 MB",
+/// "5.0 GB". The tenth shown never reads 1024.0: a size that would round to
+/// it shows in the next unit ("1.0 MB", "1.0 GB").
+pub fn human_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+    if bytes < KB {
+        return format!("{bytes} B");
+    }
+    // Tenths of a unit, rounded half up: the digit the card's text shows, so
+    // the unit taken is the one that text will name.
+    let tenths = |unit: u64| (u128::from(bytes) * 10 + u128::from(unit / 2)) / u128::from(unit);
+    let [kilobytes, megabytes, gigabytes] = [KB, MB, GB].map(tenths);
+    let (tenths, unit) = if kilobytes < 10240 {
+        (kilobytes, "KB")
+    } else if megabytes < 10240 {
+        (megabytes, "MB")
+    } else {
+        (gigabytes, "GB")
+    };
+    format!("{}.{} {unit}", tenths / 10, tenths % 10)
 }
 
 // ── Tokens ─────────────────────────────────────────────────────────────────
@@ -325,6 +442,15 @@ mod tests {
         }
     }
 
+    /// A file with a name and a path of its own (a host path, on Windows).
+    fn named(name: &str, path: &str) -> AttachedFile {
+        AttachedFile {
+            name: name.to_string(),
+            path: PathBuf::from(path),
+            bytes: 0,
+        }
+    }
+
     /// S4: files are sent as paths in a short block after the text, relative
     /// to the agent's folder when they are inside it, else absolute; a
     /// prompt with only files is the block alone.
@@ -332,32 +458,175 @@ mod tests {
     fn files_are_sent_as_paths_after_the_text() {
         let cwd = Path::new("/work");
         assert_eq!(
-            message_path(Path::new("/work/src/main.rs"), cwd),
+            message_path(Path::new("/work/src/main.rs"), cwd, None),
             "src/main.rs"
         );
         assert_eq!(
-            message_path(Path::new("/Users/me/Downloads/report.pdf"), cwd),
+            message_path(Path::new("/Users/me/Downloads/report.pdf"), cwd, None),
             "/Users/me/Downloads/report.pdf"
         );
         // A sibling whose name starts like the folder's is not inside it.
         assert_eq!(
-            message_path(Path::new("/workshop/x.rs"), cwd),
+            message_path(Path::new("/workshop/x.rs"), cwd, None),
             "/workshop/x.rs"
         );
         let files = [file("src/main.rs"), file("notes.txt")];
         assert_eq!(
-            with_files("look", &files, cwd),
+            with_files("look", &files, cwd, None),
             "look\n\nAttached files:\n- src/main.rs\n- notes.txt"
         );
-        assert_eq!(with_files("look", &[], cwd), "look");
+        assert_eq!(with_files("look", &[], cwd, None), "look");
         assert_eq!(
-            with_files("", &files, cwd),
+            with_files("", &files, cwd, None),
             "Attached files:\n- src/main.rs\n- notes.txt"
         );
         assert_eq!(
-            with_files(" \n", &files[..1], cwd),
+            with_files(" \n", &files[..1], cwd, None),
             "Attached files:\n- src/main.rs"
         );
+    }
+
+    /// S11: a prompt names paths as the agent's backend reads them: both the
+    /// file and the folder (WSL reads `C:\a` as `/mnt/c/a`), so a file inside
+    /// the folder stays relative there and one outside it is that backend's
+    /// path. A path it can't reach, a local tab and a tab with no backend
+    /// keep this computer's spelling, as before.
+    #[test]
+    fn paths_are_named_as_the_agents_backend_reads_them() {
+        let wsl = Backend::Wsl {
+            distro: "Ubuntu".to_string(),
+        };
+        let cwd = Path::new(r"C:\proj");
+        let files = [
+            named("main.rs", r"C:\proj\src\main.rs"),
+            named("a.pdf", r"C:\Users\x\Downloads\a.pdf"),
+        ];
+        assert_eq!(
+            with_files("look", &files, cwd, Some(&wsl)),
+            "look\n\nAttached files:\n- src/main.rs\n- /mnt/c/Users/x/Downloads/a.pdf"
+        );
+        // A folder in a WSL share reads the same way.
+        assert_eq!(
+            with_files(
+                "look",
+                &[named("a.txt", r"\\wsl.localhost\Ubuntu\home\me\proj\a.txt")],
+                Path::new(r"\\wsl.localhost\Ubuntu\home\me\proj"),
+                Some(&wsl),
+            ),
+            "look\n\nAttached files:\n- a.txt"
+        );
+        // A network path the backend can't reach is named as it is here.
+        assert_eq!(
+            with_files(
+                "look",
+                &[named("x.pdf", r"\\nas\share\x.pdf")],
+                cwd,
+                Some(&wsl),
+            ),
+            "look\n\nAttached files:\n- \\\\nas\\share\\x.pdf"
+        );
+        let local = Backend::Local;
+        for backend in [None, Some(&local)] {
+            assert_eq!(
+                with_files("look", &files, cwd, backend),
+                "look\n\nAttached files:\n- C:\\proj\\src\\main.rs\n- C:\\Users\\x\\Downloads\\a.pdf"
+            );
+        }
+    }
+
+    /// S11: several refused paths give one warning naming each, one per line;
+    /// a single refusal keeps the text it always had.
+    #[test]
+    fn refused_paths_give_one_warning_naming_each() {
+        assert_eq!(rejection_warning(&[]), None);
+        let folder = Rejection::Folder {
+            name: "shots".to_string(),
+        };
+        assert_eq!(
+            rejection_warning(std::slice::from_ref(&folder)).as_deref(),
+            Some("shots is a folder; attach files instead.")
+        );
+        let unsupported = Rejection::Unsupported {
+            name: "a.exe".to_string(),
+        };
+        assert_eq!(
+            rejection_warning(&[folder, unsupported]).as_deref(),
+            Some(
+                "shots is a folder; attach files instead.\n\
+                 a.exe is not a PNG, JPEG, GIF, WebP, BMP or TIFF image."
+            )
+        );
+    }
+
+    /// S11: a file gone from disk keeps the prompt from being sent, and the
+    /// warning names each one so the user can remove them.
+    #[test]
+    fn a_gone_file_is_named_and_stops_the_send() {
+        let files = [named("a.pdf", "/work/a.pdf"), named("b.txt", "/work/b.txt")];
+        assert_eq!(missing_files(&files, |_: &Path| true), None);
+        assert_eq!(
+            missing_files(&files, |path| !path.ends_with("b.txt")).as_deref(),
+            Some("b.txt is no longer there; remove it from the attachments to send.")
+        );
+        assert_eq!(
+            missing_files(&files, |_: &Path| false).as_deref(),
+            Some(
+                "a.pdf is no longer there; remove it from the attachments to send.\n\
+                 b.txt is no longer there; remove it from the attachments to send."
+            )
+        );
+    }
+
+    /// S11: the block names one file per line, so a path with a line break in
+    /// it (or one with no UTF-8 spelling) is refused when attached, by name,
+    /// instead of breaking the block.
+    #[test]
+    fn paths_the_block_cannot_carry_are_refused() {
+        assert_eq!(unprintable(Path::new("/work/src/main.rs")), None);
+        assert_eq!(
+            unprintable(Path::new("/work/a\nb.txt")),
+            Some(Rejection::LineBreak {
+                name: "a\nb.txt".to_string()
+            })
+        );
+        assert_eq!(
+            unprintable(Path::new("/work/a\rb.txt")).map(|r| r.to_string()),
+            Some("a\rb.txt has a line break in its path; rename it to attach it.".to_string())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_path_without_a_utf8_spelling_is_refused() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let path = Path::new("/work").join(OsStr::from_bytes(b"bad\xffname.txt"));
+        let rejection = unprintable(&path).expect("no UTF-8 spelling");
+        assert!(
+            matches!(rejection, Rejection::NotUtf8 { .. }),
+            "{rejection:?}"
+        );
+        assert!(rejection.to_string().contains("is not valid UTF-8"));
+    }
+
+    /// S11: sizes reach GB, and the tenth a card shows never reads 1024.0: a
+    /// size that would round to it shows in the next unit. The small sizes'
+    /// text is unchanged.
+    #[test]
+    fn sizes_reach_gigabytes() {
+        assert_eq!(human_size(5), "5 B");
+        assert_eq!(human_size(1023), "1023 B");
+        assert_eq!(human_size(2048), "2.0 KB");
+        assert_eq!(human_size(3 * 1024 * 1024), "3.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024), "1.0 GB");
+        assert_eq!(human_size(5 * 1024 * 1024 * 1024), "5.0 GB");
+        // Just below a unit: it rounds up to it instead of reading 1024.0.
+        assert_eq!(human_size(1024 * 1024 - 1), "1.0 MB");
+        assert_eq!(human_size(1048524), "1023.9 KB");
+        assert_eq!(human_size(1048525), "1.0 MB");
+        assert_eq!(human_size(1024 * 1024 * 1024 - 1), "1.0 GB");
+        assert_eq!(human_size(1073689395), "1023.9 MB");
+        assert_eq!(human_size(1073689396), "1.0 GB");
     }
 
     #[test]

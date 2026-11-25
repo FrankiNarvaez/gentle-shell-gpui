@@ -1,10 +1,12 @@
 //! What a prompt carries besides its typed text: images (validation, the RPC
 //! payload, and the decode cache conversation thumbnails draw from) and the
 //! reading of a dropped or picked path. The rules that need neither GPUI nor
-//! the filesystem (files named by path in the prompt, the long-paste limits
-//! and the `[Pasted text #N]` tokens that stand for them, the `[Image #N]`
-//! chips of older messages) live in [`gentle_core::attachments`] and are
-//! re-exported here for this feature's callers.
+//! the filesystem (files named by path in the prompt as the tab's backend
+//! reads them, the paths a prompt block can't carry, the warnings a refused
+//! or gone file gives, the long-paste limits and the `[Pasted text #N]`
+//! tokens that stand for them, the `[Image #N]` chips of older messages) live
+//! in [`gentle_core::attachments`] and are re-exported here for this
+//! feature's callers.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -19,8 +21,9 @@ use serde_json::{Value, json};
 use gentle_core::transcript::{UserImage, image_key};
 
 pub use gentle_core::attachments::{
-    AttachedFile, PastedText, Rejection, chip_text, expand, find_tokens, human_size, is_long_paste,
-    needs_lead, present, remove_token, renumber, token, with_files,
+    AttachedFile, PastedText, Rejection, chip_text, expand, file_name, find_tokens, human_size,
+    is_long_paste, missing_files, needs_lead, present, rejection_warning, remove_token, renumber,
+    token, unprintable, with_files,
 };
 
 /// Largest image accepted, before base64.
@@ -82,12 +85,14 @@ pub enum Loaded {
 
 /// Read a path: an image attaches from its bytes ([`Attachment`]: sniffed,
 /// capped at [`MAX_IMAGE_BYTES`]); any other regular file attaches by path
-/// ([`AttachedFile`]); a folder is refused ([`Rejection::Folder`]).
+/// ([`AttachedFile`]); a folder is refused ([`Rejection::Folder`]), and so is
+/// a path that can't be read ([`Rejection::Unreadable`]) or named in the
+/// prompt's block ([`Rejection::LineBreak`], [`Rejection::NotUtf8`]).
 pub fn load_path(path: &Path) -> Result<Loaded, Rejection> {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    if let Some(rejection) = unprintable(path) {
+        return Err(rejection);
+    }
+    let name = file_name(path);
     let unreadable = |error: std::io::Error| Rejection::Unreadable {
         name: name.clone(),
         error: error.to_string(),
@@ -96,7 +101,7 @@ pub fn load_path(path: &Path) -> Result<Loaded, Rejection> {
     if metadata.is_dir() {
         return Err(Rejection::Folder { name });
     }
-    if !is_image_file(path) {
+    if !is_image_file(path).map_err(unreadable)? {
         return Ok(Loaded::File(AttachedFile {
             name,
             path: path.to_path_buf(),
@@ -115,21 +120,21 @@ pub fn load_path(path: &Path) -> Result<Loaded, Rejection> {
 
 /// Whether a path is an image, judged by its first bytes rather than its
 /// extension (a misnamed `shot.pnmg` still attaches as an image; a
-/// non-image attaches as a file).
-pub fn is_image_file(path: &Path) -> bool {
+/// non-image attaches as a file). `Err` when its bytes can't be read.
+pub fn is_image_file(path: &Path) -> std::io::Result<bool> {
     use std::io::Read as _;
     let mut head = [0u8; 12];
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
+    let mut file = std::fs::File::open(path)?;
     let mut read = 0;
     while read < head.len() {
         match file.read(&mut head[read..]) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
             Ok(n) => read += n,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
         }
     }
-    is_image_header(&head[..read])
+    Ok(is_image_header(&head[..read]))
 }
 
 /// The formats [`Attachment::from_bytes`] takes: those [`sniff`] knows, plus
@@ -449,15 +454,62 @@ mod tests {
         std::fs::write(&misnamed, PNG).unwrap();
         let fake = dir.join("fake.png");
         std::fs::write(&fake, "not an image").unwrap();
-        assert!(is_image_file(&png));
-        assert!(is_image_file(&misnamed));
+        assert!(is_image_file(&png).unwrap());
+        assert!(is_image_file(&misnamed).unwrap());
         let Loaded::Image(misnamed) = load_path(&misnamed).unwrap() else {
             panic!("a misnamed PNG is still an image");
         };
         assert_eq!(misnamed.mime_type(), "image/png");
-        assert!(!is_image_file(&fake));
-        assert!(!is_image_file(&text));
-        assert!(!is_image_file(&dir.join("missing.png")));
+        assert!(!is_image_file(&fake).unwrap());
+        assert!(!is_image_file(&text).unwrap());
+        assert!(is_image_file(&dir.join("missing.png")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// S11: a path that can't be read is refused as unreadable, never
+    /// attached as a file as if it were something else.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_path_is_rejected() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("unreadable");
+        let shot = dir.join("shot.png");
+        std::fs::write(&shot, PNG).unwrap();
+        std::fs::set_permissions(&shot, std::fs::Permissions::from_mode(0o000)).unwrap();
+        // Running as root reads it anyway: there is nothing to prove then.
+        if std::fs::read(&shot).is_ok() {
+            std::fs::remove_dir_all(&dir).unwrap();
+            return;
+        }
+        let rejection = load_path(&shot).unwrap_err();
+        assert!(
+            matches!(rejection, Rejection::Unreadable { .. }),
+            "{rejection:?}"
+        );
+        assert!(
+            rejection
+                .to_string()
+                .starts_with("Could not read shot.png: ")
+        );
+        assert!(is_image_file(&shot).is_err());
+        std::fs::set_permissions(&shot, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// S11: a path the prompt's block can't carry (one with a line break) is
+    /// refused when it is attached, by name, instead of breaking the block.
+    #[cfg(unix)]
+    #[test]
+    fn paths_with_a_line_break_are_refused() {
+        let dir = temp_dir("newline");
+        let odd = dir.join("a\nb.txt");
+        std::fs::write(&odd, "hi").unwrap();
+        assert_eq!(
+            load_path(&odd).unwrap_err(),
+            Rejection::LineBreak {
+                name: "a\nb.txt".to_string()
+            }
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -38,6 +38,10 @@ impl SessionView {
             self.warn(message, window, cx);
             return;
         }
+        if let Some(message) = self.gone_files_warning() {
+            self.warn(message, window, cx);
+            return;
+        }
         self.composer
             .update(cx, |state, cx| state.set_value("", window, cx));
         self.prompt_history.record(&text);
@@ -62,9 +66,23 @@ impl SessionView {
         let images = std::mem::take(&mut self.attachments);
         let files = std::mem::take(&mut self.files);
         // What the prompt says: the text, then where the agent reads the files.
-        let message = attachments::with_files(&text, &files, &self.cwd);
+        let message = self.prompt_message(&text, &files);
         self.send_prompt_with(message, images, cx);
         cx.notify();
+    }
+
+    /// What the prompt's `message` says: the text, then the attached files as
+    /// this tab's backend reads their paths (in WSL, `C:\Users\x\a.pdf` is
+    /// `/mnt/c/Users/x/a.pdf`).
+    pub(super) fn prompt_message(&self, text: &str, files: &[attachments::AttachedFile]) -> String {
+        attachments::with_files(text, files, &self.cwd, self.runs_on.as_ref())
+    }
+
+    /// The warning that stops a send while an attached file is gone from
+    /// disk, naming it (`None` when they are all there): the text and the
+    /// cards stay as they are, so the user can remove them.
+    pub(super) fn gone_files_warning(&self) -> Option<String> {
+        attachments::missing_files(&self.files, |path| path.is_file())
     }
 
     /// Text from outside the composer (`-p`, a later launch's prompt): runs
@@ -224,7 +242,8 @@ impl SessionView {
 
     /// Attach what was dropped or picked and warn about the rest: images wait
     /// as thumbnails, files as cards, both in the strip above the composer.
-    /// Nothing is typed into the text.
+    /// Nothing is typed into the text, and a file or image already waiting is
+    /// not attached twice (one card either way).
     pub(super) fn attach(
         &mut self,
         loaded: Vec<Result<attachments::Loaded, attachments::Rejection>>,
@@ -234,14 +253,24 @@ impl SessionView {
         let mut rejected = Vec::new();
         for result in loaded {
             match result {
-                Ok(attachments::Loaded::Image(image)) => self.attachments.push(image),
-                Ok(attachments::Loaded::File(file)) => self.files.push(file),
-                Err(rejection) => rejected.push(rejection.to_string()),
+                Ok(attachments::Loaded::Image(image)) => {
+                    // The same bytes (a screenshot pasted twice, a file
+                    // dropped twice) are the same image.
+                    if !self.attachments.iter().any(|a| a.key == image.key) {
+                        self.attachments.push(image);
+                    }
+                }
+                Ok(attachments::Loaded::File(file)) => {
+                    if !self.files.iter().any(|f| f.path == file.path) {
+                        self.files.push(file);
+                    }
+                }
+                Err(rejection) => rejected.push(rejection),
             }
         }
         self.composer
             .update(cx, |state, cx| state.focus(window, cx));
-        for message in rejected {
+        if let Some(message) = attachments::rejection_warning(&rejected) {
             self.warn(message, window, cx);
         }
         cx.notify();

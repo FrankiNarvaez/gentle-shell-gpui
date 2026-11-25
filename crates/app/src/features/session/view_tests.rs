@@ -8,7 +8,7 @@ use pi_rpc::desktop_rpc::{PROMPT_COMMAND, SCHEMA, WIDGET_KEY};
 use pi_rpc::{UiMethod, UiRequest};
 use serde_json::{Value, json};
 
-use super::attachments::{Attachment, Loaded};
+use super::attachments::{AttachedFile, Attachment, Loaded};
 use super::{AgentsTab, SessionView};
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
@@ -779,6 +779,119 @@ fn pasting_a_copied_file_attaches_it(cx: &mut TestAppContext) {
         view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string()),
         "",
         "pasting a file types nothing"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// S11: the prompt names files as the tab's backend reads them: a WSL tab
+/// maps both the file and the folder (so one inside the folder stays
+/// relative and one outside it is that backend's path), while a tab with no
+/// backend yet keeps this computer's spelling.
+#[gpui::test]
+fn a_prompt_names_its_files_as_the_tabs_backend_reads_them(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let attached = |name: &str, path: &str| AttachedFile {
+        name: name.to_string(),
+        path: std::path::PathBuf::from(path),
+        bytes: 0,
+    };
+    view.update(cx, |view, _| view.cwd = std::path::PathBuf::from("/work"));
+    let files = [
+        attached("main.rs", "/work/src/main.rs"),
+        attached("a.pdf", "/media/a.pdf"),
+    ];
+    assert_eq!(
+        view.read_with(cx, |view, _| view.prompt_message("look", &files)),
+        "look\n\nAttached files:\n- src/main.rs\n- /media/a.pdf"
+    );
+
+    view.update(cx, |view, _| {
+        view.cwd = std::path::PathBuf::from(r"C:\proj");
+        view.runs_on = Some(gentle_core::backend::Backend::Wsl {
+            distro: "Ubuntu".to_string(),
+        });
+    });
+    let files = [
+        attached("main.rs", r"C:\proj\src\main.rs"),
+        attached("a.pdf", r"C:\Users\x\Downloads\a.pdf"),
+    ];
+    assert_eq!(
+        view.read_with(cx, |view, _| view.prompt_message("look", &files)),
+        "look\n\nAttached files:\n- src/main.rs\n- /mnt/c/Users/x/Downloads/a.pdf"
+    );
+}
+
+/// S11: attaching the same file twice keeps one card, whatever route it came
+/// by (its path for a file, its bytes for an image), and removing the card
+/// lets it be attached again.
+#[gpui::test]
+fn attaching_the_same_file_twice_keeps_one_card(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let dir = std::env::temp_dir().join(format!("gs-attach-twice-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("report.pdf");
+    std::fs::write(&report, b"%PDF-1.7\n").unwrap();
+    let shot = dir.join("shot.png");
+    std::fs::write(&shot, PNG).unwrap();
+
+    view.update_in(cx, |view, window, cx| {
+        view.attach_paths(
+            vec![report.clone(), report.clone(), shot.clone(), shot.clone()],
+            window,
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.files.len()), 1);
+    assert_eq!(view.read_with(cx, |view, _| view.attachments.len()), 1);
+
+    view.update_in(cx, |view, window, cx| {
+        view.remove_file(0, cx);
+        view.attach_paths(vec![report.clone()], window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files.len()),
+        1,
+        "removing the card lets the file be attached again"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// S11: a file gone from disk when the prompt would be sent stops the send
+/// and names it; the card stays so the user can remove it.
+#[gpui::test]
+fn a_file_gone_before_sending_stops_the_send(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let dir = std::env::temp_dir().join(format!("gs-attach-gone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let report = dir.join("report.pdf");
+    std::fs::write(&report, b"%PDF-1.7\n").unwrap();
+
+    view.update_in(cx, |view, window, cx| {
+        view.attach_paths(vec![report.clone()], window, cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |view, _| view.files.len()), 1);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.gone_files_warning()),
+        None,
+        "a file that is there stops nothing"
+    );
+
+    std::fs::remove_file(&report).unwrap();
+    assert_eq!(
+        view.read_with(cx, |view, _| view.gone_files_warning())
+            .as_deref(),
+        Some("report.pdf is no longer there; remove it from the attachments to send."),
+        "the send is stopped by a warning naming the file"
+    );
+    assert_eq!(
+        view.read_with(cx, |view, _| view.files.len()),
+        1,
+        "the card stays, for the user to remove it"
     );
     std::fs::remove_dir_all(&dir).unwrap();
 }
