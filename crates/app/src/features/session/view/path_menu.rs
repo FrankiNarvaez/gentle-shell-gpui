@@ -1,8 +1,9 @@
 //! The `@` file menu over the composer: typing `@` searches the tab's folder
 //! the way a terminal would (ignore-aware, with the switcher's file ranking),
-//! Tab completes a folder prefix, Enter puts the file's `@path` into the
-//! sentence where the reference was typed — as plain text in the prompt, not
-//! as a tile, and without sending — and Esc closes the menu.
+//! Tab completes a folder prefix or fills the file the search found, Enter
+//! puts the file's `@path` into the sentence where the reference was typed —
+//! as plain text in the prompt, not as a tile, and without sending — and Esc
+//! closes the menu.
 //!
 //! The files are read off the UI thread, once per folder, and only the folder
 //! the tab is in now is ever offered — drawn, picked or completed: an index or
@@ -318,6 +319,29 @@ impl SessionView {
         cx.notify();
     }
 
+    /// Fill the highlighted file of the menu for `query` — as Enter fills it:
+    /// its `@path` goes into the sentence, no tile is made and nothing is
+    /// sent. Whether there was a row to fill.
+    fn fill_highlighted(
+        &mut self,
+        query: &str,
+        at: usize,
+        end: usize,
+        folder: &Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let rows = self.path_rows(query);
+        if rows.is_empty() {
+            return false;
+        }
+        let cursor = self.path_cursor(query, rows.len());
+        let path = rows[cursor].path.clone();
+        self.choose_path(at, end, &path, folder, window, cx);
+        cx.notify();
+        true
+    }
+
     /// Tab on a reference: read the folder of the segment being typed off the
     /// UI thread, then complete it. The completion lands only while the
     /// composer still holds the text and caret it was asked for.
@@ -379,6 +403,16 @@ impl SessionView {
             return;
         }
         let Some(completed) = completed_query(&asked.reference.query, &names) else {
+            // Nothing to add to the prefix: Tab's other job is the file the
+            // search found, filled as Enter fills it.
+            self.fill_highlighted(
+                &asked.reference.query,
+                asked.reference.at,
+                asked.caret,
+                &asked.folder,
+                window,
+                cx,
+            );
             return;
         };
         let insert = format!("@{completed}");
@@ -387,8 +421,9 @@ impl SessionView {
     }
 
     /// ↑/↓ move through the `@` menu, Tab completes the folder prefix being
-    /// typed, Enter puts the highlighted file's `@path` in the sentence
-    /// without sending, Esc closes the menu. Runs as a keystroke interceptor
+    /// typed or fills the file the search found (the row the arrows chose
+    /// when one did), Enter puts the highlighted file's `@path` in the
+    /// sentence without sending, Esc closes the menu. Runs as a keystroke interceptor
     /// before ↑/↓ history and the `/` menu, so the arrows are the menu's while
     /// it is open. Enter also belongs to the menu while the folder's files are
     /// still being read: sending then would post the raw `@query` instead of
@@ -413,9 +448,19 @@ impl SessionView {
         let Some(mention) = mention_at(&text, caret) else {
             return false;
         };
-        // Tab completes a folder the reference only names in part, whether or
-        // not the menu is listing anything yet.
+        // Tab completes the reference: a row the arrows moved the highlight
+        // to is filled as Enter fills it; otherwise the folder prefix is
+        // completed (whether or not the menu lists anything yet), and a query
+        // no prefix completes fills the highlighted file when the folder
+        // answers (`complete_landed`).
         if keystroke.key == "tab" {
+            let count = self.path_rows(&mention.query).len();
+            if self.path_cursor(&mention.query, count) != 0 {
+                let folder = self.cwd.clone();
+                if self.fill_highlighted(&mention.query, mention.at, caret, &folder, window, cx) {
+                    return true;
+                }
+            }
             return self.complete_path(&mention, text, caret, window, cx);
         }
         if self.path_menu.dismissed.as_deref() == Some(text.as_str()) {
@@ -1029,6 +1074,58 @@ mod tests {
         cx.simulate_keystrokes("tab");
         cx.run_until_parked();
         assert_eq!(composer_text(&view, cx), "@../");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Tab fills the file the search found when no folder prefix completes
+    /// it (`@min` reaches `src/main.rs` through the ranking): plain text in
+    /// the sentence, no tile, nothing sent.
+    #[gpui::test]
+    fn tab_fills_the_file_the_search_found(cx: &mut TestAppContext) {
+        let dir = folder("tab-fill");
+        let (view, cx) = tab(cx, dir.clone());
+
+        type_at(&view, cx, "open @min", 9);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "open @src/main.rs ");
+        assert!(!drawn(cx, "path-menu"), "the menu closes on the choice");
+        assert_eq!(
+            view.read_with(cx, |view, _| (
+                view.files.len(),
+                view.attachments.len(),
+                view.live.pending.is_none()
+            )),
+            (0, 0, true),
+            "no tile, and nothing was sent"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Tab fills the row the arrows moved the highlight to: the second match,
+    /// not the folder prefix and not the top row.
+    #[gpui::test]
+    fn tab_fills_the_row_the_arrows_chose(cx: &mut TestAppContext) {
+        let dir = folder("tab-chosen");
+        let (view, cx) = tab(cx, dir.clone());
+
+        // `alpha.md` ranks first, `src/main.rs` second: ↓ chooses the second.
+        type_at(&view, cx, "@a", 2);
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert_eq!(composer_text(&view, cx), "@src/main.rs ");
+        assert!(!drawn(cx, "path-menu"), "the menu closes on the choice");
+        assert_eq!(
+            view.read_with(cx, |view, _| (
+                view.files.len(),
+                view.attachments.len(),
+                view.live.pending.is_none()
+            )),
+            (0, 0, true),
+            "no tile, and nothing was sent"
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
