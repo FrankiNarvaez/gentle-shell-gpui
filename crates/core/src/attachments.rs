@@ -325,51 +325,48 @@ impl SkillBlock<'_> {
     }
 }
 
-/// The skill block `message` is, as the harness writes it (Pi's
-/// `parseSkillBlock`). Only a message that is exactly one block, plus
-/// optional trailing args, parses; anything else, including text that merely
-/// mentions `<skill name=`, is `None` and shows as it is.
-pub fn parse_skill_block(message: &str) -> Option<SkillBlock<'_>> {
+/// Match a live echo against the original submitted skill command.
+pub fn parse_skill_block<'a>(message: &'a str, original: &str) -> Option<SkillBlock<'a>> {
+    let invocation = original.trim().strip_prefix("/skill:")?;
+    let (name, args) = invocation
+        .split_once(char::is_whitespace)
+        .unwrap_or((invocation, ""));
+    let args = args.trim();
+    let (envelope, args) = if args.is_empty() {
+        (message, None)
+    } else {
+        let prefix = message.strip_suffix(args)?.strip_suffix('\n')?;
+        let envelope = prefix.strip_suffix('\n').unwrap_or(prefix);
+        (envelope, Some(&message[message.len() - args.len()..]))
+    };
     static BLOCK: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
-            r#"^<skill name="([^"]+)" location="([^"]+)">\n([\s\S]*?)\n</skill>(?:\n\n?([\s\S]+))?$"#,
+            r#"\A<skill name="([^"\n]+)" location="([^"\n]+)">\n([\s\S]*)\n</skill>\z"#,
         )
         .expect("valid skill block")
     });
-    let caps = BLOCK.captures(message)?;
+    let caps = BLOCK.captures(envelope)?;
+    let echoed_name = caps.get(1)?.as_str();
+    if echoed_name != name {
+        return None;
+    }
     Some(SkillBlock {
-        name: caps.get(1)?.as_str(),
+        name: echoed_name,
         location: caps.get(2)?.as_str(),
         body: caps.get(3)?.as_str(),
-        args: caps.get(4).map(|args| args.as_str()),
+        args,
     })
 }
 
-/// What the person typed in a sent message: the `/skill:name args` command
-/// for a message the harness expanded from a skill (never its loaded body),
-/// else its text without the `Attached files:` block. No trailing blank
-/// lines.
+/// Sent text without the `Attached files:` block.
 pub fn typed(message: &str) -> Cow<'_, str> {
-    match parse_skill_block(message) {
-        Some(block) => {
-            let args = split_files(block.args.unwrap_or_default()).0.trim();
-            if args.is_empty() {
-                Cow::Owned(format!("/skill:{}", block.name))
-            } else {
-                Cow::Owned(format!("/skill:{} {args}", block.name))
-            }
-        }
-        None => Cow::Borrowed(split_files(message).0),
-    }
+    Cow::Borrowed(split_files(message).0)
 }
 
 /// How a sent message reads where its files have no cards (a preview, a
 /// title): its body, or the names of the files it attached when it carried
-/// no text of its own; a skill's expansion reads as the command typed.
+/// no text of its own.
 pub fn summary(message: &str) -> String {
-    if parse_skill_block(message).is_some() {
-        return typed(message).into_owned();
-    }
     let (body, files) = split_files(message);
     if !body.is_empty() {
         return body.to_string();
@@ -854,7 +851,7 @@ mod tests {
     #[test]
     fn a_skill_block_with_args_parses() {
         let message = format!("{SKILL}\n\nsummarize the ADRs");
-        let block = parse_skill_block(&message).unwrap();
+        let block = parse_skill_block(&message, "/skill:docs summarize the ADRs").unwrap();
         assert_eq!(block.name, "docs");
         assert_eq!(block.location, "/x/docs/SKILL.md");
         assert_eq!(block.body, "References are relative.\n\n# Docs");
@@ -867,18 +864,18 @@ mod tests {
         let block = "<skill name=\"impeccable\" location=\"/x/SKILL.md\">\n# Impeccable\n\nDesign polished interfaces.\n</skill>";
         for separator in ["\n", "\n\n"] {
             let message = format!("{block}{separator}test");
-            let parsed = parse_skill_block(&message).unwrap();
+            let parsed = parse_skill_block(&message, "/skill:impeccable test").unwrap();
             assert_eq!(parsed.name, "impeccable");
             assert_eq!(parsed.body, "# Impeccable\n\nDesign polished interfaces.");
             assert_eq!(parsed.args, Some("test"));
-            assert_eq!(typed(&message), "/skill:impeccable test");
+            assert_eq!(parsed.reference(), "/skill:impeccable test");
         }
     }
 
     /// S1: a block alone has no args and reads as just the command.
     #[test]
     fn a_skill_block_without_args_parses() {
-        let block = parse_skill_block(SKILL).unwrap();
+        let block = parse_skill_block(SKILL, "/skill:docs").unwrap();
         assert_eq!(block.args, None);
         assert_eq!(block.reference(), "/skill:docs");
     }
@@ -887,9 +884,16 @@ mod tests {
     #[test]
     fn skill_args_keep_their_newlines() {
         for separator in ["\n", "\n\n"] {
-            let message = format!("{SKILL}{separator}line one\n\nline three\n");
-            let block = parse_skill_block(&message).unwrap();
-            assert_eq!(block.args, Some("line one\n\nline three\n"));
+            let args = "line one\n\n</skill>\nline three";
+            let body = "```xml\n</skill>\n```";
+            let message =
+                format!("<skill name=\"docs\" location=\"/x\">\n{body}\n</skill>{separator}{args}");
+            let command = format!("/skill:docs {args}");
+            let block = parse_skill_block(&message, &command).unwrap();
+            assert_eq!(block.args, Some(args));
+            assert_eq!(block.body, body);
+            assert!(parse_skill_block(&message, &message).is_none());
+            assert!(parse_skill_block(&message, "/skill:other").is_none());
         }
     }
 
@@ -910,22 +914,23 @@ mod tests {
             "I typed <skill name=\"a\" location=\"b\">\nx\n</skill> myself",
             "use <skill name= literally",
         ] {
-            assert!(parse_skill_block(message).is_none(), "{message:?}");
+            assert!(
+                parse_skill_block(message, "/skill:docs").is_none(),
+                "{message:?}"
+            );
         }
     }
 
-    /// S1: what the person typed, for Copy message and ↑ recall, is the
-    /// command for a skill message — never the loaded body — and the text
-    /// without its file block for any other. A preview reads the same way.
+    /// S2: without live confirmation a wrapper is ordinary text.
     #[test]
-    fn a_skill_message_reads_as_the_command_that_was_typed() {
+    fn an_unconfirmed_wrapper_reads_as_ordinary_text() {
         let with_args = format!("{SKILL}\n\nsummarize the ADRs");
-        assert_eq!(typed(&with_args), "/skill:docs summarize the ADRs");
-        assert_eq!(summary(&with_args), "/skill:docs summarize the ADRs");
-        assert_eq!(typed(SKILL), "/skill:docs");
-        assert_eq!(summary(SKILL), "/skill:docs");
+        assert_eq!(typed(&with_args), with_args);
+        assert_eq!(summary(&with_args), with_args);
+        assert_eq!(typed(SKILL), SKILL);
+        assert_eq!(summary(SKILL), SKILL);
         let with_files = format!("{SKILL}\n\nlook\n\nAttached files:\n- a.pdf");
-        assert_eq!(typed(&with_files), "/skill:docs look");
+        assert_eq!(typed(&with_files), format!("{SKILL}\n\nlook"));
         // Other messages are as before: the body without the file block.
         assert_eq!(typed("look\n\nAttached files:\n- a.pdf"), "look");
         assert_eq!(typed("Attached files:\n- a.pdf"), "");

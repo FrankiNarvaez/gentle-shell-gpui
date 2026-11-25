@@ -449,6 +449,16 @@ impl SessionView {
         let dialogs = !self.extension.dialogs.is_empty();
         if let Some(pending) = &mut self.live.pending {
             pending.started |= running;
+            if let Some(Item::User { text, images }) = items.get(pending.base)
+                && !self.live.skills.contains_key(&pending.base)
+            {
+                let text = gentle_core::attachments::mixed_attachment_text(text, images.len());
+                let bubble = BubbleText::from_prompt(text, &pending.text);
+                if bubble.skill.is_some() {
+                    let command = gentle_core::attachments::typed(&pending.text).into_owned();
+                    self.live.skills.insert(pending.base, (command, bubble));
+                }
+            }
             let answered = items
                 .get(pending.base..)
                 .is_some_and(|rest| rest.iter().any(|i| matches!(i, Item::Assistant { .. })));
@@ -825,8 +835,9 @@ impl SessionView {
             Item::User { text, images } => {
                 let images: Vec<_> = images.iter().map(|i| self.image_cache.get(i)).collect();
                 let computed;
-                let shown = match self.list.prepared(ix) {
-                    Some(Prepared::Bubble(cell)) => cell.get_or_init(|| {
+                let shown = match (self.live.skills.get(&ix), self.list.prepared(ix)) {
+                    (Some((_, bubble)), _) => bubble,
+                    (_, Some(Prepared::Bubble(cell))) => cell.get_or_init(|| {
                         BubbleText::new(gentle_core::attachments::mixed_attachment_text(
                             text,
                             images.len(),
@@ -1260,6 +1271,9 @@ impl SessionView {
                     .icon(Icon::new(IconName::Copy))
                     .tooltip("Copy message")
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some((original, _)) = this.live.skills.get(&ix) {
+                            return this.copy_text(original.clone(), cx);
+                        }
                         if let Some(Item::User { text, images }) = this.transcript.items.get(ix) {
                             this.copy_text(
                                 message_body(gentle_core::attachments::mixed_attachment_text(
@@ -2344,7 +2358,7 @@ impl CodeLine {
 /// above it, and the files it attached are cards beside them) and a long
 /// one's folded start. Made once per message: every frame hands the text view
 /// the same strings, which it recognizes without parsing again.
-struct BubbleText {
+pub(super) struct BubbleText {
     markdown: SharedString,
     /// The paths of the files the prompt attached, as the agent was told
     /// them: their block is out of `markdown` and they show as cards.
@@ -2368,7 +2382,11 @@ struct SkillText {
 
 impl BubbleText {
     fn new(text: &str) -> Self {
-        let block = gentle_core::attachments::parse_skill_block(text);
+        Self::from_prompt(text, "")
+    }
+
+    fn from_prompt(text: &str, original: &str) -> Self {
+        let block = gentle_core::attachments::parse_skill_block(text, original);
         let skill = block.as_ref().map(|block| SkillText {
             name: block.name.to_string().into(),
             body: gentle_core::markdown::sent_message(block.body).into(),
@@ -3680,7 +3698,8 @@ mod tests {
     fn impeccable_skill_bubble_shows_only_its_name_and_test() {
         let block = "<skill name=\"impeccable\" location=\"/x/SKILL.md\">\n# Impeccable\n\nDesign polished interfaces.\n</skill>";
         for separator in ["\n", "\n\n"] {
-            let bubble = BubbleText::new(&format!("{block}{separator}test"));
+            let echo = format!("{block}{separator}test");
+            let bubble = BubbleText::from_prompt(&echo, "/skill:impeccable test");
             assert_eq!(bubble.skill.as_ref().unwrap().name, "impeccable");
             assert_eq!(bubble.visible(false), "test");
         }
@@ -3688,18 +3707,17 @@ mod tests {
 
     #[test]
     fn a_skill_message_collapses_to_its_name_and_args() {
-        let bubble = BubbleText::new(SKILL_MESSAGE);
+        let bubble = BubbleText::from_prompt(SKILL_MESSAGE, "/skill:docs summarize the ADRs");
+        assert!(BubbleText::new(SKILL_MESSAGE).skill.is_none());
         let skill = bubble.skill.as_ref().unwrap();
         assert_eq!(skill.name, "docs");
         assert!(skill.body.contains("Loaded body."));
         assert_eq!(bubble.markdown, "summarize the ADRs");
-        assert_eq!(
-            super::message_body(SKILL_MESSAGE),
-            "/skill:docs summarize the ADRs"
-        );
+        assert_eq!(super::message_body(SKILL_MESSAGE), SKILL_MESSAGE);
 
-        let bare = BubbleText::new(
+        let bare = BubbleText::from_prompt(
             "<skill name=\"docs\" location=\"/x/SKILL.md\">\nLoaded body.\n</skill>",
+            "/skill:docs",
         );
         assert!(bare.skill.is_some());
         assert!(bare.markdown.trim().is_empty());
@@ -3707,7 +3725,7 @@ mod tests {
             super::message_body(
                 "<skill name=\"docs\" location=\"/x/SKILL.md\">\nLoaded body.\n</skill>"
             ),
-            "/skill:docs"
+            "<skill name=\"docs\" location=\"/x/SKILL.md\">\nLoaded body.\n</skill>"
         );
 
         let lookalike = BubbleText::new("see <skill name=\"a\" location=\"b\">\nx\n</skill>");
@@ -3732,7 +3750,7 @@ mod tests {
             ) -> impl gpui_kit::IntoElement {
                 gpui_kit::div().size_full().child(super::user_bubble(
                     0,
-                    &super::BubbleText::new(SKILL_MESSAGE),
+                    &BubbleText::from_prompt(SKILL_MESSAGE, "/skill:docs summarize the ADRs"),
                     Vec::new(),
                     false,
                     None,

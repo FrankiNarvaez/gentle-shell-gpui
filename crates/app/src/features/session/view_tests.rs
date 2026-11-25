@@ -1353,10 +1353,29 @@ fn history_recall_leaves_the_file_block_out(cx: &mut TestAppContext) {
     assert_eq!(composer(cx), "look", "a files-only prompt is not recalled");
 }
 
-/// S1: ↑ recalls a resumed skill message as the command that was typed,
-/// never the skill's loaded body.
 #[gpui::test]
-fn history_recall_yields_the_skill_command_not_its_body(cx: &mut TestAppContext) {
+fn live_skill_echo_matches_only_the_idle_pending_command(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let echo = "<skill name=\"docs\" location=\"/x\">\n```xml\n</skill>\n```\n</skill>\n\nlook";
+    view.update(cx, |view, cx| {
+        for (ix, original) in [echo, "/skill:docs look"].into_iter().enumerate() {
+            view.live.expect_reply(original, Vec::new(), ix);
+            view.transcript
+                .items
+                .push(gentle_core::transcript::Item::User {
+                    text: echo.into(),
+                    images: Vec::new(),
+                });
+            view.sync_view(cx);
+        }
+        assert!(!view.live.skills.contains_key(&0));
+        assert_eq!(view.live.skills[&1].0, "/skill:docs look");
+    });
+}
+
+/// S2: a resumed wrapper is ordinary text in history.
+#[gpui::test]
+fn history_recall_keeps_resumed_skill_text(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     let block = "<skill name=\"docs\" location=\"/x/SKILL.md\">\nLoaded body.\n</skill>";
     view.update(cx, |view, _| {
@@ -1382,9 +1401,9 @@ fn history_recall_yields_the_skill_command_not_its_body(cx: &mut TestAppContext)
         view.read_with(cx, |view, cx| view.composer.read(cx).value().to_string())
     };
     cx.simulate_keystrokes("up");
-    assert_eq!(composer(cx), "/skill:docs");
-    cx.simulate_keystrokes("up");
-    assert_eq!(composer(cx), "/skill:docs summarize");
+    assert_eq!(composer(cx), block);
+    cx.simulate_keystrokes("up up up"); // Cross the three-line wrapper, then recall the older entry.
+    assert_eq!(composer(cx), format!("{block}\n\nsummarize"));
 }
 
 /// ↑ and ↓ in the composer walk the prompts sent before and come back to

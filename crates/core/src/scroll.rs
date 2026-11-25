@@ -59,19 +59,8 @@ pub fn item_weight(item: &Item) -> f32 {
         // text included; one that is only a block has no text to weigh.
         Item::User { text, images } => {
             let visible = crate::attachments::mixed_attachment_text(text, images.len());
-            let skill = crate::attachments::parse_skill_block(visible);
-            let visible = skill
-                .as_ref()
-                .map_or(visible, |skill| skill.args.unwrap_or_default());
             let (body, files) = crate::attachments::split_files(visible);
-            let text = if skill.is_some() {
-                // Only the skill row and the typed args are visible by default.
-                1.5 + if body.trim().is_empty() {
-                    0.
-                } else {
-                    user_text(body)
-                }
-            } else if files.is_empty() {
+            let text = if files.is_empty() {
                 user_text(text)
             } else if body.trim().is_empty() {
                 0.
@@ -376,7 +365,7 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_skill_weight_ignores_loaded_body() {
+    fn unconfirmed_skill_weight_includes_loaded_body() {
         for separator in ["\n", "\n\n"] {
             for body in ["short".to_string(), "long body\n".repeat(80)] {
                 let item = Item::User {
@@ -385,7 +374,10 @@ mod tests {
                     ),
                     images: vec![],
                 };
-                assert_eq!(item_weight(&item), 3.8 + 1.5 + 1.);
+                let Item::User { text, .. } = &item else {
+                    unreachable!()
+                };
+                assert_eq!(item_weight(&item), 3.8 + user_text(text));
             }
         }
     }

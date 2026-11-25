@@ -800,6 +800,8 @@ impl SessionView {
             if let Some(data) = this.report(result) {
                 let messages = data["messages"].as_array().cloned().unwrap_or_default();
                 if !messages.is_empty() {
+                    this.live.skills.clear();
+                    this.live.reply_failed();
                     this.transcript.load_messages(&messages);
                     this.seed_prompt_history();
                     this.markdown.clear();
@@ -1091,7 +1093,7 @@ impl SessionView {
         for image in &images {
             self.image_cache.insert(image);
         }
-        if !steer {
+        if !self.busy() {
             let shown = images.iter().map(|a| a.image.clone()).collect();
             self.live
                 .expect_reply(&text, shown, self.transcript.items.len());

@@ -23,6 +23,7 @@ pub(in crate::features::session) struct Live {
     /// Spans in `tools` and `thinking` still running (their labels show tenths).
     pub(super) open_spans: usize,
     pub(super) pending: Option<Pending>,
+    pub(in crate::features::session) skills: HashMap<usize, (String, BubbleText)>,
     /// Keyboard highlight of the front dialog, by dialog id.
     pub(super) dialog_cursor: Option<(String, usize)>,
     pub(super) model_picker: bool,
