@@ -94,8 +94,8 @@ impl Workspace {
             // stopping the mouse-down keeps TitleBar from starting a move.
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.open_palette(Category::Workspaces, window, cx)
+            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                this.open_workspace_selector(event.position(), window, cx)
             }))
             .on_mouse_down(
                 MouseButton::Right,

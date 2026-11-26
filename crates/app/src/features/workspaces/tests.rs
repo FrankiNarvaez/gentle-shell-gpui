@@ -75,7 +75,7 @@ fn sample() -> SavedState {
         tabs_sidebar_width: 300.,
         files_sidebar_width: 350.,
         sidebar_compact: true,
-        sidebar_compact_first: true,
+        tabs_sidebar_hidden: true,
     }
 }
 
@@ -106,9 +106,10 @@ fn restores_legacy_compact_rail_and_width() {
     }))
     .unwrap();
     assert!(state.sidebar_compact);
-    assert!(!state.sidebar_compact_first);
     assert_eq!(state.tabs_sidebar_width, 340.);
     assert_eq!(state.files_sidebar_width, 260.);
+    // A legacy file never had an explicit hidden flag: the panel shows.
+    assert!(!state.tabs_sidebar_hidden);
     let stored = serde_json::to_value(state).unwrap();
     assert_eq!(stored["sidebar_width"], 340.);
     assert!(stored.get("tabs_sidebar_width").is_none());
@@ -144,9 +145,9 @@ fn json_round_trip() {
     assert!(minimal.workspaces[0].sidebar_expanded);
     assert_eq!(minimal.tab_layout, TabLayout::Horizontal);
     assert!(!minimal.sidebar_compact);
-    assert!(!minimal.sidebar_compact_first);
     assert!(back.sidebar_compact);
-    assert!(back.sidebar_compact_first);
+    assert!(!minimal.tabs_sidebar_hidden);
+    assert!(back.tabs_sidebar_hidden);
     assert!(minimal.workspaces[0].tabs.is_empty());
     assert!(back.workspaces[0].tabs[0].pinned);
     // Both sidebar widths round-trip and legacy files default to 260.

@@ -27,39 +27,23 @@ fn drag_saved_width(
     pointer: f32,
     window: f32,
     saved: f32,
-    start: f32,
 ) -> Option<f32> {
-    use gentle_core::workspaces::{
-        SidebarDrag::{Compact, Width},
-        shown_sidebar_width,
+    use gentle_core::workspaces::shown_sidebar_width;
+    let Some(gentle_core::workspaces::SidebarDrag::Width(w)) = action else {
+        return None;
     };
-    match (side, action) {
+    match side {
         // A drag against the rendered cap is not a request to shrink the saved width.
-        (Side::Files, Some(Width(w)))
-            if saved > w && w == shown_sidebar_width(saved, window) && pointer >= w =>
-        {
-            None
-        }
-        (_, Some(Width(w))) => Some(w),
-        // Intermediate resize events must not choose the width restored from the rail.
-        (Side::Tabs, Some(Compact)) => Some(start),
-        _ => None,
+        Side::Files if saved > w && w == shown_sidebar_width(saved, window) && pointer >= w => None,
+        _ => Some(w),
     }
 }
 
 impl Workspace {
     fn sidebar_handle(&self, side: Side, cx: &mut Context<Self>) -> impl IntoElement {
-        let (id, revision, width) = match side {
-            Side::Tabs => (
-                "tabs-resize-handle",
-                self.tabs_sidebar_motion.revision,
-                self.tabs_sidebar_width,
-            ),
-            Side::Files => (
-                "files-resize-handle",
-                self.files_sidebar_motion.revision,
-                self.files_sidebar_width,
-            ),
+        let (id, revision) = match side {
+            Side::Tabs => ("tabs-resize-handle", self.tabs_sidebar_motion.revision),
+            Side::Files => ("files-resize-handle", self.files_sidebar_motion.revision),
         };
         let workspace = cx.entity().downgrade();
         ui::resize_handle(
@@ -74,7 +58,7 @@ impl Workspace {
         .when(matches!(side, Side::Files), |d| d.left(rems(-6. / 16.)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_drag(
-            SidebarDrag::new(side, cx.entity_id(), revision, width),
+            SidebarDrag::new(side, cx.entity_id(), revision),
             move |drag, _, _, cx| {
                 let _ = workspace.update(cx, |this, cx| {
                     this.sidebar_motion_mut(side).active_drag =
@@ -100,38 +84,12 @@ impl Workspace {
         })
     }
 
-    pub(super) fn retarget_sidebar_drag(
-        &mut self,
-        side: Side,
-        open: bool,
-        compact: bool,
-        window_width: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let now = std::time::Instant::now();
-        let (allocation, _) = self.visible_sidebar_geometry(side, window_width, now);
-        match side {
-            Side::Tabs if open => {
-                self.set_sidebar_compact(compact, cx);
-                self.set_tab_layout(TabLayout::Vertical, cx);
-            }
-            Side::Tabs => self.set_tab_layout(TabLayout::Horizontal, cx),
-            Side::Files => self.toggle_sidebar(cx),
-        }
-        self.sidebar_motion_mut(side)
-            .preserve_allocation(allocation, open);
-    }
-
     fn resize_sidebar(
         &mut self,
         event: &DragMoveEvent<SidebarDrag>,
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        use gentle_core::workspaces::SidebarDrag::{
-            Collapse, Compact, Expand, Reopen, ReopenExpanded, Width,
-        };
-
         // The row survives the handle unmounting. A missed mouse-up can
         // leave GPUI's active payload in place even when left is no longer held.
         let drag = event.drag(cx);
@@ -143,7 +101,7 @@ impl Workspace {
         let (distance, open, revision) = match drag.side {
             Side::Tabs => (
                 x - event.bounds.left(),
-                self.tab_layout == TabLayout::Vertical,
+                self.tabs_sidebar_visible(),
                 self.tabs_sidebar_motion.revision,
             ),
             Side::Files if self.sidebar.is_some() => (
@@ -162,41 +120,16 @@ impl Workspace {
         let window_width = f32::from(window.viewport_size().width) / scale;
         let side = drag.side;
         let held = event.event.pressed_button == Some(MouseButton::Left);
-        let compact_gesture =
-            matches!(side, Side::Tabs) && (self.sidebar_compact_first || self.sidebar_compact);
-        let action = {
-            let mut gesture = drag.gesture.borrow_mut();
-            if compact_gesture {
-                gesture.update_compact(pointer, window_width, open, self.sidebar_compact, held)
-            } else {
-                gesture.update(pointer, window_width, open, held)
-            }
-        };
-        // After restoring the expanded panel, don't jump its edge back to the
-        // pointer on the next event. Resize again once the pointer reaches it.
-        if matches!(action, Some(Expand | ReopenExpanded)) {
-            drag.picking_up_width.set(true);
-        } else if matches!(action, Some(Width(_))) && drag.picking_up_width.get() {
-            let restored =
-                gentle_core::workspaces::shown_sidebar_width(self.tabs_sidebar_width, window_width);
-            if pointer < restored {
-                return;
-            }
-            drag.picking_up_width.set(false);
-        }
+        let action = drag
+            .gesture
+            .borrow_mut()
+            .update(pointer, window_width, open, held);
         let drag_revision = drag.revision.clone();
         let saved = match side {
             Side::Tabs => self.tabs_sidebar_width,
             Side::Files => self.files_sidebar_width,
         };
-        if let Some(w) = drag_saved_width(
-            side,
-            action,
-            pointer,
-            window_width,
-            saved,
-            drag.starting_width,
-        ) {
+        if let Some(w) = drag_saved_width(side, action, pointer, window_width, saved) {
             match side {
                 Side::Tabs => self.resize_tab_sidebar(w, cx),
                 Side::Files if saved != w => {
@@ -211,22 +144,6 @@ impl Workspace {
             self.sidebar_motion_mut(side).active_drag = Default::default();
             cx.notify();
         }
-        // Held width updates change the destination of an active slide, not
-        // its interpolated start. Without a slide they still resize directly.
-        match (side, action) {
-            (Side::Tabs, Some(Compact | Expand)) => {
-                self.set_sidebar_compact(action == Some(Compact), cx);
-            }
-            (_, Some(Collapse | Reopen | ReopenExpanded)) => self.retarget_sidebar_drag(
-                side,
-                action != Some(Collapse),
-                compact_gesture && action == Some(Reopen),
-                window_width,
-                cx,
-            ),
-            _ => {}
-        }
-        // Gestural changes can retarget the motion without invalidating this drag.
         drag_revision.set(match side {
             Side::Tabs => self.tabs_sidebar_motion.revision,
             Side::Files => self.files_sidebar_motion.revision,
@@ -373,19 +290,19 @@ impl Render for Workspace {
                                             this.open_empty_area_menu(event.position, window, cx);
                                         }),
                                     )
-                                    // With vertical tabs the sidebar header shows
-                                    // the workspace and switches it, so the chip
-                                    // would only repeat it.
+                                    .child(self.render_workspace_chip(cx))
+                                    .when(vertical_tabs, |row| {
+                                        row.child(self.new_tab_button("title-new-tab", None, cx))
+                                    })
                                     .when(!vertical_tabs, |row| {
-                                        row.child(self.render_workspace_chip(cx))
-                                            .child(
-                                                div()
-                                                    .flex_none()
-                                                    .w(px(1.))
-                                                    .h(rems(14. / 16.))
-                                                    .bg(ui::border()),
-                                            )
-                                            .child(self.render_tabs(cx))
+                                        row.child(
+                                            div()
+                                                .flex_none()
+                                                .w(px(1.))
+                                                .h(rems(14. / 16.))
+                                                .bg(ui::border()),
+                                        )
+                                        .child(self.render_tabs(cx))
                                     }),
                             )
                             .child(
@@ -450,26 +367,26 @@ impl Render for Workspace {
                                                 cx,
                                             ))
                                     })
-                                    .child(
-                                        Button::new("toggle-tab-sidebar")
-                                            .ghost()
-                                            .xsmall()
-                                            .icon(Icon::new(
-                                                if vertical_tabs && !self.sidebar_compact {
+                                    .when(vertical_tabs, |row| {
+                                        row.child(
+                                            Button::new("toggle-tab-sidebar")
+                                                .ghost()
+                                                .xsmall()
+                                                .icon(Icon::new(if !self.tabs_sidebar_hidden {
                                                     IconName::PanelLeftClose
                                                 } else {
                                                     IconName::PanelLeftOpen
-                                                },
-                                            ))
-                                            .tooltip(if vertical_tabs && !self.sidebar_compact {
-                                                "Collapse workspace sidebar"
-                                            } else {
-                                                "Expand workspace sidebar"
-                                            })
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.toggle_sidebar_compact(cx)
-                                            })),
-                                    )
+                                                }))
+                                                .tooltip(if !self.tabs_sidebar_hidden {
+                                                    "Hide workspace sidebar"
+                                                } else {
+                                                    "Show workspace sidebar"
+                                                })
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.toggle_tabs_sidebar(cx)
+                                                })),
+                                        )
+                                    })
                                     .child(
                                         Button::new("open-palette")
                                             .ghost()
@@ -541,9 +458,11 @@ impl Render for Workspace {
                                     }),
                                 )
                                 .child(sidebar_surface(Side::Tabs, self.render_tab_sidebar(cx)))
-                                .when(tabs_resizing || (vertical_tabs && !tabs_moving), |column| {
-                                    column.child(self.sidebar_handle(Side::Tabs, cx))
-                                }),
+                                .when(
+                                    tabs_resizing
+                                        || (vertical_tabs && !self.sidebar_compact && !tabs_moving),
+                                    |column| column.child(self.sidebar_handle(Side::Tabs, cx)),
+                                ),
                         )
                     })
                     .child(
@@ -653,7 +572,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::{Side, drag_saved_width};
-    use gentle_core::workspaces::{SidebarDrag as Action, SidebarGesture, shown_sidebar_width};
+    use gentle_core::workspaces::{SidebarGesture, shown_sidebar_width};
 
     #[test]
     fn files_drag_at_window_cap_preserves_saved_width() {
@@ -663,36 +582,14 @@ mod tests {
         for pointer in [320., 370.] {
             let action = gesture.update(pointer, 800., true, true);
             assert_eq!(
-                drag_saved_width(Side::Files, action, pointer, 800., saved, saved),
+                drag_saved_width(Side::Files, action, pointer, 800., saved),
                 None
             );
         }
         let action = gesture.update(300., 800., true, true);
         assert_eq!(
-            drag_saved_width(Side::Files, action, 300., 800., saved, saved),
+            drag_saved_width(Side::Files, action, 300., 800., saved),
             Some(300.)
         );
-    }
-
-    #[test]
-    fn compact_drag_keeps_the_width_from_before_the_gesture() {
-        for pointers in [&[190., 130.][..], &[130.][..]] {
-            let mut gesture = SidebarGesture::default();
-            let start = 345.;
-            let mut saved = start;
-            let mut compact = false;
-            for &pointer in pointers {
-                let action = gesture.update_compact(pointer, 1200., true, compact, true);
-                saved = drag_saved_width(Side::Tabs, action, pointer, 1200., saved, start)
-                    .unwrap_or(saved);
-                compact = action == Some(Action::Compact);
-            }
-            assert!(compact);
-            assert_eq!(
-                gesture.update_compact(200., 1200., true, compact, true),
-                Some(Action::Expand)
-            );
-            assert_eq!(saved, 345.);
-        }
     }
 }

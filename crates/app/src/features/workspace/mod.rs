@@ -319,19 +319,15 @@ struct SidebarDrag {
     owner: gpui::EntityId,
     revision: std::rc::Rc<std::cell::Cell<u64>>,
     gesture: std::cell::RefCell<gentle_core::workspaces::SidebarGesture>,
-    picking_up_width: std::cell::Cell<bool>,
-    starting_width: f32,
 }
 
 impl SidebarDrag {
-    fn new(side: Side, owner: gpui::EntityId, revision: u64, starting_width: f32) -> Self {
+    fn new(side: Side, owner: gpui::EntityId, revision: u64) -> Self {
         Self {
             side,
             owner,
             revision: std::rc::Rc::new(std::cell::Cell::new(revision)),
             gesture: Default::default(),
-            picking_up_width: Default::default(),
-            starting_width,
         }
     }
 }
@@ -423,7 +419,8 @@ pub struct Workspace {
     files_sidebar_motion: sidebar_motion::SidebarMotion,
     tab_layout: TabLayout,
     sidebar_compact: bool,
-    sidebar_compact_first: bool,
+    /// Whether the vertical navigator is hidden (independent of the rail).
+    tabs_sidebar_hidden: bool,
     /// Width of the vertical tabs sidebar (px at 100 % interface size).
     tabs_sidebar_width: f32,
     /// Width of the right Files sidebar (px at 100 % interface size).
@@ -574,7 +571,7 @@ impl Workspace {
             files_sidebar_motion: Default::default(),
             tab_layout: saved.tab_layout,
             sidebar_compact: saved.sidebar_compact,
-            sidebar_compact_first: saved.sidebar_compact_first,
+            tabs_sidebar_hidden: saved.tabs_sidebar_hidden,
             tabs_sidebar_width: gentle_core::workspaces::saved_sidebar_width(
                 saved.tabs_sidebar_width,
             ),

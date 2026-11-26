@@ -203,9 +203,6 @@ pub const SIDEBAR_MIN_WIDTH: f32 = 200.;
 pub const SIDEBAR_MAX_WIDTH: f32 = 480.;
 /// The share of the window a sidebar may take at most.
 pub const SIDEBAR_MAX_SHARE: f32 = 0.4;
-/// Dragged narrower than this, a sidebar collapses; between this and the
-/// minimum it holds at the minimum, so a resize doesn't hide it by accident.
-pub const SIDEBAR_COLLAPSE_BELOW: f32 = 140.;
 
 /// A saved width as the app keeps it: between the minimum and the maximum,
 /// the default when it isn't a number.
@@ -229,74 +226,28 @@ pub fn shown_sidebar_width(saved: f32, window: f32) -> f32 {
 pub enum SidebarDrag {
     /// The sidebar takes this width.
     Width(f32),
-    /// Dragged past the collapse point: the sidebar hides.
-    Collapse,
-    /// The same held drag moved back to the minimum usable width.
-    Reopen,
-    /// Show the narrow icon rail without changing the saved width.
-    Compact,
-    /// Restore the saved expanded width.
-    Expand,
-    /// Reverse a fast collapse directly to expanded.
-    ReopenExpanded,
 }
 
 /// Dragging a sidebar's edge to `pointer`, its distance from the sidebar's
-/// outer edge, in a `window` this wide.
-pub fn drag_sidebar_width(pointer: f32, window: f32) -> SidebarDrag {
-    if pointer < SIDEBAR_COLLAPSE_BELOW {
-        SidebarDrag::Collapse
-    } else {
-        SidebarDrag::Width(shown_sidebar_width(pointer, window))
+/// outer edge, in a `window` this wide. Dragging only ever resizes: both
+/// edges clamp, so nothing collapses, compacts, reopens or reorients by
+/// itself.
+pub fn drag_sidebar_width(pointer: f32, window: f32) -> f32 {
+    if !pointer.is_finite() {
+        return SIDEBAR_MIN_WIDTH;
     }
+    pointer
+        .clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+        .min(shown_sidebar_width(pointer.max(SIDEBAR_MIN_WIDTH), window))
 }
 
 /// State owned by the active drag, not by the sidebar.
 #[derive(Clone, Default)]
 pub struct SidebarGesture {
-    collapsed: bool,
     ended: bool,
 }
 
 impl SidebarGesture {
-    pub fn update_compact(
-        &mut self,
-        pointer: f32,
-        window: f32,
-        visible: bool,
-        compact: bool,
-        left_held: bool,
-    ) -> Option<SidebarDrag> {
-        use SidebarDrag::{Collapse, Compact, Expand, Reopen, ReopenExpanded, Width};
-        const HIDE_BELOW: f32 = 24.;
-        const REOPEN_AT: f32 = 48.;
-        self.ended |= !left_held;
-        if self.ended || !pointer.is_finite() {
-            return None;
-        }
-        if !visible {
-            if !self.collapsed || pointer < REOPEN_AT {
-                return None;
-            }
-            self.collapsed = false;
-            return Some(if pointer >= SIDEBAR_MIN_WIDTH {
-                ReopenExpanded
-            } else {
-                Reopen
-            });
-        }
-        if pointer < HIDE_BELOW {
-            self.collapsed = true;
-            Some(Collapse)
-        } else if compact {
-            (pointer >= SIDEBAR_MIN_WIDTH).then_some(Expand)
-        } else if pointer < SIDEBAR_COLLAPSE_BELOW {
-            Some(Compact)
-        } else {
-            Some(Width(shown_sidebar_width(pointer, window)))
-        }
-    }
-
     pub fn update(
         &mut self,
         pointer: f32,
@@ -306,19 +257,10 @@ impl SidebarGesture {
     ) -> Option<SidebarDrag> {
         // A later left press must not revive a stale drag payload.
         self.ended |= !left_held;
-        if self.ended {
+        if self.ended || !visible || !pointer.is_finite() {
             return None;
         }
-        if visible {
-            let action = drag_sidebar_width(pointer, window);
-            self.collapsed = action == SidebarDrag::Collapse;
-            Some(action)
-        } else if self.collapsed && pointer >= SIDEBAR_MIN_WIDTH {
-            self.collapsed = false;
-            Some(SidebarDrag::Reopen)
-        } else {
-            None
-        }
+        Some(SidebarDrag::Width(drag_sidebar_width(pointer, window)))
     }
 }
 
@@ -356,60 +298,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn compact_drag_handles_skipped_steps_and_hysteresis() {
-        use SidebarDrag::{Collapse, Compact, Expand, Reopen};
-        let mut drag = SidebarGesture::default();
-        assert_eq!(
-            drag.update_compact(139., 1000., true, false, true),
-            Some(Compact)
-        );
-        assert_eq!(drag.update_compact(141., 1000., true, true, true), None);
-        assert_eq!(
-            drag.update_compact(20., 1000., true, true, true),
-            Some(Collapse)
-        );
-        assert_eq!(drag.update_compact(23., 1000., false, true, true), None);
-        assert_eq!(
-            drag.update_compact(48., 1000., false, true, true),
-            Some(Reopen)
-        );
-        assert_eq!(
-            drag.update_compact(200., 1000., true, true, true),
-            Some(Expand)
-        );
-        assert_eq!(
-            drag.update_compact(20., 1000., true, false, true),
-            Some(Collapse)
-        );
-        assert_eq!(drag.update_compact(200., 1000., false, true, false), None);
-        assert_eq!(drag.update_compact(200., 1000., false, true, true), None);
-        let mut fast = SidebarGesture::default();
-        assert_eq!(
-            fast.update_compact(20., 1000., true, false, true),
-            Some(Collapse)
-        );
-        assert_eq!(
-            fast.update_compact(240., 1000., false, false, true),
-            Some(SidebarDrag::ReopenExpanded)
-        );
-        let mut rail = SidebarGesture::default();
-        assert_eq!(
-            rail.update_compact(200., 1000., true, true, true),
-            Some(Expand)
-        );
-        let mut released = SidebarGesture::default();
-        assert_eq!(
-            released.update_compact(139., 1000., true, false, true),
-            Some(Compact)
-        );
-        assert_eq!(
-            released.update_compact(200., 1000., true, true, false),
-            None
-        );
-        assert_eq!(released.update_compact(200., 1000., true, true, true), None);
-    }
-
-    #[test]
     fn sidebar_slide_reverses_from_its_current_width_and_lands_exactly() {
         let closing = SidebarSlide::new(1., false);
         assert_eq!(closing.fraction(0.), 1.);
@@ -423,37 +311,26 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_drag_without_left_held_cannot_resume() {
+    fn a_drag_ends_with_the_left_button_and_stays_ended() {
         let mut drag = SidebarGesture::default();
         assert_eq!(
             drag.update(139., 1000., true, true),
-            Some(SidebarDrag::Collapse)
+            Some(SidebarDrag::Width(SIDEBAR_MIN_WIDTH))
         );
-        assert_eq!(drag.update(240., 1000., false, false), None);
-        assert_eq!(drag.update(240., 1000., false, true), None);
+        assert_eq!(drag.update(240., 1000., true, false), None);
         assert_eq!(drag.update(240., 1000., true, true), None);
+        assert_eq!(drag.update(240., 1000., false, true), None);
     }
 
     #[test]
-    fn sidebar_drag_reopens_only_a_collapse_in_the_same_gesture() {
-        let mut held = SidebarGesture::default();
-        assert_eq!(
-            held.update(139., 1000., true, true),
-            Some(SidebarDrag::Collapse)
-        );
-        assert_eq!(held.update(140., 1000., false, true), None);
-        assert_eq!(held.update(199., 1000., false, true), None);
+    fn a_hidden_panel_never_reopens_from_a_drag() {
         assert_eq!(
             SidebarGesture::default().update(240., 1000., false, true),
             None
         );
         assert_eq!(
-            held.update(200., 1000., false, true),
-            Some(SidebarDrag::Reopen)
-        );
-        assert_eq!(
-            held.update(450., 1000., true, true),
-            Some(SidebarDrag::Width(400.))
+            SidebarGesture::default().update(400., 1000., false, true),
+            None
         );
     }
 
@@ -478,24 +355,19 @@ mod tests {
     }
 
     #[test]
-    fn dragging_a_sidebar_edge_resizes_it_or_collapses_it() {
-        assert_eq!(drag_sidebar_width(330., 1600.), SidebarDrag::Width(330.));
-        // Past the maximum or the window share, it stops there.
+    fn dragging_only_resizes_and_clamps_at_both_edges() {
+        // Between the edges the pointer's distance is the width.
+        assert_eq!(drag_sidebar_width(330., 1600.), 330.);
+        // The maximum edge, and the window share, stop the drag there.
+        assert_eq!(drag_sidebar_width(700., 1600.), SIDEBAR_MAX_WIDTH);
+        assert_eq!(drag_sidebar_width(450., 1000.), 400.);
+        // The minimum edge holds at the minimum instead of collapsing.
         assert_eq!(
-            drag_sidebar_width(700., 1600.),
-            SidebarDrag::Width(SIDEBAR_MAX_WIDTH)
+            drag_sidebar_width(SIDEBAR_MIN_WIDTH - 60., 1600.),
+            SIDEBAR_MIN_WIDTH
         );
-        assert_eq!(drag_sidebar_width(450., 1000.), SidebarDrag::Width(400.));
-        // Between the collapse point and the minimum it holds at the minimum.
-        assert_eq!(
-            drag_sidebar_width(SIDEBAR_COLLAPSE_BELOW, 1600.),
-            SidebarDrag::Width(SIDEBAR_MIN_WIDTH)
-        );
-        assert_eq!(
-            drag_sidebar_width(SIDEBAR_COLLAPSE_BELOW - 1., 1600.),
-            SidebarDrag::Collapse
-        );
-        assert_eq!(drag_sidebar_width(-20., 1600.), SidebarDrag::Collapse);
+        assert_eq!(drag_sidebar_width(10., 1600.), SIDEBAR_MIN_WIDTH);
+        assert_eq!(drag_sidebar_width(-20., 1600.), SIDEBAR_MIN_WIDTH);
     }
 
     #[test]
