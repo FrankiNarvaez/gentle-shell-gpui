@@ -22,7 +22,6 @@ fn sidebar_surface(side: Side, content: impl IntoElement) -> Div {
 }
 
 fn drag_saved_width(
-    side: Side,
     action: Option<gentle_core::workspaces::SidebarDrag>,
     pointer: f32,
     window: f32,
@@ -32,11 +31,11 @@ fn drag_saved_width(
     let Some(gentle_core::workspaces::SidebarDrag::Width(w)) = action else {
         return None;
     };
-    match side {
-        // A drag against the rendered cap is not a request to shrink the saved width.
-        Side::Files if saved > w && w == shown_sidebar_width(saved, window) && pointer >= w => None,
-        _ => Some(w),
-    }
+    // The window-share cap can render a sidebar narrower than its saved width.
+    // A drag that still sits at or beyond that rendered edge is not asking to
+    // shrink the saved width, so keep it; anything inside the edge resizes.
+    let pinned_at_cap = saved > w && w == shown_sidebar_width(saved, window) && pointer >= w;
+    (!pinned_at_cap).then_some(w)
 }
 
 impl Workspace {
@@ -129,7 +128,7 @@ impl Workspace {
             Side::Tabs => self.tabs_sidebar_width,
             Side::Files => self.files_sidebar_width,
         };
-        if let Some(w) = drag_saved_width(side, action, pointer, window_width, saved) {
+        if let Some(w) = drag_saved_width(action, pointer, window_width, saved) {
             match side {
                 Side::Tabs => self.resize_tab_sidebar(w, cx),
                 Side::Files if saved != w => {
@@ -571,25 +570,21 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
-    use super::{Side, drag_saved_width};
+    use super::drag_saved_width;
     use gentle_core::workspaces::{SidebarGesture, shown_sidebar_width};
 
     #[test]
-    fn files_drag_at_window_cap_preserves_saved_width() {
+    fn drag_at_window_cap_preserves_saved_width() {
+        // Tabs and Files both measure the pointer as a width from their outer
+        // edge, so one rule covers both sidebars.
         let mut gesture = SidebarGesture::default();
         let saved = 420.;
         assert_eq!(shown_sidebar_width(saved, 800.), 320.);
         for pointer in [320., 370.] {
             let action = gesture.update(pointer, 800., true, true);
-            assert_eq!(
-                drag_saved_width(Side::Files, action, pointer, 800., saved),
-                None
-            );
+            assert_eq!(drag_saved_width(action, pointer, 800., saved), None);
         }
         let action = gesture.update(300., 800., true, true);
-        assert_eq!(
-            drag_saved_width(Side::Files, action, 300., 800., saved),
-            Some(300.)
-        );
+        assert_eq!(drag_saved_width(action, 300., 800., saved), Some(300.));
     }
 }
