@@ -2059,3 +2059,67 @@ fn a_typed_kiss_redraws_only_the_live_layer(cx: &mut TestAppContext) {
     assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
     backend.stop(&view, cx);
 }
+
+/// `n` numbered lines.
+fn lines(n: usize) -> String {
+    (1..=n).map(|i| format!("line {i}\n")).collect()
+}
+
+/// A loaded conversation's tool and shell cards show their title, subject
+/// and line counts.
+#[gpui::test]
+fn loaded_tool_and_shell_cards_show_their_title_subject_and_line_count(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.transcript.load_messages(&[
+            json!({"role": "user", "content": "run them"}),
+            json!({"role": "assistant", "stopReason": "toolUse", "content": [
+                {"type": "text", "text": "Running the tests."},
+                {"type": "toolCall", "id": "t1", "name": "bash",
+                 "arguments": {"command": "cargo test", "description": "Run the tests"}},
+            ]}),
+            json!({"role": "toolResult", "toolCallId": "t1", "isError": false,
+                   "content": [{"type": "text", "text": lines(20)}], "details": {}}),
+            json!({"role": "assistant", "stopReason": "stop",
+                   "content": [{"type": "text", "text": "Done."}]}),
+            json!({"role": "bashExecution", "command": "git status",
+                   "output": lines(12), "exitCode": 0}),
+        ]);
+        cx.notify();
+    });
+    // The finished step shows its quiet line; the shell its card.
+    assert!(drawn(cx, "step-row:Run the tests:cargo test"));
+    assert!(drawn(cx, "step-row:Shell:"));
+    assert!(drawn(cx, "fold:4 earlier lines"));
+    assert!(!drawn(cx, "fold:12 earlier lines"));
+
+    click(cx, "step-row:Run the tests:cargo test");
+    assert!(drawn(cx, "fold:12 earlier lines"));
+}
+
+/// A running tool's card follows its output: the line count it shows is the
+/// latest output's.
+#[gpui::test]
+fn a_running_tools_card_shows_its_growing_output(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let update = |text: String| {
+        json!({"type": "tool_execution_update", "toolCallId": "r1",
+               "partialResult": {"content": [{"type": "text", "text": text}]}})
+    };
+    view.update(cx, |view, cx| {
+        view.transcript
+            .apply(&json!({"type": "tool_execution_start", "toolCallId": "r1",
+            "toolName": "bash", "args": {"command": "npm test", "description": "Run npm"}}));
+        view.transcript.apply(&update(lines(10)));
+        cx.notify();
+    });
+    click(cx, "step-row:Run npm:npm test");
+    assert!(drawn(cx, "fold:2 earlier lines"));
+
+    view.update(cx, |view, cx| {
+        view.transcript.apply(&update(lines(30)));
+        cx.notify();
+    });
+    assert!(drawn(cx, "fold:22 earlier lines"));
+    assert!(!drawn(cx, "fold:2 earlier lines"));
+}
