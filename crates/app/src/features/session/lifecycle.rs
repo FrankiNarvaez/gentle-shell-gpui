@@ -651,81 +651,203 @@ mod tests {
         })
     }
 
-    /// A fresh, empty temp dir for one test.
+    /// A fresh, empty temp dir for one test: the fake launcher appends to
+    /// its log, so a leftover from an earlier run with this pid goes first.
     #[cfg(unix)]
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("gs-lifecycle-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
 
-    /// The backend starts, and the tab talks to it, without waiting for
-    /// `--version` (a cold Node start), whose answer still shows.
+    /// A fake `gentle-shell` in `dir`, logging to `dir/log`. RPC mode starts
+    /// at once and notes the tab's first command. `--version` answers
+    /// `version` only once `dir/release` exists, and gives up after about
+    /// 10 s, so a failed test leaves no probe behind. Anything else (the
+    /// login PATH probe) fails.
     #[cfg(unix)]
-    #[gpui::test]
-    fn the_tab_talks_to_its_backend_before_the_version_probe_ends(cx: &mut gpui::TestAppContext) {
+    fn fake_launcher(dir: &std::path::Path, version: &str) -> std::path::PathBuf {
         use std::os::unix::fs::PermissionsExt as _;
 
-        use super::BackendStatus;
-
-        let dir = temp_dir("version");
-        let log = dir.join("log");
         let program = dir.join("gentle-shell");
-        // `--version` takes a second; RPC mode starts at once and notes the
-        // tab's first command. Anything else (the login PATH probe) fails.
         std::fs::write(
             &program,
             format!(
-                "#!/bin/sh\nlog='{}'\ncase \" $* \" in\n\
-                 *' --version '*) sleep 1; echo version >> \"$log\"; echo 'gentle-shell 9.9.9' ;;\n\
-                 *' --mode rpc '*) echo rpc >> \"$log\"; read -r line; echo talked >> \"$log\"; exec cat > /dev/null ;;\n\
+                "#!/bin/sh\ndir='{}'\ncase \" $* \" in\n\
+                 *' --version ')\n\
+                 i=0\n\
+                 while [ ! -e \"$dir/release\" ]; do\n\
+                 i=$((i + 1)); [ \"$i\" -gt 200 ] && exit 1\n\
+                 sleep 0.05\n\
+                 done\n\
+                 echo version >> \"$dir/log\"; echo 'gentle-shell {version}' ;;\n\
+                 *' --mode rpc ')\n\
+                 echo rpc >> \"$dir/log\"; read -r line; echo talked >> \"$dir/log\"\n\
+                 exec cat > /dev/null ;;\n\
                  *) exit 1 ;;\n\
                  esac\n",
-                log.display()
+                dir.display()
             ),
         )
         .unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        program
+    }
+
+    /// The lines of `dir/log` so far.
+    #[cfg(unix)]
+    fn log(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("log"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Whether `done` holds within 10 s: real processes and their reader
+    /// threads run on their own time. Only a bound, never a pass condition.
+    #[cfg(unix)]
+    fn within(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done() {
+            if std::time::Instant::now() > deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        true
+    }
+
+    /// Stop the tab's backend and wait until it is gone.
+    #[cfg(unix)]
+    fn stop(view: &gpui_kit::Entity<super::SessionView>, cx: &mut gpui::VisualTestContext) {
+        use super::BackendStatus;
+
+        view.read_with(cx, |view, _| assert!(view.shutdown_backend()));
+        let exited = within(|| {
+            cx.run_until_parked();
+            view.read_with(cx, |view, _| {
+                matches!(view.backend.status, BackendStatus::Exited(_))
+            })
+        });
+        assert!(exited, "the backend did not exit");
+    }
+
+    /// The backend starts, and the tab talks to it, while `--version` (a
+    /// cold Node start) is still held; its answer still shows once released.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn the_tab_talks_to_its_backend_before_the_version_probe_ends(cx: &mut gpui::TestAppContext) {
+        use super::BackendStatus;
+
+        let dir = temp_dir("version");
+        let program = fake_launcher(&dir, "9.9.9");
 
         // A real process: its reader threads wake the tab.
         cx.executor().allow_parking();
         let (view, cx) = tab_on(&program, cx);
+        // The probe is released only once the tab has talked to its backend
+        // (or, failing that, at the deadline, so nothing hangs).
+        let release = std::thread::spawn({
+            let dir = dir.clone();
+            move || {
+                let talked = within(|| log(&dir).iter().any(|line| line == "talked"));
+                let held = !log(&dir).iter().any(|line| line == "version");
+                std::fs::write(dir.join("release"), "").unwrap();
+                (talked, held)
+            }
+        });
         view.update_in(cx, |view, window, cx| view.start(window, cx));
+        // Runs the probe too, which waits for the release.
         cx.run_until_parked();
 
-        // The backend notes the tab's first command on its own time.
-        let mut order = String::new();
-        for _ in 0..500 {
-            order = std::fs::read_to_string(&log).unwrap_or_default();
-            if order.contains("talked") {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        let (talked, held) = release.join().unwrap();
+        assert!(
+            talked,
+            "the tab never talked to its backend while --version was held"
+        );
+        assert!(held);
         view.read_with(cx, |view, _| {
             assert!(matches!(view.backend.status, BackendStatus::Ready(_)));
             assert_eq!(view.backend.version.as_deref(), Some("9.9.9"));
         });
-        assert_eq!(
-            order.lines().collect::<Vec<_>>(),
-            ["rpc", "talked", "version"]
-        );
+        assert_eq!(log(&dir), ["rpc", "talked", "version"]);
 
-        // Stop it, and wait until it is gone.
-        view.read_with(cx, |view, _| assert!(view.shutdown_backend()));
-        for _ in 0..500 {
-            cx.run_until_parked();
-            if view.read_with(cx, |view, _| {
-                matches!(view.backend.status, BackendStatus::Exited(_))
-            }) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        view.read_with(cx, |view, _| {
-            assert!(matches!(view.backend.status, BackendStatus::Exited(_)));
-        });
+        stop(&view, cx);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A tab restarted onto another backend while the first one's version
+    /// is on its way never shows that version: the answer belongs to the
+    /// task the restart replaced.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_restart_drops_the_old_backends_version(cx: &mut gpui::TestAppContext) {
+        use super::BackendStatus;
+
+        let first_dir = temp_dir("restart-a");
+        let second_dir = temp_dir("restart-b");
+        let first = fake_launcher(&first_dir, "1.1.1");
+        let second = fake_launcher(&second_dir, "2.2.2");
+
+        cx.executor().allow_parking();
+        let (view, cx) = tab_on(&first, cx);
+        view.update_in(cx, |view, window, cx| view.start(window, cx));
+        // The test scheduler runs a probe on this thread, in one step: step
+        // until the first backend's `--version` has answered, before the tab
+        // applies it.
+        std::fs::write(first_dir.join("release"), "").unwrap();
+        let answered = within(|| {
+            cx.executor().tick();
+            log(&first_dir).iter().any(|line| line == "version")
+        });
+        assert!(answered, "the first backend's --version never answered");
+        let first_pid = view.read_with(cx, |view, _| {
+            assert_eq!(view.backend.version, None);
+            let BackendStatus::Ready(process) = &view.backend.status else {
+                panic!("the first backend is not running");
+            };
+            process.pid()
+        });
+
+        // `/reload`'s restart, onto the second launcher.
+        view.update_in(cx, |view, window, cx| {
+            view.runs_on = Some(gentle_core::backend::Backend::Command {
+                prefix: vec![second.to_string_lossy().into_owned()],
+            });
+            view.restart_backend(window, cx);
+        });
+        std::fs::write(second_dir.join("release"), "").unwrap();
+        let mut shown = Vec::new();
+        let settled = within(|| {
+            cx.executor().tick();
+            let version = view.read_with(cx, |view, _| view.backend.version.clone());
+            if !shown.contains(&version) {
+                shown.push(version.clone());
+            }
+            version.as_deref() == Some("2.2.2")
+        });
+        assert!(settled, "the second backend's version never showed");
+        cx.run_until_parked();
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.backend.version.as_deref(), Some("2.2.2"));
+        });
+        assert_eq!(shown, [None, Some("2.2.2".to_string())]);
+
+        // The first backend is gone too, not just replaced.
+        let gone = within(|| {
+            !std::process::Command::new("kill")
+                .args(["-0", &first_pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        });
+        assert!(gone, "the first backend is still running");
+        stop(&view, cx);
+        std::fs::remove_dir_all(&first_dir).unwrap();
+        std::fs::remove_dir_all(&second_dir).unwrap();
     }
 
     /// A backend that can't start still fails the tab with the same message.
