@@ -62,6 +62,7 @@ impl SessionView {
             }
             Incoming::Exited(code) => {
                 self.backend.status = BackendStatus::Exited(code);
+                self.usage.compacting = false;
                 self.transcript.interrupt();
                 self.extension.dialogs.clear();
                 // Nothing the dead backend said or numbered applies any more.
@@ -82,9 +83,32 @@ impl SessionView {
         }
         match event["type"].as_str() {
             Some("queue_update") => self.activity.queued = queued_count(event),
-            Some("compaction_start") => self.usage.compacting = true,
+            Some("compaction_start") => {
+                self.usage.compacting = true;
+                self.usage.context_details_open = false;
+                self.usage.context_ring_hovered = false;
+            }
             Some("compaction_end") => {
                 self.usage.compacting = false;
+                self.usage.context_revision = self.usage.context_revision.wrapping_add(1);
+                if event["aborted"] != true
+                    && event["cancelled"] != true
+                    && event["success"] != false
+                    && event["errorMessage"].is_null()
+                    && let Some(tokens) = event["result"]["estimatedTokensAfter"].as_u64()
+                {
+                    self.usage.context_stale_snapshot =
+                        self.desktop.session().pending().and_then(|(id, method)| {
+                            (method == DesktopMethod::GetSnapshot).then(|| id.to_string())
+                        });
+                    self.usage.context_tokens = Some(tokens);
+                    self.usage.context_percent = self
+                        .usage
+                        .context_window
+                        .filter(|window| *window > 0)
+                        .map(|window| tokens as f64 * 100.0 / window as f64);
+                    self.usage.context_estimated = true;
+                }
                 self.refresh_stats(cx);
             }
             Some("session_info_changed") => {
@@ -299,12 +323,25 @@ impl SessionView {
     }
 
     /// Route one Desktop widget record to the slice that owns it, then hand
-    /// the original request to that slice so the shared session accepts it
-    /// exactly once. Permission responses go to whoever's request is pending;
+    /// the record, decoded once here, to that slice so the shared session
+    /// accepts it exactly once. Permission responses go to whoever's request is pending;
     /// permission events to the permission slice; everything else stays on the
     /// channel (probe, sequencing, resync, and every benign foreign record).
     fn handle_desktop_ui(&mut self, request: &UiRequest, cx: &mut Context<Self>) {
         let decoded = decode_widget(request);
+        // An unrelated delta leaves the merged context untouched; it is not
+        // fresh context data and must not replace a compaction estimate.
+        let context_changed = match &decoded {
+            Ok(Some(DesktopRecord::Event(event))) if event.event == "session_snapshot" => event
+                .session_snapshot()
+                .is_ok_and(|snapshot| snapshot.sections.context.is_some()),
+            Ok(Some(DesktopRecord::Event(_))) => false,
+            Ok(Some(DesktopRecord::Response(response))) => {
+                response.request_id() != self.usage.context_stale_snapshot.as_deref()
+                    || response.request_id().is_none()
+            }
+            _ => true,
+        };
         let pending = self.desktop.session().pending().map(|(_, method)| method);
         match route_desktop_widget(&decoded, pending) {
             DesktopRoute::Permission => {
@@ -315,7 +352,9 @@ impl SessionView {
                     .permission
                     .requested()
                     .map(|requested| super::from_desktop_mode(requested.mode));
-                let applied = self.permission.apply(self.desktop.session(), request);
+                let applied = self
+                    .permission
+                    .apply_decoded(self.desktop.session(), decoded);
                 let mut legacy_fallback = false;
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
@@ -349,7 +388,7 @@ impl SessionView {
                 {
                     self.desktop.output_mut().refresh_thread();
                 }
-                let applied = self.desktop.supervision_apply(request);
+                let applied = self.desktop.supervision_apply_decoded(decoded);
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
                     // resync, and the lists re-seed once it lands.
@@ -374,7 +413,7 @@ impl SessionView {
                 self.sync_output(cx);
             }
             DesktopRoute::Subscription => {
-                let applied = self.desktop.subscription_apply(request);
+                let applied = self.desktop.subscription_apply_decoded(decoded);
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
                     // resync. The record was already accepted, so it is never
@@ -390,7 +429,7 @@ impl SessionView {
                 self.sync_output(cx);
             }
             DesktopRoute::Design => {
-                let applied = self.desktop.design_apply(request);
+                let applied = self.desktop.design_apply_decoded(decoded);
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
                     // resync, and the canvas re-seeds once it lands.
@@ -406,7 +445,7 @@ impl SessionView {
                 self.sync_output(cx);
             }
             DesktopRoute::Config => {
-                let applied = self.desktop.config_apply(request);
+                let applied = self.desktop.config_apply_decoded(decoded);
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
                     // resync, and the Profiles screen re-reads every store
@@ -425,7 +464,7 @@ impl SessionView {
                 self.sync_output(cx);
             }
             DesktopRoute::Output => {
-                let applied = self.desktop.output_apply(request);
+                let applied = self.desktop.output_apply_decoded(decoded);
                 self.apply_output(applied, cx);
                 self.sync_supervision(cx);
                 self.sync_design(cx);
@@ -433,7 +472,7 @@ impl SessionView {
                 self.sync_output(cx);
             }
             DesktopRoute::Review => {
-                let applied = self.desktop.review_apply(request);
+                let applied = self.desktop.review_apply_decoded(decoded);
                 match applied.report.as_ref() {
                     // Events were lost: the channel owns the get_snapshot
                     // resync, and the switch is read again behind it.
@@ -449,7 +488,7 @@ impl SessionView {
                 self.sync_output(cx);
             }
             DesktopRoute::Reads => {
-                let applied = self.desktop.reads_apply(request);
+                let applied = self.desktop.reads_apply_decoded(decoded);
                 self.apply_reads(applied, cx);
                 self.sync_supervision(cx);
                 self.sync_design(cx);
@@ -457,9 +496,9 @@ impl SessionView {
                 self.sync_output(cx);
             }
             DesktopRoute::Channel => {
-                let applied = self.desktop.ui(request);
+                let applied = self.desktop.ui_decoded(decoded);
                 self.apply_desktop(applied, cx);
-                self.sync_sections(cx);
+                self.sync_sections_if_context(context_changed, cx);
                 self.sync_permission_capabilities(cx);
                 self.sync_supervision(cx);
                 self.sync_design(cx);
@@ -1085,6 +1124,15 @@ mod tests {
             Some(CanvasNotice::Stopped)
         );
         assert_eq!(design_canvas(&json!({})), None);
+        // `GENTLE_DESIGN_OPEN_BROWSER=0` kept the system browser closed: the
+        // canvas still shows, in the app.
+        assert_eq!(
+            design_canvas(&json!({"url": "http://x", "opened": false, "browserDisabled": true})),
+            Some(CanvasNotice::Open {
+                url: "http://x".into(),
+                refreshed: false,
+            })
+        );
     }
 
     #[test]

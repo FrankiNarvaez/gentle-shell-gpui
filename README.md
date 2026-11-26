@@ -94,6 +94,20 @@ The app does not reimplement Gentle Shell. Each tab starts `gentle-shell --mode 
 
 ### Workspaces and tiling — Every project in its place
 
+Manage Desktop workspaces from your terminal with the installed `gsd` command:
+
+```sh
+gsd workspace list --json
+gsd workspace current
+gsd workspace create frontend .
+gsd workspace switch frontend
+gsd workspace rename frontend web
+gsd workspace set-root web ./src
+gsd workspace remove web --force
+```
+
+`gsd workspace --help` lists the commands. Relative paths are resolved from the calling terminal. List and current read the live state when Desktop is open, otherwise the last saved state; mutations start Desktop if needed. Switching keeps other agents running. Changing a root only affects Files and future tabs; existing tabs keep their own working folders. Removing a workspace closes its tabs and stops its agents, but keeps files and conversations; `--force` explicitly confirms this. Each workspace still has one root. Use `gsd ./workspace` to open a directory literally named `workspace`.
+
 Named workspaces (each with its own folder and tabs), saved and restored; agents in other workspaces keep running while you switch. A dot on the title bar's workspace chip says an agent in another workspace is working (accent) or needs you (amber) (with vertical tabs, each project row also carries its own dot), and the switcher (⌃⌘K) shows which: "working" or "needs you" on each workspace.
 
 <details>
@@ -299,7 +313,7 @@ Each image becomes an `[Image #N]` token and a thumbnail, and the agent receives
 
 ### Session chips — What the session tracks, above the composer
 
-As in Tern, what a session tracks sits in chips over the composer instead of a side panel, so every pane keeps its full width: background **Jobs**, **Helpers 1/3** (each subagent's status, task and last step, with a button to the full Agents window) and extension widgets. The row only spells out what needs you: extension statuses fold into one ⓘ (their text in its tooltip), plan limits show once one runs high, the context chip (to compact) joins once the window passes the alert threshold, and Normal permissions and Review on are an icon each (any other mode keeps its name and tint). The context itself is a hairline on the composer's top edge, after Tern's: it fills as the window is used, with the percent at the fill's end and the window's size at the line's, turns amber past the threshold and red near the end, and a comet runs along it while the agent works. Under the composer, the folder shows by name (the full path in its tooltip), and what the session spent opens the last response's tokens; the key hints show until the first message.
+As in Tern, what a session tracks sits in chips over the composer instead of a side panel, so every pane keeps its full width: background **Jobs**, **Helpers 1/3** (each subagent's status, task and last step, with a button to the full Agents window) and extension widgets. The row only spells out what needs you: extension statuses fold into one ⓘ (their text in its tooltip), plan limits show once one runs high, and Normal permissions and Review on are an icon each (any other mode keeps its name and tint). A context ring in the composer shows usage; hover for an overview or click for details and compaction controls. Under the composer, the folder shows by name (the full path in its tooltip), and what the session spent opens the last response's tokens; the key hints show until the first message.
 
 <details>
 <summary><kbd>More</kbd> <strong>Jobs, helpers and the Todos island</strong></summary>
@@ -564,7 +578,7 @@ When Gentle Shell's design canvas opens (`/gentle:design`, or the model's `gentl
 
 <br>
 
-The page stays live while you resize, and the card lifts while you drag it. The canvas reloads itself as artboards change, so the card follows the design live; comments and Implement on the canvas go back to the conversation as usual. Reload, open in your browser and hide are in its header; it closes when the canvas stops. The page is the system's web view: WKWebView on macOS, WebView2 on Windows (in a popup that follows the window, since GPUI draws above child windows; rounded on Windows 11), WebKitGTK on Linux under X11 (on Wayland, which has no child windows, the card says so and the canvas stays in your browser). Gentle Shell also opens its own browser tab the first time, since it has no setting to skip that. The embedded page draws above the app's own menus, so it hides while a screen (palette, settings, …) is open.
+The page stays live while you resize, and the card lifts while you drag it. The canvas reloads itself as artboards change, so the card follows the design live; comments and Implement on the canvas go back to the conversation as usual. Reload, open in your browser and hide are in its header; it closes when the canvas stops. The page is the system's web view: WKWebView on macOS, WebView2 on Windows (in a popup that follows the window, since GPUI draws above child windows; rounded on Windows 11), WebKitGTK on Linux under X11 (on Wayland, which has no child windows, the card says so and the canvas stays in your browser). The app opens the canvas itself, in its card or, when pages open in your browser (Configuration › Devices › Browser), in the browser you chose (again each time the agent opens it after you closed its tab), so agent tabs ask Gentle Shell not to open a browser tab of its own; Gentle Shell 5.0.0 and older still open one, since they have no such setting. The choice applies to agent tabs started after it. The embedded page draws above the app's own menus, so it hides while a screen (palette, settings, …) is open.
 
 </details>
 
@@ -644,7 +658,7 @@ It installs what is missing (the skill into Gentle Shell, the diagram renderer i
 
 ### Configuration — Your Gentle Shell setup, in one place
 
-Your existing Gentle Shell setup: home, models, profiles, sign-ins, permission mode, persona, MCP, packages (install and remove), Claude bridge plan, and the theme picker: Gentle Shell's themes, your Pi themes (`<agent dir>/themes/`), popular terminal schemes, the solid **Studio** and **Studio Light** (a sober, high-contrast pair whose panes stay opaque at any transparency, for a professional, glass-free look), the warm solid **Clay** and **Clay Light** (a calm, cream-and-graphite pair with a terracotta accent, also opaque at any transparency) and **OLED Black** (true black that stays solid at any transparency, so an OLED screen keeps those pixels off; soft pearl text and the Gentle rose), applied app-wide and to terminals, remembered across launches.
+Your existing Gentle Shell setup: home, models, profiles, sign-ins, permission mode, persona, MCP, packages (install and remove), the Claude bridge's plan when `pi-claude-bridge` is already installed (the app doesn't offer it otherwise), and the theme picker: Gentle Shell's themes, your Pi themes (`<agent dir>/themes/`), popular terminal schemes, the solid **Studio** and **Studio Light** (a sober, high-contrast pair whose panes stay opaque at any transparency, for a professional, glass-free look), the warm solid **Clay** and **Clay Light** (a calm, cream-and-graphite pair with a terracotta accent, also opaque at any transparency) and **OLED Black** (true black that stays solid at any transparency, so an OLED screen keeps those pixels off; soft pearl text and the Gentle rose), applied app-wide and to terminals, remembered across launches.
 
 <details>
 <summary><kbd>More</kbd> <strong>Themes, transparency, interface size and more</strong></summary>
@@ -721,14 +735,14 @@ On by default; Configuration → Water reminder turns it off, changes how often 
 
 ### First run — Setup checks what's missing
 
-On first launch, or whenever something required is missing, a setup screen checks what the app needs on this system: Node.js ≥ 22.19 with npm, Go on Windows (gentle-pi builds Gentle AI with it), Gentle Shell (`gentle-pi`, with Pi inside), its one-time setup, and a signed-in provider; then Git, and optionally Engram (memory), the Claude bridge and its Claude Code login. What can be installed without your password is installed in place with a live log: Node 22 LTS from nodejs.org (checksum-verified) into the app's own folder when yours is missing or too old, gentle-pi into a user-owned npm prefix when the global one needs root, and Gentle Shell's setup itself. What needs `sudo` or an interactive login opens in a terminal tab with the command typed. Nothing touches your system Node or shell profile: the app adds its folders to the PATH it gives Gentle Shell. Install everything runs the missing steps in order; tabs that couldn't start retry once it's done. Reopen it any time from ⌘K → Setup & requirements or Configuration → Gentle Shell.
+On first launch, or whenever something required is missing, a setup screen checks what the app needs on this system: Node.js ≥ 22.19 with npm, Go on Windows (gentle-pi builds Gentle AI with it), Gentle Shell (`gentle-pi`, with Pi inside), its one-time setup, and a signed-in provider; then Git, and optionally Engram (memory). What can be installed without your password is installed in place with a live log: Node 22 LTS from nodejs.org (checksum-verified) into the app's own folder when yours is missing or too old, gentle-pi into a user-owned npm prefix when the global one needs root, and Gentle Shell's setup itself. What needs `sudo` or an interactive login opens in a terminal tab with the command typed. Nothing touches your system Node or shell profile: the app adds its folders to the PATH it gives Gentle Shell. Install everything runs the missing steps in order; tabs that couldn't start retry once it's done. Reopen it any time from ⌘K → Setup & requirements or Configuration → Gentle Shell.
 
 ### Easiest: download a release
 
 Download the asset for your system from [Releases](https://github.com/Gentleman-Programming/gentle-shell-gpui/releases) (names under [Packages and releases](#packages-and-releases)).
 
 - **macOS:** open `gentle-shell-gpui-<version>-macos-aarch64.dmg` (Apple silicon) or `…-macos-x86_64.dmg` (Intel) and drag **Gentle Shell** onto **Applications**. The app is ad-hoc signed, not notarized, so the first launch is blocked: right-click the app → **Open** → **Open**, or allow it in System Settings → Privacy & Security → **Open Anyway**. From a terminal, `xattr -dr com.apple.quarantine /Applications/"Gentle Shell.app"` does the same. Later versions install from inside the app ([Updating the app](#updating-the-app)).
-- **Windows:** run `gentle-shell-gpui-<version>-windows-x86_64-setup.exe`. It installs for your user only (no admin rights) into `%LOCALAPPDATA%\Programs\Gentle Shell`, adds Gentle Shell to the Start menu (and the desktop if you tick it) and to Apps → Installed apps for uninstalling, and puts the `gsd` command on your user PATH; installing a newer setup over it upgrades in place. SmartScreen may warn about an unknown publisher: **More info** → **Run anyway**. The `…-windows-x86_64.zip` holds the bare exe (the in-app updater uses it). The in-app browser uses the Microsoft Edge WebView2 Runtime, which Windows 11 and updated Windows 10 already have.
+- **Windows:** run `gentle-shell-gpui-<version>-windows-x86_64-setup.exe`. It installs for your user only (no admin rights) into `%LOCALAPPDATA%\Programs\Gentle Shell`, adds Gentle Shell to the Start menu (and the desktop if you tick it) and to Apps → Installed apps for uninstalling, and puts the `gsd` command on your user PATH; installing a newer setup over it upgrades in place. SmartScreen may warn about an unknown publisher: **More info** → **Run anyway**. The `…-windows-x86_64.zip` holds the bare exe (the in-app updater uses it). Windows release builds link the MSVC C runtime statically, so the installer, portable executable and in-app updates do not need a separate Visual C++ Redistributable. The in-app browser uses the Microsoft Edge WebView2 Runtime, which Windows 11 and updated Windows 10 already have.
 - **Linux:** extract the tarball and run `gentle-shell-gpui-<version>/gentle-shell-gpui`. Copy the `.desktop` file to `~/.local/share/applications/` (and fix its `Exec=` path) to get a launcher entry. The app links WebKitGTK 4.1 for its in-app browser: on Debian or Ubuntu (22.04 or newer) `sudo apt install libwebkit2gtk-4.1-0` if it isn't installed yet.
 
 ### From source (no release installed)

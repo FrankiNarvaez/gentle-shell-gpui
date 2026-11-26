@@ -39,6 +39,8 @@ fn tab(cx: &mut TestAppContext) -> (Entity<SessionView>, &mut VisualTestContext)
     cx.add_window_view(|window, cx| {
         let mut view = SessionView::new(cwd, None, window, cx, false);
         view.backend.started = true;
+        view.usage.context_test_ready = true;
+        view.usage.context_stats_received = true;
         view
     })
 }
@@ -287,6 +289,933 @@ impl gpui_kit::Render for Selectable {
 
 /// A message you sent can be selected with the mouse, like an answer, and
 /// what is selected is its text.
+#[gpui::test]
+fn context_feed_updates_exact_usage_and_clears_it(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"],
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 61.0, "tokens": 122000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(61.0), Some(122000), Some(200000))
+        );
+
+        let event = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections},
+            }))
+        };
+        view.desktop.ui(&event(2, json!({})));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(61.0), Some(122000), Some(200000))
+        );
+
+        view.desktop.ui(&event(
+            3,
+            json!({"context": {"percent": 25.0, "tokens": null, "window": 100000}}),
+        ));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (Some(25.0), None, Some(100000))
+        );
+
+        view.desktop.ui(&event(4, json!({"context": null})));
+        view.sync_sections(cx);
+        assert_eq!(
+            (
+                view.usage.context_percent,
+                view.usage.context_tokens,
+                view.usage.context_window
+            ),
+            (None, None, None)
+        );
+    });
+}
+
+#[gpui::test]
+fn context_ring_is_hidden_during_startup_even_with_context_data(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_test_ready = false;
+        view.usage.context_stats_received = false;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(61.0);
+        view.usage.context_tokens = Some(122000);
+        view.usage.context_stats_received = true;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        view.usage.context_test_ready = true;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        assert_eq!(view.usage.context_percent, None);
+        assert_eq!(view.usage.context_tokens, None);
+        // A successful empty-session stats response has no percentage.
+        view.usage.context_stats_received = true;
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+}
+
+#[gpui::test]
+fn post_compaction_estimate_is_shown_approximately(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, _| {
+        view.usage.context_window = Some(200000);
+        view.usage.context_tokens = Some(120000);
+        view.usage.context_percent = Some(60.0);
+    });
+    click(cx, "context-ring");
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+    });
+    assert!(drawn(cx, "context-ring-used-tokens-~40k"));
+    assert!(drawn(cx, "context-ring-usage-~20%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-40k"));
+    click(cx, "context-ring");
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-~40k (~20%)"));
+}
+
+#[gpui::test]
+fn compaction_without_estimate_restores_interaction_without_inventing_usage(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({"type": "compaction_start"}))],
+            window,
+            cx,
+        );
+    });
+    assert!(!drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-compaction-orbit"));
+    click(cx, "context-ring");
+    assert!(!drawn(cx, "context-compact-control"));
+    view.update_in(cx, |view, window, cx| {
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {}
+            }))],
+            window,
+            cx,
+        );
+    });
+    assert!(!drawn(cx, "context-compaction-orbit"));
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.usage.context_tokens, None);
+        assert_eq!(view.usage.context_percent, None);
+        assert_eq!(view.usage.context_window, Some(200000));
+        assert!(!view.usage.context_estimated);
+    });
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(
+        gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+        None,
+        Modifiers::none(),
+    );
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-hint"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-0"));
+}
+
+#[gpui::test]
+fn post_compaction_estimate_handles_missing_failure_and_stale_stats(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.usage.context_window = None;
+        let old = view.usage.context_revision;
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert_eq!(view.usage.context_percent, None);
+        view.usage.context_window = Some(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_percent, None);
+        view.apply_stats_at(old, Ok(json!({"contextUsage": {"percent": 80.0}})), cx);
+        assert_eq!(view.usage.context_percent, None);
+        view.apply_stats_at(
+            view.usage.context_revision,
+            Ok(json!({"contextUsage": {"percent": null}})),
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        for event in [
+            json!({"errorMessage": "failed", "result": {"estimatedTokensAfter": 1}}),
+            json!({"aborted": true, "result": {"estimatedTokensAfter": 2}}),
+            json!({"cancelled": true, "result": {"estimatedTokensAfter": 3}}),
+            json!({"success": false, "result": {"estimatedTokensAfter": 4}}),
+            json!({"result": {"estimatedTokensAfter": null}}),
+        ] {
+            let mut event = event;
+            event["type"] = json!("compaction_end");
+            view.handle_batch(vec![pi_rpc::Incoming::Event(event)], window, cx);
+            assert_eq!(view.usage.context_tokens, Some(40000));
+        }
+        view.apply_stats_at(
+            view.usage.context_revision,
+            Ok(json!({"contextUsage": {"percent": 30.0}})),
+            cx,
+        );
+        assert_eq!(view.usage.context_percent, Some(30.0));
+        assert_eq!(view.usage.context_tokens, None);
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_survives_empty_context(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 163200, "window": 272000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 62800}
+            }))],
+            window,
+            cx,
+        );
+        for (seq, context) in [
+            (
+                2,
+                json!({"percent": null, "tokens": null, "window": 272000}),
+            ),
+            (3, json!({"window": 272000})),
+        ] {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Ui(widget(json!({
+                    "schema": SCHEMA, "kind": "event", "seq": seq,
+                    "event": "session_snapshot", "data": {"sections": {"context": context}}
+                })))],
+                window,
+                cx,
+            );
+        }
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-used-tokens-~62.8k"));
+    assert!(drawn(cx, "context-ring-usage-~23%"));
+    click(cx, "context-ring");
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-~62.8k (~23%)"));
+    view.update_in(cx, |view, window, cx| {
+        for (seq, context, expected_percent) in [
+            (4, json!({"window": 314000}), Some(20.0)),
+            (5, json!({"window": 0}), None),
+            (6, json!({"window": null}), None),
+        ] {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Ui(widget(json!({
+                    "schema": SCHEMA, "kind": "event", "seq": seq,
+                    "event": "session_snapshot", "data": {"sections": {"context": context}}
+                })))],
+                window,
+                cx,
+            );
+            assert_eq!(view.usage.context_tokens, Some(62800));
+            assert_eq!(view.usage.context_percent, expected_percent);
+            assert!(view.usage.context_estimated);
+        }
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": 7,
+                "event": "session_snapshot", "data": {"sections": {"context": {
+                    "tokens": 50000, "percent": 25.0, "window": 200000
+                }}}
+            })))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_accepts_current_stats_after_empty_feed(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        let delta = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections}
+            }))
+        };
+        for (seq, sections) in [
+            (2, json!({})),
+            (3, json!({"context": null})),
+            (
+                4,
+                json!({"context": {"tokens": null, "percent": null, "window": 200000}}),
+            ),
+            (5, json!({"context": {"window": 272000}})),
+        ] {
+            let stale = view.usage.context_revision;
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Event(json!({
+                    "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+                }))],
+                window,
+                cx,
+            );
+            let current = view.usage.context_revision;
+            view.handle_batch(vec![pi_rpc::Incoming::Ui(delta(seq, sections))], window, cx);
+            view.apply_stats_at(stale, Ok(json!({"contextUsage": {"percent": 80.0}})), cx);
+            assert!(view.usage.context_estimated);
+            view.apply_stats_at(current, Ok(json!({"contextUsage": {"percent": 30.0}})), cx);
+            assert_eq!(view.usage.context_percent, Some(30.0), "sequence {seq}");
+            assert_eq!(view.usage.context_tokens, None);
+            assert!(!view.usage.context_estimated);
+        }
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        let current = view.usage.context_revision;
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(
+                6,
+                json!({"context": {
+                    "tokens": 50000, "percent": 25.0, "window": 200000
+                }}),
+            ))],
+            window,
+            cx,
+        );
+        view.apply_stats_at(current, Ok(json!({"contextUsage": {"percent": 30.0}})), cx);
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_survives_unrelated_feed_delta(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.desktop.ui(&response(
+            snapshot.request.request_id(),
+            json!({
+                "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                    "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                }}
+            }),
+        ));
+        view.sync_sections(cx);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        let delta = |seq, sections| {
+            widget(json!({
+                "schema": SCHEMA, "kind": "event", "seq": seq,
+                "event": "session_snapshot", "data": {"sections": sections}
+            }))
+        };
+        view.handle_batch(vec![pi_rpc::Incoming::Ui(delta(2, json!({})))], window, cx);
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert!(view.usage.context_estimated);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(
+                3,
+                json!({
+                    "context": {"percent": 25.0, "tokens": 50000, "window": 200000}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(delta(4, json!({"context": null})))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, None);
+        assert_eq!(view.usage.context_percent, None);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_rejects_pre_compaction_snapshot(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update_in(cx, |view, window, cx| {
+        view.usage.context_window = Some(200000);
+        let probe = view.desktop.ready(true).sends.remove(0);
+        let snapshot = view
+            .desktop
+            .ui(&response(
+                probe.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "command": PROMPT_COMMAND, "widget": WIDGET_KEY,
+                    "methods": ["capabilities", "get_snapshot"], "events": ["session_snapshot"]
+                }),
+            ))
+            .sends
+            .remove(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Event(json!({
+                "type": "compaction_end", "result": {"estimatedTokensAfter": 40000}
+            }))],
+            window,
+            cx,
+        );
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(response(
+                snapshot.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "sequence": 1, "state": {"session": {
+                        "context": {"percent": 60.0, "tokens": 120000, "window": 200000}
+                    }}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(40000));
+        assert_eq!(view.usage.context_percent, Some(20.0));
+        assert!(view.usage.context_estimated);
+        let fresh = view.desktop.resync().remove(0);
+        view.handle_batch(
+            vec![pi_rpc::Incoming::Ui(response(
+                fresh.request.request_id(),
+                json!({
+                    "schema": SCHEMA, "sequence": 2, "state": {"session": {
+                        "context": {"percent": 25.0, "tokens": 50000, "window": 200000}
+                    }}
+                }),
+            ))],
+            window,
+            cx,
+        );
+        assert_eq!(view.usage.context_tokens, Some(50000));
+        assert_eq!(view.usage.context_percent, Some(25.0));
+        assert!(!view.usage.context_estimated);
+    });
+}
+
+#[gpui::test]
+fn post_compaction_estimate_preserves_normal_stats(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.apply_stats(
+            Ok(json!({"cost": 0.5, "contextUsage": {"percent": 61.0}})),
+            cx,
+        );
+        assert_eq!(view.usage.cost, 0.5);
+        assert_eq!(view.usage.context_percent, Some(61.0));
+        assert!(!view.usage.context_estimated);
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-usage-61%"));
+}
+
+#[gpui::test]
+fn context_ring_failed_stats_then_refresh(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(Err(anyhow::anyhow!("stats failed")), cx);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(
+            Ok(json!({"cost": 0.5, "contextUsage": {"percent": 61.0}})),
+            cx,
+        );
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-usage-61%"));
+    view.update(cx, |view, _| assert_eq!(view.usage.cost, 0.5));
+}
+
+#[gpui::test]
+fn context_ring_empty_stats_response(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.reset_context();
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring"));
+    view.update(cx, |view, cx| {
+        view.apply_stats(Ok(json!({})), cx);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(!drawn(cx, "context-ring-usage-0%"));
+}
+
+#[gpui::test]
+fn context_ring_shows_model_window_without_context_feed(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.models.current = super::state::ModelInfo::parse(&json!({
+            "id": "legacy-model", "contextWindow": 200000
+        }));
+        view.apply_stats(Ok(json!({"contextUsage": {"percent": 25.0}})), cx);
+        cx.notify();
+    });
+    let at = cx
+        .debug_bounds("context-ring")
+        .expect("ring drawn")
+        .center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-25%"));
+    assert!(drawn(cx, "context-ring-overview-window-200k"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-context-window-200k"));
+    assert!(drawn(cx, "context-ring-usage-25%"));
+    assert!(!drawn(cx, "context-ring-used-tokens-50k"));
+}
+
+#[gpui::test]
+fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(5.0);
+        view.usage.context_tokens = Some(48100);
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    view.update(cx, |view, _| assert!(view.usage.context_ring_hovered));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-48.1k (5%)"));
+    assert!(drawn(cx, "context-ring-overview-window-200k"));
+    view.update(cx, |view, cx| {
+        view.usage.context_tokens = None;
+        view.usage.context_percent = Some(25.0);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-overview-25%"));
+    assert!(!drawn(cx, "context-ring-overview-48.1k (5%)"));
+    cx.simulate_mouse_move(
+        gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+        None,
+        Modifiers::none(),
+    );
+    view.update(cx, |view, _| assert!(!view.usage.context_ring_hovered));
+}
+
+#[gpui::test]
+fn context_ring_hover_returns_after_toggle_and_outside_click(cx: &mut TestAppContext) {
+    let (_, cx) = tab(cx);
+    assert!(drawn(cx, "context-ring"));
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    let outside = gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.));
+    for outside_click in [false, true] {
+        cx.simulate_mouse_move(outside, None, Modifiers::none());
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(drawn(cx, "context-ring-overview-hint"));
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
+        cx.simulate_mouse_move(outside, None, Modifiers::none());
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
+        if outside_click {
+            cx.simulate_click(outside, Modifiers::none());
+        } else {
+            click(cx, "context-ring");
+        }
+        assert!(!drawn(cx, "context-compact-control"));
+        cx.simulate_mouse_move(outside, None, Modifiers::none());
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(drawn(cx, "context-ring-overview-hint"));
+    }
+}
+
+#[gpui::test]
+fn context_ring_hover_returns_after_escape(cx: &mut TestAppContext) {
+    let (_, cx) = tab(cx);
+    assert!(drawn(cx, "context-ring"));
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    let outside = gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    cx.simulate_keystrokes("escape");
+    assert!(!drawn(cx, "context-compact-control"));
+    cx.simulate_mouse_move(outside, None, Modifiers::none());
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-overview-hint"));
+}
+
+#[gpui::test]
+fn context_ring_opens_existing_compaction_controls(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(35.0);
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(drawn(cx, "context-compact-control"));
+}
+
+#[gpui::test]
+fn context_ring_details_update_live_and_hide_missing_values(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(61.0);
+        view.usage.context_tokens = Some(122000);
+        view.usage.context_window = Some(200000);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-used-tokens-122k"));
+    assert!(drawn(cx, "context-ring-context-window-200k"));
+    assert!(drawn(cx, "context-ring-usage-61%"));
+    assert!(!drawn(cx, "context-ring-header-count"));
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(25.0);
+        view.usage.context_tokens = None;
+        view.usage.context_window = Some(100000);
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring-used-tokens-122k"));
+    assert!(!drawn(cx, "context-ring-context-window-200k"));
+    assert!(!drawn(cx, "context-ring-usage-61%"));
+    assert!(drawn(cx, "context-ring-context-window-100k"));
+    assert!(drawn(cx, "context-ring-usage-25%"));
+
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = None;
+        view.usage.context_tokens = Some(48100);
+        view.usage.context_window = None;
+        cx.notify();
+    });
+    assert!(drawn(cx, "context-ring-used-tokens-48.1k"));
+    assert!(!drawn(cx, "context-ring-context-window-100k"));
+    assert!(!drawn(cx, "context-ring-usage-25%"));
+    view.update(cx, |view, cx| {
+        view.usage.context_tokens = None;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-ring-used-tokens-48.1k"));
+    assert!(!drawn(cx, "context-ring-header-count"));
+}
+
+#[gpui::test]
+fn context_ring_advice_updates_at_boundaries_and_keeps_controls(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(69.0);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    let low = "Compacting summarizes the conversation to free context.";
+    let medium = "Consider compacting or starting a new session.";
+    let high = "Context nearly full. Compact or start a new session.";
+    for (percent, expected) in [(69.0, low), (70.0, medium), (89.0, medium), (90.0, high)] {
+        view.update(cx, |view, cx| {
+            view.usage.context_percent = Some(percent);
+            cx.notify();
+        });
+        for text in [low, medium, high] {
+            assert_eq!(drawn(cx, text), text == expected, "at {percent}%: {text}");
+        }
+        assert!(drawn(cx, "Add what to keep with /compact <instructions>."));
+        assert!(drawn(cx, "context-ring-advice-divider"));
+        assert!(drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-auto-compaction"));
+    }
+}
+
+#[gpui::test]
+fn context_ring_replaces_legacy_context_meter(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(95.0);
+        cx.notify();
+    });
+    assert!(!drawn(cx, "legacy-context-chip"));
+    assert!(!drawn(cx, "context-percent"));
+    assert!(!drawn(cx, "context-window"));
+    for end in [
+        json!({"type": "compaction_end"}),
+        json!({"type": "compaction_end", "errorMessage": "failed"}),
+    ] {
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        view.update_in(cx, |view, window, cx| {
+            view.handle_batch(
+                vec![pi_rpc::Incoming::Event(json!({"type": "compaction_start"}))],
+                window,
+                cx,
+            );
+        });
+        assert!(!drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-compaction-orbit"));
+        click(cx, "context-ring");
+        cx.simulate_keystrokes("enter");
+        assert!(!drawn(cx, "context-compact-control"));
+        let at = cx.debug_bounds("context-ring").unwrap().center();
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
+        view.update_in(cx, |view, window, cx| {
+            view.handle_batch(vec![pi_rpc::Incoming::Event(end)], window, cx);
+        });
+        assert!(!drawn(cx, "context-compaction-orbit"));
+        cx.simulate_mouse_move(
+            gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
+            None,
+            Modifiers::none(),
+        );
+        cx.simulate_mouse_move(at, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(2));
+        assert!(drawn(cx, "context-ring-overview-hint"));
+        click(cx, "context-ring");
+        assert!(drawn(cx, "context-compact-control"));
+        assert!(drawn(cx, "context-auto-compaction"));
+        click(cx, "context-ring");
+    }
+}
+
+struct SizedSession {
+    session: Entity<SessionView>,
+    width: f32,
+}
+
+impl gpui_kit::Render for SizedSession {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _};
+        gpui_kit::div()
+            .w(gpui_kit::px(self.width))
+            .h_full()
+            .child(self.session.clone())
+    }
+}
+
+#[gpui::test]
+fn context_ring_fits_and_opens_in_every_style_and_narrow_pane(cx: &mut TestAppContext) {
+    use gentle_core::input_style::InputStyle;
+    use gpui_kit::AppContext as _;
+
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(true);
+    });
+    let (root, cx) = cx.add_window_view(|window, cx| {
+        let session = cx.new(|cx| {
+            let mut view = SessionView::new(std::env::temp_dir(), None, window, cx, false);
+            view.backend.started = true;
+            view.usage.context_test_ready = true;
+            view.usage.context_stats_received = true;
+            view.usage.cost = 0.13;
+            view
+        });
+        SizedSession {
+            session,
+            width: 700.,
+        }
+    });
+    for style in InputStyle::ALL {
+        for width in [700., 320.] {
+            cx.update(|_, cx| super::input_style::set_test_style(style, cx));
+            root.update(cx, |root, cx| {
+                root.width = width;
+                root.session.update(cx, |view, cx| {
+                    view.pane_width.set(width);
+                    cx.notify();
+                });
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let ring = cx.debug_bounds("context-ring").expect("ring drawn");
+            assert!(
+                f32::from(ring.left()) >= 0. && f32::from(ring.right()) <= width,
+                "{style:?} at {width}: {ring:?}"
+            );
+            if width == 700. {
+                let usage = cx.debug_bounds("context-usage-chip").expect("usage drawn");
+                assert!(ring.right() <= usage.left(), "{style:?}: ring beside usage");
+            }
+            click(cx, "context-ring");
+            assert!(drawn(cx, "context-auto-compaction"), "{style:?} at {width}");
+            assert!(drawn(cx, "context-compact-control"), "{style:?} at {width}");
+            click(cx, "context-ring");
+            assert!(!drawn(cx, "context-auto-compaction"));
+        }
+    }
+}
+
 #[gpui::test]
 fn a_sent_prompt_can_be_selected(cx: &mut TestAppContext) {
     use gpui_kit::{AppContext as _, MouseButton, base::TextSelection};
@@ -812,4 +1741,385 @@ fn change_cwd_drops_a_pending_resume(cx: &mut TestAppContext) {
         assert!(view.backend.pending_session.is_none());
         assert!(!view.has_conversation());
     });
+}
+
+/// A stand-in for `gentle-shell --mode rpc`: it appends every command it
+/// reads to the file named by its first argument and answers each with
+/// success; `get_messages` returns a conversation of one user message.
+#[cfg(unix)]
+const FAKE_BACKEND: &str = r#"while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$1"
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"get_messages"'*) data='{"messages":[{"role":"user","content":"hello"}]}' ;;
+    *) data='{}' ;;
+  esac
+  printf '{"type":"response","id":"%s","success":true,"data":%s}\n' "$id" "$data"
+done"#;
+
+/// A tab whose backend is [`FAKE_BACKEND`]; its commands go to `log`.
+#[cfg(unix)]
+struct Backend {
+    dir: std::path::PathBuf,
+    log: std::path::PathBuf,
+    incoming: async_channel::Receiver<pi_rpc::Incoming>,
+}
+
+#[cfg(unix)]
+impl Backend {
+    fn start(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> Self {
+        // The answers come from the process's reader thread.
+        cx.executor().allow_parking();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("gs-fake-backend-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("commands.jsonl");
+        let spec = pi_rpc::LaunchSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                FAKE_BACKEND.into(),
+                "sh".into(),
+                log.to_string_lossy().into_owned(),
+            ],
+            cwd: dir.clone(),
+            env: Vec::new(),
+            launcher: "/bin/sh".into(),
+            bundled: None,
+        };
+        let (process, incoming) = pi_rpc::PiProcess::spawn(&spec).expect("spawn the fake backend");
+        view.update(cx, |view, _| {
+            view.backend.status = super::state::BackendStatus::Ready(process);
+        });
+        Self { dir, log, incoming }
+    }
+
+    /// The `type` of every command the backend has read so far.
+    fn read(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .map(|command| command["type"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// Run the tab until `ready` holds for what the backend has read, then
+    /// every command sent before a marker, with the answers to all of them
+    /// applied: the pipe keeps their order, so once the marker is answered
+    /// nothing sent earlier is still on its way.
+    fn settle(
+        &self,
+        view: &Entity<SessionView>,
+        cx: &mut VisualTestContext,
+        ready: impl Fn(&[String]) -> bool,
+    ) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready(&self.read()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the backend never got there; it read {:?}",
+                self.read()
+            );
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let process = view
+            .read_with(cx, |view, _| view.process())
+            .expect("a backend");
+        smol::block_on(process.request(json!({"type": "marker"}))).expect("the marker's answer");
+        cx.run_until_parked();
+        let mut read = self.read();
+        let marker = read
+            .iter()
+            .position(|command| command == "marker")
+            .expect("the marker");
+        read.truncate(marker);
+        read
+    }
+
+    /// Stop the process, wait until it has exited and remove its folder.
+    fn stop(self, view: &Entity<SessionView>, cx: &mut VisualTestContext) {
+        let status = view.update(cx, |view, _| {
+            std::mem::replace(
+                &mut view.backend.status,
+                super::state::BackendStatus::Exited(None),
+            )
+        });
+        if let super::state::BackendStatus::Ready(process) = status {
+            process.shutdown(std::time::Duration::ZERO);
+        }
+        while let Ok(incoming) = self.incoming.recv_blocking() {
+            if matches!(incoming, pi_rpc::Incoming::Exited(_)) {
+                break;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[cfg(unix)]
+fn user_texts(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |view, _| {
+        view.transcript
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                gentle_core::transcript::Item::User { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// Changing the model or the thinking level (the Profiles screen) re-reads
+/// the session's state, but not its conversation, which they cannot change.
+#[cfg(unix)]
+#[gpui::test]
+fn a_model_or_thinking_change_does_not_reload_the_conversation(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let backend = Backend::start(&view, cx);
+    view.update(cx, |view, cx| {
+        view.send_command(
+            json!({"type": "set_model", "provider": "anthropic", "modelId": "claude"}),
+            cx,
+        );
+        view.send_command(json!({"type": "set_thinking_level", "level": "high"}), cx);
+    });
+    let read = backend.settle(&view, cx, |read| {
+        read.iter()
+            .filter(|command| *command == "get_state")
+            .count()
+            == 2
+    });
+    assert_eq!(read[..2], ["set_model", "set_thinking_level"]);
+    assert!(
+        !read.iter().any(|command| command == "get_messages"),
+        "it read {read:?}"
+    );
+    assert!(
+        user_texts(&view, cx).is_empty(),
+        "the conversation was rebuilt"
+    );
+    backend.stop(&view, cx);
+}
+
+/// Opening a saved session still loads its conversation.
+#[cfg(unix)]
+#[gpui::test]
+fn opening_a_saved_session_loads_its_conversation(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let backend = Backend::start(&view, cx);
+    let saved = backend.dir.join("saved.jsonl");
+    view.update(cx, |view, cx| view.open_session(saved.clone(), cx));
+    let read = backend.settle(&view, cx, |read| {
+        read.iter().any(|command| command == "get_state")
+    });
+    assert_eq!(read[0], "switch_session");
+    assert!(
+        read.iter().any(|command| command == "get_messages"),
+        "it read {read:?}"
+    );
+    assert_eq!(user_texts(&view, cx), ["hello"]);
+    backend.stop(&view, cx);
+}
+
+/// A tab as the workspace pane draws it: the agent's view, cached, with its
+/// live layer over it.
+#[cfg(unix)]
+struct Pane(Entity<SessionView>);
+
+#[cfg(unix)]
+impl gpui_kit::Render for Pane {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, StyleRefinement, Styled as _};
+        gpui_kit::div()
+            .relative()
+            .size_full()
+            .child(
+                self.0
+                    .clone()
+                    .cached(StyleRefinement::default().size_full()),
+            )
+            .child(self.0.read(cx).live_layer())
+    }
+}
+
+/// A pane whose tab has a ready backend and its composer focused, with
+/// typing kisses on (the default) unless `reduce_motion`.
+#[cfg(unix)]
+fn typing_pane(
+    cx: &mut TestAppContext,
+    reduce_motion: bool,
+) -> (Entity<SessionView>, &mut VisualTestContext, Backend) {
+    use gpui_kit::AppContext as _;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(reduce_motion);
+    });
+    let cwd = std::env::temp_dir();
+    let (pane, cx) = cx.add_window_view(|window, cx| {
+        Pane(cx.new(|cx| {
+            let mut view = SessionView::new(cwd, None, window, cx, false);
+            view.backend.started = true;
+            view
+        }))
+    });
+    let view = pane.read_with(cx, |pane, _| pane.0.clone());
+    cx.update(|window, _| window.activate_window());
+    let backend = Backend::start(&view, cx);
+    cx.update(|window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |state, cx| state.focus(window, cx));
+    });
+    cx.run_until_parked();
+    // The focus pulse plays out first.
+    frames_for(std::time::Duration::from_millis(600), cx);
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    (view, cx, backend)
+}
+
+/// Deliver display frames, one every 16 ms, for `span`; how many of them
+/// something asked for.
+#[cfg(unix)]
+fn frames_for(span: std::time::Duration, cx: &mut VisualTestContext) -> usize {
+    let start = std::time::Instant::now();
+    let mut asked = 0;
+    while start.elapsed() < span {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        asked += cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    asked
+}
+
+/// Typing blows a kiss from the caret; it flies while it lives (frames are
+/// asked for) and lands after its 900 ms (none are).
+#[cfg(unix)]
+#[gpui::test]
+fn a_typed_kiss_rises_from_the_caret_and_lands(cx: &mut TestAppContext) {
+    let (view, cx, backend) = typing_pane(cx, false);
+    let caret = view.read_with(cx, |view, cx| {
+        let caret = view.composer.read(cx).prepaint_caret_geometry();
+        caret
+            .expect("the composer was drawn")
+            .cursor_bounds()
+            .origin
+    });
+    cx.simulate_keystrokes("a");
+    let blown: Vec<_> = view.read_with(cx, |view, _| {
+        view.kisses.iter().map(|(_, at, _)| *at).collect()
+    });
+    assert_eq!(blown, [caret]);
+    assert!(frames_for(std::time::Duration::from_millis(200), cx) > 0);
+    frames_for(std::time::Duration::from_millis(900), cx);
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    backend.stop(&view, cx);
+}
+
+/// With reduced motion the composer blows no kiss and asks for no frame.
+#[cfg(unix)]
+#[gpui::test]
+fn reduced_motion_blows_no_kiss(cx: &mut TestAppContext) {
+    let (view, cx, backend) = typing_pane(cx, true);
+    cx.simulate_keystrokes("a");
+    assert!(view.read_with(cx, |view, _| view.kisses.is_empty()));
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    backend.stop(&view, cx);
+}
+
+/// A kiss's flight redraws only the tab's live layer: the conversation is
+/// drawn for the keystroke and reused from its cache while the kiss flies.
+#[cfg(unix)]
+#[gpui::test]
+fn a_typed_kiss_redraws_only_the_live_layer(cx: &mut TestAppContext) {
+    let (view, cx, backend) = typing_pane(cx, false);
+    let renders = || super::view::RENDERS.with(std::cell::Cell::get);
+    cx.simulate_keystrokes("a");
+    // The keystroke draws the tab, and so does the next frame: an edit
+    // leaves it to draw once more, as the text area reports its moved caret
+    // while it paints (gpui-base's input element), kiss or no kiss.
+    assert!(cx.update(|window, cx| window.simulate_next_frame(cx)) > 0);
+    cx.run_until_parked();
+    let flying = renders();
+    assert!(frames_for(std::time::Duration::from_secs(1), cx) > 0);
+    assert_eq!(
+        renders() - flying,
+        0,
+        "SessionView renders during the flight"
+    );
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    backend.stop(&view, cx);
+}
+
+/// `n` numbered lines.
+fn lines(n: usize) -> String {
+    (1..=n).map(|i| format!("line {i}\n")).collect()
+}
+
+/// A loaded conversation's tool and shell cards show their title, subject
+/// and line counts.
+#[gpui::test]
+fn loaded_tool_and_shell_cards_show_their_title_subject_and_line_count(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.transcript.load_messages(&[
+            json!({"role": "user", "content": "run them"}),
+            json!({"role": "assistant", "stopReason": "toolUse", "content": [
+                {"type": "text", "text": "Running the tests."},
+                {"type": "toolCall", "id": "t1", "name": "bash",
+                 "arguments": {"command": "cargo test", "description": "Run the tests"}},
+            ]}),
+            json!({"role": "toolResult", "toolCallId": "t1", "isError": false,
+                   "content": [{"type": "text", "text": lines(20)}], "details": {}}),
+            json!({"role": "assistant", "stopReason": "stop",
+                   "content": [{"type": "text", "text": "Done."}]}),
+            json!({"role": "bashExecution", "command": "git status",
+                   "output": lines(12), "exitCode": 0}),
+        ]);
+        cx.notify();
+    });
+    // The finished step shows its quiet line; the shell its card.
+    assert!(drawn(cx, "step-row:Run the tests:cargo test"));
+    assert!(drawn(cx, "step-row:Shell:"));
+    assert!(drawn(cx, "fold:4 earlier lines"));
+    assert!(!drawn(cx, "fold:12 earlier lines"));
+
+    click(cx, "step-row:Run the tests:cargo test");
+    assert!(drawn(cx, "fold:12 earlier lines"));
+}
+
+/// A running tool's card follows its output: the line count it shows is the
+/// latest output's.
+#[gpui::test]
+fn a_running_tools_card_shows_its_growing_output(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let update = |text: String| {
+        json!({"type": "tool_execution_update", "toolCallId": "r1",
+               "partialResult": {"content": [{"type": "text", "text": text}]}})
+    };
+    view.update(cx, |view, cx| {
+        view.transcript
+            .apply(&json!({"type": "tool_execution_start", "toolCallId": "r1",
+            "toolName": "bash", "args": {"command": "npm test", "description": "Run npm"}}));
+        view.transcript.apply(&update(lines(10)));
+        cx.notify();
+    });
+    click(cx, "step-row:Run npm:npm test");
+    assert!(drawn(cx, "fold:2 earlier lines"));
+
+    view.update(cx, |view, cx| {
+        view.transcript.apply(&update(lines(30)));
+        cx.notify();
+    });
+    assert!(drawn(cx, "fold:22 earlier lines"));
+    assert!(!drawn(cx, "fold:2 earlier lines"));
 }

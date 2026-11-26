@@ -3,33 +3,34 @@
 //! adapter only builds the outer prompt and decodes the widget records.
 
 use pi_rpc::desktop_rpc::{
-    ActivityState, AgentDefinition, AgentDefinitionScope, ApplyProfileOutcome, ApplyProfileResult,
-    AuthSource, AuthType, BackgroundCapability, BackgroundConfirmation, BackgroundPolicy,
-    BackgroundSource, BackgroundSubagents, BannerData, Capabilities, ChangeDiff, ChangeRoot,
-    ChangeSource, ChangeStatus, ChangedFile, Changes, ClearBindingStatus,
-    ClearProfileBindingResult, CommandSource, ConfigChangeOrigin, ConfigChanged, ConfigErrorCode,
-    ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState, ConfigStatus, ConfigStore,
-    ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState, DesignCanvas, DesignCanvasEvent,
-    DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep, DesktopAgentUsage,
-    DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod, DesktopRecord,
-    DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, DevBinary, DevBinaryState,
-    Handoff, JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES, MAX_SESSION_ID_UNITS,
-    MAX_SESSIONS_LIMIT, ModelConfigPresence, NotificationsData, OrchestratorStatus, PROMPT_COMMAND,
-    PackageKind, PackageScope, PackageUpdate, PackageUpdateState, PendingQuestionKind,
-    PermissionMode, PermissionModeChanged, PermissionModeState, PersonaMode, PiUpdate, PinSource,
-    PolicyFile, ProfileApplied, ProfileApplyErrorCode, ProfileApplyMode, ProfileBinding,
-    ProfileBindingChanged, ProfileBindingKind, ProfileBindingOrigin, ProfileConfirmation,
-    ProfileFallbacksData, ProfileNote, ProfileNoteLevel, ProfilesData, ProviderAuth, ProviderUsage,
-    RateLimitEvent, RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope,
-    ReviewScopes, ReviewSetting, ReviewSource, RoutingState, SCHEMA, SessionActivity,
-    SessionChangedFile, SessionChanges, SessionChangesSummary, SessionCommand, SessionEntry,
-    SessionJobs, SessionList, SessionPermission, SessionProject, SessionSection, SessionTodo,
-    SessionTodoItem, SessionTodoProgress, SessionWorktree, SessionsScope,
-    SetBackgroundSubagentsOutcome, SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome,
-    ShellChannel, ShellUpdate, StatsRange, StatsScope, StatusSeverity, SubagentThread,
-    SwitchSessionResult, ThreadItem, UpdateState, UsageLimit, UsageLimitScope, UsageRefresh,
-    UsageResetAt, UsageStatsDay, UsageStatsModel, UsageStatsProvider, UsageStatsTotals,
-    UsageStatsTruncated, UsageStatus, UsageWindow, WIDGET_KEY, decode_payload, decode_widget,
+    ActivityState, AgentDefinition, AgentDefinitionScope, AgentDefinitionSource,
+    ApplyProfileOutcome, ApplyProfileResult, AuthSource, AuthType, BackgroundCapability,
+    BackgroundConfirmation, BackgroundPolicy, BackgroundSource, BackgroundSubagents, BannerData,
+    Capabilities, ChangeDiff, ChangeRoot, ChangeSource, ChangeStatus, ChangedFile, Changes,
+    ClearBindingStatus, ClearProfileBindingResult, CommandSource, ConfigChangeOrigin,
+    ConfigChanged, ConfigErrorCode, ConfigLayer, ConfigLayerSource, ConfigScope, ConfigState,
+    ConfigStatus, ConfigStore, ConfigWrite, ConfigWriteTarget, ConfigWriteTargetState,
+    DesignCanvas, DesignCanvasEvent, DesignEntry, DesignTransition, DesktopAgent, DesktopAgentStep,
+    DesktopAgentUsage, DesktopErrorCode, DesktopErrorInfo, DesktopEvent, DesktopJob, DesktopMethod,
+    DesktopRecord, DesktopRequest, DesktopResponse, DesktopRpcError, DesktopSession, DevBinary,
+    DevBinaryState, Handoff, JobExitCode, JobOutput, ListSessionsQuery, MAX_REQUEST_BYTES,
+    MAX_SESSION_ID_UNITS, MAX_SESSIONS_LIMIT, ModelConfigPresence, NotificationsData,
+    OrchestratorStatus, PROMPT_COMMAND, PackageKind, PackageScope, PackageUpdate,
+    PackageUpdateState, PendingQuestionKind, PermissionMode, PermissionModeChanged,
+    PermissionModeState, PersonaMode, PiUpdate, PinSource, PolicyFile, ProfileApplied,
+    ProfileApplyErrorCode, ProfileApplyMode, ProfileBinding, ProfileBindingChanged,
+    ProfileBindingKind, ProfileBindingOrigin, ProfileConfirmation, ProfileFallbacksData,
+    ProfileNote, ProfileNoteLevel, ProfilesData, ProviderAuth, ProviderUsage, RateLimitEvent,
+    RateLimitSource, ReviewConfirmation, ReviewEffective, ReviewMode, ReviewScope, ReviewScopes,
+    ReviewSetting, ReviewSource, RoutingState, SCHEMA, SessionActivity, SessionChangedFile,
+    SessionChanges, SessionChangesSummary, SessionCommand, SessionEntry, SessionJobs, SessionList,
+    SessionPermission, SessionProject, SessionSection, SessionTodo, SessionTodoItem,
+    SessionTodoProgress, SessionWorktree, SessionsScope, SetBackgroundSubagentsOutcome,
+    SetConfigResult, SetPermissionModeResult, SetReviewModeOutcome, ShellChannel, ShellUpdate,
+    StatsRange, StatsScope, StatusSeverity, SubagentThread, SwitchSessionResult, ThreadItem,
+    UpdateState, UsageLimit, UsageLimitScope, UsageRefresh, UsageResetAt, UsageStatsDay,
+    UsageStatsModel, UsageStatsProvider, UsageStatsTotals, UsageStatsTruncated, UsageStatus,
+    UsageWindow, WIDGET_KEY, decode_payload, decode_widget,
 };
 use pi_rpc::{Response, UiMethod, UiRequest};
 use serde_json::{Value, json};
@@ -587,6 +588,53 @@ fn the_session_ignores_unrelated_widgets_and_keeps_its_state() {
         session.pending(),
         Some(("desktop-1", DesktopMethod::Capabilities))
     );
+}
+
+#[test]
+fn a_record_already_decoded_is_correlated_like_the_request_it_came_from() {
+    let mut session = DesktopSession::new();
+    session.issue(DesktopMethod::Capabilities).unwrap();
+
+    // Not this protocol's widget: nothing to correlate, nothing changes.
+    assert_eq!(session.accept_decoded(Ok(None)), Ok(None));
+    assert_eq!(
+        session.pending(),
+        Some(("desktop-1", DesktopMethod::Capabilities))
+    );
+
+    // A record that did not decode keeps its error, and the request stays.
+    let broken = decode_widget(&widget("{not json"));
+    assert!(matches!(broken, Err(DesktopRpcError::MalformedPayload(_))));
+    assert_eq!(session.accept_decoded(broken.clone()), broken);
+    assert_eq!(
+        session.pending(),
+        Some(("desktop-1", DesktopMethod::Capabilities))
+    );
+
+    // The answer is handed back as decoded and settles the request.
+    let answer = decode_widget(&widget(&response_line(
+        "desktop-1",
+        capabilities_data(&["capabilities"], &[]),
+    )));
+    assert!(matches!(answer, Ok(Some(_))));
+    assert_eq!(session.accept_decoded(answer.clone()), answer);
+    assert!(session.pending().is_none());
+    assert_eq!(
+        session.accept_decoded(answer),
+        Err(DesktopRpcError::UncorrelatedResponse {
+            expected: None,
+            got: Some("desktop-1".into()),
+        })
+    );
+
+    // Events keep their sequence checks.
+    let first = decode_widget(&widget(&event_line(1, "snapshot_changed", json!({}))));
+    assert_eq!(session.accept_decoded(first.clone()), first);
+    assert_eq!(
+        session.accept_decoded(first),
+        Err(DesktopRpcError::DuplicateSequence { last: 1, got: 1 })
+    );
+    assert_eq!(session.last_sequence(), Some(1));
 }
 
 #[test]
@@ -6846,6 +6894,7 @@ fn agent_definitions_decode_the_spec_answer() {
             name: "explore".into(),
             description: Some("Global explorer.".into()),
             scope: AgentDefinitionScope::Global,
+            source: None,
             model: Some("openai-codex/gpt-5.6-terra".into()),
             thinking: Some("high".into()),
             mode: None,
@@ -6854,6 +6903,8 @@ fn agent_definitions_decode_the_spec_answer() {
         }
     );
     assert_eq!(definitions.agents[1].scope, AgentDefinitionScope::Project);
+    // Gentle Shell 5.0.0 sends no `source`: its answer covers only some roots.
+    assert!(!definitions.lists_every_root());
     assert_eq!(definitions.agents[1].mode.as_deref(), Some("background"));
     assert!(!definitions.truncated);
     assert_eq!(definitions.problems.invalid, 1);
@@ -6893,6 +6944,60 @@ fn agent_definitions_decode_the_spec_answer() {
         refused.error().and_then(DesktopErrorInfo::kind),
         Some(DesktopErrorCode::AgentDefinitionsUnavailable)
     );
+}
+
+#[test]
+fn agent_definitions_say_where_each_came_from() {
+    let answer = |agents: Value| {
+        ok_response(json!({
+            "agents": agents,
+            "truncated": false,
+            "problems": { "invalid": 1, "notices": 0 },
+            "subagentDefaults": { "model": "anthropic/claude-luna", "thinking": null, "mode": "background" },
+            "defaultOrchestrator": { "status": "set", "model": "openai-codex/gpt-5.6-terra", "thinking": "medium" }
+        }))
+        .agent_definitions()
+    };
+    // The upstream example (gentle-shell#3518).
+    let definitions = answer(json!([
+        { "name": "explore", "description": "Global explorer.", "scope": "global", "source": "user", "model": "openai-codex/gpt-5.6-terra", "thinking": "high", "mode": null, "tools": ["read", "grep"], "toolsTruncated": false },
+        { "name": "worker", "description": "Project worker.", "scope": "project", "source": "project", "model": null, "thinking": null, "mode": "background", "tools": [], "toolsTruncated": false }
+    ]))
+    .unwrap();
+    assert_eq!(
+        definitions.agents[0].source,
+        Some(AgentDefinitionSource::User)
+    );
+    assert_eq!(
+        definitions.agents[1].source,
+        Some(AgentDefinitionSource::Project)
+    );
+    assert!(definitions.lists_every_root());
+    assert_eq!(
+        "builtin".parse::<AgentDefinitionSource>(),
+        Ok(AgentDefinitionSource::Builtin)
+    );
+
+    // A kind this client does not know, or a `null`, reads as no source:
+    // the answer still decodes, but no longer lists every root.
+    for source in [json!("plugin"), Value::Null] {
+        let definitions = answer(json!([
+            { "name": "explore", "description": null, "scope": "global", "source": "builtin", "model": null, "thinking": null, "mode": null, "tools": [], "toolsTruncated": false },
+            { "name": "odd", "description": null, "scope": "global", "source": source, "model": null, "thinking": null, "mode": null, "tools": [], "toolsTruncated": false }
+        ]))
+        .unwrap();
+        assert_eq!(definitions.agents[1].source, None, "{source}");
+        assert!(!definitions.lists_every_root(), "{source}");
+    }
+    // A source that is not a string is malformed, like any other field.
+    assert!(
+        answer(json!([
+            { "name": "explore", "description": null, "scope": "global", "source": 1, "model": null, "thinking": null, "mode": null, "tools": [], "toolsTruncated": false }
+        ]))
+        .is_err()
+    );
+    // An empty list says nothing about the roots.
+    assert!(!answer(json!([])).unwrap().lists_every_root());
 }
 
 #[test]
