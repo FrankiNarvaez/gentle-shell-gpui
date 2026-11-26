@@ -110,13 +110,15 @@ impl Workspace {
     }
 
     /// The horizontal strip and the sidebar use the same placement menu.
+    /// With vertical tabs it also switches the navigator to the icon rail.
     pub(super) fn tab_placement_menu(
         menu: PopupMenu,
         layout: TabLayout,
+        compact: bool,
         workspace: WeakEntity<Self>,
     ) -> PopupMenu {
         let horizontal = workspace.clone();
-        let vertical = workspace;
+        let vertical = workspace.clone();
         menu.item(
             PopupMenuItem::new("Horizontal tabs")
                 .checked(layout == TabLayout::Horizontal)
@@ -134,6 +136,15 @@ impl Workspace {
                         .update(cx, |this, cx| this.set_tab_layout(TabLayout::Vertical, cx));
                 }),
         )
+        .when(layout == TabLayout::Vertical, |menu| {
+            menu.separator().item(
+                PopupMenuItem::new("Compact sidebar")
+                    .checked(compact)
+                    .on_click(move |_, _, cx| {
+                        let _ = workspace.update(cx, |this, cx| this.toggle_sidebar_compact(cx));
+                    }),
+            )
+        })
     }
 
     /// Move the existing tab, including all its live pane entities, without
@@ -310,6 +321,7 @@ impl Workspace {
         menu: PopupMenu,
         weak: WeakEntity<Self>,
         layout: TabLayout,
+        compact: bool,
     ) -> PopupMenu {
         let new_space = weak.clone();
         let menu = menu
@@ -322,7 +334,7 @@ impl Workspace {
                     }),
             )
             .separator();
-        Self::tab_placement_menu(menu, layout, weak)
+        Self::tab_placement_menu(menu, layout, compact, weak)
     }
 
     // ── Tab multi-selection ───────────────────────────────────────────────
