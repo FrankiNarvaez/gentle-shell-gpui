@@ -394,16 +394,22 @@ impl SessionView {
                         spec.args
                             .push(runs_on.path(&path).unwrap_or_else(|| path.into_owned()));
                     }
-                    let version = crate::features::backend::shell_version(&runs_on, &spec);
                     let (process, rx) = PiProcess::spawn(&spec)?;
-                    anyhow::Ok((process, rx, version, runs_on))
+                    anyhow::Ok((process, rx, spec, runs_on))
                 })
                 .await;
-            let rx = match spawned {
-                Ok((process, rx, version, runs_on)) => {
+            let (rx, probe) = match spawned {
+                Ok((process, rx, spec, runs_on)) => {
+                    // The version is only shown: asked while the backend
+                    // boots, not before (`--version` is a cold Node start).
+                    let probe = {
+                        let runs_on = runs_on.clone();
+                        cx.background_executor().spawn(async move {
+                            crate::features::backend::shell_version(&runs_on, &spec)
+                        })
+                    };
                     let ok = this.update(cx, |this, cx| {
                         this.backend.status = BackendStatus::Ready(process);
-                        this.backend.version = version;
                         this.runs_on = Some(runs_on);
                         this.genui_mode = genui_mode;
                         this.sync_genui_mode(cx);
@@ -424,7 +430,7 @@ impl SessionView {
                     if ok.is_err() {
                         return;
                     }
-                    rx
+                    (rx, probe)
                 }
                 Err(error) => {
                     let _ = this.update(cx, |this, cx| {
@@ -434,16 +440,31 @@ impl SessionView {
                     return;
                 }
             };
-            while let Ok(first) = rx.recv().await {
-                // One update (and one frame) for everything already queued.
-                let batch = drain_queued(first, &rx);
-                if this
-                    .update_in(cx, |this, window, cx| this.handle_batch(batch, window, cx))
-                    .is_err()
-                {
-                    break;
+            // Owned by this task: a tab closed or restarted first never
+            // gets the old backend's version.
+            let version = {
+                let (this, mut cx) = (this.clone(), cx.clone());
+                async move {
+                    let version = probe.await;
+                    let _ = this.update(&mut cx, |this, cx| {
+                        this.backend.version = version;
+                        cx.notify();
+                    });
                 }
-            }
+            };
+            let events = async {
+                while let Ok(first) = rx.recv().await {
+                    // One update (and one frame) for everything already queued.
+                    let batch = drain_queued(first, &rx);
+                    if this
+                        .update_in(cx, |this, window, cx| this.handle_batch(batch, window, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+            smol::future::zip(version, events).await;
         });
         self.sync_chrome(cx);
         cx.notify();
@@ -602,5 +623,136 @@ mod tests {
             mode_action(Some(&Report::Timeout)),
             ModeAction::Report
         ));
+    }
+
+    /// A headless tab whose backend is `program`, reached as a command
+    /// backend (its prefix), so the launch never looks for this computer's
+    /// `gentle-shell`. Not started yet: marked started, so drawing it
+    /// doesn't start it either.
+    #[cfg(unix)]
+    fn tab_on<'a>(
+        program: &std::path::Path,
+        cx: &'a mut gpui::TestAppContext,
+    ) -> (
+        gpui_kit::Entity<super::SessionView>,
+        &'a mut gpui::VisualTestContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(true);
+        });
+        let cwd = program.parent().unwrap().to_path_buf();
+        let prefix = vec![program.to_string_lossy().into_owned()];
+        cx.add_window_view(|window, cx| {
+            let mut view = super::SessionView::new(cwd, None, window, cx, false);
+            view.runs_on = Some(gentle_core::backend::Backend::Command { prefix });
+            view.backend.started = true;
+            view
+        })
+    }
+
+    /// A fresh, empty temp dir for one test.
+    #[cfg(unix)]
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("gs-lifecycle-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// The backend starts, and the tab talks to it, without waiting for
+    /// `--version` (a cold Node start), whose answer still shows.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn the_tab_talks_to_its_backend_before_the_version_probe_ends(cx: &mut gpui::TestAppContext) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use super::BackendStatus;
+
+        let dir = temp_dir("version");
+        let log = dir.join("log");
+        let program = dir.join("gentle-shell");
+        // `--version` takes a second; RPC mode starts at once and notes the
+        // tab's first command. Anything else (the login PATH probe) fails.
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nlog='{}'\ncase \" $* \" in\n\
+                 *' --version '*) sleep 1; echo version >> \"$log\"; echo 'gentle-shell 9.9.9' ;;\n\
+                 *' --mode rpc '*) echo rpc >> \"$log\"; read -r line; echo talked >> \"$log\"; exec cat > /dev/null ;;\n\
+                 *) exit 1 ;;\n\
+                 esac\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // A real process: its reader threads wake the tab.
+        cx.executor().allow_parking();
+        let (view, cx) = tab_on(&program, cx);
+        view.update_in(cx, |view, window, cx| view.start(window, cx));
+        cx.run_until_parked();
+
+        // The backend notes the tab's first command on its own time.
+        let mut order = String::new();
+        for _ in 0..500 {
+            order = std::fs::read_to_string(&log).unwrap_or_default();
+            if order.contains("talked") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        view.read_with(cx, |view, _| {
+            assert!(matches!(view.backend.status, BackendStatus::Ready(_)));
+            assert_eq!(view.backend.version.as_deref(), Some("9.9.9"));
+        });
+        assert_eq!(
+            order.lines().collect::<Vec<_>>(),
+            ["rpc", "talked", "version"]
+        );
+
+        // Stop it, and wait until it is gone.
+        view.read_with(cx, |view, _| assert!(view.shutdown_backend()));
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if view.read_with(cx, |view, _| {
+                matches!(view.backend.status, BackendStatus::Exited(_))
+            }) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        view.read_with(cx, |view, _| {
+            assert!(matches!(view.backend.status, BackendStatus::Exited(_)));
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A backend that can't start still fails the tab with the same message.
+    #[cfg(unix)]
+    #[gpui::test]
+    fn a_backend_that_cannot_start_fails_the_tab(cx: &mut gpui::TestAppContext) {
+        use super::BackendStatus;
+
+        let dir = temp_dir("missing");
+        let program = dir.join("gentle-shell");
+        let (view, cx) = tab_on(&program, cx);
+        view.update_in(cx, |view, window, cx| view.start(window, cx));
+        cx.run_until_parked();
+
+        view.read_with(cx, |view, _| {
+            let BackendStatus::Failed(error) = &view.backend.status else {
+                panic!("the tab did not fail");
+            };
+            assert_eq!(
+                *error,
+                format!(
+                    "failed to start {}: No such file or directory (os error 2)",
+                    program.display()
+                )
+            );
+            assert_eq!(view.backend.version, None);
+        });
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
