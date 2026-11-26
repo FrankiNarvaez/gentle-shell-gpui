@@ -546,7 +546,16 @@ mod tests {
         wait_until("the first frame is drawn", || {
             scene.frame().is_some_and(|f| f.size == size)
         });
-        std::thread::sleep(Duration::from_millis(500));
+        // At rest once its loop stops turning: after the frame it still
+        // paces once and uses up the wake `set_size` left.
+        let mut seen = (scene.shared.turns.load(Ordering::Relaxed), Instant::now());
+        wait_until("the scene's thread rests", || {
+            let turns = scene.shared.turns.load(Ordering::Relaxed);
+            if turns != seen.0 {
+                seen = (turns, Instant::now());
+            }
+            seen.1.elapsed() >= Duration::from_millis(300)
+        });
         scene
     }
 
