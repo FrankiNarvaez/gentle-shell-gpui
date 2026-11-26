@@ -1927,3 +1927,135 @@ fn opening_a_saved_session_loads_its_conversation(cx: &mut TestAppContext) {
     assert_eq!(user_texts(&view, cx), ["hello"]);
     backend.stop(&view, cx);
 }
+
+/// A tab as the workspace pane draws it: the agent's view, cached, with its
+/// live layer over it.
+#[cfg(unix)]
+struct Pane(Entity<SessionView>);
+
+#[cfg(unix)]
+impl gpui_kit::Render for Pane {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        cx: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, StyleRefinement, Styled as _};
+        gpui_kit::div()
+            .relative()
+            .size_full()
+            .child(
+                self.0
+                    .clone()
+                    .cached(StyleRefinement::default().size_full()),
+            )
+            .child(self.0.read(cx).live_layer())
+    }
+}
+
+/// A pane whose tab has a ready backend and its composer focused, with
+/// typing kisses on (the default) unless `reduce_motion`.
+#[cfg(unix)]
+fn typing_pane(
+    cx: &mut TestAppContext,
+    reduce_motion: bool,
+) -> (Entity<SessionView>, &mut VisualTestContext, Backend) {
+    use gpui_kit::AppContext as _;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_reduce_motion(reduce_motion);
+    });
+    let cwd = std::env::temp_dir();
+    let (pane, cx) = cx.add_window_view(|window, cx| {
+        Pane(cx.new(|cx| {
+            let mut view = SessionView::new(cwd, None, window, cx, false);
+            view.backend.started = true;
+            view
+        }))
+    });
+    let view = pane.read_with(cx, |pane, _| pane.0.clone());
+    cx.update(|window, _| window.activate_window());
+    let backend = Backend::start(&view, cx);
+    cx.update(|window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |state, cx| state.focus(window, cx));
+    });
+    cx.run_until_parked();
+    // The focus pulse plays out first.
+    frames_for(std::time::Duration::from_millis(600), cx);
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    (view, cx, backend)
+}
+
+/// Deliver display frames, one every 16 ms, for `span`; how many of them
+/// something asked for.
+#[cfg(unix)]
+fn frames_for(span: std::time::Duration, cx: &mut VisualTestContext) -> usize {
+    let start = std::time::Instant::now();
+    let mut asked = 0;
+    while start.elapsed() < span {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        asked += cx.update(|window, cx| window.simulate_next_frame(cx));
+        cx.run_until_parked();
+    }
+    asked
+}
+
+/// Typing blows a kiss from the caret; it flies while it lives (frames are
+/// asked for) and lands after its 900 ms (none are).
+#[cfg(unix)]
+#[gpui::test]
+fn a_typed_kiss_rises_from_the_caret_and_lands(cx: &mut TestAppContext) {
+    let (view, cx, backend) = typing_pane(cx, false);
+    let caret = view.read_with(cx, |view, cx| {
+        let caret = view.composer.read(cx).prepaint_caret_geometry();
+        caret
+            .expect("the composer was drawn")
+            .cursor_bounds()
+            .origin
+    });
+    cx.simulate_keystrokes("a");
+    let blown: Vec<_> = view.read_with(cx, |view, _| {
+        view.kisses.iter().map(|(_, at, _)| *at).collect()
+    });
+    assert_eq!(blown, [caret]);
+    assert!(frames_for(std::time::Duration::from_millis(200), cx) > 0);
+    frames_for(std::time::Duration::from_millis(900), cx);
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    backend.stop(&view, cx);
+}
+
+/// With reduced motion the composer blows no kiss and asks for no frame.
+#[cfg(unix)]
+#[gpui::test]
+fn reduced_motion_blows_no_kiss(cx: &mut TestAppContext) {
+    let (view, cx, backend) = typing_pane(cx, true);
+    cx.simulate_keystrokes("a");
+    assert!(view.read_with(cx, |view, _| view.kisses.is_empty()));
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    backend.stop(&view, cx);
+}
+
+/// A kiss's flight redraws only the tab's live layer: the conversation is
+/// drawn for the keystroke and reused from its cache while the kiss flies.
+#[cfg(unix)]
+#[gpui::test]
+fn a_typed_kiss_redraws_only_the_live_layer(cx: &mut TestAppContext) {
+    let (view, cx, backend) = typing_pane(cx, false);
+    let renders = || super::view::RENDERS.with(std::cell::Cell::get);
+    cx.simulate_keystrokes("a");
+    // The keystroke draws the tab, and so does the next frame: an edit
+    // leaves it to draw once more, as the text area reports its moved caret
+    // while it paints (gpui-base's input element), kiss or no kiss.
+    assert!(cx.update(|window, cx| window.simulate_next_frame(cx)) > 0);
+    cx.run_until_parked();
+    let flying = renders();
+    assert!(frames_for(std::time::Duration::from_secs(1), cx) > 0);
+    assert_eq!(
+        renders() - flying,
+        0,
+        "SessionView renders during the flight"
+    );
+    assert_eq!(cx.update(|window, cx| window.simulate_next_frame(cx)), 0);
+    backend.stop(&view, cx);
+}

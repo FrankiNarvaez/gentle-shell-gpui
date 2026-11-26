@@ -1929,9 +1929,18 @@ impl SessionView {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// `SessionView` renders on this thread, for tests that count a tab's
+    /// redraws (each GPUI test runs on its own thread).
+    pub(super) static RENDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Render for SessionView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         crate::shared::diagnostics::render("SessionView");
+        #[cfg(test)]
+        RENDERS.with(|renders| renders.set(renders.get() + 1));
         // Its indicators on the live layer are placed again as it draws.
         self.live_slots.clear(cx.entity_id());
         // A tab starts its backend once shown.
