@@ -586,10 +586,14 @@ impl Workspace {
         }
     }
 
-    /// Focus the active tab's focused pane.
+    /// Focus the active tab's focused pane, or the workspace's own root
+    /// handle when there is no pane (an empty workspace): the root handle is
+    /// what keeps the window-level shortcuts reachable there.
     pub(super) fn focus_active(&self, window: &mut Window, cx: &mut App) {
         if let Some(pane) = self.focused_pane().and_then(|id| self.panes.get(&id)) {
             pane.item.focus.focus(window, cx);
+        } else {
+            self.focus.focus(window, cx);
         }
     }
 
@@ -1004,6 +1008,12 @@ impl Workspace {
         if space == self.current && !self.space().tabs.is_empty() {
             self.activate(self.space().active, window, cx);
         } else {
+            // Closing the last tab leaves an empty workspace with no pane to
+            // own the keyboard: keep the root handle focused so the
+            // window-level shortcuts stay reachable there.
+            if space == self.current {
+                self.focus_active(window, cx);
+            }
             self.schedule_save(cx);
             cx.notify();
         }

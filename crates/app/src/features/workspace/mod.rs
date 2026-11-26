@@ -479,6 +479,12 @@ pub struct Workspace {
     music: Entity<Music>,
     /// Simulators and emulators, docked at the right or floating.
     devices: Entity<DevicePanel>,
+    /// The window's keyboard focus when no pane owns it: an empty workspace
+    /// shows only chrome (a button and a message), so nothing registers a
+    /// focusable element and ⌘T / ⌘⇧T / ⌘O fall back to the root node, which
+    /// has no actions. Focusing this handle on the root puts the window-level
+    /// key bindings back in reach until a pane or an overlay takes over.
+    focus: gpui_kit::FocusHandle,
 }
 
 impl EventEmitter<WorkspaceEvent> for Workspace {}
@@ -603,6 +609,7 @@ impl Workspace {
             closed: Vec::new(),
             music,
             devices,
+            focus: cx.focus_handle(),
             _surge_end: None,
             _title_poll: cx.spawn(async move |this, cx| {
                 loop {
