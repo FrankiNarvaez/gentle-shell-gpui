@@ -479,11 +479,13 @@ fn a_row_spelled_differently_is_still_the_current_session(cx: &mut TestAppContex
     let real = tmp.0.join("real");
     let current = write_session(&real, "current.jsonl", &head);
     let other = write_session(&real, "other.jsonl", &head);
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut listed = vec![
         listed_as(&current, current.clone()),
         listed_as(&current, real.join("sub").join("..").join("current.jsonl")),
         listed_as(&other, real.join("sub").join("..").join("other.jsonl")),
     ];
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut expected = vec![true, true, false];
     #[cfg(unix)]
     {
