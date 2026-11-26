@@ -2352,10 +2352,11 @@ fn send_registers_the_pending_reply_unless_steering(cx: &mut TestAppContext) {
 }
 
 /// S3 (R3-002): a confirmation never renders or copies for another item at
-/// its index; the transcript rebuilt by a refresh drops it.
+/// its index. A transcript rebuilt by a refresh drops it, so the same text at
+/// the same index renders and copies as ordinary text.
 #[gpui::test]
 fn a_confirmation_is_only_for_its_own_echo(cx: &mut TestAppContext) {
-    let (view, cx) = tab(cx);
+    let (view, cx) = rooted_tab(cx);
     view.update(cx, |view, cx| {
         view.live
             .expect_reply("/skill:docs look", Vec::new(), 0, true);
@@ -2367,18 +2368,41 @@ fn a_confirmation_is_only_for_its_own_echo(cx: &mut TestAppContext) {
         view.transcript.items.clear();
         push_user(view, "something else");
         assert!(view.live.confirmed(0, &view.transcript.items[0]).is_none());
+    });
 
-        view.transcript.items.clear();
-        view.transcript.apply(&serde_json::json!({
-            "type": "message_start",
-            "message": {"role": "user", "content": "something else"},
-        }));
+    // The real reload path: `get_messages` replaced the transcript with one
+    // user message at index 0, which is `ECHO` again. The rebuild drops the
+    // stale confirmation, so the item is no longer treated as a skill
+    // invocation.
+    view.update(cx, |view, cx| {
+        view.apply_messages(&[serde_json::json!(
+            {"role": "user", "content": ECHO}
+        )]);
         view.sync_view(cx);
         assert!(
             view.live.skills.is_empty(),
             "the stale confirmation is dropped"
         );
+        assert!(
+            view.live.confirmed(0, &view.transcript.items[0]).is_none(),
+            "the rebuilt item is ordinary text, not a skill invocation"
+        );
+        cx.notify();
     });
+    cx.run_until_parked();
+
+    // And the rebuilt item renders and copies as the ordinary text it is.
+    assert!(drawn(cx, "user-text-0"));
+    assert!(!drawn(cx, "skill-body-0"));
+    let bounds = cx.debug_bounds("user-text-0").expect("the typed text");
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    click(cx, "copy-message-0");
+    assert_eq!(
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some(ECHO.to_string()),
+        "Copy reads the ordinary text, not a skill command"
+    );
 }
 
 /// S3 (R3-003): reloading the transcript clears confirmations but leaves an
@@ -2414,7 +2438,8 @@ fn a_refresh_keeps_the_reply_in_flight(cx: &mut TestAppContext) {
 }
 
 /// S3 (R3-004): a confirmed skill that carried files keeps its collapsed
-/// weight when a later item re-derives it.
+/// weight when it is re-derived from index 0 (not by a reset), as a shell
+/// finishing before it would.
 #[gpui::test]
 fn a_confirmed_skill_with_files_keeps_its_weight(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
@@ -2423,20 +2448,24 @@ fn a_confirmed_skill_with_files_keeps_its_weight(cx: &mut TestAppContext) {
         "<skill name=\"docs\" location=\"/x\">\n{big}\n</skill>\n\nlook\n\nAttached files:\n- a.pdf"
     );
     view.update(cx, |view, cx| {
+        // A running shell item before the confirmed row: finishing it (as a
+        // real shell reply does) dirties from index 0, re-deriving the
+        // confirmed item at index 1 without resetting the transcript.
+        let shell = view.transcript.start_shell("!build".into());
         view.live.expect_reply(
             "/skill:docs look\n\nAttached files:\n- a.pdf",
             Vec::new(),
-            0,
+            1,
             true,
         );
         push_user(view, &echo);
         view.sync_view(cx);
-        let first = view.list.weight(0).unwrap();
+        let first = view.list.weight(1).unwrap();
         assert!(first < 20., "{first}");
         view.live.reply_failed();
-        push_user(view, "x");
+        view.transcript.finish_shell(shell, Some(0), None);
         view.sync_view(cx);
-        assert_eq!(view.list.weight(0), Some(first));
+        assert_eq!(view.list.weight(1), Some(first));
     });
 }
 
