@@ -3284,3 +3284,188 @@ fn a_long_paste_keeps_its_chip(cx: &mut TestAppContext) {
         )]
     );
 }
+
+/// A stand-in for `gentle-shell --mode rpc`: it appends every command it
+/// reads to the file named by its first argument and answers each with
+/// success; `get_messages` returns a conversation of one user message.
+#[cfg(unix)]
+const FAKE_BACKEND: &str = r#"while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$1"
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+  case "$line" in
+    *'"type":"get_messages"'*) data='{"messages":[{"role":"user","content":"hello"}]}' ;;
+    *) data='{}' ;;
+  esac
+  printf '{"type":"response","id":"%s","success":true,"data":%s}\n' "$id" "$data"
+done"#;
+
+/// A tab whose backend is [`FAKE_BACKEND`]; its commands go to `log`.
+#[cfg(unix)]
+struct Backend {
+    dir: std::path::PathBuf,
+    log: std::path::PathBuf,
+    incoming: async_channel::Receiver<pi_rpc::Incoming>,
+}
+
+#[cfg(unix)]
+impl Backend {
+    fn start(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> Self {
+        // The answers come from the process's reader thread.
+        cx.executor().allow_parking();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("gs-fake-backend-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("commands.jsonl");
+        let spec = pi_rpc::LaunchSpec {
+            program: "/bin/sh".into(),
+            args: vec![
+                "-c".into(),
+                FAKE_BACKEND.into(),
+                "sh".into(),
+                log.to_string_lossy().into_owned(),
+            ],
+            cwd: dir.clone(),
+            env: Vec::new(),
+            launcher: "/bin/sh".into(),
+            bundled: None,
+        };
+        let (process, incoming) = pi_rpc::PiProcess::spawn(&spec).expect("spawn the fake backend");
+        view.update(cx, |view, _| {
+            view.backend.status = super::state::BackendStatus::Ready(process);
+        });
+        Self { dir, log, incoming }
+    }
+
+    /// The `type` of every command the backend has read so far.
+    fn read(&self) -> Vec<String> {
+        std::fs::read_to_string(&self.log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .map(|command| command["type"].as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    /// Run the tab until `ready` holds for what the backend has read, then
+    /// every command sent before a marker, with the answers to all of them
+    /// applied: the pipe keeps their order, so once the marker is answered
+    /// nothing sent earlier is still on its way.
+    fn settle(
+        &self,
+        view: &Entity<SessionView>,
+        cx: &mut VisualTestContext,
+        ready: impl Fn(&[String]) -> bool,
+    ) -> Vec<String> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready(&self.read()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the backend never got there; it read {:?}",
+                self.read()
+            );
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let process = view
+            .read_with(cx, |view, _| view.process())
+            .expect("a backend");
+        smol::block_on(process.request(json!({"type": "marker"}))).expect("the marker's answer");
+        cx.run_until_parked();
+        let mut read = self.read();
+        let marker = read
+            .iter()
+            .position(|command| command == "marker")
+            .expect("the marker");
+        read.truncate(marker);
+        read
+    }
+
+    /// Stop the process, wait until it has exited and remove its folder.
+    fn stop(self, view: &Entity<SessionView>, cx: &mut VisualTestContext) {
+        let status = view.update(cx, |view, _| {
+            std::mem::replace(
+                &mut view.backend.status,
+                super::state::BackendStatus::Exited(None),
+            )
+        });
+        if let super::state::BackendStatus::Ready(process) = status {
+            process.shutdown(std::time::Duration::ZERO);
+        }
+        while let Ok(incoming) = self.incoming.recv_blocking() {
+            if matches!(incoming, pi_rpc::Incoming::Exited(_)) {
+                break;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[cfg(unix)]
+fn user_texts(view: &Entity<SessionView>, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |view, _| {
+        view.transcript
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                gentle_core::transcript::Item::User { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+/// Changing the model or the thinking level (the Profiles screen) re-reads
+/// the session's state, but not its conversation, which they cannot change.
+#[cfg(unix)]
+#[gpui::test]
+fn a_model_or_thinking_change_does_not_reload_the_conversation(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let backend = Backend::start(&view, cx);
+    view.update(cx, |view, cx| {
+        view.send_command(
+            json!({"type": "set_model", "provider": "anthropic", "modelId": "claude"}),
+            cx,
+        );
+        view.send_command(json!({"type": "set_thinking_level", "level": "high"}), cx);
+    });
+    let read = backend.settle(&view, cx, |read| {
+        read.iter()
+            .filter(|command| *command == "get_state")
+            .count()
+            == 2
+    });
+    assert_eq!(read[..2], ["set_model", "set_thinking_level"]);
+    assert!(
+        !read.iter().any(|command| command == "get_messages"),
+        "it read {read:?}"
+    );
+    assert!(
+        user_texts(&view, cx).is_empty(),
+        "the conversation was rebuilt"
+    );
+    backend.stop(&view, cx);
+}
+
+/// Opening a saved session still loads its conversation.
+#[cfg(unix)]
+#[gpui::test]
+fn opening_a_saved_session_loads_its_conversation(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let backend = Backend::start(&view, cx);
+    let saved = backend.dir.join("saved.jsonl");
+    view.update(cx, |view, cx| view.open_session(saved.clone(), cx));
+    let read = backend.settle(&view, cx, |read| {
+        read.iter().any(|command| command == "get_state")
+    });
+    assert_eq!(read[0], "switch_session");
+    assert!(
+        read.iter().any(|command| command == "get_messages"),
+        "it read {read:?}"
+    );
+    assert_eq!(user_texts(&view, cx), ["hello"]);
+    backend.stop(&view, cx);
+}

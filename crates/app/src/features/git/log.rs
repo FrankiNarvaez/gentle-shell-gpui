@@ -108,7 +108,12 @@ pub fn history(toplevel: &Path, scope: &Scope, limit: usize) -> Option<History> 
     let dirty = !matches!(scope, Scope::Branch(_))
         && git(
             toplevel,
-            &["status", "--porcelain", "--untracked-files=normal"],
+            &[
+                "--no-optional-locks",
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+            ],
         )
         .is_some_and(|s| !s.trim().is_empty());
     let upstream = git(
@@ -159,4 +164,28 @@ pub fn in_progress(toplevel: &Path) -> Option<InProgress> {
     let dir = git(toplevel, &["rev-parse", "--absolute-git-dir"])?;
     let dir = backend::host_path(toplevel, dir.trim());
     InProgress::detect(|name| dir.join(name).exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reloading the Git pane reads whether HEAD is dirty: that read must
+    /// not rewrite `.git/index` (and take `index.lock`) under the user's git.
+    #[test]
+    fn history_leaves_a_stat_dirty_index_unwritten() {
+        let Some(dir) = super::super::tests::stat_dirty_repo("history") else {
+            return;
+        };
+        let index = std::fs::read(dir.join(".git/index")).unwrap();
+
+        let history = history(&dir, &Scope::Head, 10).unwrap();
+
+        let unchanged = std::fs::read(dir.join(".git/index")).unwrap() == index;
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(history.dirty);
+        assert_eq!(history.current.as_deref(), Some("main"));
+        assert_eq!((history.commits.len(), history.total), (1, 1));
+        assert!(unchanged, "history rewrote .git/index");
+    }
 }
