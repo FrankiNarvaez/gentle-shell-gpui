@@ -12,6 +12,7 @@ use pi_rpc::desktop_rpc::DesktopMethod;
 use pi_rpc::{UiAnswer, UiMethod};
 
 use crate::shared::ui;
+use gentle_core::double_interrupt::{self, Outcome};
 use gentle_core::transcript::{NoticeLevel, Transcript};
 
 mod agents;
@@ -85,6 +86,9 @@ pub enum SessionEvent {
         path: std::path::PathBuf,
         line: Option<u32>,
     },
+    /// A second Ctrl+C on the idle agent: close its pane, as ⌘W does (its
+    /// confirmations included).
+    CloseRequested,
 }
 
 /// What the window reads from a tab, to emit [`SessionEvent::ChromeChanged`]
@@ -319,13 +323,16 @@ impl SessionView {
                     this.model_query_changed(cx);
                 }
             }),
+            // Ctrl+C must beat Copy (Ctrl+C off macOS) unless text is
+            // selected, and every other key drops its pending first press.
             // The model picker's, the `@` file menu's and the `/` menu's
             // ↑/↓/Enter must beat the focused search field and composer (and
             // the `@` menu's arrows beat ↑/↓ prompt history).
             cx.intercept_keystrokes(move |event, window, cx| {
                 let consumed = weak
                     .update(cx, |this, cx| {
-                        this.model_picker_key(&event.keystroke, window, cx)
+                        this.interrupt_key(&event.keystroke, window, cx)
+                            || this.model_picker_key(&event.keystroke, window, cx)
                             || this.path_menu_key(&event.keystroke, window, cx)
                             || this.history_key(&event.keystroke, window, cx)
                             || this.slash_menu_key(&event.keystroke, window, cx)
@@ -675,6 +682,80 @@ impl SessionView {
         } else {
             cx.propagate();
         }
+    }
+
+    /// Ctrl+C in this tab, ahead of the key bindings. While a turn or
+    /// `!command` runs it only stops it, as Esc does, and never arms the
+    /// close; on the idle agent the first press shows the close hint for
+    /// [`double_interrupt::WINDOW`] and a second within it asks the window to
+    /// close the pane, as ⌘W does. Nothing reaches the agent. Off macOS
+    /// Ctrl+C is also Copy, which wins while text is selected. Any other key
+    /// starts over, and a held key never counts. A canvas's agent has no pane
+    /// of its own: there Ctrl+C only stops.
+    fn interrupt_key(
+        &mut self,
+        keystroke: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let m = &keystroke.modifiers;
+        let interrupt =
+            keystroke.key == "c" && m.control && !(m.platform || m.alt || m.shift || m.function);
+        if !interrupt {
+            self.live.interrupt_held = false;
+            if self.live.double_interrupt.reset() {
+                cx.notify();
+            }
+            return false;
+        }
+        if !self.focus_handle.contains_focused(window, cx)
+            || (cfg!(not(target_os = "macos")) && self.has_selected_text(window, cx))
+        {
+            return false;
+        }
+        let held = std::mem::replace(&mut self.live.interrupt_held, true);
+        let busy = self.stoppable();
+        if busy && !held {
+            self.stop(cx);
+        }
+        let now = std::time::Instant::now();
+        let idle = !busy && self.canvas.is_none();
+        match self.live.double_interrupt.press(now, idle, held) {
+            Outcome::Interrupt => {}
+            Outcome::Hint => {
+                self.live.close_hints += 1;
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor()
+                        .timer(double_interrupt::WINDOW)
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.live.double_interrupt.armed() == Some(now) {
+                            this.live.double_interrupt.reset();
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+            }
+            Outcome::Close => cx.emit(SessionEvent::CloseRequested),
+        }
+        cx.notify();
+        true
+    }
+
+    /// Text selected in the composer, a dialog's field or the conversation:
+    /// what Ctrl+C copies off macOS.
+    fn has_selected_text(&self, window: &mut Window, cx: &mut App) -> bool {
+        self.composer.read(cx).is_copyable()
+            || self.dialog_input.read(cx).is_copyable()
+            || !gpui_kit::base::TextSelection::selected_text(window, cx)
+                .trim()
+                .is_empty()
+    }
+
+    /// A key came up: a Ctrl+C after it is a new press, not a key repeat.
+    fn on_key_up(&mut self, _: &KeyUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.live.interrupt_held = false;
     }
 }
 

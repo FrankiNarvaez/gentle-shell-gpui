@@ -1168,37 +1168,19 @@ impl Render for TerminalView {
                 )
             })
             .when(self.double_interrupt.armed().is_some(), |this| {
-                this.child(close_hint(self.close_hints, cx.theme().font_family.clone()))
+                // In the interface's font: the terminal's draws ⌃ as ^.
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom(rems(PADDING / 16.))
+                        .right(rems(PADDING / 16.))
+                        .child(ui::close_hint(
+                            self.close_hints,
+                            cx.theme().font_family.clone(),
+                        )),
+                )
             })
     }
-}
-
-/// "Press ⌃C again to close" in the pane's corner for the double Ctrl+C
-/// window: on the pane's own surface so it reads over the text, in the
-/// interface's font (not the terminal's, where ⌃ draws as ^), fading in
-/// quickly and out as the window closes.
-fn close_hint(id: u64, font: SharedString) -> impl IntoElement {
-    let chord = if cfg!(target_os = "macos") {
-        "⌃C"
-    } else {
-        "Ctrl+C"
-    };
-    div()
-        .absolute()
-        .bottom(rems(PADDING / 16.))
-        .right(rems(PADDING / 16.))
-        .rounded_md()
-        .bg(ui::panel())
-        .font_family(font)
-        .child(ui::chip(
-            format!("Press {chord} again to close"),
-            ui::muted(),
-        ))
-        .with_animation(
-            ElementId::NamedInteger("close-hint".into(), id),
-            Animation::new(double_interrupt::WINDOW),
-            |el, t| el.opacity((t / 0.15).min((1. - t) / 0.35).clamp(0., 1.)),
-        )
 }
 
 #[cfg(test)]
