@@ -1054,72 +1054,86 @@ impl ChangesView {
                     .child(Textarea::new(&self.description).appearance(false)),
             )
             // The sidebar is narrower than the row's full labels: "Write it"
-            // is the sparkles icon (its tooltip says what it does), the
-            // primary reads "Generate", and the labelled controls may shrink,
-            // ending in an ellipsis, so nothing spills past the panel's edge.
+            // is the sparkles icon (its tooltip says what it does) and the
+            // primary reads "Generate". When the row still doesn't fit, the
+            // primary wraps whole to a line of its own, full width, so
+            // nothing shrinks to an ellipsis or spills past the panel's edge.
             .child(
                 h_flex()
+                    .flex_wrap()
                     .min_w_0()
                     .pt_1()
                     .gap_1()
-                    .child(
-                        Button::new("changes-write")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::Sparkles))
-                            .loading(self.generating)
-                            .disabled(!ready || working || !staged)
-                            .tooltip("Write the message from the staged diff with Gentle Shell")
-                            .on_click(cx.listener(|this, _, window, cx| this.generate(window, cx))),
-                    )
-                    .child(
-                        Button::new("changes-amend")
-                            .ghost()
-                            .xsmall()
-                            .label("Amend")
-                            .min_w_0()
-                            .flex_shrink(1.)
-                            .selected(self.amend)
-                            .disabled(!ready || working)
-                            .tooltip("Rewrite the last commit instead of making a new one")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.toggle_amend(window, cx)),
-                            ),
-                    )
-                    // The status fills only the space the buttons leave, so it
-                    // is what truncates first.
+                    // Both grow, the primary by a negligible share: on one row
+                    // the free space goes to this group, so the primary keeps
+                    // its own width; alone on a wrapped line it fills it.
                     .child(
                         h_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .justify_end()
-                            .gap_1p5()
-                            .text_size(rems(11.5 / 16.))
-                            .text_color(ui::muted())
-                            .when_some(self.busy, |d, busy| {
-                                d.child(Spinner::new().xsmall().color(ui::accent()))
-                                    .child(div().min_w_0().truncate().child(busy))
-                            })
-                            .when(self.generating, |d| {
-                                d.child(div().min_w_0().truncate().child("Writing…"))
-                            }),
+                            .flex_grow(10_000.)
+                            .gap_1()
+                            .child(
+                                Button::new("changes-write")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(Icon::new(IconName::Sparkles))
+                                    .loading(self.generating)
+                                    .disabled(!ready || working || !staged)
+                                    .tooltip(
+                                        "Write the message from the staged diff with Gentle Shell",
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| {
+                                            this.generate(window, cx)
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                Button::new("changes-amend")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("Amend")
+                                    .selected(self.amend)
+                                    .disabled(!ready || working)
+                                    .tooltip("Rewrite the last commit instead of making a new one")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_amend(window, cx)
+                                    })),
+                            )
+                            // The status fills only the space the buttons
+                            // leave, so it is what truncates first.
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .justify_end()
+                                    .gap_1p5()
+                                    .text_size(rems(11.5 / 16.))
+                                    .text_color(ui::muted())
+                                    .when_some(self.busy, |d, busy| {
+                                        d.child(Spinner::new().xsmall().color(ui::accent()))
+                                            .child(div().min_w_0().truncate().child(busy))
+                                    })
+                                    .when(self.generating, |d| {
+                                        d.child(div().min_w_0().truncate().child("Writing…"))
+                                    }),
+                            ),
                     )
                     // Secondary actions on the left, the primary last on the
                     // right (the design system's footer), its key in the
-                    // tooltip rather than a cap on the button.
+                    // tooltip rather than a cap on the button. It never
+                    // shrinks.
                     .child(
                         DropdownButton::new("changes-commit")
                             .primary()
                             .small()
-                            .min_w_0()
-                            .flex_shrink(1.)
+                            .flex_grow(1.)
+                            .flex_shrink_0()
                             .disabled(!ready || working)
                             .button(
                                 Button::new("changes-commit-main")
+                                    .flex_grow(1.)
                                     .label(primary_label)
-                                    .min_w_0()
-                                    .flex_shrink(1.)
                                     .tooltip(format!("{primary_tip} ({})", ui::shortcut("↵")))
                                     .on_click(
                                         cx.listener(|this, _, window, cx| this.primary(window, cx)),
