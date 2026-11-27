@@ -198,7 +198,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("]"), FocusNextPane, None),
         KeyBinding::new(key!("["), FocusPrevPane, None),
         // Off macOS also F6, the Windows convention for the next pane: on
-        // layouts such as Spanish, [ and ] need AltGr.
+        // layouts such as Spanish, [ and ] need AltGr. Terminals don't keep
+        // it, so it is also the keyboard's way out of a terminal pane.
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("f6", FocusNextPane, None),
         #[cfg(not(target_os = "macos"))]
@@ -242,9 +243,8 @@ fn bind_keys(cx: &mut App) {
 
 /// Global chords off macOS that a focused terminal receives instead.
 #[cfg(not(target_os = "macos"))]
-const TERMINAL_KEEPS: [&str; 10] = [
-    "ctrl-t", "ctrl-w", "ctrl-b", "ctrl-k", "ctrl-o", "ctrl-q", "ctrl-[", "ctrl-]", "f6",
-    "shift-f6",
+const TERMINAL_KEEPS: [&str; 8] = [
+    "ctrl-t", "ctrl-w", "ctrl-b", "ctrl-k", "ctrl-o", "ctrl-q", "ctrl-[", "ctrl-]",
 ];
 
 fn set_menus(cx: &mut App) {
@@ -319,14 +319,21 @@ mod tests {
             ("ctrl-q", Quit.name()),
             ("ctrl-[", FocusPrevPane.name()),
             ("ctrl-]", FocusNextPane.name()),
-            ("f6", FocusNextPane.name()),
-            ("shift-f6", FocusPrevPane.name()),
         ] {
             assert_eq!(
                 resolve(cx, keys, &in_terminal),
                 Vec::<String>::new(),
                 "{keys}"
             );
+            assert_eq!(resolve(cx, keys, &elsewhere), [action], "{keys}");
+        }
+        // F6 / Shift+F6 stay the app's everywhere: the way out of a terminal
+        // pane from the keyboard.
+        for (keys, action) in [
+            ("f6", FocusNextPane.name()),
+            ("shift-f6", FocusPrevPane.name()),
+        ] {
+            assert_eq!(resolve(cx, keys, &in_terminal), [action], "{keys}");
             assert_eq!(resolve(cx, keys, &elsewhere), [action], "{keys}");
         }
         // Chords with shift stay app commands inside a terminal.

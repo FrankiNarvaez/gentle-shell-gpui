@@ -163,7 +163,7 @@ Your login shell in a real PTY (alacritty_terminal) with the Gentleman colors; �
 
 Ctrl+C still interrupts, and pressed twice within 700 ms at an idle prompt it also closes the pane, as ⌘W does: the first press shows "Press ⌃C again to close" in the pane's corner while the second would close it. Nothing running is ever closed on: a press that stops a command (`sleep 30`) never arms the close, any other key in between starts over, and holding the key doesn't count. The idle check asks the system: on macOS and Linux the shell must own the terminal's foreground and still be the shell (not `exec`'d into `tmux` or an editor; background jobs `&` don't count, as for ⌘W); on Windows it must have no child processes. A terminal on another backend (WSL, a command) can't be checked from here, so there Ctrl+C only interrupts.
 
-On Windows and Linux a focused terminal also receives the app's Ctrl+T, Ctrl+W, Ctrl+B, Ctrl+K, Ctrl+O, Ctrl+Q, Ctrl+[ and Ctrl+] chords and F6 / Shift+F6, the control keys a shell or Vim relies on; outside a terminal those keys keep their command, and inside one the Shift chords (Ctrl+Shift+T, Ctrl+Shift+W…) still work. On Windows, AltGr characters (`@`, `#`, `[`, `€`… on Spanish or German layouts) are typed into the terminal as text.
+On Windows and Linux a focused terminal also receives the app's Ctrl+T, Ctrl+W, Ctrl+B, Ctrl+K, Ctrl+O, Ctrl+Q, Ctrl+[ and Ctrl+] chords, the control keys a shell or Vim relies on; outside a terminal those keys keep their command, and inside one the Shift chords (Ctrl+Shift+T, Ctrl+Shift+W…) still work, and F6 / Shift+F6 move to the next / previous pane. On Windows, AltGr characters (`@`, `#`, `[`, `€`… on Spanish or German layouts) are typed into the terminal as text.
 
 ---
 
