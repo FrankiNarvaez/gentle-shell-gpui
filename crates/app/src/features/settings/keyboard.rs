@@ -37,7 +37,8 @@ impl SettingsView {
             )
             .child(div().pt_2().text_xs().text_color(ui::faint()).child(
                 "j/k navigate lists, h/l collapse and expand, gg/G jump to first/last, \
-                         s/u stage/unstage in Changes. Arrows keep working.",
+                         o opens in Files, s/u stage/unstage and d opens the diff in Changes. \
+                         Arrows keep working.",
             ))
     }
 }
