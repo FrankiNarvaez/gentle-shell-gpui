@@ -322,6 +322,11 @@ impl Render for Workspace {
         v_flex()
             .size_full()
             .text_color(ui::fg())
+            // Only an empty workspace needs the root to own the keyboard: a
+            // pane's or an overlay's own focusable elements take it in every
+            // other state, and an unconditional grab here would steal focus
+            // from a pane when the pointer hits blank chrome.
+            .when(self.tab().is_none(), |root| root.track_focus(&self.focus))
             // A click in a web page (a device, the browser card) takes the
             // keyboard away from GPUI; any click that reaches GPUI takes it back.
             .capture_any_mouse_down(|_, window, _| {
