@@ -23,10 +23,11 @@ pub(super) enum SettingsPage {
     Notifications,
     Extensions,
     Updates,
+    About,
 }
 
 impl SettingsPage {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 10] = [
         Self::General,
         Self::Appearance,
         Self::Agents,
@@ -36,6 +37,7 @@ impl SettingsPage {
         Self::Notifications,
         Self::Extensions,
         Self::Updates,
+        Self::About,
     ];
 
     pub fn id(self) -> &'static str {
@@ -49,6 +51,7 @@ impl SettingsPage {
             Self::Notifications => "settings-nav-notifications",
             Self::Updates => "settings-nav-updates",
             Self::Extensions => "settings-nav-extensions",
+            Self::About => "settings-nav-about",
         }
     }
 
@@ -63,6 +66,7 @@ impl SettingsPage {
             Self::Notifications => "Notifications",
             Self::Updates => "Updates",
             Self::Extensions => "Extensions",
+            Self::About => "About",
         }
     }
 
@@ -77,6 +81,7 @@ impl SettingsPage {
             Self::Notifications => "Alerts and notification preferences",
             Self::Updates => "Application and tool updates",
             Self::Extensions => "Packages and extension management",
+            Self::About => "Version, license and credits",
         }
     }
 
@@ -91,6 +96,7 @@ impl SettingsPage {
             Self::Notifications => IconName::Bell,
             Self::Updates => IconName::RefreshCw,
             Self::Extensions => IconName::Layers,
+            Self::About => IconName::Info,
         }
     }
 
@@ -124,6 +130,9 @@ impl SettingsPage {
             }
             Self::Extensions => {
                 "package packages extension extensions install remove npm git local updates version management advanced"
+            }
+            Self::About => {
+                "about credits authors contributors thanks people license licenses mit third-party third party open source repository repo github issues bug feedback"
             }
         }
     }
@@ -322,9 +331,20 @@ mod tests {
                 "settings page without description"
             );
         }
-        assert_eq!(ids.len(), 9);
+        assert_eq!(ids.len(), 10);
         assert_eq!(SettingsPage::ALL[7], SettingsPage::Extensions);
         assert_eq!(SettingsPage::ALL[8], SettingsPage::Updates);
+        assert_eq!(SettingsPage::ALL[9], SettingsPage::About);
+    }
+
+    #[test]
+    fn searching_for_credits_or_licenses_lands_on_about() {
+        for query in ["about", "credits", "contributors", "license", "third-party"] {
+            let first = SettingsPage::ALL
+                .into_iter()
+                .find(|page| page.matches_query(query));
+            assert_eq!(first, Some(SettingsPage::About), "{query:?}");
+        }
     }
 
     #[test]

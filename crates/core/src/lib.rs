@@ -10,6 +10,7 @@ pub mod browser;
 pub mod canvas;
 pub mod commands;
 pub mod contrast;
+pub mod credits;
 pub mod devices;
 pub mod diagnostics;
 pub mod docs;

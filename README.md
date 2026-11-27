@@ -673,6 +673,8 @@ Three sliders, 0–100% each, set the glass. **Transparency** (default 60%; 15% 
 
 **Typing kisses** (Configuration › Appearance): Auto, the default, lets the composer blow small pixel kisses and hearts from the caret as you type, none while the system asks to reduce motion; Off stops them for this app only (`composerParticles` in `settings.json`).
 
+**About** (Configuration › About): the app's version and license, links to this repository and its issues, everyone who has committed to it, from [CREDITS.md](CREDITS.md) (generated from the git history and built into the app, so no network call), and where the third-party licenses are.
+
 </details>
 
 ---
@@ -883,7 +885,7 @@ Workflows: **CI** runs clippy and the tests on macOS, Linux and Windows for push
 
 Cut a release:
 
-1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`, run `cargo check` so `Cargo.lock` updates, and commit.
+1. Run `scripts/credits.sh` (from a full clone) and commit `CREDITS.md` if it changed. Then bump `version` under `[workspace.package]` in the root `Cargo.toml`, run `cargo check` so `Cargo.lock` updates, and commit.
 2. Optional dry run: Actions → Release → Run workflow. It builds all four targets and uploads the assets and `SHA256SUMS` as an artifact without publishing.
 3. `git tag v0.2.0 && git push origin main v0.2.0`. The Release workflow checks the tag against the workspace version, builds macOS (arm64 and x86_64), Windows and Linux, writes `SHA256SUMS` and publishes the GitHub release with generated notes. A version with `-` (`0.2.0-rc.1`) is a prerelease.
 
@@ -917,6 +919,8 @@ Built in public. Bring a real workflow, a bug report, or a small improvement tha
   <a href="https://github.com/Gentleman-Programming/gentle-shell-gpui/stargazers"><strong>★ Star gentle-shell-gpui on GitHub</strong></a>
 </p>
 
+Everyone who has committed to this repository is credited in [CREDITS.md](CREDITS.md), generated from the git history by `scripts/credits.sh`; the app shows it in Configuration › About.
+
 - Open an [issue](https://github.com/Gentleman-Programming/gentle-shell-gpui/issues) with what's needed to reproduce or understand the idea.
 - Before a pull request, read [`docs/development.md`](docs/development.md) and [`AGENTS.md`](AGENTS.md).
 - Follow [Gentleman Programming](https://github.com/Gentleman-Programming) for the wider ecosystem: [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell), Gentle AI and Engram.
@@ -928,6 +932,8 @@ Built in public. Bring a real workflow, a bug report, or a small improvement tha
 </p>
 
 <p align="center"><strong>A native home for the agents you lead.</strong></p>
+
+<a id="license"></a>
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-F095C8?style=for-the-badge&labelColor=1A1218" alt="MIT License">
