@@ -94,8 +94,8 @@ impl Workspace {
             // stopping the mouse-down keeps TitleBar from starting a move.
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.open_palette(Category::Workspaces, window, cx)
+            .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                this.open_workspace_selector(event.position(), window, cx)
             }))
             .on_mouse_down(
                 MouseButton::Right,
@@ -1019,7 +1019,7 @@ mod tests {
                         tabs_sidebar_motion: Default::default(),
                         files_sidebar_motion: Default::default(),
                         sidebar_compact: false,
-                        tabs_sidebar_peek: false,
+                        tabs_sidebar_hidden: false,
                         tabs_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         files_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         badge_picker: None,

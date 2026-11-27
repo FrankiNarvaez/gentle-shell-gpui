@@ -10,77 +10,72 @@ fn platform_select_modifier(event: &ClickEvent, cx: &App) -> bool {
 }
 
 impl Workspace {
-    /// Whether the tabs sidebar shows as its icon rail: the chosen compact
-    /// mode, unless the current drag expanded it.
-    pub(super) fn tabs_sidebar_rail(&self) -> bool {
-        self.sidebar_compact && !self.tabs_sidebar_peek
-    }
-
-    /// The main navigator stays on the left; the button picks the mode it
-    /// shows, sliding between the rail and the expanded width.
+    /// The main navigator stays on the left; this button only switches
+    /// between the expanded panel and the narrow icon rail. Hiding is a
+    /// separate, persisted state.
     pub(super) fn toggle_sidebar_compact(&mut self, cx: &mut Context<Self>) {
-        if self.tab_layout == TabLayout::Horizontal {
-            self.set_sidebar_compact(false, cx);
-            self.set_tab_layout(TabLayout::Vertical, cx);
-        } else {
-            let rail = self.tabs_sidebar_rail();
-            self.set_sidebar_compact(!rail, cx);
-        }
-    }
-
-    /// The menu's Compact checkbox: the chosen mode, so it persists. Turning
-    /// it on from horizontal tabs goes straight to the vertical rail.
-    pub(super) fn choose_compact_tabs(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_compact {
-            self.set_sidebar_compact(false, cx);
-            return;
-        }
-        self.set_sidebar_compact(true, cx);
-        if self.tab_layout == TabLayout::Horizontal {
-            self.set_tab_layout(TabLayout::Vertical, cx);
-        }
+        self.set_sidebar_compact(!self.sidebar_compact, cx);
     }
 
     pub(super) fn set_sidebar_compact(&mut self, compact: bool, cx: &mut Context<Self>) {
-        // A transient expansion is not the chosen mode: turning the mode on
-        // still brings the rail back.
-        if self.sidebar_compact == compact && !self.tabs_sidebar_peek {
+        if self.sidebar_compact == compact {
             return;
         }
         self.cancel_workspace_rename_state(cx);
-        // Slide from what is on screen, like a drag into or out of the rail.
-        // Hidden (horizontal tabs) or before the first layout there is no
-        // width to move from.
-        let window = self.tabs_sidebar_motion.window;
-        let from = (self.tab_layout == TabLayout::Vertical && window > 0.).then(|| {
-            self.sidebar_geometry(Side::Tabs, window, std::time::Instant::now())
-                .0
-        });
         self.sidebar_compact = compact;
-        self.tabs_sidebar_peek = false;
         self.tabs_sidebar_motion.revision += 1;
-        if let Some(from) = from {
-            self.animate_sidebar_width(Side::Tabs, window, from, cx.reduce_motion());
-        }
         self.schedule_save(cx);
         cx.notify();
     }
 
-    /// Expand the compact rail for the current gesture only: the chosen mode
-    /// stays compact, so a restart brings the rail back.
-    pub(super) fn set_tabs_sidebar_peek(&mut self, peek: bool, cx: &mut Context<Self>) {
-        if self.tabs_sidebar_peek == peek {
+    /// Whether the left navigator's vertical panel is showing (expanded or
+    /// rail), independent of tab placement.
+    pub(super) fn tabs_sidebar_visible(&self) -> bool {
+        self.tab_layout == TabLayout::Vertical && !self.tabs_sidebar_hidden
+    }
+
+    /// Live state for the Configuration screen, which observes the workspace
+    /// rather than keeping a stale copy.
+    pub fn tab_layout(&self) -> TabLayout {
+        self.tab_layout
+    }
+
+    pub fn sidebar_compact(&self) -> bool {
+        self.sidebar_compact
+    }
+
+    pub fn tabs_sidebar_hidden(&self) -> bool {
+        self.tabs_sidebar_hidden
+    }
+
+    /// Show or hide the vertical navigator without touching tab placement,
+    /// the compact rail, the active tab or the saved width. Hiding a
+    /// horizontal layout is a no-op: the panel is already in the title bar.
+    pub(super) fn set_tabs_sidebar_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        if self.tab_layout != TabLayout::Vertical || self.tabs_sidebar_hidden == hidden {
             return;
         }
-        self.tabs_sidebar_peek = peek;
-        self.tabs_sidebar_motion.revision += 1;
+        self.cancel_workspace_rename_state(cx);
+        self.tabs_sidebar_motion
+            .retarget(!self.tabs_sidebar_hidden, cx.reduce_motion());
+        self.tabs_sidebar_hidden = hidden;
+        self.schedule_save(cx);
         cx.notify();
     }
 
-    /// Resize only the expanded navigator, keeping its width while the rail
-    /// shows.
+    pub(super) fn toggle_tabs_sidebar(&mut self, cx: &mut Context<Self>) {
+        if self.tab_layout == TabLayout::Vertical {
+            self.set_tabs_sidebar_hidden(!self.tabs_sidebar_hidden, cx);
+        }
+    }
+
+    /// Resize only the expanded navigator, keeping its width while compact
+    /// or hidden.
     pub(super) fn resize_tab_sidebar(&mut self, width: f32, cx: &mut Context<Self>) {
-        if self.tab_layout != TabLayout::Vertical || self.tabs_sidebar_rail() || !width.is_finite()
+        if self.tab_layout != TabLayout::Vertical
+            || self.sidebar_compact
+            || self.tabs_sidebar_hidden
+            || !width.is_finite()
         {
             return;
         }
@@ -98,8 +93,15 @@ impl Workspace {
             return;
         }
         self.cancel_workspace_rename_state(cx);
-        self.tabs_sidebar_motion
-            .retarget(self.tab_layout == TabLayout::Vertical, cx.reduce_motion());
+        // Animate only when the panel's effective visibility actually
+        // changes. A hidden vertical panel stays hidden (and unmounted)
+        // across a round trip through horizontal, so it never flashes in.
+        let was_open = self.tabs_sidebar_visible();
+        let will_open = layout == TabLayout::Vertical && !self.tabs_sidebar_hidden;
+        if was_open != will_open {
+            self.tabs_sidebar_motion
+                .retarget(was_open, cx.reduce_motion());
+        }
         self.tab_layout = layout;
         // File browsing is a separate right sidebar; switching tab placement
         // must neither open nor hide that independent panel.
@@ -107,9 +109,8 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The horizontal strip and the sidebar use the same placement menu: the
-    /// two views, and below them the Compact checkbox that makes the icon rail
-    /// the sidebar's resting mode. Dragging the sidebar's edge follows it.
+    /// The horizontal strip and the sidebar use the same placement menu.
+    /// With vertical tabs it also switches the navigator to the icon rail.
     pub(super) fn tab_placement_menu(
         menu: PopupMenu,
         layout: TabLayout,
@@ -120,7 +121,6 @@ impl Workspace {
         let vertical = workspace.clone();
         menu.item(
             PopupMenuItem::new("Horizontal tabs")
-                .icon(Icon::new(IconName::List))
                 .checked(layout == TabLayout::Horizontal)
                 .on_click(move |_, _, cx| {
                     let _ = horizontal.update(cx, |this, cx| {
@@ -130,21 +130,21 @@ impl Workspace {
         )
         .item(
             PopupMenuItem::new("Vertical tabs")
-                .icon(Icon::new(IconName::PanelLeft))
                 .checked(layout == TabLayout::Vertical)
                 .on_click(move |_, _, cx| {
                     let _ = vertical
                         .update(cx, |this, cx| this.set_tab_layout(TabLayout::Vertical, cx));
                 }),
         )
-        .separator()
-        .item(
-            PopupMenuItem::new("Compact sidebar")
-                .checked(compact)
-                .on_click(move |_, _, cx| {
-                    let _ = workspace.update(cx, |this, cx| this.choose_compact_tabs(cx));
-                }),
-        )
+        .when(layout == TabLayout::Vertical, |menu| {
+            menu.separator().item(
+                PopupMenuItem::new("Compact sidebar")
+                    .checked(compact)
+                    .on_click(move |_, _, cx| {
+                        let _ = workspace.update(cx, |this, cx| this.toggle_sidebar_compact(cx));
+                    }),
+            )
+        })
     }
 
     /// Move the existing tab, including all its live pane entities, without
@@ -994,6 +994,8 @@ mod tests {
         Workspace,
     };
 
+    use crate::features::workspace::Overlay;
+
     fn space_with(name: &str, ids: &[usize]) -> Space {
         let mut space = Space::new(name.into(), std::env::temp_dir());
         space.tabs = ids.iter().map(|id| unbuilt(*id, false)).collect();
@@ -1048,7 +1050,7 @@ mod tests {
                         tabs_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         files_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         sidebar_compact: false,
-                        tabs_sidebar_peek: false,
+                        tabs_sidebar_hidden: false,
                         badge_picker: None,
                         open_menu: None,
                         workspace_rename: None,
@@ -1107,644 +1109,206 @@ mod tests {
     }
 
     #[gpui::test]
-    fn the_placement_views_keep_the_chosen_compact_mode(cx: &mut TestAppContext) {
-        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
-            assert_eq!(ws.tab_layout, TabLayout::Horizontal);
-            // Vertical tabs only moves the tabs; it keeps the chosen mode.
-            ws.set_tab_layout(TabLayout::Vertical, cx);
-            assert_eq!(ws.tab_layout, TabLayout::Vertical);
-            assert!(!ws.sidebar_compact);
-            // The Compact checkbox from horizontal tabs goes straight to the rail.
-            ws.set_tab_layout(TabLayout::Horizontal, cx);
-            ws.choose_compact_tabs(cx);
-            assert_eq!(ws.tab_layout, TabLayout::Vertical);
-            assert!(ws.sidebar_compact);
-            assert!(ws.tabs_sidebar_rail());
-            // Unchecking it keeps the vertical placement and expands it.
-            ws.choose_compact_tabs(cx);
-            assert_eq!(ws.tab_layout, TabLayout::Vertical);
-            assert!(!ws.sidebar_compact);
-            assert!(!ws.tabs_sidebar_rail());
-        });
-    }
-
-    /// The Compact checkbox shows the chosen mode even while a drag has the
-    /// rail expanded: the expansion is not a mode.
-    #[gpui::test]
-    fn the_compact_choice_and_a_peeked_rail_are_different_things(cx: &mut TestAppContext) {
-        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
-            ws.set_tab_layout(TabLayout::Vertical, cx);
-            ws.set_sidebar_compact(true, cx);
-            ws.set_tabs_sidebar_peek(true, cx);
-            assert!(ws.sidebar_compact, "the chosen mode is still compact");
-            assert!(!ws.tabs_sidebar_rail(), "the sidebar shows expanded");
-            // The Compact / Expand button sets the mode it shows and clears
-            // the peek, so collapsing keeps the compact choice.
-            ws.toggle_sidebar_compact(cx);
-            assert!(ws.sidebar_compact);
-            assert!(!ws.tabs_sidebar_peek);
-            assert!(ws.tabs_sidebar_rail());
-            ws.toggle_sidebar_compact(cx);
-            assert!(!ws.sidebar_compact);
-            assert!(!ws.tabs_sidebar_peek);
-        });
-    }
-
-    #[gpui::test]
-    fn the_expanded_peek_is_never_saved(cx: &mut TestAppContext) {
-        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
-            ws.set_tab_layout(TabLayout::Vertical, cx);
-            ws.set_sidebar_compact(true, cx);
-            ws.set_tabs_sidebar_peek(true, cx);
-            let saved = ws.snapshot(cx);
-            assert!(saved.sidebar_compact, "the chosen mode is saved");
-            let json = serde_json::to_value(&saved).unwrap();
-            assert_eq!(json["sidebar_compact"], true);
-            assert!(json.get("sidebar_compact_first").is_none());
-            assert!(json.get("tabs_sidebar_peek").is_none());
-            // A restart restores the chosen mode, so the rail comes back.
-            let back: crate::features::workspaces::SavedState =
-                serde_json::from_value(json).unwrap();
-            assert!(back.sidebar_compact);
-        });
-    }
-
-    /// The saved expanded width survives the Compact / Expand button, and a
-    /// drag that shows the rail never overwrites it.
-    #[gpui::test]
-    fn the_compact_option_slides_the_width_both_ways(cx: &mut TestAppContext) {
-        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
-            ws.set_tab_layout(TabLayout::Vertical, cx);
-            // What the last layout measured.
-            ws.tabs_sidebar_motion.window = 1600.;
-            ws.resize_tab_sidebar(345., cx);
-            let start = std::time::Instant::now();
-            ws.choose_compact_tabs(cx);
-            assert!(ws.sidebar_compact);
-            assert!(ws.tabs_sidebar_motion.width_moving());
-            let shown = ws.sidebar_geometry(super::Side::Tabs, 1600., start).0;
-            assert!(shown > 300., "the rail slides in from 345, not 48: {shown}");
-            let done = start + std::time::Duration::from_millis(400);
-            assert_eq!(ws.sidebar_geometry(super::Side::Tabs, 1600., done).0, 48.);
-            // The next frames finish the slide before the next click.
-            ws.tabs_sidebar_motion.advance(done, false);
-
-            let start = std::time::Instant::now();
-            ws.choose_compact_tabs(cx);
-            assert!(!ws.sidebar_compact);
-            assert!(ws.tabs_sidebar_motion.width_moving());
-            let shown = ws.sidebar_geometry(super::Side::Tabs, 1600., start).0;
-            assert!(shown < 100., "the panel slides out from the rail: {shown}");
-            let done = start + std::time::Duration::from_millis(400);
-            assert_eq!(ws.sidebar_geometry(super::Side::Tabs, 1600., done).0, 345.);
-        });
-    }
-
-    #[gpui::test]
     fn sidebar_width_survives_compact_toggle_and_respects_limits(cx: &mut TestAppContext) {
         with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
             let width = |ws: &Workspace| {
                 ws.sidebar_geometry(super::Side::Tabs, 1600., std::time::Instant::now())
                     .0
             };
-            ws.toggle_sidebar_compact(cx);
+            // Compact is an explicit state change: it never moves the tabs
+            // between the strip and the sidebar.
+            ws.tab_layout = TabLayout::Vertical;
             ws.resize_tab_sidebar(345., cx);
             assert_eq!(width(ws), 345.);
-            ws.toggle_sidebar_compact(cx);
+            ws.set_sidebar_compact(true, cx);
             assert_eq!(width(ws), 48.);
-            // Before the first layout there is no on-screen width to move from.
-            assert!(!ws.tabs_sidebar_motion.width_moving());
+            // Resizing while compact leaves the saved expanded width alone.
             ws.resize_tab_sidebar(420., cx);
-            ws.toggle_sidebar_compact(cx);
+            assert_eq!(ws.tabs_sidebar_width, 345.);
+            ws.set_sidebar_compact(false, cx);
             assert_eq!(width(ws), 345.);
             ws.resize_tab_sidebar(10., cx);
             assert_eq!(width(ws), 200.);
             ws.resize_tab_sidebar(900., cx);
             assert_eq!(width(ws), 480.);
-            // Peeked, the drag saves the expanded width as it always did.
-            ws.set_sidebar_compact(true, cx);
-            ws.set_tabs_sidebar_peek(true, cx);
-            ws.resize_tab_sidebar(300., cx);
-            assert_eq!(ws.tabs_sidebar_width, 300.);
-            assert_eq!(ws.tab_layout, TabLayout::Vertical);
         });
     }
 
-    #[cfg(debug_assertions)]
-    fn rendered_sidebar_window(
-        cx: &mut TestAppContext,
-        compact: bool,
-        peek: bool,
-    ) -> (gpui::AnyWindowHandle, gpui::Entity<Workspace>) {
-        let out = Rc::new(RefCell::new(None));
-        let capture = out.clone();
-        with_workspace(cx, vec![space_with("A", &[])], 0, move |ws, window, cx| {
+    #[gpui::test]
+    fn dragging_below_the_minimum_clamps_instead_of_collapsing(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[])], 0, |ws, _, cx| {
             ws.tab_layout = TabLayout::Vertical;
-            ws.tabs_sidebar_width = 365.;
-            ws.sidebar_compact = compact;
-            ws.tabs_sidebar_peek = peek;
-            *capture.borrow_mut() = Some((window.window_handle(), cx.entity().clone()));
+            ws.sidebar_compact = false;
+            ws.resize_tab_sidebar(50., cx);
+            // Dragging never collapses or reorients: it clamps at the minimum.
+            assert_eq!(ws.tab_layout, TabLayout::Vertical);
+            assert!(!ws.sidebar_compact);
+            assert_eq!(
+                ws.tabs_sidebar_width,
+                gentle_core::workspaces::SIDEBAR_MIN_WIDTH
+            );
         });
-        let (handle, ws) = out.borrow_mut().take().unwrap();
-        cx.update(|cx| {
+    }
+
+    #[gpui::test]
+    fn hiding_and_reopening_preserves_width_active_tab_and_orientation(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[1, 2, 3])], 0, |ws, _, cx| {
+            ws.tab_layout = TabLayout::Vertical;
+            ws.sidebar_compact = false;
+            ws.tabs_sidebar_hidden = false;
+            ws.resize_tab_sidebar(345., cx);
+            ws.space_mut().active = 2;
+            assert!(ws.tabs_sidebar_visible());
+
+            ws.set_tabs_sidebar_hidden(true, cx);
+            assert!(!ws.tabs_sidebar_visible());
+            assert_eq!(ws.tab_layout, TabLayout::Vertical, "hiding never reorients");
+            assert_eq!(ws.space().active, 2, "hiding keeps the active tab");
+            assert_eq!(ws.tabs_sidebar_width, 345., "hiding keeps the saved width");
+
+            ws.set_tabs_sidebar_hidden(false, cx);
+            assert!(ws.tabs_sidebar_visible());
+            assert_eq!(ws.tab_layout, TabLayout::Vertical);
+            assert_eq!(ws.space().active, 2);
+            assert_eq!(
+                ws.tabs_sidebar_width, 345.,
+                "reopening restores the last width"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn hiding_a_horizontal_layout_is_a_no_op(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[1, 2])], 0, |ws, _, cx| {
+            ws.tab_layout = TabLayout::Horizontal;
+            assert!(!ws.tabs_sidebar_visible());
+            ws.set_tabs_sidebar_hidden(true, cx);
+            assert!(
+                !ws.tabs_sidebar_hidden,
+                "hiding never persists for horizontal"
+            );
+            assert_eq!(
+                ws.tab_layout,
+                TabLayout::Horizontal,
+                "visibility never changes orientation"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn hidden_panel_stays_hidden_across_orientation_round_trip(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[1])], 0, |ws, _, cx| {
+            ws.tab_layout = TabLayout::Vertical;
+            ws.set_tabs_sidebar_hidden(true, cx);
+            assert!(!ws.tabs_sidebar_visible());
+
+            // Going horizontal hides the panel; coming back must not mount it.
+            ws.set_tab_layout(TabLayout::Horizontal, cx);
+            ws.set_tab_layout(TabLayout::Vertical, cx);
+            assert!(
+                !ws.tabs_sidebar_visible(),
+                "hidden panel must not flash back"
+            );
+            assert!(ws.tabs_sidebar_hidden);
+
+            // Only an explicit show restores it.
+            ws.set_tabs_sidebar_hidden(false, cx);
+            assert!(ws.tabs_sidebar_visible());
+        });
+    }
+
+    #[gpui::test]
+    fn settings_syncs_live_panel_state_from_the_workspace(cx: &mut TestAppContext) {
+        let captured = Rc::new(RefCell::new(None));
+        let out = captured.clone();
+        with_workspace(cx, vec![space_with("A", &[1])], 0, move |ws, window, cx| {
+            ws.tab_layout = TabLayout::Vertical;
+            ws.sidebar_compact = true;
+            ws.tabs_sidebar_hidden = false;
+            ws.sidebar_visible = true;
             crate::shared::themes::init(cx);
-            crate::features::hydration::init(cx);
-        });
-        handle
-            .update(cx, |_, window, cx| {
-                window.replace_root(cx, |window, cx| {
-                    gpui_kit::base::Root::new(ws.clone(), window, cx)
-                });
-                window.draw(cx).clear(cx);
-            })
-            .unwrap();
-        (handle, ws)
-    }
-
-    #[cfg(debug_assertions)]
-    #[gpui::test]
-    fn held_sidebar_reversal_keeps_surface_filled_through_next_move(cx: &mut TestAppContext) {
-        use gpui::{
-            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-            VisualTestContext, point, px,
-        };
-        for compact in [false, true] {
-            let (handle, ws) = rendered_sidebar_window(cx, compact, false);
-            let mut visual = VisualTestContext::from_window(handle, cx);
-            let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
-            let pos = |x| point(px((6. + x) * scale), px(100. * scale));
-            let draw = |visual: &mut VisualTestContext| {
-                visual.update(|window, cx| window.draw(cx).clear(cx));
-                let row = visual.debug_bounds("tabs-slide-row").unwrap();
-                let surface = visual.debug_bounds("tabs-slide-surface").unwrap();
-                let body = visual.debug_bounds("sidebar-adjacent-body").unwrap();
-                let width = f32::from(row.size.width) / scale;
-                let painted = f32::from(surface.size.width.min(row.size.width)) / scale;
-                let gap = f32::from(body.left() - row.right()) / scale;
-                assert!(
-                    (painted - width).abs() < 1.,
-                    "compact start={compact}: {width} allocated, {painted} painted"
-                );
-                (width, gap)
+            ws.open_settings(window, cx);
+            let Some((Overlay::Settings(view), _)) = &ws.overlay else {
+                panic!("Configuration must open from the workspace");
             };
-            let initial = draw(&mut visual);
-            assert_eq!(initial.1, 6.);
-            let x = initial.0 + 2.;
-            let move_to = |visual: &mut VisualTestContext, x| {
-                visual.update(|window, cx| {
-                    window.dispatch_event(
-                        MouseMoveEvent {
-                            position: pos(x),
-                            pressed_button: Some(MouseButton::Left),
-                            modifiers: Modifiers::none(),
-                        }
-                        .to_platform_input(),
-                        cx,
-                    );
-                });
-            };
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: pos(x),
-                        modifiers: Modifiers::none(),
-                        click_count: 1,
-                        first_mouse: false,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-            move_to(&mut visual, x + 4.);
-            move_to(&mut visual, 16.);
-            visual.update(|_, cx| assert_eq!(ws.read(cx).tab_layout, TabLayout::Horizontal));
-            let before = draw(&mut visual);
-            // The same held drag back out reopens it, choosing the mode again:
-            // the rail when the chosen mode is compact, the panel otherwise.
-            move_to(&mut visual, 240.);
-            visual.update(|_, cx| {
-                let ws = ws.read(cx);
-                assert_eq!(ws.tab_layout, TabLayout::Vertical);
-                assert!(
-                    !ws.tabs_sidebar_rail(),
-                    "compact={compact} reopens expanded"
-                );
-                assert_eq!(ws.sidebar_compact, compact, "the chosen mode stays");
-            });
-            let reversed = draw(&mut visual);
-            assert!(
-                (before.0 - reversed.0).abs() < 80.,
-                "{before:?} → {reversed:?}"
-            );
-            assert!(
-                (before.1 - reversed.1).abs() < 2.,
-                "{before:?} → {reversed:?}"
-            );
-            move_to(&mut visual, 390.);
-            let next = draw(&mut visual);
-            assert!((reversed.0 - next.0).abs() < 80., "{reversed:?} → {next:?}");
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseUpEvent {
-                        button: MouseButton::Left,
-                        position: pos(390.),
-                        modifiers: Modifiers::none(),
-                        click_count: 1,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-        }
+            *out.borrow_mut() = Some((cx.entity(), view.clone()));
+        });
+        let (workspace, view) = captured.borrow_mut().take().unwrap();
+        let initial = cx.update(|cx| {
+            (
+                view.read(cx).files_sidebar(),
+                view.read(cx).sidebar_compact(),
+                view.read(cx).tabs_sidebar_hidden(),
+            )
+        });
+        assert!(initial.0);
+        assert!(initial.1);
+        assert!(!initial.2);
+
+        // The title bar toggles Files while the screen is open; the screen's
+        // cached flags must follow the workspace.
+        workspace.update(cx, |ws, cx| ws.toggle_sidebar(cx));
+        let after = cx.update(|cx| {
+            (
+                view.read(cx).files_sidebar(),
+                view.read(cx).sidebar_compact(),
+                view.read(cx).tabs_sidebar_hidden(),
+            )
+        });
+        assert!(!after.0);
+        assert!(after.1);
+        assert!(!after.2);
     }
 
-    #[cfg(debug_assertions)]
     #[gpui::test]
-    fn compact_rail_entry_and_exit_are_continuous(cx: &mut TestAppContext) {
-        use gentle_core::workspaces::{
-            SIDEBAR_COMPACT_BELOW, SIDEBAR_EXPAND_ABOVE, SIDEBAR_MIN_WIDTH,
-        };
-        use gpui::{
-            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-            VisualTestContext, point, px,
-        };
-        let (handle, _ws) = rendered_sidebar_window(cx, true, true);
-        let mut visual = VisualTestContext::from_window(handle, cx);
-        let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
-        let pos = |x: f32| point(px((6. + x) * scale), px(100. * scale));
-        // The row's allocation and the surface painted inside it stay one width.
-        let frame = |visual: &mut VisualTestContext| {
-            visual.update(|window, cx| window.draw(cx).clear(cx));
-            let row = visual.debug_bounds("tabs-slide-row").unwrap();
-            let surface = visual.debug_bounds("tabs-slide-surface").unwrap();
-            let width = f32::from(row.size.width) / scale;
-            let painted = f32::from(surface.size.width.min(row.size.width)) / scale;
+    fn compact_and_hidden_are_independent(cx: &mut TestAppContext) {
+        with_workspace(cx, vec![space_with("A", &[1])], 0, |ws, _, cx| {
+            ws.tab_layout = TabLayout::Vertical;
+            // Compact leaves the panel visible as the rail.
+            ws.set_sidebar_compact(true, cx);
+            assert!(ws.sidebar_compact);
+            assert!(ws.tabs_sidebar_visible());
+            // Hiding removes the panel but keeps the compact choice.
+            ws.set_tabs_sidebar_hidden(true, cx);
+            assert!(!ws.tabs_sidebar_visible());
             assert!(
-                (painted - width).abs() < 1.,
-                "{width} allocated, {painted} painted"
+                ws.sidebar_compact,
+                "hiding doesn't clear the compact choice"
             );
-            width
-        };
-        let move_to = |visual: &mut VisualTestContext, x: f32| {
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseMoveEvent {
-                        position: pos(x),
-                        pressed_button: Some(MouseButton::Left),
-                        modifiers: Modifiers::none(),
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-        };
-        const RAIL: f32 = 48.;
-        let before_drag = frame(&mut visual);
-        assert!(
-            before_drag >= SIDEBAR_MIN_WIDTH,
-            "expanded width {before_drag}"
-        );
-        visual.update(|window, cx| {
-            window.dispatch_event(
-                MouseDownEvent {
-                    button: MouseButton::Left,
-                    position: pos(before_drag + 2.),
-                    modifiers: Modifiers::none(),
-                    click_count: 1,
-                    first_mouse: false,
-                }
-                .to_platform_input(),
-                cx,
-            );
-        });
-        // Pick the edge up; the row keeps its width.
-        move_to(&mut visual, before_drag - 1.);
-        let expanded = frame(&mut visual);
-        assert!(
-            (expanded - before_drag).abs() < 3. && expanded >= SIDEBAR_MIN_WIDTH,
-            "picking up the edge jumped {before_drag} → {expanded}"
-        );
-        let distance = expanded - RAIL;
-        // Into the rail, only once the pointer is well past the minimum.
-        move_to(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
-        let entering = frame(&mut visual);
-        assert!(
-            (entering - expanded).abs() < distance / 2.,
-            "entering the rail jumped {expanded} → {entering}"
-        );
-        // It keeps closing frame after frame: never in one step, never past 48.
-        let mut last = entering;
-        for step in 0..3 {
-            std::thread::sleep(std::time::Duration::from_millis(25));
-            let width = frame(&mut visual);
-            assert!(
-                width <= last + 0.5 && width >= RAIL - 0.5,
-                "closing frame {step}: {last} → {width}"
-            );
-            last = width;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(240));
-        let rail = frame(&mut visual);
-        assert!((rail - RAIL).abs() < 0.5, "rail width {rail}");
-        // Out of the rail, only once the pointer is clearly dragged out.
-        move_to(&mut visual, SIDEBAR_EXPAND_ABOVE + 10.);
-        let leaving = frame(&mut visual);
-        assert!(
-            (leaving - rail).abs() < distance / 2.,
-            "leaving the rail jumped {rail} → {leaving}"
-        );
-        let mut last = leaving;
-        for step in 0..3 {
-            std::thread::sleep(std::time::Duration::from_millis(25));
-            let width = frame(&mut visual);
-            assert!(
-                width >= last - 0.5 && width <= expanded + 0.5,
-                "opening frame {step}: {last} → {width}"
-            );
-            last = width;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(240));
-        let reopened = frame(&mut visual);
-        assert!(
-            (reopened - expanded).abs() < 0.5,
-            "expanded width {reopened}"
-        );
-        visual.update(|window, cx| {
-            window.dispatch_event(
-                MouseUpEvent {
-                    button: MouseButton::Left,
-                    position: pos(SIDEBAR_EXPAND_ABOVE + 10.),
-                    modifiers: Modifiers::none(),
-                    click_count: 1,
-                }
-                .to_platform_input(),
-                cx,
-            );
-        });
-    }
-
-    /// The same rail change with reduced motion: no transition at all.
-    #[cfg(debug_assertions)]
-    #[gpui::test]
-    fn compact_rail_change_is_immediate_with_reduced_motion(cx: &mut TestAppContext) {
-        use gentle_core::workspaces::SIDEBAR_COMPACT_BELOW;
-        use gpui::{
-            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, VisualTestContext,
-            point, px,
-        };
-        let (handle, _ws) = rendered_sidebar_window(cx, true, true);
-        cx.update(|cx| cx.set_reduce_motion(true));
-        let mut visual = VisualTestContext::from_window(handle, cx);
-        let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
-        let pos = |x: f32| point(px((6. + x) * scale), px(100. * scale));
-        let width = |visual: &mut VisualTestContext| {
-            visual.update(|window, cx| window.draw(cx).clear(cx));
-            let row = visual.debug_bounds("tabs-slide-row").unwrap();
-            f32::from(row.size.width) / scale
-        };
-        let move_to = |visual: &mut VisualTestContext, x: f32| {
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseMoveEvent {
-                        position: pos(x),
-                        pressed_button: Some(MouseButton::Left),
-                        modifiers: Modifiers::none(),
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-        };
-        let expanded = width(&mut visual);
-        visual.update(|window, cx| {
-            window.dispatch_event(
-                MouseDownEvent {
-                    button: MouseButton::Left,
-                    position: pos(expanded + 2.),
-                    modifiers: Modifiers::none(),
-                    click_count: 1,
-                    first_mouse: false,
-                }
-                .to_platform_input(),
-                cx,
-            );
-        });
-        move_to(&mut visual, expanded - 1.);
-        assert!((width(&mut visual) - expanded).abs() < 3.);
-        move_to(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
-        assert_eq!(width(&mut visual), 48.);
-    }
-
-    /// S13: with Compact chosen, the rail is the resting mode. Dragging it
-    /// outward expands the sidebar for that gesture only and dragging back
-    /// inward returns to the rail — held in one drag, or after releasing the
-    /// expanded panel and starting another.
-    #[cfg(debug_assertions)]
-    #[gpui::test]
-    fn compact_drags_expand_and_return_to_the_rail(cx: &mut TestAppContext) {
-        use gentle_core::workspaces::{
-            SIDEBAR_COMPACT_BELOW, SIDEBAR_EXPAND_ABOVE, SIDEBAR_MIN_WIDTH,
-        };
-        use gpui::{
-            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-            VisualTestContext, point, px,
-        };
-        let (handle, ws) = rendered_sidebar_window(cx, true, false);
-        let mut visual = VisualTestContext::from_window(handle, cx);
-        let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
-        let pos = |x: f32| point(px((6. + x) * scale), px(100. * scale));
-        const RAIL: f32 = 48.;
-        let frame = |visual: &mut VisualTestContext| {
-            visual.update(|window, cx| window.draw(cx).clear(cx));
-            let row = visual.debug_bounds("tabs-slide-row").unwrap();
-            let surface = visual.debug_bounds("tabs-slide-surface").unwrap();
-            let width = f32::from(row.size.width) / scale;
-            let painted = f32::from(surface.size.width.min(row.size.width)) / scale;
-            assert!(
-                (painted - width).abs() < 1.,
-                "{width} allocated, {painted} painted"
-            );
-            width
-        };
-        let move_to = |visual: &mut VisualTestContext, x: f32| {
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseMoveEvent {
-                        position: pos(x),
-                        pressed_button: Some(MouseButton::Left),
-                        modifiers: Modifiers::none(),
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-        };
-        let press = |visual: &mut VisualTestContext, x: f32| {
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseDownEvent {
-                        button: MouseButton::Left,
-                        position: pos(x),
-                        modifiers: Modifiers::none(),
-                        click_count: 1,
-                        first_mouse: false,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-        };
-        let release = |visual: &mut VisualTestContext, x: f32| {
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseUpEvent {
-                        button: MouseButton::Left,
-                        position: pos(x),
-                        modifiers: Modifiers::none(),
-                        click_count: 1,
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-        };
-        let settle = || std::thread::sleep(std::time::Duration::from_millis(260));
-
-        // Held: out of the rail, then back into it.
-        assert!((frame(&mut visual) - RAIL).abs() < 0.5);
-        press(&mut visual, RAIL + 2.);
-        move_to(&mut visual, RAIL + 5.);
-        move_to(&mut visual, SIDEBAR_EXPAND_ABOVE + 10.);
-        settle();
-        let expanded = frame(&mut visual);
-        assert!(expanded >= SIDEBAR_MIN_WIDTH, "expanded width {expanded}");
-        visual.update(|_, cx| {
-            let ws = ws.read(cx);
-            assert!(ws.sidebar_compact, "the chosen mode is still compact");
-            assert!(ws.tabs_sidebar_peek, "the gesture expanded the rail");
-        });
-        move_to(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
-        settle();
-        let rail = frame(&mut visual);
-        assert!((rail - RAIL).abs() < 0.5, "back in the rail: {rail}");
-        visual.update(|_, cx| assert!(!ws.read(cx).tabs_sidebar_peek));
-        release(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
-
-        // Released while expanded, it stays expanded.
-        press(&mut visual, RAIL + 2.);
-        move_to(&mut visual, RAIL + 5.);
-        move_to(&mut visual, SIDEBAR_EXPAND_ABOVE + 10.);
-        settle();
-        release(&mut visual, SIDEBAR_EXPAND_ABOVE + 10.);
-        let kept_open = frame(&mut visual);
-        assert!(
-            (kept_open - expanded).abs() < 1.,
-            "releasing keeps it expanded: {kept_open}"
-        );
-        // The next drag inward still returns to the rail instead of hiding.
-        press(&mut visual, kept_open + 2.);
-        move_to(&mut visual, kept_open - 1.);
-        move_to(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
-        settle();
-        let rail = frame(&mut visual);
-        assert!(
-            (rail - RAIL).abs() < 0.5,
-            "second drag into the rail: {rail}"
-        );
-        visual.update(|_, cx| {
-            let ws = ws.read(cx);
-            assert_eq!(ws.tab_layout, TabLayout::Vertical, "the rail is not a hide");
+            // Reopening restores the rail, still compact.
+            ws.set_tabs_sidebar_hidden(false, cx);
+            assert!(ws.tabs_sidebar_visible());
             assert!(ws.sidebar_compact);
         });
-        release(&mut visual, SIDEBAR_COMPACT_BELOW - 10.);
     }
 
-    /// S13: with Compact unchecked, dragging inward below the minimum hides
-    /// the sidebar directly, and the same held drag past the minimum brings it
-    /// back.
-    #[cfg(debug_assertions)]
+    /// Choosing a placement from the title bar's primary menu must keep the
+    /// shown workspace and its active tab untouched.
     #[gpui::test]
-    fn vertical_tabs_drag_hides_directly(cx: &mut TestAppContext) {
-        use gentle_core::workspaces::{SIDEBAR_COLLAPSE_BELOW, SIDEBAR_MIN_WIDTH};
-        use gpui::{
-            InputEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-            VisualTestContext, point, px,
-        };
-        let (handle, ws) = rendered_sidebar_window(cx, false, false);
-        let mut visual = VisualTestContext::from_window(handle, cx);
-        let scale = visual.update(|window, _| f32::from(window.rem_size()) / 16.);
-        let pos = |x: f32| point(px((6. + x) * scale), px(100. * scale));
-        let frame = |visual: &mut VisualTestContext| {
-            visual.update(|window, cx| window.draw(cx).clear(cx));
-            let row = visual.debug_bounds("tabs-slide-row").unwrap();
-            f32::from(row.size.width) / scale
-        };
-        let move_to = |visual: &mut VisualTestContext, x: f32| {
-            visual.update(|window, cx| {
-                window.dispatch_event(
-                    MouseMoveEvent {
-                        position: pos(x),
-                        pressed_button: Some(MouseButton::Left),
-                        modifiers: Modifiers::none(),
-                    }
-                    .to_platform_input(),
-                    cx,
-                );
-            });
-        };
-        let settle = || std::thread::sleep(std::time::Duration::from_millis(260));
+    fn primary_menu_placement_keeps_the_workspace_selection(cx: &mut TestAppContext) {
+        with_workspace(
+            cx,
+            vec![space_with("A", &[1, 2]), space_with("B", &[3])],
+            1,
+            |ws, _, cx| {
+                ws.tab_layout = TabLayout::Horizontal;
+                ws.space_mut().active = 1;
+                let focused = ws.focused_pane();
+                assert_eq!(ws.current, 1);
+                assert_eq!(ws.space().active, 1);
 
-        let expanded = frame(&mut visual);
-        assert!(expanded >= SIDEBAR_MIN_WIDTH, "expanded width {expanded}");
-        visual.update(|window, cx| {
-            window.dispatch_event(
-                MouseDownEvent {
-                    button: MouseButton::Left,
-                    position: pos(expanded + 2.),
-                    modifiers: Modifiers::none(),
-                    click_count: 1,
-                    first_mouse: false,
-                }
-                .to_platform_input(),
-                cx,
-            );
-        });
-        move_to(&mut visual, expanded - 1.);
-        move_to(&mut visual, SIDEBAR_COLLAPSE_BELOW - 10.);
-        settle();
-        visual.update(|_, cx| {
-            let ws = ws.read(cx);
-            assert_eq!(ws.tab_layout, TabLayout::Horizontal, "hidden at once");
-            assert!(!ws.sidebar_compact);
-            assert!(!ws.tabs_sidebar_peek, "no rail on the way out");
-        });
-        visual.update(|window, cx| window.draw(cx).clear(cx));
-        assert!(
-            visual.debug_bounds("tabs-slide-row").is_none(),
-            "nothing left in the row"
+                ws.set_tab_layout(TabLayout::Vertical, cx);
+
+                assert_eq!(ws.tab_layout, TabLayout::Vertical);
+                assert_eq!(ws.current, 1, "placement keeps the shown workspace");
+                assert_eq!(ws.space().active, 1, "placement keeps the active tab");
+                assert_eq!(
+                    ws.focused_pane(),
+                    focused,
+                    "placement keeps the focused pane"
+                );
+            },
         );
-        // Still held, moving back out past the minimum brings it back whole.
-        move_to(&mut visual, 240.);
-        settle();
-        let reopened = frame(&mut visual);
-        assert!(
-            (reopened - expanded).abs() < 3.,
-            "reopened width {reopened}"
-        );
-        visual.update(|_, cx| assert_eq!(ws.read(cx).tab_layout, TabLayout::Vertical));
-        visual.update(|window, cx| {
-            window.dispatch_event(
-                MouseUpEvent {
-                    button: MouseButton::Left,
-                    position: pos(240.),
-                    modifiers: Modifiers::none(),
-                    click_count: 1,
-                }
-                .to_platform_input(),
-                cx,
-            );
-        });
     }
 
     fn sorted(ids: Vec<usize>) -> Vec<usize> {

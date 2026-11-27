@@ -134,7 +134,7 @@ pub(super) fn saved_title(pane: &SavedPane) -> SharedString {
 impl Workspace {
     /// The left sidebar's content.
     pub(super) fn render_tab_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
-        if self.tabs_sidebar_rail() {
+        if self.sidebar_compact {
             self.render_compact_sidebar(cx)
         } else {
             self.render_accordion_sidebar(cx)

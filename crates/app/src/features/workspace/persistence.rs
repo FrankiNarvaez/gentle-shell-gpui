@@ -112,6 +112,7 @@ impl Workspace {
             tabs_sidebar_width: self.tabs_sidebar_width,
             files_sidebar_width: self.files_sidebar_width,
             sidebar_compact: self.sidebar_compact,
+            tabs_sidebar_hidden: self.tabs_sidebar_hidden,
         }
     }
 
