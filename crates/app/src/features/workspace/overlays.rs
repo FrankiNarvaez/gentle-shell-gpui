@@ -23,6 +23,8 @@ impl Workspace {
             }
             return;
         }
+        // Before the switcher takes the keyboard from the card.
+        let browser_card = self.focused_card(window, cx);
         self.start_active_session(window, cx);
         let commands = self
             .active_session()
@@ -35,6 +37,7 @@ impl Workspace {
             root: self.space().root.clone(),
             category,
             tab_layout: self.tab_layout,
+            browser_card,
         };
         let view = cx.new(|cx| PaletteView::new(input, window, cx));
         let subscription = cx.subscribe_in(
@@ -156,6 +159,9 @@ impl Workspace {
             } => self.pick_workspace_folder(Some(name), window, cx),
             PaletteAction::OpenFile(path) => self.open_file(path, window, cx),
             PaletteAction::SwitchBranch(branch) => self.confirm_switch_branch(branch, window, cx),
+            PaletteAction::BrowserCard { stage, command } => {
+                self.run_card_command(stage, command, window, cx)
+            }
         }
     }
 
