@@ -137,6 +137,9 @@ struct Pane {
     path: Option<PathBuf>,
     /// Last conversation file seen, to save when it changes.
     session_file: Option<PathBuf>,
+    /// Which conversation its agent shows (`SessionView::conversation`), so
+    /// a notice from an earlier one doesn't open this one.
+    conversation: u64,
     /// What the tab bar shows for this pane, kept here so drawing the chrome
     /// never reads the views of tabs that aren't shown (reading an entity
     /// while drawing makes its every notify redraw the window). Agents

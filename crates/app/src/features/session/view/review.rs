@@ -124,6 +124,10 @@ pub(super) fn review_chip(
                     .px_2()
                     .py_2()
                     .rounded(rems(ui::ISLAND_ROW / 16.))
+                    // The row under the pointer is marked, as other menu
+                    // rows; only its button changes anything, so no pointer
+                    // cursor and no pressed look.
+                    .hover(|s| s.bg(ui::surface_hover()))
                     .child(
                         v_flex()
                             .flex_1()

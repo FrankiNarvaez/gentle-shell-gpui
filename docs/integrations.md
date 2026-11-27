@@ -543,6 +543,8 @@ An MCP server's own UI (a tool with `_meta.ui.resourceUri` pointing at a `ui://`
 
 Only `http://` and `https://` are accepted by `--open-url` and `/web`. The generated shim is app-owned; no Gentle Shell configuration is modified. The app must be running to forward the request (in the agent context it always is); if it is not, the CLI becomes the primary and opens the window with the page. A canvas `Stopped` notice only closes the card when it is still showing the design, not after it navigated to a web app.
 
+**Leaving a maximized card** (`browser/mod.rs`): the card has its own focus (`BrowserPanel::focus`, key context `BrowserCard`), taken by a click on the card and by maximizing it; there Esc (`RestoreCard`) restores a maximized card and stops, and otherwise goes on to the window's Esc. A click in the page gives the keyboard to the native view, and WebKit keeps Esc even when the page ignores it (the app never sees it), so every browser card's page gets `ESCAPE_SCRIPT` as an initialization script: on `keydown` Escape it waits until the page's handlers ran and, unless one called `preventDefault` (or stopped it before the window) or an IME was composing, posts `gentle:escape` through wry's IPC, which restores the card when it is maximized. Any page could post that message; all it can do is restore its own card. The header ends with − (`BrowserEvent::Hide`: to the tray, the native view and its web process dropped until shown again) and ✕ (`BrowserEvent::Close`: `remove_stage`, as the tray's ✕). The switcher (⌘K) asks the workspace which shown card has the keyboard (`focused_card`: the card's focus, or on macOS its web view as the window's first responder) before taking the keyboard, and lists that card's Maximize, Restore, Hide and Close first (`palette::commands::card_rows`; a docked card doesn't maximize).
+
 ### Agents driving pages (`gentle-browser`, the `browser` tool)
 
 After Tern's `tern browser`: an agent opens a page in a card of its own and drives it while the user watches.
@@ -608,7 +610,7 @@ App paths: `dirs::data_dir()/gentle-shell-gpui/` (on macOS, `~/Library/Applicati
 
 | File | Owner | Read / write | Module |
 | --- | --- | --- | --- |
-| `<data>/gentle-shell-gpui/settings.json` (`theme`, `transparency`, `blur`, `opacity`, `interfaceScale`, `interfaceFont`, `codeFont`, `terminalFont`, `codeFontSize`, `terminalFontSize`, `composerParticles`, `onboarding`, `browserProfiles`) | App | R/W | `shared/themes.rs` (`store_path`, `write_key`, `write_glass`, `write_fonts` through `apply_fonts`), `shared/kisses.rs` (`set_typing`), `features/setup/mod.rs` (`first_run`, `mark_done`), `features/browser/mod.rs` (`add_named_profile`) |
+| `<data>/gentle-shell-gpui/settings.json` (`theme`, `transparency`, `blur`, `opacity`, `interfaceScale`, `interfaceFont`, `codeFont`, `terminalFont`, `codeFontSize`, `terminalFontSize`, `composerParticles`, `onboarding`, `browserProfiles`, `changesGroupByFolder`) | App | R/W | `shared/themes.rs` (`store_path`, `write_key`, `write_glass`, `write_fonts` through `apply_fonts`), `shared/kisses.rs` (`set_typing`), `features/setup/mod.rs` (`first_run`, `mark_done`), `features/browser/mod.rs` (`add_named_profile`), `features/files/changes.rs` (`write_group_by_folder`) |
 | `<data>/gentle-shell-gpui/workspaces.json` | App | R/W | `features/workspaces/store.rs` |
 | `<data>/gentle-shell-gpui/app-update.json` | App | R/W | `features/app_update/cache.rs` |
 | `<data>/gentle-shell-gpui/engram-update.json` (`checkedAt`, `latest`, `skipped`) | App | R/W | `features/updates/engram.rs` |

@@ -44,8 +44,9 @@ flowchart TD
 | `music`: gentle-stream's `ctl --json` envelope (the player's state and its structured errors) and the cache folder `setup-samples` uses | `music/`: running `gentle-stream ctl` per request, polling, the ♪ popover; `setup/music.rs`: finding and installing the player. |
 | `web`: http(s) URL extraction, loopback filtering and log punctuation, `same_page` (one browser card per page); `browser`: `gentle-browser` ops and arguments, targets, profiles and their store ids, how cards open (`CardLayout`: docked or floating, the docked column's width, a floating card's size; `browserCard` in the app's `settings.json`); `screen`: `gentle-screen` ops and arguments, key chords, which processes input may reach | `browser/` and session events: in-app browser card (floating, or docked in the window's right column with a draggable divider; `shared/floating.rs` holds the geometry, `Mode` and the dock's width rule shared with the device panel) and `WebSurface`, agents driving pages (`automation.rs`, `automation.js`, `cli.rs`, the `browser` tool); `workspace/stages.rs`: one card per page whoever opens it (the design canvas, `gentle-open`, a dev-server URL and `gentle-browser open` reuse the card already on that page); `screen/`: `gentle-screen` (`cli.rs`, the `screen` tool, the OS per platform); `platform/shims.rs` writes the `gentle-open`, `gentle-browser`, `gentle-device` and `gentle-screen` shims. |
 | `gentle_state`: `PermissionMode`, jobs, phase inference | `shared/gentle_state.rs`: reading and saving `permission-mode.json` (the fallback for a Shell without Desktop RPC's permission slice). |
+| `credits`: parsing `CREDITS.md` (groups by `##` heading, `- Name (@login)` people, GitHub login validation) | `settings/pages/about.rs`: embedding the file with `include_str!`, the About page. |
 | `notifications`: `Alert`, policy validation and changes; `alert_timing`: `Gate` and `ContextLatch` | `alerts/`: file cache and writing, playback, bundled tones, notifying the window. |
-| `double_interrupt`: when a second Ctrl+C closes a terminal pane (`WINDOW`, idle at both presses, key repeats and other keys) | `terminal/`: the keystrokes, the close hint and its timer; `platform/shell_idle.rs`: asking the OS whether the shell is idle at its prompt. |
+| `double_interrupt`: when a second Ctrl+C closes a terminal or agent pane (`WINDOW`, idle at both presses, key repeats and other keys) | `terminal/`: the keystrokes and the hint's timer; `session/`: the same for an agent (idle: no turn or `!command` running), ahead of Copy; `shared/ui.rs`: the close hint; `platform/shell_idle.rs`: asking the OS whether the shell is idle at its prompt. |
 | `text::first_line` | `shared/ui.rs`: the remaining presentation utilities. |
 | `usage`: subscription window models and parsers (Codex, NaN), grouping, account claim; session records, statistics aggregation, ISO dates and civil days | `usage/`: reading `auth.json`, resolving keys (`$VAR`, `!command`), HTTP requests, walking and caching session files, clock and local time offset. |
 | `profiles`: routing model, `profiles.json` format, pins, agent frontmatter, notes | `profiles/`: homes and agent discovery, atomic writes, saved and materialized routing, Pi settings, pin and worktree files, Make default. |
@@ -198,7 +199,7 @@ settings/mod.rs      # SettingsView: state, loading, page navigation
 settings/
 ├── events.rs       # SettingsEvent, what the workspace handles
 ├── view.rs         # Render: header, category rail, page body
-├── navigation.rs   # SettingsPage (the nine categories), search, rail and compact picker
+├── navigation.rs   # SettingsPage (the ten categories), search, rail and compact picker
 ├── pages/          # one file per category, composing the sections below
 ├── services/       # blocking work off the UI thread: snapshot load, upgrades
 ├── layout.rs       # row, section, or_dash
@@ -249,7 +250,7 @@ app_update/
 
 providers/          # mod.rs: types and constructor; login.rs (login helper and flow), list.rs, flow_view.rs, render.rs
 onboarding/         # mod.rs: state and API; checks.rs (install plan, tones), install.rs, view.rs
-notices/            # mod.rs: Notice, Notices; store.rs (push, read, limit), bell.rs, panel.rs
+notices/            # mod.rs: Notice, Notices, Origin (pane + its conversation) and Reach; store.rs (push folding per origin, read, limit), bell.rs, panel.rs
 memory/             # mod.rs: MemoryView (opens on a MemoryTarget); client.rs (HTTP to Engram), view.rs
 alerts/             # mod.rs: fire, context_threshold; policy.rs, sound.rs, tones.rs
 updates/            # mod.rs: check and skip; cache.rs (launcher config), registry.rs (npm)
