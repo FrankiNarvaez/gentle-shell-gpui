@@ -89,8 +89,8 @@ impl Workspace {
             f32::from(window.viewport_size().width) / (f32::from(window.rem_size()) / 16.);
         let now = std::time::Instant::now();
         let occupied = |side| {
-            let (width, fraction) = self.sidebar_geometry(side, window_px, now);
-            rem((width + 6.) * fraction)
+            let (width, gap) = self.visible_sidebar_geometry(side, window_px, now);
+            rem(width + gap)
         };
         let w =
             (f32::from(viewport.width) - rem(12.) - occupied(Side::Tabs) - occupied(Side::Files))
