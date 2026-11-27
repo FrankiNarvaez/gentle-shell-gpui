@@ -671,6 +671,8 @@ Three sliders, 0–100% each, set the glass. **Transparency** (default 60%; 15% 
 
 **Typing kisses** (Configuration › Appearance): Auto, the default, lets the composer blow small pixel kisses and hearts from the caret as you type, none while the system asks to reduce motion; Off stops them for this app only (`composerParticles` in `settings.json`).
 
+**About** (Configuration › About): the app's version and license, links to this repository and its issues, the authors and contributors from [CREDITS.md](CREDITS.md) (built into the app, so no network call) and where the third-party licenses are.
+
 </details>
 
 ---
@@ -915,6 +917,8 @@ Built in public. Bring a real workflow, a bug report, or a small improvement tha
   <a href="https://github.com/Gentleman-Programming/gentle-shell-gpui/stargazers"><strong>★ Star gentle-shell-gpui on GitHub</strong></a>
 </p>
 
+Authors and contributors are credited in [CREDITS.md](CREDITS.md), which the app shows in Configuration › About.
+
 - Open an [issue](https://github.com/Gentleman-Programming/gentle-shell-gpui/issues) with what's needed to reproduce or understand the idea.
 - Before a pull request, read [`docs/development.md`](docs/development.md) and [`AGENTS.md`](AGENTS.md).
 - Follow [Gentleman Programming](https://github.com/Gentleman-Programming) for the wider ecosystem: [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell), Gentle AI and Engram.
@@ -926,6 +930,8 @@ Built in public. Bring a real workflow, a bug report, or a small improvement tha
 </p>
 
 <p align="center"><strong>A native home for the agents you lead.</strong></p>
+
+<a id="license"></a>
 
 <p align="center">
   <img src="https://img.shields.io/badge/License-MIT-F095C8?style=for-the-badge&labelColor=1A1218" alt="MIT License">
