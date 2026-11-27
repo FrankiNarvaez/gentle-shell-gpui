@@ -3675,6 +3675,41 @@ fn opening_a_saved_session_loads_its_conversation(cx: &mut TestAppContext) {
     backend.stop(&view, cx);
 }
 
+/// The conversation a notice is tied to: ⌘N and opening another session
+/// replace it as soon as they are asked (the new session's startup notices
+/// arrive before the answer); resuming the one shown (a restart) keeps it.
+#[cfg(unix)]
+#[gpui::test]
+fn only_another_session_replaces_the_conversation(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let backend = Backend::start(&view, cx);
+    let (shown, other) = (backend.dir.join("a.jsonl"), backend.dir.join("b.jsonl"));
+    let get_states =
+        |n: usize| move |read: &[String]| read.iter().filter(|c| *c == "get_state").count() >= n;
+    let conversation =
+        |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.conversation());
+
+    view.update(cx, |view, cx| {
+        view.session_file = Some(shown.clone());
+        view.open_session(shown.clone(), cx);
+    });
+    backend.settle(&view, cx, get_states(1));
+    assert_eq!(conversation(cx), 0, "resuming the one shown");
+
+    view.update_in(cx, |view, window, cx| view.new_session(window, cx));
+    assert_eq!(conversation(cx), 1, "counted when asked");
+    backend.settle(&view, cx, get_states(2));
+    assert_eq!(conversation(cx), 1);
+
+    view.update(cx, |view, cx| {
+        view.session_file = Some(shown.clone());
+        view.open_session(other.clone(), cx);
+    });
+    backend.settle(&view, cx, get_states(3));
+    assert_eq!(conversation(cx), 2);
+    backend.stop(&view, cx);
+}
+
 /// A tab as the workspace pane draws it: the agent's view, cached, with its
 /// live layer over it.
 #[cfg(unix)]

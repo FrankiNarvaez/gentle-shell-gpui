@@ -54,7 +54,8 @@ pub enum SessionEvent {
     },
     /// Something the window chrome shows may have changed: [`SessionView::title`],
     /// [`SessionView::is_running`], [`SessionView::session_file`],
-    /// [`SessionView::cwd`] or [`SessionView::model_choices`]. Streaming
+    /// [`SessionView::conversation`], [`SessionView::cwd`] or
+    /// [`SessionView::model_choices`]. Streaming
     /// output does not emit it, so the window need not redraw per token.
     ChromeChanged,
     /// A Gentle Shell command whose UI is terminal-only was run (typed or
@@ -99,6 +100,7 @@ struct Chrome {
     running: bool,
     needs_you: bool,
     session_file: Option<PathBuf>,
+    conversation: u64,
     models: u64,
     skills: usize,
 }
@@ -203,6 +205,10 @@ pub struct SessionView {
     skill_dirs: Vec<(String, PathBuf)>,
     session_name: Option<String>,
     session_file: Option<PathBuf>,
+    /// Which conversation the tab shows, counting each time another one
+    /// replaces it on this backend (⌘N, `/new`, `/clone`, switching to
+    /// another session); a restart or resume on the same one keeps it.
+    conversation: u64,
     title: Option<String>,
     active_shell: Option<usize>,
     banner: crate::shared::banner::BannerConfig,
@@ -406,6 +412,7 @@ impl SessionView {
             skill_dirs: Vec::new(),
             session_name: None,
             session_file: None,
+            conversation: 0,
             title: None,
             active_shell: None,
             credentials_reload: None,
@@ -523,6 +530,12 @@ impl SessionView {
             .or_else(|| self.session_file.clone())
     }
 
+    /// See the field: which conversation the tab shows, so the window can
+    /// tell a notice from an earlier one in the same pane.
+    pub fn conversation(&self) -> u64 {
+        self.conversation
+    }
+
     /// Current model, then the reported default, then by provider, keeping catalog order.
     fn ordered_models(&self) -> Vec<state::ModelInfo> {
         let mut models = self.models.available.clone();
@@ -574,6 +587,7 @@ impl SessionView {
             running: self.is_running(),
             needs_you: self.needs_you(),
             session_file: self.session_file(),
+            conversation: self.conversation,
             models: self.models.rev,
             skills: self.skill_dirs.len(),
         };
