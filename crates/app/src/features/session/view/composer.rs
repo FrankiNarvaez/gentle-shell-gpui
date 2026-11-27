@@ -19,9 +19,10 @@ use gpui_kit::*;
 
 use super::activity::{ChipPopoverOptions, chip_popover};
 use super::dialogs::checkbox_box;
-use super::{NARROW, TINY, image_tile, number_badge};
+use super::{FileStrip, NARROW, TINY, file_tile, image_tile, number_badge};
 use crate::features::session::SessionView;
-use crate::features::session::attachments::PastedText;
+use crate::features::session::attachments::{self, PastedText};
+use crate::features::session::submit::SKILL_TOKEN_ID;
 use crate::shared::kisses::{HEART, LIPS, noise, paint_sprite};
 use crate::shared::ui;
 use gentle_core::input_style::InputStyle;
@@ -243,10 +244,10 @@ impl SessionView {
         })
     }
 
-    /// 64px tiles of what waits to be sent: numbered image thumbnails, then
-    /// pasted-text cards; each with ×.
+    /// The strip's tiles: numbered image thumbnails, then the files in the
+    /// same tile, each with its ×.
     fn render_attachments(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if self.attachments.is_empty() && self.pasted.is_empty() {
+        if self.attachments.is_empty() && self.files.is_empty() && self.pasted.is_empty() {
             return None;
         }
         let images: Vec<_> = self
@@ -259,13 +260,34 @@ impl SessionView {
                     rems(64. / 16.),
                     rems(64. / 16.),
                 )
+                .debug_selector(move || format!("composer-image-{ix}"))
                 .child(number_badge(ix + 1))
-                .child(remove_button(
-                    ("attachment-remove", ix),
-                    cx.listener(move |this, _, window, cx| this.remove_attachment(ix, window, cx)),
-                ))
+                .child(
+                    remove_button(
+                        ("attachment-remove", ix),
+                        cx.listener(move |this, _, _, cx| this.remove_attachment(ix, cx)),
+                    )
+                    .debug_selector(move || format!("attachment-remove-{ix}")),
+                )
             })
             .collect();
+        let files = self.files.iter().enumerate().map(|(ix, file)| {
+            let tip: SharedString = format!(
+                "{} ({})",
+                file.path.display(),
+                attachments::human_size(file.bytes)
+            )
+            .into();
+            file_tile(("file-tile", ix), &file.name, tip, FileStrip::Composer)
+                .debug_selector(move || format!("composer-file-{ix}"))
+                .child(
+                    remove_button(
+                        ("file-remove", ix),
+                        cx.listener(move |this, _, _, cx| this.remove_file(ix, cx)),
+                    )
+                    .debug_selector(move || format!("file-remove-{ix}")),
+                )
+        });
         let pastes = self.pasted.iter().enumerate().map(|(ix, paste)| {
             pasted_card(ix + 1, paste).child(remove_button(
                 ("pasted-remove", ix),
@@ -278,6 +300,7 @@ impl SessionView {
                 .flex_wrap()
                 .gap_2()
                 .children(images)
+                .children(files)
                 .children(pastes),
         )
     }
@@ -300,16 +323,19 @@ impl SessionView {
                 Textarea::new(&self.composer)
                     .appearance(false)
                     .disabled(!ready)
-                    // Pasted texts' tokens, as file-icon `#N` chips.
+                    // A pasted text's `#N` chip, or — in the theme's own
+                    // accent — the `/skill:name` the prompt invokes.
                     .token(|token, _, _| {
-                        let chip = InputToken::new(token)
-                            .icon(IconName::FileText)
-                            .text_color(ui::info());
+                        let (tint, icon) = if token.token().id().as_ref() == SKILL_TOKEN_ID {
+                            (ui::accent(), IconName::Zap)
+                        } else {
+                            (ui::info(), IconName::FileText)
+                        };
+                        let chip = InputToken::new(token).icon(icon).text_color(tint);
                         if token.is_selected() {
                             chip
                         } else {
-                            chip.bg(ui::info().opacity(0.12))
-                                .border_color(ui::info().opacity(0.22))
+                            chip.bg(tint.opacity(0.12)).border_color(tint.opacity(0.22))
                         }
                     })
                     .on_paste(move |item, window, cx| {
@@ -470,7 +496,9 @@ impl SessionView {
         rem_size: Pixels,
         cx: &mut Context<Self>,
     ) -> (AnyElement, Option<AnyElement>) {
-        let empty = self.composer.read(cx).value().trim().is_empty() && self.attachments.is_empty();
+        let empty = self.composer.read(cx).value().trim().is_empty()
+            && self.attachments.is_empty()
+            && self.files.is_empty();
         let busy = self.busy();
         let ready = self.backend.is_ready();
         let style = crate::features::session::input_style::style(cx);
@@ -522,9 +550,9 @@ impl SessionView {
             } else {
                 IconName::Paperclip
             }))
-            .tooltip("Attach images (or paste / drop them)")
+            .tooltip("Attach files or images (or paste / drop them)")
             .disabled(!ready)
-            .on_click(cx.listener(|this, _, window, cx| this.pick_images(window, cx)));
+            .on_click(cx.listener(|this, _, window, cx| this.pick_attachments(window, cx)));
         // The model, effort and plan chips every style keeps together.
         let controls = h_flex()
             .min_w_0()
