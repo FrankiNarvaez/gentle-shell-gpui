@@ -200,6 +200,8 @@ impl Workspace {
                 }
             }
             SessionEvent::OpenProviders => self.open_providers(window, cx),
+            // A double Ctrl+C on the idle agent closes its pane as ⌘W does.
+            SessionEvent::CloseRequested => self.close_pane(id, window, cx),
             SessionEvent::OpenScreen(screen) => {
                 self.open_screen(*screen, Some(session.clone()), window, cx)
             }
