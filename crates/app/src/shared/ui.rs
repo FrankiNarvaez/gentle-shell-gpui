@@ -622,8 +622,8 @@ pub fn chip(text: impl Into<SharedString>, color: Hsla) -> Div {
 
 /// A vertical resize handle for sidebar edges, as wide as the window body's
 /// `gap_1p5` (6 px at 100 %) so it fills the gap beside a sidebar. It shows no
-/// visible line until hover, when a 2×40 px pill lights up in the accent color.
-pub fn resize_handle(id: impl Into<ElementId>) -> Stateful<Div> {
+/// visible line until hover or an active resize, when a 2×40 px pill lights up.
+pub fn resize_handle(id: impl Into<ElementId>, active: bool, hover: bool) -> Stateful<Div> {
     div()
         .id(id.into())
         .group("resize-handle")
@@ -639,9 +639,11 @@ pub fn resize_handle(id: impl Into<ElementId>) -> Stateful<Div> {
                 .w(px(2.))
                 .h(px(40.))
                 .rounded_full()
-                .bg(border_strong())
-                .opacity(0.0)
-                .group_hover("resize-handle", |s| s.opacity(1.0).bg(petal())),
+                .bg(petal())
+                .opacity(if active { 1. } else { 0. })
+                .when(hover, |pill| {
+                    pill.group_hover("resize-handle", |s| s.opacity(1.))
+                }),
         )
 }
 
@@ -978,6 +980,23 @@ pub fn scrim(id: impl Into<ElementId>) -> AnimationElement<Div> {
         Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
         |el, t| el.opacity(t),
     )
+}
+
+/// The veil an agent tab wears while files are dragged over it: the tab's own
+/// ground, [`popover_bg`] at 88 %, faded in with [`scrim`]'s curve and no
+/// travel. Not `backdrop()` (the scrim's black): this one keeps the pane's colour
+/// while it hides what is on it, and 88 % is as light as the words over it can
+/// go and still clear AA over a bright backdrop.
+pub fn veil(id: impl Into<ElementId>) -> AnimationElement<Div> {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(popover_bg().opacity(0.88))
+        .with_animation(
+            id,
+            Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t),
+        )
 }
 
 // ── Live indicators ────────────────────────────────────────────────────────

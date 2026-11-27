@@ -57,6 +57,11 @@ impl Workspace {
         self.current = index;
         if let Some(active) = tab_to_activate(self.space(), tab) {
             self.activate(active, window, cx);
+        } else {
+            // An empty workspace has no pane to own the keyboard: keep the
+            // root handle focused so the window-level shortcuts stay
+            // reachable there.
+            self.focus_active(window, cx);
         }
         self.space_mut().last_active = workspaces::now();
         if changed {

@@ -150,6 +150,7 @@ fn fixture<'a>(
                         tabs_sidebar_motion: Default::default(),
                         files_sidebar_motion: Default::default(),
                         sidebar_compact: false,
+                        tabs_sidebar_hidden: false,
                         tabs_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         files_sidebar_width: gentle_core::workspaces::SIDEBAR_DEFAULT_WIDTH,
                         badge_picker: None,
@@ -183,6 +184,7 @@ fn fixture<'a>(
                         closed: Vec::new(),
                         music: cx.new(|cx| crate::features::music::Music::new(window, cx)),
                         devices: cx.new(crate::features::devices::DevicePanel::new),
+                        focus: cx.focus_handle(),
                     };
                     workspace.activate(0, window, cx);
                     workspace
