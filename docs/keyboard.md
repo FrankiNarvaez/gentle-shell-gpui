@@ -26,7 +26,7 @@ While a sequence is pending (after ⌃Space, or the first `g` of `gg`), a which-
 | Next / previous tab | ⌃Tab / ⌃⇧Tab | Ctrl+Tab / Ctrl+Shift+Tab |
 | New pane (tiled) | ⌘D | Ctrl+Shift+D |
 | Split down | ⌘⇧D | Ctrl+Shift+E |
-| Next / previous pane | ⌘] / ⌘[ | Ctrl+] / Ctrl+[ |
+| Next / previous pane | ⌘] / ⌘[ | Ctrl+] / Ctrl+[, or F6 / Shift+F6 |
 | Focus the composer | ⌘L | Ctrl+Shift+L |
 | Focus Files | ⌘⇧B | Ctrl+Shift+B |
 | Focus Git changes | ⌘⇧G | Ctrl+Shift+G |
@@ -104,7 +104,7 @@ More Files keys (always on): open to the side ⌘↵, open in a new tab ⌥⌘�
 
 ## Terminals
 
-Terminal panes get every key that the app has no binding for. On Windows and Linux they also get Ctrl+T, Ctrl+W, Ctrl+B, Ctrl+K, Ctrl+O, Ctrl+Q, Ctrl+[ and Ctrl+], the control keys a shell or Vim relies on (Ctrl+W deletes a word, Ctrl+[ is Escape); outside a terminal those chords keep their command. From a terminal, use the Shift chords (Ctrl+Shift+T, Ctrl+Shift+W…) or the leader: ⌃Space `t` / `x` / `b` / `:` / `h`…`l`. The app takes ⌃Space for the leader, so a terminal program never sees it, not even a lone ⌃Space with no key after it: the guide waits for your choice instead of replaying it. Ctrl+Space (NUL) is what readline, emacs and tmux use for set-mark and as an alternative prefix, so if a program inside a terminal needs it, run tmux with another prefix in the app, or change the leader in `keymap.json` (see below) and keep ⌃Space for the program.
+Terminal panes get every key that the app has no binding for. On Windows and Linux they also get Ctrl+T, Ctrl+W, Ctrl+B, Ctrl+K, Ctrl+O, Ctrl+Q, Ctrl+[ and Ctrl+], the control keys a shell or Vim relies on (Ctrl+W deletes a word, Ctrl+[ is Escape), and F6 / Shift+F6, which programs such as htop and mc use; outside a terminal those keys keep their command. On Windows, AltGr characters (`@`, `#`, `\`, `[`, `€`… on Spanish or German layouts) are typed into the terminal as text. From a terminal, use the Shift chords (Ctrl+Shift+T, Ctrl+Shift+W…) or the leader: ⌃Space `t` / `x` / `b` / `:` / `h`…`l`. The app takes ⌃Space for the leader, so a terminal program never sees it, not even a lone ⌃Space with no key after it: the guide waits for your choice instead of replaying it. Ctrl+Space (NUL) is what readline, emacs and tmux use for set-mark and as an alternative prefix, so if a program inside a terminal needs it, run tmux with another prefix in the app, or change the leader in `keymap.json` (see below) and keep ⌃Space for the program.
 
 Leader `w` moves focus to the tab sidebar on the right, on the active tab. Up/Down or `j`/`k` highlight tabs across every workspace without switching; Enter opens the highlighted tab (switching workspace if needed), and Esc returns to the previous focus without changing anything. With tabs on top, the layout switches to the sidebar first. **Go to tab…** (palette) searches tabs by tab title or workspace name instead.
 

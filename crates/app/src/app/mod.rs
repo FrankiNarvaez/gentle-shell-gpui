@@ -385,6 +385,12 @@ fn bind_defaults(cx: &mut App) {
         KeyBinding::new(split_down, SplitDown, None),
         KeyBinding::new(key!("]"), FocusNextPane, None),
         KeyBinding::new(key!("["), FocusPrevPane, None),
+        // Off macOS also F6, the Windows convention for the next pane: on
+        // layouts such as Spanish, [ and ] need AltGr.
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("f6", FocusNextPane, None),
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("shift-f6", FocusPrevPane, None),
         KeyBinding::new(key!("b"), ToggleSidebar, None),
         // Go to tab N (9 = last tab).
         KeyBinding::new(key!("1"), ActivateTab1, None),
@@ -484,8 +490,9 @@ fn bind_defaults(cx: &mut App) {
 
 /// Global chords off macOS that a focused terminal receives instead.
 #[cfg(not(target_os = "macos"))]
-const TERMINAL_KEEPS: [&str; 8] = [
-    "ctrl-t", "ctrl-w", "ctrl-b", "ctrl-k", "ctrl-o", "ctrl-q", "ctrl-[", "ctrl-]",
+const TERMINAL_KEEPS: [&str; 10] = [
+    "ctrl-t", "ctrl-w", "ctrl-b", "ctrl-k", "ctrl-o", "ctrl-q", "ctrl-[", "ctrl-]", "f6",
+    "shift-f6",
 ];
 
 fn set_menus(cx: &mut App) {
@@ -609,6 +616,8 @@ mod tests {
             ("ctrl-q", Quit.name()),
             ("ctrl-[", FocusPrevPane.name()),
             ("ctrl-]", FocusNextPane.name()),
+            ("f6", FocusNextPane.name()),
+            ("shift-f6", FocusPrevPane.name()),
         ] {
             assert_eq!(
                 resolve(cx, keys, &in_terminal),

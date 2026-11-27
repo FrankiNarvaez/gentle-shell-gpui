@@ -24,6 +24,21 @@ pub(crate) fn is_text_input(ks: &Keystroke) -> bool {
     !m.alt || alt_composes(ks)
 }
 
+/// On Windows AltGr arrives as Ctrl+Alt: AltGr+2 types `@` on Spanish and
+/// German layouts. The platform flags keys whose modifiers change the
+/// character (`prefer_character_input`); those are text, not Ctrl chords.
+pub(crate) fn altgr_composes(ks: &Keystroke, prefer_character_input: bool) -> bool {
+    let m = &ks.modifiers;
+    prefer_character_input
+        && m.control
+        && m.alt
+        && !m.platform
+        && ks
+            .key_char
+            .as_deref()
+            .is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control))
+}
+
 /// On macOS, Option is also the layout's compose key: Option+2 types `@` on
 /// Spanish/German layouts. Treat Option as Meta only when it does not produce
 /// a distinct ASCII character (Option+B → `∫` becomes Meta-b).
@@ -194,7 +209,7 @@ pub(crate) fn is_interrupt(ks: &Keystroke) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_interrupt, is_text_input, key_to_bytes};
+    use super::{altgr_composes, is_interrupt, is_text_input, key_to_bytes};
     use gpui_kit::{Keystroke, Modifiers};
 
     fn ks(key: &str, key_char: Option<&str>, mods: Modifiers) -> Keystroke {
@@ -204,6 +219,26 @@ mod tests {
             key_char: key_char.map(Into::into),
         }
     }
+    /// AltGr+2 (`@`) and AltGr+E (`€`) are text when the platform flags
+    /// them; a Ctrl+Alt chord it does not flag, or Ctrl+W, stays a chord.
+    #[test]
+    fn altgr_characters_are_text() {
+        let ctrl_alt = Modifiers {
+            control: true,
+            alt: true,
+            ..Default::default()
+        };
+        assert!(altgr_composes(&ks("2", Some("@"), ctrl_alt), true));
+        assert!(altgr_composes(&ks("e", Some("€"), ctrl_alt), true));
+        assert!(!altgr_composes(&ks("2", Some("@"), ctrl_alt), false));
+        let ctrl = Modifiers {
+            control: true,
+            ..Default::default()
+        };
+        assert!(!altgr_composes(&ks("w", None, ctrl), false));
+        assert!(!altgr_composes(&ks("w", None, ctrl), true));
+    }
+
     fn none() -> Modifiers {
         Modifiers::default()
     }
