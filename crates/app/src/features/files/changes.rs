@@ -725,6 +725,8 @@ impl ChangesView {
             }
         };
         let weak = cx.entity().downgrade();
+        // An empty Staged stays with its zero, dimmed and with nothing to act on.
+        let empty = count == 0;
         h_flex()
             .h(rems(ROW_HEIGHT / 16.))
             .px_3()
@@ -732,7 +734,8 @@ impl ChangesView {
             .child(
                 Checkbox::new(SharedString::from(format!("{id}-check")))
                     .small()
-                    .checked(group == ChangeGroup::Staged)
+                    .checked(group == ChangeGroup::Staged && !empty)
+                    .disabled(empty)
                     .tooltip(action)
                     .on_click(move |_, _, cx| {
                         let _ = weak.update(cx, |this, cx| all(this, cx));
@@ -762,7 +765,7 @@ impl ChangesView {
                         div()
                             .text_size(rems(13.5 / 16.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(ui::fg())
+                            .text_color(if empty { ui::muted() } else { ui::fg() })
                             .child(label),
                     )
                     .child(
@@ -783,6 +786,7 @@ impl ChangesView {
                     .outline()
                     .xsmall()
                     .label(action)
+                    .disabled(empty)
                     .on_click(cx.listener(move |this, _, _, cx| all(this, cx))),
             )
     }
@@ -1471,6 +1475,7 @@ mod tests {
                 assert_eq!(
                     rows(view),
                     [
+                        "Staged folded=false",
                         "Unstaged folded=false",
                         "Unstaged a.rs",
                         "Untracked folded=true"
@@ -1480,6 +1485,7 @@ mod tests {
                 assert_eq!(
                     rows(view),
                     [
+                        "Staged folded=false",
                         "Unstaged folded=false",
                         "Unstaged a.rs",
                         "Untracked folded=true"
@@ -1489,6 +1495,7 @@ mod tests {
                 assert_eq!(
                     rows(view),
                     [
+                        "Staged folded=false",
                         "Unstaged folded=false",
                         "Unstaged a.rs",
                         "Untracked folded=false",
