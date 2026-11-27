@@ -421,8 +421,10 @@ pub const CONTEXT: &str = "BrowserCard";
 actions!(browser, [RestoreCard]);
 
 pub enum BrowserEvent {
-    /// The card's button: send it to the instance tray.
+    /// The card's − button: send it to the instance tray.
     Hide,
+    /// The card's X button: close it, page and all (as the tray's X).
+    Close,
     /// Docked or floated: the window lays its cards out again.
     Layout,
 }
@@ -946,12 +948,20 @@ impl BrowserPanel {
                         )
                     })
                     .child(
-                        Button::new("browser-close")
+                        Button::new("browser-hide")
                             .ghost()
                             .xsmall()
                             .icon(Icon::new(IconName::Minus))
                             .tooltip("Hide · it stays in the top bar")
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserEvent::Hide))),
+                    )
+                    .child(
+                        Button::new("browser-close")
+                            .ghost()
+                            .xsmall()
+                            .icon(Icon::new(IconName::X))
+                            .tooltip("Close")
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(BrowserEvent::Close))),
                     ),
             )
     }

@@ -206,14 +206,15 @@ impl Workspace {
     ) {
         let id = self.next_stage;
         self.next_stage += 1;
-        // The card's own button only hides it; the tray closes it. Docking
-        // or floating a card lays the others out again.
+        // The card's − hides it in the tray, its X closes it (as the tray's
+        // X). Docking or floating a card lays the others out again.
         let subscriptions = [
             cx.subscribe_in(
                 &panel,
                 window,
                 move |this, _, event: &BrowserEvent, window, cx| match event {
                     BrowserEvent::Hide => this.set_stage_shown(id, false, window, cx),
+                    BrowserEvent::Close => this.remove_stage(id, window, cx),
                     BrowserEvent::Layout => {
                         this.tile_stages(window, cx);
                         cx.notify();
@@ -328,6 +329,7 @@ impl Workspace {
                 panel.update(cx, |panel, cx| panel.restore(cx));
             }
             CardCommand::Hide => self.set_stage_shown(id, false, window, cx),
+            CardCommand::Close => self.remove_stage(id, window, cx),
         }
     }
 

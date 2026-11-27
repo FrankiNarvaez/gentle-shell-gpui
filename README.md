@@ -208,7 +208,7 @@ Click a commit for its details under the list: the whole message and the files i
 
 ### Command palette (⌘K) — Every command, one keystroke away
 
-Categories: All, Commands, Workspaces, Files, Branches. Includes every Gentle Shell slash command and skill. ↑↓ move, ↵ runs, Tab or ←→ (while the search is empty) switch category, Esc closes. Gentle Shell commands whose screen only exists in the terminal open the app's own: `/gentle:usage` and `/gentle:stats` open Usage (Subscription / Local stats), `/gentle:agents` the Agents window and `/gentle:jobs` its Jobs tab, `/gentle:profiles` (no arguments) Profiles, `/gentle:commands` ⌘K, `/gentle:changes` Review. Opened with the keyboard on a browser card (the card or its page), it lists that card's **Maximize**, **Restore** and **Hide browser card** first, whichever apply.
+Categories: All, Commands, Workspaces, Files, Branches. Includes every Gentle Shell slash command and skill. ↑↓ move, ↵ runs, Tab or ←→ (while the search is empty) switch category, Esc closes. Gentle Shell commands whose screen only exists in the terminal open the app's own: `/gentle:usage` and `/gentle:stats` open Usage (Subscription / Local stats), `/gentle:agents` the Agents window and `/gentle:jobs` its Jobs tab, `/gentle:profiles` (no arguments) Profiles, `/gentle:commands` ⌘K, `/gentle:changes` Review. Opened with the keyboard on a browser card (the card or its page), it lists that card's **Maximize**, **Restore**, **Hide** and **Close browser card** first, whichever apply.
 
 <details>
 <summary><kbd>More</kbd> <strong>Categories and Gentle Shell commands</strong></summary>
@@ -573,7 +573,7 @@ With a Shell newer than 4.8 (its `main`), Local stats come from Shell's own `/ge
 
 ### Gentle Design — The design canvas, in a floating card
 
-When Gentle Shell's design canvas opens (`/gentle:design`, or the model's `gentle_design` tool), it waits in the title bar's instance tray (see Instances); open it from there and it shows in a floating browser card, bottom-right by default: drag its header to move it, any edge or corner to resize it, double-click the header or use the button to maximize it. A maximized card shows **Restore** in its header; that button, Esc or another double-click puts it back where it was. Esc works with the keyboard on the card or in its page, but the page gets it first: an Esc the site uses (to close its own menu or dialog) stays there. The header's − hides the card in the instance tray. With the keyboard on a card, ⌘K also offers **Maximize**, **Restore** and **Hide browser card**.
+When Gentle Shell's design canvas opens (`/gentle:design`, or the model's `gentle_design` tool), it waits in the title bar's instance tray (see Instances); open it from there and it shows in a floating browser card, bottom-right by default: drag its header to move it, any edge or corner to resize it, double-click the header or use the button to maximize it. A maximized card shows **Restore** in its header; that button, Esc or another double-click puts it back where it was. Esc works with the keyboard on the card or in its page, but the page gets it first: an Esc the site uses (to close its own menu or dialog) stays there. The header's − hides the card in the instance tray, and its ✕ (last in the header) closes it, page and all, like ✕ in the tray. With the keyboard on a card, ⌘K also offers **Maximize**, **Restore**, **Hide** and **Close browser card**.
 
 <details>
 <summary><kbd>More</kbd> <strong>The card and its web view</strong></summary>

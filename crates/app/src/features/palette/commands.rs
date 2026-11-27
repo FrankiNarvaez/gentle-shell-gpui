@@ -225,8 +225,8 @@ pub(super) fn screen_rows(tab_layout: TabLayout) -> Vec<Row> {
 }
 
 /// The rows of the browser card that had the keyboard: what it can do now.
-/// A maximized card restores, a floating one maximizes, a docked one (which
-/// stays in its column) only hides.
+/// A maximized card restores, a floating one maximizes (a docked one stays
+/// in its column); any hides or closes.
 pub(super) fn card_rows(card: BrowserCard) -> Vec<Row> {
     let BrowserCard {
         stage,
@@ -265,6 +265,12 @@ pub(super) fn card_rows(card: BrowserCard) -> Vec<Row> {
         "Hide browser card",
         format!("{title} waits in the instance tray"),
         CardCommand::Hide,
+    ));
+    rows.push(row(
+        IconName::X,
+        "Close browser card",
+        format!("{title} closes, page and all"),
+        CardCommand::Close,
     ));
     rows
 }
@@ -389,15 +395,16 @@ mod tests {
             .collect::<Vec<_>>()
         };
         let card = |command| PaletteAction::BrowserCard { stage: 3, command };
+        let (hide, close) = (card(CardCommand::Hide), card(CardCommand::Close));
         assert_eq!(
             actions(false, false),
-            [card(CardCommand::Maximize), card(CardCommand::Hide)]
+            [card(CardCommand::Maximize), hide.clone(), close.clone()]
         );
         assert_eq!(
             actions(true, false),
-            [card(CardCommand::Restore), card(CardCommand::Hide)]
+            [card(CardCommand::Restore), hide.clone(), close.clone()]
         );
-        assert_eq!(actions(false, true), [card(CardCommand::Hide)]);
+        assert_eq!(actions(false, true), [hide, close]);
     }
 
     #[test]

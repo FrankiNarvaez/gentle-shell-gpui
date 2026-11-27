@@ -80,7 +80,7 @@ pub enum PaletteAction {
     OpenFile(PathBuf),
     /// Asks for confirmation before running `git switch`.
     SwitchBranch(String),
-    /// Maximize, restore or hide the browser card that had the keyboard
+    /// Maximize, restore, hide or close the browser card that had the keyboard
     /// (the workspace's id for it).
     BrowserCard {
         stage: u64,
@@ -93,6 +93,7 @@ pub enum CardCommand {
     Maximize,
     Restore,
     Hide,
+    Close,
 }
 
 /// The browser card that had the keyboard when the switcher opened (on the
