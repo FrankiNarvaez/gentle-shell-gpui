@@ -593,7 +593,7 @@ mod tests {
         assert!(messages.is_empty(), "{messages:?}");
         let workspace = KeyContext::parse("GentleWorkspace").unwrap();
         let terminal = KeyContext::parse("Terminal").unwrap();
-        let resolve = |cx: &mut TestAppContext, keys: &str, stack: &[KeyContext]| {
+        let resolve = |cx: &mut TestAppContext, keys: &'static str, stack: &[KeyContext]| {
             let input = [Keystroke::parse(keys).unwrap()];
             cx.update(|cx| {
                 cx.key_bindings()
