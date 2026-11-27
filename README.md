@@ -244,7 +244,7 @@ Click it for the list: each row shows the device or page, the agent tab that ope
 
 ### Notifications (🔔) — One inbox for extension notices
 
-Extension notices go to a notification center instead of piling up as toasts; only warnings and errors still toast. The badge counts unread notices, repeats collapse into `×N`, and clicking a notice jumps to the pane that raised it.
+Extension notices go to a notification center instead of piling up as toasts; only warnings and errors still toast. The badge counts unread notices, repeats from the same session collapse into `×N` (the same message from two sessions stays two entries), and clicking a notice jumps to the session that raised it, across workspaces and tabs. A notice whose pane was closed, or whose pane now shows another session (after ⌘N, `/new`, `/clone` or opening a saved session there), says so on its row and when clicked instead of opening something else.
 
 <p align="right"><a href="#top">Back to top ↑</a></p>
 

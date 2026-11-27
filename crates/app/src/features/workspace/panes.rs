@@ -152,6 +152,7 @@ impl Workspace {
             cwd,
             path: None,
             session_file: resume,
+            conversation: 0,
             title: SharedString::default(),
             running: false,
             needs_you: false,
@@ -176,11 +177,17 @@ impl Workspace {
             // Tab titles, running dots and the saved conversation follow
             // each session; its other changes don't touch the chrome.
             SessionEvent::ChromeChanged => {
-                let file = session.read(cx).session_file();
+                let (file, conversation) = {
+                    let session = session.read(cx);
+                    (session.session_file(), session.conversation())
+                };
                 let Some(pane) = self.panes.get_mut(&id) else {
                     return;
                 };
-                let changed = pane.sync_chrome(cx);
+                // A new conversation in the pane sets apart the notices of
+                // the last one.
+                let changed = pane.sync_chrome(cx) || pane.conversation != conversation;
+                pane.conversation = conversation;
                 if pane.session_file != file {
                     pane.session_file = file;
                     self.schedule_save(cx);
@@ -237,9 +244,14 @@ impl Workspace {
             }
             SessionEvent::Notice { level, message } => {
                 let source = self.pane_title(id);
+                let origin = notices::Origin {
+                    pane: id,
+                    conversation: session.read(cx).conversation(),
+                };
                 let (level, message) = (*level, message.clone());
                 self.notices.update(cx, |store, cx| {
-                    store.push(level, message, source, Some(id), std::time::Instant::now());
+                    let now = std::time::Instant::now();
+                    store.push(level, message, source, Some(origin), now);
                     cx.notify();
                 });
                 cx.notify();
@@ -347,6 +359,7 @@ impl Workspace {
             cwd,
             path,
             session_file: None,
+            conversation: 0,
             title: SharedString::default(),
             running: false,
             needs_you: false,
@@ -400,6 +413,7 @@ impl Workspace {
             cwd,
             path: Some(path),
             session_file: None,
+            conversation: 0,
             title: SharedString::default(),
             running: false,
             needs_you: false,
@@ -605,6 +619,12 @@ impl Workspace {
         }
         self.focus_active(window, cx);
         cx.notify();
+    }
+
+    /// Whether a notice's pane is still open and still shows the session
+    /// that sent it.
+    pub(super) fn notice_reach(&self, origin: &notices::Origin) -> notices::Reach {
+        origin.reach(self.panes.get(&origin.pane).map(|p| p.conversation))
     }
 
     /// Show the pane wherever it lives: its workspace, its tab, then focus.
