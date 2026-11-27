@@ -427,7 +427,7 @@ fn post_compaction_estimate_is_shown_approximately(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(at, None, Modifiers::none());
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
-    assert!(drawn(cx, "context-ring-overview-~40k (~20%)"));
+    assert!(!drawn(cx, "context-ring-overview-~40k (~20%)"));
 }
 
 #[gpui::test]
@@ -477,7 +477,7 @@ fn compaction_without_estimate_restores_interaction_without_inventing_usage(
     cx.simulate_mouse_move(at, None, Modifiers::none());
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
-    assert!(drawn(cx, "context-ring-overview-hint"));
+    assert!(!drawn(cx, "context-ring-overview-hint"));
     click(cx, "context-ring");
     assert!(drawn(cx, "context-compact-control"));
     assert!(drawn(cx, "context-auto-compaction"));
@@ -597,7 +597,7 @@ fn post_compaction_estimate_survives_empty_context(cx: &mut TestAppContext) {
     cx.simulate_mouse_move(at, None, Modifiers::none());
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
-    assert!(drawn(cx, "context-ring-overview-~62.8k (~23%)"));
+    assert!(!drawn(cx, "context-ring-overview-~62.8k (~23%)"));
     view.update_in(cx, |view, window, cx| {
         for (seq, context, expected_percent) in [
             (4, json!({"window": 314000}), Some(20.0)),
@@ -915,8 +915,8 @@ fn context_ring_shows_model_window_without_context_feed(cx: &mut TestAppContext)
     cx.simulate_mouse_move(at, None, Modifiers::none());
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
-    assert!(drawn(cx, "context-ring-overview-25%"));
-    assert!(drawn(cx, "context-ring-overview-window-200k"));
+    assert!(!drawn(cx, "context-ring-overview-25%"));
+    assert!(!drawn(cx, "context-ring-overview-window-200k"));
     click(cx, "context-ring");
     assert!(drawn(cx, "context-ring-context-window-200k"));
     assert!(drawn(cx, "context-ring-usage-25%"));
@@ -924,7 +924,7 @@ fn context_ring_shows_model_window_without_context_feed(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
-fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
+fn context_ring_tooltip_survives_live_usage_updates(cx: &mut TestAppContext) {
     let (view, cx) = tab(cx);
     view.update(cx, |view, cx| {
         view.usage.context_percent = Some(5.0);
@@ -938,14 +938,16 @@ fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
     view.update(cx, |view, _| assert!(view.usage.context_ring_hovered));
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
-    assert!(drawn(cx, "context-ring-overview-48.1k (5%)"));
-    assert!(drawn(cx, "context-ring-overview-window-200k"));
+    assert!(drawn(cx, "context-ring-tooltip"));
+    assert!(!drawn(cx, "context-ring-overview-48.1k (5%)"));
+    assert!(!drawn(cx, "context-ring-overview-window-200k"));
     view.update(cx, |view, cx| {
         view.usage.context_tokens = None;
         view.usage.context_percent = Some(25.0);
         cx.notify();
     });
-    assert!(drawn(cx, "context-ring-overview-25%"));
+    assert!(drawn(cx, "context-ring-tooltip"));
+    assert!(!drawn(cx, "context-ring-overview-25%"));
     assert!(!drawn(cx, "context-ring-overview-48.1k (5%)"));
     cx.simulate_mouse_move(
         gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.)),
@@ -956,7 +958,7 @@ fn context_ring_hover_overview_updates_live(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn context_ring_hover_returns_after_toggle_and_outside_click(cx: &mut TestAppContext) {
+fn context_ring_tooltip_returns_after_toggle_and_outside_click(cx: &mut TestAppContext) {
     let (_, cx) = tab(cx);
     assert!(drawn(cx, "context-ring"));
     let at = cx.debug_bounds("context-ring").unwrap().center();
@@ -966,14 +968,17 @@ fn context_ring_hover_returns_after_toggle_and_outside_click(cx: &mut TestAppCon
         cx.simulate_mouse_move(at, None, Modifiers::none());
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(2));
-        assert!(drawn(cx, "context-ring-overview-hint"));
+        assert!(drawn(cx, "context-ring-tooltip"));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
         click(cx, "context-ring");
         assert!(drawn(cx, "context-compact-control"));
+        assert!(!drawn(cx, "context-ring-tooltip"));
         assert!(!drawn(cx, "context-ring-overview-hint"));
         cx.simulate_mouse_move(outside, None, Modifiers::none());
         cx.simulate_mouse_move(at, None, Modifiers::none());
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(2));
+        assert!(!drawn(cx, "context-ring-tooltip"));
         assert!(!drawn(cx, "context-ring-overview-hint"));
         if outside_click {
             cx.simulate_click(outside, Modifiers::none());
@@ -985,25 +990,104 @@ fn context_ring_hover_returns_after_toggle_and_outside_click(cx: &mut TestAppCon
         cx.simulate_mouse_move(at, None, Modifiers::none());
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(2));
-        assert!(drawn(cx, "context-ring-overview-hint"));
+        assert!(drawn(cx, "context-ring-tooltip"));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
     }
 }
 
 #[gpui::test]
-fn context_ring_hover_returns_after_escape(cx: &mut TestAppContext) {
+fn context_ring_tooltip_returns_after_escape(cx: &mut TestAppContext) {
     let (_, cx) = tab(cx);
     assert!(drawn(cx, "context-ring"));
     let at = cx.debug_bounds("context-ring").unwrap().center();
     let outside = gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(0.));
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-tooltip"));
     click(cx, "context-ring");
     assert!(drawn(cx, "context-compact-control"));
+    cx.simulate_mouse_move(outside, None, Modifiers::none());
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(!drawn(cx, "context-ring-tooltip"));
     cx.simulate_keystrokes("escape");
     assert!(!drawn(cx, "context-compact-control"));
     cx.simulate_mouse_move(outside, None, Modifiers::none());
     cx.simulate_mouse_move(at, None, Modifiers::none());
     cx.executor()
         .advance_clock(std::time::Duration::from_secs(2));
-    assert!(drawn(cx, "context-ring-overview-hint"));
+    assert!(drawn(cx, "context-ring-tooltip"));
+    assert!(!drawn(cx, "context-ring-overview-hint"));
+}
+
+#[gpui::test]
+fn context_ring_has_no_hover_popup_and_details_have_progress(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(62.0);
+        cx.notify();
+    });
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(!drawn(cx, "context-ring-overview-hint"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-ring-progress"));
+}
+
+#[gpui::test]
+fn context_ring_tooltip_and_advice_spacing(cx: &mut TestAppContext) {
+    let (_, cx) = tab(cx);
+    let at = cx.debug_bounds("context-ring").unwrap().center();
+    cx.simulate_mouse_move(at, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(2));
+    assert!(drawn(cx, "context-ring-tooltip"));
+    assert!(!drawn(cx, "context-ring-overview-hint"));
+    click(cx, "context-ring");
+    assert!(drawn(cx, "context-compact-control"));
+    assert!(drawn(cx, "context-auto-compaction"));
+    assert!(!drawn(cx, "context-ring-advice-divider"));
+    let progress = cx.debug_bounds("context-ring-progress").unwrap();
+    let advice = cx
+        .debug_bounds("Compacting summarizes the conversation to free context.")
+        .unwrap();
+    assert!(advice.top() >= progress.bottom());
+}
+
+#[gpui::test]
+fn context_ring_progress_tracks_live_estimated_and_missing_usage(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = Some(69.0);
+        cx.notify();
+    });
+    click(cx, "context-ring");
+    for (percent, selector, label) in [
+        (69.0, "context-progress-success", "context-ring-usage-~69%"),
+        (70.0, "context-progress-warning", "context-ring-usage-~70%"),
+        (90.0, "context-progress-danger", "context-ring-usage-~90%"),
+    ] {
+        view.update(cx, |view, cx| {
+            view.usage.context_percent = Some(percent);
+            view.usage.context_estimated = true;
+            cx.notify();
+        });
+        assert!(drawn(cx, selector));
+        assert!(drawn(cx, label));
+        let track = cx.debug_bounds("context-ring-progress").unwrap();
+        let fill = cx.debug_bounds("context-progress-fill").unwrap();
+        let ratio = f32::from(fill.size.width) / f32::from(track.size.width);
+        assert!((ratio - percent as f32 / 100.).abs() < 0.02);
+    }
+    view.update(cx, |view, cx| {
+        view.usage.context_percent = None;
+        cx.notify();
+    });
+    assert!(!drawn(cx, "context-progress-fill"));
 }
 
 #[gpui::test]
@@ -1085,7 +1169,7 @@ fn context_ring_advice_updates_at_boundaries_and_keeps_controls(cx: &mut TestApp
             assert_eq!(drawn(cx, text), text == expected, "at {percent}%: {text}");
         }
         assert!(drawn(cx, "Add what to keep with /compact <instructions>."));
-        assert!(drawn(cx, "context-ring-advice-divider"));
+        assert!(!drawn(cx, "context-ring-advice-divider"));
         assert!(drawn(cx, "context-compact-control"));
         assert!(drawn(cx, "context-auto-compaction"));
     }
@@ -1136,7 +1220,7 @@ fn context_ring_replaces_legacy_context_meter(cx: &mut TestAppContext) {
         cx.simulate_mouse_move(at, None, Modifiers::none());
         cx.executor()
             .advance_clock(std::time::Duration::from_secs(2));
-        assert!(drawn(cx, "context-ring-overview-hint"));
+        assert!(!drawn(cx, "context-ring-overview-hint"));
         click(cx, "context-ring");
         assert!(drawn(cx, "context-compact-control"));
         assert!(drawn(cx, "context-auto-compaction"));

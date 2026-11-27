@@ -144,6 +144,38 @@ impl SessionView {
                         .into_any_element(),
                 )
             }));
+            rows.push(
+                div()
+                    .debug_selector(|| "context-ring-progress".into())
+                    .w_full()
+                    .h(px(5.))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .bg(ui::border_strong())
+                    .when(percent > 0. && percent.is_finite(), |track| {
+                        let tone = if percent >= 90. {
+                            "context-progress-danger"
+                        } else if percent >= 70. {
+                            "context-progress-warning"
+                        } else {
+                            "context-progress-success"
+                        };
+                        track.child(
+                            div()
+                                .debug_selector(move || tone.into())
+                                .h_full()
+                                .w(relative(percent.clamp(0., 100.) as f32 / 100.))
+                                .rounded_full()
+                                .bg(color)
+                                .child(
+                                    div()
+                                        .debug_selector(|| "context-progress-fill".into())
+                                        .size_full(),
+                                ),
+                        )
+                    })
+                    .into_any_element(),
+            );
             let advice = if percent >= 90. {
                 "Context nearly full. Compact or start a new session."
             } else if percent >= 70. {
@@ -152,15 +184,6 @@ impl SessionView {
                 "Compacting summarizes the conversation to free context."
             };
             let instruction = "Add what to keep with /compact <instructions>.";
-            rows.push(
-                div()
-                    .debug_selector(|| "context-ring-advice-divider".into())
-                    .my_1()
-                    .h(px(1.))
-                    .w_full()
-                    .bg(ui::border())
-                    .into_any_element(),
-            );
             rows.push(
                 v_flex()
                     .text_size(rems(12. / 16.))
@@ -183,6 +206,7 @@ impl SessionView {
                         Button::new("context-compact")
                             .small()
                             .primary()
+                            .cursor(CursorStyle::Arrow)
                             .icon(Icon::new(IconName::ChevronsDownUp))
                             .label(if compacting {
                                 "Compacting…"
@@ -190,7 +214,6 @@ impl SessionView {
                                 "Compact now"
                             })
                             .loading(compacting)
-                            .when(!compacting && ready, |button| button.cursor_pointer())
                             .disabled(compacting || !ready)
                             .on_click(move |_, _, cx| {
                                 let _ = compact.update(cx, |this, cx| this.compact(None, cx));
@@ -202,7 +225,7 @@ impl SessionView {
                     .debug_selector(|| "context-auto-compaction".into())
                     .gap_2()
                     .pt_1()
-                    .cursor_pointer()
+                    .cursor(CursorStyle::Arrow)
                     .text_size(rems(12. / 16.))
                     .text_color(ui::fg())
                     .when(auto.is_none() || !ready, |d| d.opacity(0.5))
