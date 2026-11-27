@@ -74,6 +74,14 @@ pub(in crate::features::session) struct Live {
     /// When Esc last closed something (a panel, a dialog, a surface), so a
     /// quick run of Esc presses closing things doesn't go on to stop the turn.
     pub(in crate::features::session) escape_closed: Option<Instant>,
+    /// A first Ctrl+C on the idle agent, waiting for the second that closes
+    /// the pane (as at a terminal's idle prompt).
+    pub(in crate::features::session) double_interrupt:
+        gentle_core::double_interrupt::DoubleInterrupt,
+    /// Ctrl+C went down and hasn't come up: a key repeat, never a second press.
+    pub(in crate::features::session) interrupt_held: bool,
+    /// Counts the close hints shown, so each one runs its own fade.
+    pub(in crate::features::session) close_hints: u64,
 }
 
 /// How often live timers are re-checked.

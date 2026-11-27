@@ -1016,7 +1016,11 @@ impl SessionView {
     /// command list): Pi replaces the session on the same backend, so the
     /// conversation and the channel start over on the one it reports.
     pub(super) fn replace_session(&mut self, command: Value, cx: &mut Context<Self>) {
-        self.request(command, cx, |this, result, cx| {
+        // Counted when asked, not on the answer: what the backend says while
+        // it switches (the new session's startup notices) is the new one's.
+        let before = self.conversation;
+        self.conversation += 1;
+        self.request(command, cx, move |this, result, cx| {
             if let Some(data) = this.report(result)
                 && data["cancelled"] != true
             {
@@ -1024,12 +1028,20 @@ impl SessionView {
                 this.reset_desktop_channel();
                 this.refresh_state(cx);
                 this.refresh_git(cx);
+            } else {
+                this.conversation = before;
             }
         });
     }
 
     /// RPC `switch_session` to a saved conversation.
     pub fn open_session(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // Another conversation, counted when asked (see `replace_session`);
+        // resuming the one shown (at launch, on a restart) is not.
+        let before = self.conversation;
+        if self.session_file().as_ref() != Some(&path) {
+            self.conversation += 1;
+        }
         let command = json!({"type": "switch_session", "sessionPath": path});
         self.request(command, cx, move |this, result, cx| {
             let switched = this
@@ -1043,6 +1055,8 @@ impl SessionView {
                 this.session_file = Some(path);
                 this.reset_desktop_channel();
                 this.refresh_state(cx);
+            } else {
+                this.conversation = before;
             }
         });
     }

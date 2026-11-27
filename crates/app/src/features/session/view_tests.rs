@@ -2721,6 +2721,129 @@ fn escape_closes_first_then_stops_the_turn(cx: &mut TestAppContext) {
     assert_eq!(stopping(cx), turn, "with nothing open, Esc stops the turn");
 }
 
+/// Counts the tab's requests to close its pane; they count while the
+/// subscription lives.
+fn close_requests(
+    view: &Entity<SessionView>,
+    cx: &mut VisualTestContext,
+) -> (Rc<RefCell<usize>>, Subscription) {
+    let count: Rc<RefCell<usize>> = Rc::default();
+    let seen = count.clone();
+    let subscription = cx.cx.update(|cx| {
+        cx.subscribe(view, move |_, event: &super::SessionEvent, _| {
+            if matches!(event, super::SessionEvent::CloseRequested) {
+                *seen.borrow_mut() += 1;
+            }
+        })
+    });
+    (count, subscription)
+}
+
+/// Lets go of Ctrl+C: the next press is a new one, not a key repeat.
+fn release_ctrl_c(cx: &mut VisualTestContext) {
+    cx.simulate_event(gpui_kit::KeyUpEvent {
+        keystroke: gpui_kit::Keystroke::parse("ctrl-c").unwrap(),
+    });
+}
+
+/// Two Ctrl+C on the idle agent ask the window to close its pane, sending
+/// nothing and leaving the draft alone; a held key or any other key between
+/// the presses starts over.
+#[gpui::test]
+fn double_ctrl_c_on_the_idle_agent_closes_its_pane(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let (closes, _subscription) = close_requests(&view, cx);
+    let armed = |cx: &mut VisualTestContext| {
+        view.read_with(cx, |view, _| view.live.double_interrupt.armed().is_some())
+    };
+    type_in_composer(&view, cx, "exit");
+
+    cx.simulate_keystrokes("ctrl-c");
+    assert!(armed(cx), "the first press shows the hint");
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(*closes.borrow(), 0, "a key repeat never closes");
+    assert!(!armed(cx), "and drops the first press");
+    release_ctrl_c(cx);
+
+    cx.simulate_keystrokes("ctrl-c");
+    release_ctrl_c(cx);
+    cx.simulate_keystrokes("left");
+    assert!(!armed(cx), "another key starts over");
+    cx.simulate_keystrokes("ctrl-c");
+    assert!(armed(cx));
+    release_ctrl_c(cx);
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(*closes.borrow(), 1, "the second press closes");
+    assert!(!armed(cx));
+    assert_eq!(composer_text(&view, cx), "exit");
+    assert_eq!(sent_prompts(&view, cx), 0);
+}
+
+/// Ctrl+C while a turn runs stops it, as Esc does, and never arms the close:
+/// the next press, the agent idle again, only shows the hint.
+#[gpui::test]
+fn ctrl_c_while_a_turn_runs_only_stops_it(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let (closes, _subscription) = close_requests(&view, cx);
+    type_in_composer(&view, cx, "");
+    view.update(cx, |view, cx| {
+        view.transcript.running = true;
+        view.sync_view(cx);
+    });
+
+    cx.simulate_keystrokes("ctrl-c");
+    let (stopping, turn, armed) = view.read_with(cx, |view, _| {
+        (
+            view.live.stopping,
+            view.turn_since(),
+            view.live.double_interrupt.armed(),
+        )
+    });
+    assert!(turn.is_some());
+    assert_eq!(stopping, turn, "the press stops the turn");
+    assert_eq!(armed, None, "and doesn't arm the close");
+
+    release_ctrl_c(cx);
+    view.update(cx, |view, cx| {
+        view.transcript.running = false;
+        view.sync_view(cx);
+    });
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(*closes.borrow(), 0);
+    assert!(view.read_with(cx, |view, _| view.live.double_interrupt.armed().is_some()));
+}
+
+/// Off macOS Ctrl+C is also Copy: with text selected it copies and isn't a
+/// press. On macOS (⌘C copies) it is a press all the same.
+#[gpui::test]
+fn ctrl_c_with_text_selected_copies_off_macos(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    type_in_composer(&view, cx, "exit");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-a"
+    } else {
+        "ctrl-a"
+    });
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()))
+    });
+
+    cx.simulate_keystrokes("ctrl-c");
+    let armed = view.read_with(cx, |view, _| view.live.double_interrupt.armed().is_some());
+    let clipboard = cx.update(|_, cx| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .unwrap_or_default()
+    });
+    if cfg!(target_os = "macos") {
+        assert!(armed);
+        assert_eq!(clipboard, "sentinel");
+    } else {
+        assert!(!armed, "copying isn't a press");
+        assert_eq!(clipboard, "exit");
+    }
+}
+
 /// Moving an agent to another folder asks first only when that would lose
 /// something: what was said, a running turn or a conversation about to resume.
 #[gpui::test]
@@ -3549,6 +3672,41 @@ fn opening_a_saved_session_loads_its_conversation(cx: &mut TestAppContext) {
         "it read {read:?}"
     );
     assert_eq!(user_texts(&view, cx), ["hello"]);
+    backend.stop(&view, cx);
+}
+
+/// The conversation a notice is tied to: ⌘N and opening another session
+/// replace it as soon as they are asked (the new session's startup notices
+/// arrive before the answer); resuming the one shown (a restart) keeps it.
+#[cfg(unix)]
+#[gpui::test]
+fn only_another_session_replaces_the_conversation(cx: &mut TestAppContext) {
+    let (view, cx) = tab(cx);
+    let backend = Backend::start(&view, cx);
+    let (shown, other) = (backend.dir.join("a.jsonl"), backend.dir.join("b.jsonl"));
+    let get_states =
+        |n: usize| move |read: &[String]| read.iter().filter(|c| *c == "get_state").count() >= n;
+    let conversation =
+        |cx: &mut VisualTestContext| view.read_with(cx, |view, _| view.conversation());
+
+    view.update(cx, |view, cx| {
+        view.session_file = Some(shown.clone());
+        view.open_session(shown.clone(), cx);
+    });
+    backend.settle(&view, cx, get_states(1));
+    assert_eq!(conversation(cx), 0, "resuming the one shown");
+
+    view.update_in(cx, |view, window, cx| view.new_session(window, cx));
+    assert_eq!(conversation(cx), 1, "counted when asked");
+    backend.settle(&view, cx, get_states(2));
+    assert_eq!(conversation(cx), 1);
+
+    view.update(cx, |view, cx| {
+        view.session_file = Some(shown.clone());
+        view.open_session(other.clone(), cx);
+    });
+    backend.settle(&view, cx, get_states(3));
+    assert_eq!(conversation(cx), 2);
     backend.stop(&view, cx);
 }
 

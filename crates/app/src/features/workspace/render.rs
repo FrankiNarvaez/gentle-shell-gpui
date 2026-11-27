@@ -363,10 +363,19 @@ impl Render for Workspace {
                                             })
                                             .child(notices::bell(
                                                 &self.notices,
-                                                Rc::new(move |pane, window, cx| {
-                                                    let _ = weak.update(cx, |this, cx| {
-                                                        this.reveal_pane(pane, window, cx)
-                                                    });
+                                                Rc::new({
+                                                    let weak = weak.clone();
+                                                    move |pane, window, cx| {
+                                                        let _ = weak.update(cx, |this, cx| {
+                                                            this.reveal_pane(pane, window, cx)
+                                                        });
+                                                    }
+                                                }),
+                                                Rc::new(move |origin, cx| {
+                                                    weak.upgrade()
+                                                        .map_or(notices::Reach::Open, |this| {
+                                                            this.read(cx).notice_reach(origin)
+                                                        })
                                                 }),
                                                 cx,
                                             ))
