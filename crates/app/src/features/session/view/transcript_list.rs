@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::*;
 
 use super::rail::preview;
-use super::{BubbleText, CardSpec, card_spec, follows_step, line_count};
+use super::{BubbleText, CardSpec, follows_step, line_count};
 use crate::features::session::attachments;
 use crate::shared::ui;
 use gentle_core::scroll::{self, Estimate, RailMark};
@@ -100,7 +100,8 @@ pub(super) struct HeaderKey {
 
 /// Display data derived once per change of an item, not per frame.
 pub(super) enum Prepared {
-    Card(CardSpec),
+    /// A tool or shell card's data, built when its row first shows.
+    Card(OnceCell<Option<CardSpec>>),
     /// A custom message's line count.
     Lines(usize),
     /// A message you sent as its bubble shows it, cut when first shown.
@@ -367,7 +368,7 @@ impl TranscriptList {
                 self.step_tight.remove(&ix);
             }
             let prepared = match item {
-                Item::Tool { .. } | Item::Shell { .. } => card_spec(item).map(Prepared::Card),
+                Item::Tool { .. } | Item::Shell { .. } => Some(Prepared::Card(OnceCell::new())),
                 Item::Custom { text, .. } => Some(Prepared::Lines(line_count(text))),
                 Item::CommandOutput { notices, .. } => Some(Prepared::Lines(
                     notices.iter().map(|(_, text)| line_count(text)).sum(),
