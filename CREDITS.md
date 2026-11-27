@@ -1,18 +1,17 @@
 # Credits
 
-The people behind Gentle Shell's desktop app. Configuration › About shows this list in the app, built in (no network call), so keep it here: one `- Name (@github-login)` line per person under a `##` heading.
+Everyone who has authored a commit in this repository. Configuration › About shows this list in the app, built in.
 
-## Authors
-
-- Ismael Osuna (@ismaelosuna7824)
+Generated from the git history by `scripts/credits.sh` (bots left out; `.mailmap` merges a person's names and addresses and links them to their GitHub account). Don't edit it by hand: add a `.mailmap` line if needed, run the script from a full clone and commit the result.
 
 ## Contributors
 
 - Alan Buscaglia (@Alan-TheGentleman)
-- Franki Narvaez (@FrankiNarvaez)
+- FrankiNarvaez (@FrankiNarvaez)
+- Ismael Osuna (@ismaelosuna7824)
 - JaViJeC (@javijec)
-- Josué Rodríguez (@josuerodcat90)
-- Lionel Joaquin (@lioneljg)
+- Josue Rodriguez (@josuerodcat90)
+- lioneljg (@lioneljg)
 - Matías D. (@decode2)
-- Maylo Parra (@Mayloparra24)
+- Maylo Daring Parra Aguirre (@Mayloparra24)
 - Reaan (@Reaan06)
