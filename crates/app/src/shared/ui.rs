@@ -620,6 +620,29 @@ pub fn chip(text: impl Into<SharedString>, color: Hsla) -> Div {
         .child(text.into())
 }
 
+/// "Press ⌃C again to close" (`Ctrl+C` off macOS) for a double Ctrl+C's
+/// window (`gentle_core::double_interrupt::WINDOW`), placed by the pane that
+/// shows it: on the pane's own surface so it reads over its content, in the
+/// interface's `font` (a terminal's draws ⌃ as ^), fading in quickly and out
+/// as the window closes. `id`: a new one per hint, so each runs its own fade.
+pub fn close_hint(id: u64, font: SharedString) -> impl IntoElement {
+    let chord = if cfg!(target_os = "macos") {
+        "⌃C"
+    } else {
+        "Ctrl+C"
+    };
+    div()
+        .rounded_md()
+        .bg(panel())
+        .font_family(font)
+        .child(chip(format!("Press {chord} again to close"), muted()))
+        .with_animation(
+            ElementId::NamedInteger("close-hint".into(), id),
+            Animation::new(gentle_core::double_interrupt::WINDOW),
+            |el, t| el.opacity((t / 0.15).min((1. - t) / 0.35).clamp(0., 1.)),
+        )
+}
+
 /// A vertical resize handle for sidebar edges, as wide as the window body's
 /// `gap_1p5` (6 px at 100 %) so it fills the gap beside a sidebar. It shows no
 /// visible line until hover or an active resize, when a 2×40 px pill lights up.

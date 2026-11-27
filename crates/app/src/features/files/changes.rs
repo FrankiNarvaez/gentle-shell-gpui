@@ -69,6 +69,7 @@ enum Line {
     Header {
         group: ChangeGroup,
         count: usize,
+        folded: bool,
     },
     Dir {
         group: ChangeGroup,
@@ -93,10 +94,12 @@ pub struct ChangesView {
     /// Group by folder (the default) or the flat list; the choice is saved
     /// in the app's settings as `changesGroupByFolder`.
     tree_mode: bool,
+    /// Groups folded to their header (Staged, Unstaged, Untracked).
+    folded: HashSet<ChangeGroup>,
     /// Folders folded in the by-folder view, per group.
     collapsed: HashSet<(ChangeGroup, String)>,
     selected: Option<(ChangeGroup, String)>,
-    /// The list's rows, rebuilt when the tree, mode or collapsed folders change.
+    /// The list's rows, rebuilt when the tree, mode or folded groups or folders change.
     lines: Rc<Vec<Line>>,
     scroll: UniformListScrollHandle,
     summary: Entity<InputState>,
@@ -140,6 +143,7 @@ impl ChangesView {
             tree_mode: themes::store_path()
                 .as_deref()
                 .is_none_or(read_group_by_folder),
+            folded: HashSet::new(),
             collapsed: HashSet::new(),
             selected: None,
             lines: Rc::new(Vec::new()),
@@ -269,16 +273,21 @@ impl ChangesView {
     }
 
     /// Rebuild the flat row model: per group (Staged, Unstaged, Untracked) a
-    /// header with its count, then its entries (under folder rows of its own
-    /// in the by-folder view).
+    /// header with its count, then, unless the group is folded, its entries
+    /// (under folder rows of its own in the by-folder view).
     fn relayout(&mut self) {
         let mut lines = Vec::new();
         if let Some(tree) = self.tree() {
             for (group, entries) in git::change_groups(&tree.entries) {
+                let folded = self.folded.contains(&group);
                 lines.push(Line::Header {
                     group,
                     count: entries.len(),
+                    folded,
                 });
+                if folded {
+                    continue;
+                }
                 if !self.tree_mode {
                     lines.extend(entries.into_iter().map(|(entry, badge)| Line::Entry {
                         group,
@@ -318,6 +327,15 @@ impl ChangesView {
             }
         }
         self.lines = Rc::new(lines);
+    }
+
+    /// Fold or unfold a group to its header; staging is left alone.
+    fn toggle_fold(&mut self, group: ChangeGroup, cx: &mut Context<Self>) {
+        if !self.folded.remove(&group) {
+            self.folded.insert(group);
+        }
+        self.relayout();
+        cx.notify();
     }
 
     /// Run a git operation in the background, then re-read status; a
@@ -668,6 +686,7 @@ impl ChangesView {
         &self,
         group: ChangeGroup,
         count: usize,
+        folded: bool,
         cx: &mut Context<Self>,
     ) -> Div {
         let (label, action, id) = match group {
@@ -705,22 +724,44 @@ impl ChangesView {
                         let _ = weak.update(cx, |this, cx| all(this, cx));
                     }),
             )
+            // The chevron, name and count fold the group; the checkbox
+            // beside them is what stages or unstages.
             .child(
-                div()
-                    .text_size(rems(13.5 / 16.))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(ui::fg())
-                    .child(label),
-            )
-            .child(
-                div()
-                    .px_1p5()
+                h_flex()
+                    .id(SharedString::from(format!("{id}-fold")))
+                    .h_full()
+                    .px_1()
+                    .gap_1p5()
                     .rounded_md()
-                    .bg(ui::well())
-                    .font_family(ui::mono())
-                    .text_size(ui::code_rems(10.5))
-                    .text_color(ui::muted())
-                    .child(count.to_string()),
+                    .cursor_pointer()
+                    .hover(|s| s.bg(ui::surface_hover()))
+                    .child(
+                        Icon::new(if folded {
+                            IconName::ChevronRight
+                        } else {
+                            IconName::ChevronDown
+                        })
+                        .xsmall()
+                        .text_color(ui::faint()),
+                    )
+                    .child(
+                        div()
+                            .text_size(rems(13.5 / 16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(ui::fg())
+                            .child(label),
+                    )
+                    .child(
+                        div()
+                            .px_1p5()
+                            .rounded_md()
+                            .bg(ui::well())
+                            .font_family(ui::mono())
+                            .text_size(ui::code_rems(10.5))
+                            .text_color(ui::muted())
+                            .child(count.to_string()),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_fold(group, cx))),
             )
             .child(div().flex_1())
             .child(
@@ -734,8 +775,12 @@ impl ChangesView {
 
     fn render_line(&self, line: &Line, cx: &mut Context<Self>) -> AnyElement {
         match line {
-            Line::Header { group, count } => self
-                .render_section_header(*group, *count, cx)
+            Line::Header {
+                group,
+                count,
+                folded,
+            } => self
+                .render_section_header(*group, *count, *folded, cx)
                 .into_any_element(),
             Line::Dir {
                 group,
@@ -1063,72 +1108,86 @@ impl ChangesView {
                     .child(Textarea::new(&self.description).appearance(false)),
             )
             // The sidebar is narrower than the row's full labels: "Write it"
-            // is the sparkles icon (its tooltip says what it does), the
-            // primary reads "Generate", and the labelled controls may shrink,
-            // ending in an ellipsis, so nothing spills past the panel's edge.
+            // is the sparkles icon (its tooltip says what it does) and the
+            // primary reads "Generate". When the row still doesn't fit, the
+            // primary wraps whole to a line of its own, full width, so
+            // nothing shrinks to an ellipsis or spills past the panel's edge.
             .child(
                 h_flex()
+                    .flex_wrap()
                     .min_w_0()
                     .pt_1()
                     .gap_1()
-                    .child(
-                        Button::new("changes-write")
-                            .ghost()
-                            .xsmall()
-                            .icon(Icon::new(IconName::Sparkles))
-                            .loading(self.generating)
-                            .disabled(!ready || working || !staged)
-                            .tooltip("Write the message from the staged diff with Gentle Shell")
-                            .on_click(cx.listener(|this, _, window, cx| this.generate(window, cx))),
-                    )
-                    .child(
-                        Button::new("changes-amend")
-                            .ghost()
-                            .xsmall()
-                            .label("Amend")
-                            .min_w_0()
-                            .flex_shrink(1.)
-                            .selected(self.amend)
-                            .disabled(!ready || working)
-                            .tooltip("Rewrite the last commit instead of making a new one")
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.toggle_amend(window, cx)),
-                            ),
-                    )
-                    // The status fills only the space the buttons leave, so it
-                    // is what truncates first.
+                    // Both grow, the primary by a negligible share: on one row
+                    // the free space goes to this group, so the primary keeps
+                    // its own width; alone on a wrapped line it fills it.
                     .child(
                         h_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .justify_end()
-                            .gap_1p5()
-                            .text_size(rems(11.5 / 16.))
-                            .text_color(ui::muted())
-                            .when_some(self.busy, |d, busy| {
-                                d.child(Spinner::new().xsmall().color(ui::accent()))
-                                    .child(div().min_w_0().truncate().child(busy))
-                            })
-                            .when(self.generating, |d| {
-                                d.child(div().min_w_0().truncate().child("Writing…"))
-                            }),
+                            .flex_grow(10_000.)
+                            .gap_1()
+                            .child(
+                                Button::new("changes-write")
+                                    .ghost()
+                                    .xsmall()
+                                    .icon(Icon::new(IconName::Sparkles))
+                                    .loading(self.generating)
+                                    .disabled(!ready || working || !staged)
+                                    .tooltip(
+                                        "Write the message from the staged diff with Gentle Shell",
+                                    )
+                                    .on_click(
+                                        cx.listener(|this, _, window, cx| {
+                                            this.generate(window, cx)
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                Button::new("changes-amend")
+                                    .ghost()
+                                    .xsmall()
+                                    .label("Amend")
+                                    .selected(self.amend)
+                                    .disabled(!ready || working)
+                                    .tooltip("Rewrite the last commit instead of making a new one")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_amend(window, cx)
+                                    })),
+                            )
+                            // The status fills only the space the buttons
+                            // leave, so it is what truncates first.
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .justify_end()
+                                    .gap_1p5()
+                                    .text_size(rems(11.5 / 16.))
+                                    .text_color(ui::muted())
+                                    .when_some(self.busy, |d, busy| {
+                                        d.child(Spinner::new().xsmall().color(ui::accent()))
+                                            .child(div().min_w_0().truncate().child(busy))
+                                    })
+                                    .when(self.generating, |d| {
+                                        d.child(div().min_w_0().truncate().child("Writing…"))
+                                    }),
+                            ),
                     )
                     // Secondary actions on the left, the primary last on the
                     // right (the design system's footer), its key in the
-                    // tooltip rather than a cap on the button.
+                    // tooltip rather than a cap on the button. It never
+                    // shrinks.
                     .child(
                         DropdownButton::new("changes-commit")
                             .primary()
                             .small()
-                            .min_w_0()
-                            .flex_shrink(1.)
+                            .flex_grow(1.)
+                            .flex_shrink_0()
                             .disabled(!ready || working)
                             .button(
                                 Button::new("changes-commit-main")
+                                    .flex_grow(1.)
                                     .label(primary_label)
-                                    .min_w_0()
-                                    .flex_shrink(1.)
                                     .tooltip(format!("{primary_tip} ({})", ui::shortcut("↵")))
                                     .on_click(
                                         cx.listener(|this, _, window, cx| this.primary(window, cx)),
@@ -1334,7 +1393,80 @@ fn parse_commit_message(reply: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_commit_message, read_group_by_folder, write_group_by_folder};
+    use super::{
+        ChangeGroup, ChangesView, Line, Repo, parse_commit_message, read_group_by_folder,
+        write_group_by_folder,
+    };
+    use gentle_core::git::status::parse_status_v2;
+
+    /// The list's rows: each header with whether it is folded, each entry
+    /// with its path.
+    fn rows(view: &ChangesView) -> Vec<String> {
+        let tree = view.tree().unwrap();
+        view.lines
+            .iter()
+            .map(|line| match line {
+                Line::Header { group, folded, .. } => format!("{group:?} folded={folded}"),
+                Line::Entry { group, entry, .. } => {
+                    format!("{group:?} {}", tree.entries[*entry].path)
+                }
+                Line::Dir { group, dir, .. } => format!("{group:?} dir {dir}"),
+            })
+            .collect()
+    }
+
+    #[gpui::test]
+    fn folded_group_keeps_its_header_and_survives_a_status_refresh(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        let root = std::env::temp_dir();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| ChangesView::new(root.clone(), window, cx));
+        let repo = |raw: &str| Repo {
+            toplevel: root.clone(),
+            tree: parse_status_v2(raw),
+            repository: None,
+        };
+        let first = repo("1 .M N... 100644 100644 100644 aaaa bbbb a.rs\0? b.txt\0");
+        let refreshed = repo("1 .M N... 100644 100644 100644 aaaa bbbb a.rs\0? b.txt\0? c.txt\0");
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                // The flat list, whatever the saved choice is.
+                view.tree_mode = false;
+                view.apply(Some(first), cx);
+                view.toggle_fold(ChangeGroup::Untracked, cx);
+                assert_eq!(
+                    rows(view),
+                    [
+                        "Unstaged folded=false",
+                        "Unstaged a.rs",
+                        "Untracked folded=true"
+                    ]
+                );
+                view.apply(Some(refreshed), cx);
+                assert_eq!(
+                    rows(view),
+                    [
+                        "Unstaged folded=false",
+                        "Unstaged a.rs",
+                        "Untracked folded=true"
+                    ]
+                );
+                view.toggle_fold(ChangeGroup::Untracked, cx);
+                assert_eq!(
+                    rows(view),
+                    [
+                        "Unstaged folded=false",
+                        "Unstaged a.rs",
+                        "Untracked folded=false",
+                        "Untracked b.txt",
+                        "Untracked c.txt"
+                    ]
+                );
+            });
+        });
+    }
 
     #[test]
     fn group_by_folder_is_the_default_and_a_saved_list_is_kept() {

@@ -2129,6 +2129,7 @@ impl Render for SessionView {
             .map(|main| match expanded {
                 Some(surface) => main.child(
                     div()
+                        .relative()
                         .flex_1()
                         .min_h_0()
                         .w_full()
@@ -2139,7 +2140,8 @@ impl Render for SessionView {
                             surface
                                 .view()
                                 .cached(StyleRefinement::default().size_full()),
-                        ),
+                        )
+                        .children(self.render_close_hint(cx)),
                 ),
                 None => main.child(
                     div()
@@ -2182,7 +2184,8 @@ impl Render for SessionView {
                                     )),
                             )
                         })
-                        .children(self.render_jump_down(cx)),
+                        .children(self.render_jump_down(cx))
+                        .children(self.render_close_hint(cx)),
                 ),
             })
             .map(|main| {
@@ -2239,6 +2242,7 @@ impl Render for SessionView {
             .on_action(cx.listener(Self::toggle_agents))
             .on_action(cx.listener(Self::on_new_session))
             .capture_key_down(cx.listener(Self::on_dialog_key))
+            .capture_key_up(cx.listener(Self::on_key_up))
             .relative()
             .size_full()
             .child(main)
@@ -2250,6 +2254,23 @@ impl Render for SessionView {
 // ── The drop target ────────────────────────────────────────────────────────
 
 impl SessionView {
+    /// "Press ⌃C again to close" in the conversation's corner, above the
+    /// composer, while a second Ctrl+C would close the pane.
+    fn render_close_hint(&self, cx: &App) -> Option<AnyElement> {
+        self.live.double_interrupt.armed()?;
+        Some(
+            div()
+                .absolute()
+                .bottom(rems(12. / 16.))
+                .right(rems(1.))
+                .child(ui::close_hint(
+                    self.live.close_hints,
+                    cx.theme().font_family.clone(),
+                ))
+                .into_any_element(),
+        )
+    }
+
     /// Follow a drag of files over the tab: `over` says whether the pointer is
     /// inside it. GPUI has no drag-leave hook, so every drag move of a file
     /// drag writes `drop_over` here, and the frame's other writer clears it
