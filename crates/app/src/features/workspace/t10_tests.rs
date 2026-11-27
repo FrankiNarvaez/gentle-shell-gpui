@@ -82,8 +82,13 @@ fn t10_create_workspace_chooses_the_folder_in_the_explorer(cx: &mut TestAppConte
     cx.simulate_keystrokes("enter");
     assert!(explorer_open(&host, cx));
     // It opens in the focused pane's folder (Alpha/twin); `-` twice reaches
-    // the folder both workspaces live in.
-    cx.simulate_keystrokes("- -");
+    // the folder both workspaces live in. The explorer reads each folder in
+    // the background, so wait for every listing before typing on.
+    cx.run_until_parked();
+    cx.simulate_keystrokes("-");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("-");
+    cx.run_until_parked();
     cx.simulate_input("Beta");
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {
         "cmd-enter"
