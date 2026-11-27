@@ -282,6 +282,7 @@ fn bind_keys_from(user: keymap::Keymap, cx: &mut App) -> Vec<String> {
     files::bind_keys(cx);
     crate::features::workspace::sidebars::bind_keys(cx);
     crate::features::canvas::bind_keys(cx);
+    crate::features::terminal::bind_keys(cx);
     // What "Open keymap file" documents: the keymap as it is with no user file.
     crate::shared::keymap::remember_defaults(
         &user.leader,
@@ -573,6 +574,42 @@ mod tests {
                 "keymap.json bindings[0]: \"ctrl-space h\" is bound globally by default; omit \"context\" to change it"
             ]
         );
+    }
+
+    /// The terminal's Tab / Shift+Tab reach the shell even before any
+    /// terminal exists, and a keymap reload keeps them: they are part of the
+    /// defaults, not a one-shot install by the first terminal to open.
+    #[gpui::test]
+    fn reloading_the_keymap_keeps_the_terminal_tab_bindings(cx: &mut TestAppContext) {
+        use gpui::{KeyContext, Keystroke};
+
+        cx.update(gpui_kit::init);
+        let terminal = KeyContext::parse("Terminal").unwrap();
+        let root = KeyContext::parse("Root").unwrap();
+        let contexts = [root, terminal];
+        let resolve = |cx: &mut TestAppContext, key: &'static str| {
+            cx.update(|cx| {
+                let keymap = cx.key_bindings();
+                let (route, pending) = keymap
+                    .borrow()
+                    .bindings_for_input(&[Keystroke::parse(key).unwrap()], &contexts);
+                assert!(!pending, "{key} starts a longer binding sequence");
+                assert!(!route.is_empty(), "{key} is not bound");
+                route[0].action().name().to_string()
+            })
+        };
+
+        // Startup, with no terminal ever opened.
+        let messages = cx.update(|cx| bind_keys_from(keymap::Keymap::default(), cx));
+        assert!(messages.is_empty(), "{messages:?}");
+        assert_eq!(resolve(cx, "tab"), "terminal::Complete");
+        assert_eq!(resolve(cx, "shift-tab"), "terminal::BackTab");
+
+        // Reload: the defaults rebind the terminal's keys, not the lazy install.
+        let messages = cx.update(|cx| bind_keys_from(keymap::Keymap::default(), cx));
+        assert!(messages.is_empty(), "{messages:?}");
+        assert_eq!(resolve(cx, "tab"), "terminal::Complete");
+        assert_eq!(resolve(cx, "shift-tab"), "terminal::BackTab");
     }
 
     /// Off macOS a focused terminal receives the shell/vim control keys;

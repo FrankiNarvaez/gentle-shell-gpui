@@ -4,7 +4,7 @@
 //! dead keys and IMEs compose); everything else — named keys, Ctrl chords and
 //! Alt-as-Meta — is encoded here.
 
-use gpui_kit::{App, Global, KeyBinding, Keystroke, actions};
+use gpui_kit::{App, KeyBinding, Keystroke, actions};
 
 const ESC: u8 = 0x1b;
 
@@ -28,18 +28,12 @@ pub(crate) fn bindings() -> [KeyBinding; 2] {
     ]
 }
 
-/// Registers [`bindings`] the first time a terminal opens. The app's key map
-/// is built before any terminal exists, so the terminal adds its own there.
-pub(crate) fn install(cx: &mut App) {
-    if cx.has_global::<KeysInstalled>() {
-        return;
-    }
-    cx.set_global(KeysInstalled);
+/// Registers [`bindings`] from the app's defaults, like every other feature's
+/// `bind_keys`; a keymap reload binds them again instead of relying on the
+/// first terminal to install them once.
+pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys(bindings());
 }
-
-struct KeysInstalled;
-impl Global for KeysInstalled {}
 
 /// Whether this keystroke is ordinary text that the platform input handler
 /// will deliver (and compose) for us.
@@ -270,7 +264,7 @@ mod tests {
     #[gpui::test]
     fn plain_tab_in_a_focused_terminal_reaches_the_shell(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
-        cx.update(super::install);
+        cx.update(super::bind_keys);
         assert_eq!(
             routed_action(cx, "tab", &["Root", "Terminal"]),
             "terminal::Complete",
@@ -283,7 +277,7 @@ mod tests {
     #[gpui::test]
     fn shift_tab_in_a_focused_terminal_reaches_the_shell(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
-        cx.update(super::install);
+        cx.update(super::bind_keys);
         assert_eq!(
             routed_action(cx, "shift-tab", &["Root", "Terminal"]),
             "terminal::BackTab",

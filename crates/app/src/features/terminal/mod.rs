@@ -32,6 +32,13 @@ use crate::platform::shell_idle::ShellIdle;
 use crate::shared::ui;
 
 /// Font size and padding in px at 100 %; they follow the interface size.
+/// Registers the terminal's key bindings from the app's defaults (like every
+/// other feature's `bind_keys`), so a keymap reload rebinds them instead of
+/// the first terminal installing them once.
+pub(crate) fn bind_keys(cx: &mut App) {
+    keys::bind_keys(cx);
+}
+
 const FONT_SIZE: f32 = 13.;
 const LINE_HEIGHT: f32 = 1.3;
 const PADDING: f32 = 10.;
@@ -249,7 +256,6 @@ fn mono_font() -> Font {
 
 impl TerminalView {
     pub fn new(cwd: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        keys::install(cx);
         let (tx, rx) = async_channel::unbounded::<TermEvent>();
         let listener = Listener(tx);
         let dims = TermDims {
