@@ -1056,7 +1056,7 @@ impl ChangesView {
             // The sidebar is narrower than the row's full labels: "Write it"
             // is the sparkles icon (its tooltip says what it does) and the
             // primary reads "Generate". When the row still doesn't fit, the
-            // primary wraps whole to a line of its own, right-aligned, so
+            // primary wraps whole to a line of its own, full width, so
             // nothing shrinks to an ellipsis or spills past the panel's edge.
             .child(
                 h_flex()
@@ -1064,9 +1064,12 @@ impl ChangesView {
                     .min_w_0()
                     .pt_1()
                     .gap_1()
+                    // Both grow, the primary by a negligible share: on one row
+                    // the free space goes to this group, so the primary keeps
+                    // its own width; alone on a wrapped line it fills it.
                     .child(
                         h_flex()
-                            .flex_grow(1.)
+                            .flex_grow(10_000.)
                             .gap_1()
                             .child(
                                 Button::new("changes-write")
@@ -1119,16 +1122,17 @@ impl ChangesView {
                     // Secondary actions on the left, the primary last on the
                     // right (the design system's footer), its key in the
                     // tooltip rather than a cap on the button. It never
-                    // shrinks: alone on a wrapped line it stays on the right.
+                    // shrinks.
                     .child(
                         DropdownButton::new("changes-commit")
                             .primary()
                             .small()
-                            .flex_none()
-                            .ml_auto()
+                            .flex_grow(1.)
+                            .flex_shrink_0()
                             .disabled(!ready || working)
                             .button(
                                 Button::new("changes-commit-main")
+                                    .flex_grow(1.)
                                     .label(primary_label)
                                     .tooltip(format!("{primary_tip} ({})", ui::shortcut("↵")))
                                     .on_click(
