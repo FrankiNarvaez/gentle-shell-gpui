@@ -94,6 +94,8 @@ pub struct RefsView {
     collapsed: HashSet<Section>,
     /// The list's rows, rebuilt when the refs, filter or collapsed sections change.
     lines: Rc<Vec<Line>>,
+    /// [`Self::show_stashes`] asked: scroll to the Stashes header once listed.
+    reveal_stashes: bool,
     scroll: UniformListScrollHandle,
     busy: bool,
     error: Option<String>,
@@ -119,6 +121,7 @@ impl RefsView {
             filter,
             collapsed: HashSet::new(),
             lines: Rc::new(Vec::new()),
+            reveal_stashes: false,
             scroll: UniformListScrollHandle::new(),
             busy: false,
             error: None,
@@ -253,7 +256,35 @@ impl RefsView {
                 }
             }
         }
+        if self.reveal_stashes && self.snapshot().is_some() {
+            self.reveal_stashes = false;
+            let header = lines.iter().position(|line| {
+                matches!(
+                    line,
+                    Line::Header {
+                        section: Section::Stashes,
+                        ..
+                    }
+                )
+            });
+            if let Some(ix) = header {
+                self.scroll.scroll_to_item(ix, ScrollStrategy::Top);
+            }
+        }
         self.lines = Rc::new(lines);
+    }
+
+    /// Show every stash: clear a filter that would hide some, unfold the
+    /// Stashes section and scroll to it (once the refs are read).
+    pub fn show_stashes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.filter.read(cx).value().trim().is_empty() {
+            self.filter
+                .update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        self.collapsed.remove(&Section::Stashes);
+        self.reveal_stashes = true;
+        self.relayout(cx);
+        cx.notify();
     }
 
     /// Run a git operation in the background, then re-read the refs.

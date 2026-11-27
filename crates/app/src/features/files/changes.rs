@@ -41,6 +41,8 @@ pub enum ChangesEvent {
     OpenFile(PathBuf),
     /// [`ChangesView::change_count`] changed.
     Changed,
+    /// "Show stashes" from the clean view: open the stashes in Branches.
+    ShowStashes,
 }
 
 #[derive(Clone, PartialEq)]
@@ -50,16 +52,24 @@ struct Repo {
     tree: WorkTree,
     /// Shortened path of the repository when the sidebar's root sits inside a larger one.
     repository: Option<String>,
+    /// Stashes kept, counted only while the working tree is clean.
+    stashes: usize,
 }
 
 impl Repo {
     fn read(root: &Path, toplevel: PathBuf) -> Option<Self> {
         let tree = git::work_tree(&toplevel)?;
         let repository = git::repository_path(root, &toplevel);
+        let stashes = if tree.entries.is_empty() {
+            git::stash_count(&toplevel)
+        } else {
+            0
+        };
         Some(Repo {
             toplevel,
             tree,
             repository,
+            stashes,
         })
     }
 }
@@ -108,6 +118,9 @@ pub struct ChangesView {
     visible: bool,
     /// [`Self::open_diff`] came before the first read: run it once it lands.
     open_pending: bool,
+    /// The clean view offers "Show stashes" (the sidebar; the review has
+    /// no Branches tab to show them in).
+    pub(super) offers_stashes: bool,
     _poll: Task<()>,
     _commit: Task<()>,
     _generate: Task<()>,
@@ -149,6 +162,7 @@ impl ChangesView {
             error: None,
             visible: true,
             open_pending: false,
+            offers_stashes: false,
             _poll: Task::ready(()),
             _commit: Task::ready(()),
             _generate: Task::ready(()),
@@ -983,13 +997,31 @@ impl ChangesView {
     }
 
     fn render_list(&self, cx: &mut Context<Self>) -> AnyElement {
-        let tree = match &self.repo {
-            None => return empty_state(IconName::RefreshCw, "Reading git status…"),
-            Some(None) => return empty_state(IconName::GitBranch, "Not a git repository"),
-            Some(Some(repo)) => &repo.tree,
+        let repo = match &self.repo {
+            None => {
+                return empty_state(IconName::RefreshCw, "Reading git status…").into_any_element();
+            }
+            Some(None) => {
+                return empty_state(IconName::GitBranch, "Not a git repository").into_any_element();
+            }
+            Some(Some(repo)) => repo,
         };
-        if tree.entries.is_empty() {
-            return empty_state(IconName::CircleCheck, "Working tree clean");
+        if repo.tree.entries.is_empty() {
+            let clean = empty_state(IconName::CircleCheck, "Working tree clean");
+            if !self.offers_stashes || repo.stashes == 0 {
+                return clean.into_any_element();
+            }
+            return clean
+                .child(
+                    Button::new("changes-show-stashes")
+                        .outline()
+                        .small()
+                        .icon(Icon::new(IconName::Archive))
+                        .label("Show stashes")
+                        .tooltip("Open the stashes in Branches")
+                        .on_click(cx.listener(|_, _, _, cx| cx.emit(ChangesEvent::ShowStashes))),
+                )
+                .into_any_element();
         }
         div()
             .relative()
@@ -1226,7 +1258,7 @@ fn status_badge(badge: char) -> Div {
         .child(badge.to_string())
 }
 
-fn empty_state(icon: IconName, text: &'static str) -> AnyElement {
+fn empty_state(icon: IconName, text: &'static str) -> Div {
     v_flex()
         .flex_1()
         .items_center()
@@ -1240,7 +1272,6 @@ fn empty_state(icon: IconName, text: &'static str) -> AnyElement {
                 .text_color(ui::muted())
                 .child(text),
         )
-        .into_any_element()
 }
 
 // ── Commit messages from Gentle Shell ──────────────────────────────────────
