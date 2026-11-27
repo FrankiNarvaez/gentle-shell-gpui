@@ -343,7 +343,10 @@ impl Workspace {
         self.open_owned_menu(
             "workspace-empty-area",
             position,
-            move |menu, _, _cx| Self::empty_area_menu(menu, weak, layout),
+            {
+                let compact = self.sidebar_compact;
+                move |menu, _, _cx| Self::empty_area_menu(menu, weak, layout, compact)
+            },
             window,
             cx,
         );
