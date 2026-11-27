@@ -196,6 +196,119 @@ impl Workspace {
         self.toggle_sidebar(cx);
     }
 
+    pub(super) fn on_focus_pane_left(
+        &mut self,
+        _: &FocusPaneLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_neighbour(PaneDirection::Left, window, cx);
+    }
+
+    pub(super) fn on_focus_pane_right(
+        &mut self,
+        _: &FocusPaneRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_neighbour(PaneDirection::Right, window, cx);
+    }
+
+    pub(super) fn on_focus_pane_up(
+        &mut self,
+        _: &FocusPaneUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_neighbour(PaneDirection::Up, window, cx);
+    }
+
+    pub(super) fn on_focus_pane_down(
+        &mut self,
+        _: &FocusPaneDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_neighbour(PaneDirection::Down, window, cx);
+    }
+
+    pub(super) fn on_resize_pane_left(
+        &mut self,
+        _: &ResizePaneLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.resize_pane(PaneDirection::Left, window, cx);
+    }
+
+    pub(super) fn on_resize_pane_right(
+        &mut self,
+        _: &ResizePaneRight,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.resize_pane(PaneDirection::Right, window, cx);
+    }
+
+    pub(super) fn on_resize_pane_up(
+        &mut self,
+        _: &ResizePaneUp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.resize_pane(PaneDirection::Up, window, cx);
+    }
+
+    pub(super) fn on_resize_pane_down(
+        &mut self,
+        _: &ResizePaneDown,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.resize_pane(PaneDirection::Down, window, cx);
+    }
+
+    pub(super) fn on_split_left(
+        &mut self,
+        _: &SplitLeft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.split_before(SplitAxis::Horizontal, None, window, cx);
+    }
+
+    pub(super) fn on_split_up(&mut self, _: &SplitUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.split_before(SplitAxis::Vertical, None, window, cx);
+    }
+
+    pub(super) fn on_toggle_pane_mode(
+        &mut self,
+        _: &TogglePaneMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.pane_mode = !self.pane_mode;
+        if self.pane_mode {
+            self.pane_mode_focus.focus(window, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn on_exit_pane_mode(
+        &mut self,
+        _: &ExitPaneMode,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pane_mode {
+            self.pane_mode = false;
+            self.focus_active(window, cx);
+            cx.notify();
+        }
+    }
+
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.files_sidebar_motion
             .retarget(self.sidebar_visible, cx.reduce_motion());

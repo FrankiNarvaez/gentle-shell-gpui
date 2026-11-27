@@ -14,12 +14,40 @@ use crate::features::workspace::{
     NextTab, PrevTab, Quit, ReopenClosed, SplitDown, SplitRight, TilePane, ToggleSidebar,
     Workspace,
 };
+use crate::features::workspace::{
+    ExitPaneMode, FocusPaneDown, FocusPaneLeft, FocusPaneRight, FocusPaneUp, ResizePaneDown,
+    ResizePaneLeft, ResizePaneRight, ResizePaneUp,
+};
 use crate::{
     features::app_update, features::files, features::session, features::workspace,
     platform::instance, shared::assets, shared::themes,
 };
 
 actions!(gentle, [ZoomIn, ZoomOut, ActualSize]);
+
+/// Key context of the workspace while pane mode is on.
+const PANE_MODE: &str = "GentleWorkspace && pane_mode";
+
+/// Sticky pane mode bindings: active while the workspace root carries the
+/// `pane_mode` context flag.
+fn pane_mode_bindings() -> Vec<KeyBinding> {
+    let c = Some(PANE_MODE);
+    vec![
+        KeyBinding::new("h", FocusPaneLeft, c),
+        KeyBinding::new("j", FocusPaneDown, c),
+        KeyBinding::new("k", FocusPaneUp, c),
+        KeyBinding::new("l", FocusPaneRight, c),
+        KeyBinding::new("shift-h", ResizePaneLeft, c),
+        KeyBinding::new("shift-j", ResizePaneDown, c),
+        KeyBinding::new("shift-k", ResizePaneUp, c),
+        KeyBinding::new("shift-l", ResizePaneRight, c),
+        KeyBinding::new("v", SplitRight, c),
+        KeyBinding::new("s", SplitDown, c),
+        KeyBinding::new("x", ClosePane, c),
+        KeyBinding::new("escape", ExitPaneMode, c),
+        KeyBinding::new("enter", ExitPaneMode, c),
+    ]
+}
 
 /// Runs the app until its last window closes. `requests` carries later
 /// launches' folders and prompts to this window.
@@ -206,7 +234,11 @@ fn bind_keys(cx: &mut App) {
             crate::features::browser::RestoreCard,
             Some(crate::features::browser::CONTEXT),
         ),
-        KeyBinding::new("escape", session::Abort, Some(session::CONTEXT)),
+        KeyBinding::new(
+            "escape",
+            session::Abort,
+            Some("GentleSession && !pane_mode"),
+        ),
         KeyBinding::new(key!("."), session::Stop, Some(session::CONTEXT)),
         KeyBinding::new(
             key!("shift-a"),
@@ -227,6 +259,7 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new(key!("-"), ZoomOut, None),
         KeyBinding::new(key!("0"), ActualSize, None),
     ]);
+    cx.bind_keys(pane_mode_bindings());
     files::FileView::bind_keys(cx);
     crate::features::canvas::bind_keys(cx);
 }
@@ -256,4 +289,15 @@ fn set_menus(cx: &mut App) {
         ],
         disabled: false,
     }]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pane_mode_bindings;
+
+    #[test]
+    fn pane_mode_bindings_parse() {
+        // hjkl move, HJKL resize, v/s split, x close, Esc/Enter leave.
+        assert_eq!(pane_mode_bindings().len(), 13);
+    }
 }
