@@ -791,6 +791,22 @@ impl SessionView {
         );
     }
 
+    /// The ↑ history of a resumed conversation: what was typed in it, in
+    /// order, without the `Attached files:` block a prompt carried. A resumed
+    /// skill expansion is recalled as it was sent: nothing in a resumed
+    /// message says it came from a `/skill:` command. A prompt that was only
+    /// files is not recalled: recalling it and sending again would name files
+    /// already sent.
+    pub(super) fn seed_prompt_history(&mut self) {
+        let bodies = self.transcript.items.iter().filter_map(|item| match item {
+            gentle_core::transcript::Item::User { text, .. } => {
+                Some(gentle_core::attachments::typed(text)).filter(|body| !body.trim().is_empty())
+            }
+            _ => None,
+        });
+        self.prompt_history.seed(bodies);
+    }
+
     pub(super) fn refresh_state(&mut self, cx: &mut Context<Self>) {
         self.set_model_default(None, cx);
         self.request(json!({"type": "get_state"}), cx, |this, result, _| {
@@ -808,20 +824,25 @@ impl SessionView {
         self.request(json!({"type": "get_messages"}), cx, |this, result, _| {
             if let Some(data) = this.report(result)
                 && let Some(messages) = data["messages"].as_array()
-                && !messages.is_empty()
             {
-                this.transcript.load_messages(messages);
-                this.prompt_history
-                    .seed(this.transcript.items.iter().filter_map(|item| match item {
-                        gentle_core::transcript::Item::User { text, .. } => Some(text.as_str()),
-                        _ => None,
-                    }));
-                this.markdown.clear();
-                this.sync_todo_from_history();
+                this.apply_messages(messages);
             }
         });
         self.refresh_stats(cx);
         self.refresh_model_default(cx);
+    }
+
+    /// Replace the transcript with Pi's `messages` (none: leave it). The
+    /// reload marks the transcript reset, which drops the skill confirmations
+    /// in `sync_view`; an outstanding reply stays, as before skills collapsed.
+    pub(super) fn apply_messages(&mut self, messages: &[Value]) {
+        if messages.is_empty() {
+            return;
+        }
+        self.transcript.load_messages(messages);
+        self.seed_prompt_history();
+        self.markdown.clear();
+        self.sync_todo_from_history();
     }
 
     /// Re-read the model, thinking level and default after a profile apply
@@ -1151,10 +1172,15 @@ impl SessionView {
         for image in &images {
             self.image_cache.insert(image);
         }
+        // A steered prompt is no reply to wait for. Whether anything else was
+        // in flight (`busy`) only decides if its echo may be confirmed as a
+        // skill invocation: with another prompt pending, its position is not
+        // known.
         if !steer {
             let shown = images.iter().map(|a| a.image.clone()).collect();
+            let idle = !self.busy();
             self.live
-                .expect_reply(&text, shown, self.transcript.items.len());
+                .expect_reply(&text, shown, self.transcript.items.len(), idle);
         }
         // An extension command may answer with notices: gather them.
         let capture = text.trim_start().starts_with('/').then(|| {

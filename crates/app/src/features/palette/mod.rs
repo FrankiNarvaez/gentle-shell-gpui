@@ -21,8 +21,9 @@ mod sources;
 mod view;
 
 use commands::{command_row, screen_rows};
+use sources::list_branches;
 pub use sources::switch_branch;
-use sources::{list_branches, walk_files};
+pub(crate) use sources::walk_files;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PaletteAction {
@@ -163,7 +164,7 @@ enum Line {
     Row(usize),
 }
 
-const MAX_FILES: usize = 20_000;
+pub(crate) const MAX_FILES: usize = 20_000;
 
 pub struct PaletteView {
     query: Entity<InputState>,

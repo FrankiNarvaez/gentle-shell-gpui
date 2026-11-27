@@ -988,6 +988,23 @@ pub fn scrim(id: impl Into<ElementId>) -> AnimationElement<Div> {
     )
 }
 
+/// The veil an agent tab wears while files are dragged over it: the tab's own
+/// ground, [`popover_bg`] at 88 %, faded in with [`scrim`]'s curve and no
+/// travel. Not `backdrop()` (the scrim's black): this one keeps the pane's colour
+/// while it hides what is on it, and 88 % is as light as the words over it can
+/// go and still clear AA over a bright backdrop.
+pub fn veil(id: impl Into<ElementId>) -> AnimationElement<Div> {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(popover_bg().opacity(0.88))
+        .with_animation(
+            id,
+            Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t),
+        )
+}
+
 // ── Live indicators ────────────────────────────────────────────────────────
 //
 // Pulses, spinners and shimmers run for a whole agent turn. A `with_animation`
