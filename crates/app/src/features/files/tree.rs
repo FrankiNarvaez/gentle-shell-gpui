@@ -228,18 +228,31 @@ impl FileTreeView {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| root.display().to_string())
             .into();
-        let changes = cx.new(|cx| ChangesView::new(root.clone(), window, cx));
+        let changes = cx.new(|cx| {
+            let mut changes = ChangesView::new(root.clone(), window, cx);
+            changes.offers_stashes = true;
+            changes
+        });
         let refs = cx.new(|cx| RefsView::new(root.clone(), window, cx));
         let subscriptions = vec![
             cx.observe_global::<ShowIgnored>(|this, cx| {
                 let value = cx.global::<ShowIgnored>().value;
                 this.apply_show_ignored(value, cx);
             }),
-            cx.subscribe(&changes, |_, _, event: &ChangesEvent, cx| match event {
-                ChangesEvent::OpenDiff(path) => cx.emit(FileTreeEvent::OpenDiff(path.clone())),
-                ChangesEvent::OpenFile(path) => cx.emit(FileTreeEvent::Open(path.clone())),
-                ChangesEvent::Changed => cx.notify(),
-            }),
+            cx.subscribe_in(
+                &changes,
+                window,
+                |this, _, event: &ChangesEvent, window, cx| match event {
+                    ChangesEvent::OpenDiff(path) => cx.emit(FileTreeEvent::OpenDiff(path.clone())),
+                    ChangesEvent::OpenFile(path) => cx.emit(FileTreeEvent::Open(path.clone())),
+                    ChangesEvent::Changed => cx.notify(),
+                    ChangesEvent::ShowStashes => {
+                        this.set_tab(Tab::Branches, window, cx);
+                        this.refs
+                            .update(cx, |refs, cx| refs.show_stashes(window, cx));
+                    }
+                },
+            ),
             cx.subscribe(&refs, |_, _, event: &RefsEvent, cx| match event {
                 RefsEvent::OpenAgent(path) => cx.emit(FileTreeEvent::OpenAgent(path.clone())),
                 RefsEvent::OpenHistory(path) => cx.emit(FileTreeEvent::OpenHistory(path.clone())),
