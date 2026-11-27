@@ -26,7 +26,7 @@ use gpui_kit::*;
 
 use super::status_color;
 use crate::features::git::{self, ChangeGroup, EntryKind, StatusEntry, WorkTree};
-use crate::shared::ui;
+use crate::shared::{themes, ui};
 
 const POLL: Duration = Duration::from_secs(3);
 const ROW_HEIGHT: f32 = 26.;
@@ -90,6 +90,8 @@ pub struct ChangesView {
     root: PathBuf,
     /// `None` until the first read, `Some(None)` outside a git work tree.
     repo: Option<Option<Repo>>,
+    /// Group by folder (the default) or the flat list; the choice is saved
+    /// in the app's settings as `changesGroupByFolder`.
     tree_mode: bool,
     /// Folders folded in the by-folder view, per group.
     collapsed: HashSet<(ChangeGroup, String)>,
@@ -135,7 +137,9 @@ impl ChangesView {
         let mut this = Self {
             root,
             repo: None,
-            tree_mode: false,
+            tree_mode: themes::store_path()
+                .as_deref()
+                .is_none_or(read_group_by_folder),
             collapsed: HashSet::new(),
             selected: None,
             lines: Rc::new(Vec::new()),
@@ -607,6 +611,11 @@ impl ChangesView {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.tree_mode != tree {
                         this.tree_mode = tree;
+                        if let Some(path) = themes::store_path()
+                            && let Err(err) = write_group_by_folder(&path, tree)
+                        {
+                            eprintln!("gentle-shell-gpui: could not save the Changes view: {err}");
+                        }
                         this.relayout();
                         cx.notify();
                     }
@@ -1243,6 +1252,18 @@ fn empty_state(icon: IconName, text: &'static str) -> AnyElement {
         .into_any_element()
 }
 
+/// Changes groups by folder unless the list was chosen: a missing or
+/// invalid `changesGroupByFolder` reads as by folder.
+fn read_group_by_folder(path: &Path) -> bool {
+    themes::read_key(path, "changesGroupByFolder")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(true)
+}
+
+fn write_group_by_folder(path: &Path, by_folder: bool) -> std::io::Result<()> {
+    themes::write_key(path, "changesGroupByFolder", by_folder.into())
+}
+
 // ── Commit messages from Gentle Shell ──────────────────────────────────────
 
 fn commit_prompt(diff: &str) -> String {
@@ -1313,7 +1334,33 @@ fn parse_commit_message(reply: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_commit_message;
+    use super::{parse_commit_message, read_group_by_folder, write_group_by_folder};
+
+    #[test]
+    fn group_by_folder_is_the_default_and_a_saved_list_is_kept() {
+        let dir = std::env::temp_dir().join(format!(
+            "gentle-changes-view-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        assert!(read_group_by_folder(&path), "no settings file");
+        std::fs::write(&path, r#"{"changesGroupByFolder":"no"}"#).unwrap();
+        assert!(read_group_by_folder(&path), "invalid value");
+        std::fs::write(&path, r#"{"theme":"Studio"}"#).unwrap();
+        write_group_by_folder(&path, false).unwrap();
+        assert!(!read_group_by_folder(&path));
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(saved["theme"], "Studio");
+        write_group_by_folder(&path, true).unwrap();
+        assert!(read_group_by_folder(&path));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn commit_message_summary_and_body() {
