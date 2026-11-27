@@ -459,6 +459,9 @@ fn bind_defaults(cx: &mut App) {
         // ⌘? is the Help menu's search.
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-?", workspace::OpenShortcuts, None),
+        // Windows reports shift-/ as `?` without shift.
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-?", workspace::OpenShortcuts, None),
         // Interface size. Bindings run before a terminal sees the keys. ⌘+
         // is shift-= on most layouts; the platforms report it either way.
         KeyBinding::new(key!("="), ZoomIn, None),
@@ -467,7 +470,23 @@ fn bind_defaults(cx: &mut App) {
         KeyBinding::new(key!("-"), ZoomOut, None),
         KeyBinding::new(key!("0"), ActualSize, None),
     ]);
+    // Off macOS these global chords are control keys a shell or vim needs
+    // (Ctrl+W deletes a word, Ctrl+[ is Escape): a focused terminal gets
+    // them, every other view keeps the command. Bound before the user's
+    // keymap so a user binding for the same keys still wins.
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys(
+        TERMINAL_KEEPS
+            .iter()
+            .map(|keys| KeyBinding::new(keys, NoAction, Some("Terminal"))),
+    );
 }
+
+/// Global chords off macOS that a focused terminal receives instead.
+#[cfg(not(target_os = "macos"))]
+const TERMINAL_KEEPS: [&str; 8] = [
+    "ctrl-t", "ctrl-w", "ctrl-b", "ctrl-k", "ctrl-o", "ctrl-q", "ctrl-[", "ctrl-]",
+];
 
 fn set_menus(cx: &mut App) {
     cx.set_menus(vec![Menu {
@@ -547,6 +566,64 @@ mod tests {
                 "keymap.json bindings[0]: \"ctrl-space h\" is bound globally by default; omit \"context\" to change it"
             ]
         );
+    }
+
+    /// Off macOS a focused terminal receives the shell/vim control keys;
+    /// elsewhere the same chords keep their command.
+    #[cfg(not(target_os = "macos"))]
+    #[gpui::test]
+    fn terminals_keep_their_control_keys_off_macos(cx: &mut TestAppContext) {
+        use gpui::{KeyContext, Keystroke};
+        use gpui_kit::Action as _;
+
+        use crate::features::workspace::{
+            ClosePane, FocusNextPane, FocusPrevPane, NewTab, NewTerminalTab, OpenExplorer,
+            OpenPalette, OpenShortcuts, Quit, ToggleSidebar,
+        };
+
+        cx.update(gpui_kit::init);
+        let messages = cx.update(|cx| bind_keys_from(keymap::Keymap::default(), cx));
+        assert!(messages.is_empty(), "{messages:?}");
+        let workspace = KeyContext::parse("GentleWorkspace").unwrap();
+        let terminal = KeyContext::parse("Terminal").unwrap();
+        let resolve = |cx: &mut TestAppContext, keys: &str, stack: &[KeyContext]| {
+            let input = [Keystroke::parse(keys).unwrap()];
+            cx.update(|cx| {
+                cx.key_bindings()
+                    .borrow()
+                    .bindings_for_input(&input, stack)
+                    .0
+                    .iter()
+                    .map(|b| b.action().name().to_string())
+                    .collect::<Vec<_>>()
+            })
+        };
+        let in_terminal = [workspace.clone(), terminal];
+        let elsewhere = [workspace];
+        for (keys, action) in [
+            ("ctrl-t", NewTab.name()),
+            ("ctrl-w", ClosePane.name()),
+            ("ctrl-b", ToggleSidebar.name()),
+            ("ctrl-k", OpenPalette.name()),
+            ("ctrl-o", OpenExplorer.name()),
+            ("ctrl-q", Quit.name()),
+            ("ctrl-[", FocusPrevPane.name()),
+            ("ctrl-]", FocusNextPane.name()),
+        ] {
+            assert_eq!(
+                resolve(cx, keys, &in_terminal),
+                Vec::<String>::new(),
+                "{keys}"
+            );
+            assert_eq!(resolve(cx, keys, &elsewhere), [action], "{keys}");
+        }
+        // Chords with shift stay app commands inside a terminal.
+        assert_eq!(
+            resolve(cx, "ctrl-shift-t", &in_terminal),
+            [NewTerminalTab.name()]
+        );
+        // Windows reports Ctrl+Shift+/ as ctrl-? without shift.
+        assert_eq!(resolve(cx, "ctrl-?", &in_terminal), [OpenShortcuts.name()]);
     }
 
     #[test]
