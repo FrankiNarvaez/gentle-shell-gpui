@@ -98,7 +98,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.split(SplitAxis::Horizontal, None, window, cx);
+        self.split(SplitAxis::Horizontal, None, false, window, cx);
     }
 
     /// ⌘D: a new pane tiled Hyprland-style (dwindle), splitting the focused
@@ -118,7 +118,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.split(SplitAxis::Vertical, None, window, cx);
+        self.split(SplitAxis::Vertical, None, false, window, cx);
     }
 
     pub(super) fn on_new_agent_pane(
@@ -274,11 +274,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.split_before(SplitAxis::Horizontal, None, window, cx);
+        self.split(SplitAxis::Horizontal, None, true, window, cx);
     }
 
     pub(super) fn on_split_up(&mut self, _: &SplitUp, window: &mut Window, cx: &mut Context<Self>) {
-        self.split_before(SplitAxis::Vertical, None, window, cx);
+        self.split(SplitAxis::Vertical, None, true, window, cx);
     }
 
     pub(super) fn on_toggle_pane_mode(

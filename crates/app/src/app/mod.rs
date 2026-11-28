@@ -294,10 +294,40 @@ fn set_menus(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::pane_mode_bindings;
+    use gpui_kit::OperatingSystem;
 
     #[test]
-    fn pane_mode_bindings_parse() {
-        // hjkl move, HJKL resize, v/s split, x close, Esc/Enter leave.
-        assert_eq!(pane_mode_bindings().len(), 13);
+    fn pane_mode_bindings_map_each_key_to_its_action() {
+        let got: Vec<(String, &'static str)> = pane_mode_bindings()
+            .iter()
+            .map(|binding| {
+                let keystrokes = binding.keystrokes();
+                assert_eq!(
+                    keystrokes.len(),
+                    1,
+                    "pane-mode bindings are single keystrokes"
+                );
+                (
+                    keystrokes[0].unparse(OperatingSystem::Mac),
+                    binding.action().name(),
+                )
+            })
+            .collect();
+        let expected: Vec<(String, &str)> = vec![
+            ("h".into(), "gentle::FocusPaneLeft"),
+            ("j".into(), "gentle::FocusPaneDown"),
+            ("k".into(), "gentle::FocusPaneUp"),
+            ("l".into(), "gentle::FocusPaneRight"),
+            ("shift-h".into(), "gentle::ResizePaneLeft"),
+            ("shift-j".into(), "gentle::ResizePaneDown"),
+            ("shift-k".into(), "gentle::ResizePaneUp"),
+            ("shift-l".into(), "gentle::ResizePaneRight"),
+            ("v".into(), "gentle::SplitRight"),
+            ("s".into(), "gentle::SplitDown"),
+            ("x".into(), "gentle::ClosePane"),
+            ("escape".into(), "gentle::ExitPaneMode"),
+            ("enter".into(), "gentle::ExitPaneMode"),
+        ];
+        assert_eq!(got, expected);
     }
 }

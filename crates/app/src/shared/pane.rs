@@ -376,6 +376,44 @@ impl<L: Clone + PartialEq> PaneTree<L> {
         }
     }
 
+    /// The rectangle of the node at `path` (empty = this node) when the
+    /// tree fills `x,y,w,h`. Mirrors [`Self::leaf_rects`], stopping at the
+    /// node instead of descending to its leaves.
+    fn rect_at(&self, path: &[bool], x: f32, y: f32, w: f32, h: f32) -> (f32, f32, f32, f32) {
+        match (self, path.split_first()) {
+            (_, None) | (PaneTree::Leaf(_), Some(_)) => (x, y, w, h),
+            (
+                PaneTree::Split {
+                    axis,
+                    ratio,
+                    first,
+                    second,
+                },
+                Some((side, rest)),
+            ) => {
+                if *axis == SplitAxis::Horizontal {
+                    let inner = w - DIVIDER;
+                    let first_w = inner * ratio;
+                    let second_w = inner * (1. - ratio);
+                    if *side {
+                        second.rect_at(rest, x + first_w + DIVIDER, y, second_w, h)
+                    } else {
+                        first.rect_at(rest, x, y, first_w, h)
+                    }
+                } else {
+                    let inner = h - DIVIDER;
+                    let first_h = inner * ratio;
+                    let second_h = inner * (1. - ratio);
+                    if *side {
+                        second.rect_at(rest, x, y + first_h + DIVIDER, w, second_h)
+                    } else {
+                        first.rect_at(rest, x, y, w, first_h)
+                    }
+                }
+            }
+        }
+    }
+
     /// The pane spatially adjacent to `target` in `direction`: the candidate
     /// whose center lies in that direction and whose perpendicular overlap
     /// with `target` is largest; ties favour the nearest along the primary
@@ -437,32 +475,62 @@ impl<L: Clone + PartialEq> PaneTree<L> {
         best.map(|(l, _, _)| l)
     }
 
-    /// Grow `target` in `direction` by `step` by adjusting the closest
-    /// divider that bounds it on that side. `true` when such a divider
-    /// exists; the ratio is clamped by [`set_ratio`].
-    pub fn resize_toward(&mut self, target: &L, direction: PaneDirection, step: f32) -> bool {
+    /// Move the border of `target` nearest to `direction`, like tmux's
+    /// `resize-pane`: the border on that side moves outward (growing
+    /// `target`) when it exists, otherwise the border on the opposite side
+    /// moves in `direction` (shrinking `target`). `min_px` keeps both sides
+    /// of the changed split at least that many pixels when the split has
+    /// room for that. `w`×`h` is the full size the tree fills. `true` when
+    /// a border on the relevant axis exists.
+    pub fn resize_toward(
+        &mut self,
+        target: &L,
+        direction: PaneDirection,
+        step: f32,
+        min_px: f32,
+        w: f32,
+        h: f32,
+    ) -> bool {
         let path = self.path_to(target);
-        for depth in (0..path.len()).rev() {
-            let prefix = &path[..depth];
-            let side = path[depth];
-            let Some(axis) = self.axis_at(prefix) else {
-                continue;
-            };
-            let axis_matches = match direction {
-                PaneDirection::Left | PaneDirection::Right => axis == SplitAxis::Horizontal,
-                PaneDirection::Up | PaneDirection::Down => axis == SplitAxis::Vertical,
-            };
-            let on_far_side = match direction {
-                PaneDirection::Left | PaneDirection::Up => side,
-                PaneDirection::Right | PaneDirection::Down => !side,
-            };
-            if axis_matches && on_far_side {
+        let sign = match direction {
+            PaneDirection::Left | PaneDirection::Up => -step,
+            PaneDirection::Right | PaneDirection::Down => step,
+        };
+        // Prefer the border on the `direction` side (moving it outward grows
+        // the pane); fall back to the opposite side (moving it in
+        // `direction` shrinks the pane).
+        for far_side in [true, false] {
+            for depth in (0..path.len()).rev() {
+                let prefix = &path[..depth];
+                let side = path[depth];
+                let Some(axis) = self.axis_at(prefix) else {
+                    continue;
+                };
+                let axis_matches = match direction {
+                    PaneDirection::Left | PaneDirection::Right => axis == SplitAxis::Horizontal,
+                    PaneDirection::Up | PaneDirection::Down => axis == SplitAxis::Vertical,
+                };
+                let on_far_side = match direction {
+                    PaneDirection::Left | PaneDirection::Up => side,
+                    PaneDirection::Right | PaneDirection::Down => !side,
+                };
+                if !axis_matches || on_far_side != far_side {
+                    continue;
+                }
                 let Some(ratio) = self.ratio_at(prefix) else {
                     continue;
                 };
-                let new_ratio = match direction {
-                    PaneDirection::Left | PaneDirection::Up => ratio - step,
-                    PaneDirection::Right | PaneDirection::Down => ratio + step,
+                let (_, _, split_w, split_h) = self.rect_at(prefix, 0., 0., w, h);
+                let total = match axis {
+                    SplitAxis::Horizontal => split_w - DIVIDER,
+                    SplitAxis::Vertical => split_h - DIVIDER,
+                };
+                let bound = min_px / total.max(1.);
+                let new_ratio = ratio + sign;
+                let new_ratio = if bound < 0.5 {
+                    new_ratio.clamp(bound, 1. - bound)
+                } else {
+                    new_ratio
                 };
                 self.set_ratio(prefix, new_ratio);
                 return true;
@@ -800,18 +868,18 @@ mod tests {
     }
 
     #[test]
-    fn resize_changes_the_closest_divider() {
-        // [1 | 2], grow 1 to the right -> ratio increases.
+    fn resize_moves_the_nearest_border_in_direction() {
+        // [1 | 2]. Resize right on 1 moves its right border right (grows 1).
         let mut tree = h(1, 2);
-        assert!(tree.resize_toward(&1, PaneDirection::Right, 0.05));
+        assert!(tree.resize_toward(&1, PaneDirection::Right, 0.05, 320., SIZE, SIZE));
         let PaneTree::Split { ratio, .. } = &tree else {
             panic!("expected a split")
         };
         assert!((*ratio - 0.55).abs() < 0.001);
 
-        // [1 | 2], grow 2 to the left -> ratio decreases.
+        // Resize left on 2 moves its left border left (grows 2).
         let mut tree = h(1, 2);
-        assert!(tree.resize_toward(&2, PaneDirection::Left, 0.05));
+        assert!(tree.resize_toward(&2, PaneDirection::Left, 0.05, 320., SIZE, SIZE));
         let PaneTree::Split { ratio, .. } = &tree else {
             panic!("expected a split")
         };
@@ -819,11 +887,40 @@ mod tests {
     }
 
     #[test]
+    fn resize_shrinks_a_pane_against_the_left_edge() {
+        // [1 | 2]: pane 1 has no left border, so Resize left moves its right
+        // border left and shrinks it.
+        let mut tree = h(1, 2);
+        assert!(tree.resize_toward(&1, PaneDirection::Left, 0.05, 320., SIZE, SIZE));
+        let PaneTree::Split { ratio, .. } = &tree else {
+            panic!("expected a split")
+        };
+        assert!((*ratio - 0.45).abs() < 0.001);
+    }
+
+    #[test]
+    fn resize_grows_the_middle_pane_left() {
+        // [1 | [2 | 3]]: pane 2's left border is the outer divider; Resize
+        // left moves it left, growing pane 2 (and 3).
+        let mut tree = h(1, 2);
+        tree.split(&2, 3, SplitAxis::Horizontal);
+        assert!(tree.resize_toward(&2, PaneDirection::Left, 0.05, 320., SIZE, SIZE));
+        let PaneTree::Split { ratio, second, .. } = &tree else {
+            panic!("expected a split")
+        };
+        assert!((*ratio - 0.45).abs() < 0.001);
+        let PaneTree::Split { ratio: inner, .. } = &**second else {
+            panic!("expected a nested split")
+        };
+        assert!((*inner - 0.5).abs() < 0.001);
+    }
+
+    #[test]
     fn resize_nested_uses_closest_divider() {
         // [1 | [2 / 3]]: growing 3 upward moves only the inner divider.
         let mut tree = h(1, 2);
         tree.split(&2, 3, SplitAxis::Vertical);
-        assert!(tree.resize_toward(&3, PaneDirection::Up, 0.05));
+        assert!(tree.resize_toward(&3, PaneDirection::Up, 0.05, 200., SIZE, SIZE));
         let PaneTree::Split { ratio, second, .. } = &tree else {
             panic!("expected a split")
         };
@@ -835,21 +932,47 @@ mod tests {
     }
 
     #[test]
-    fn resize_clamps_at_minimum_pane_size() {
-        // [1 | 2], grow 1 right repeatedly; ratio stops at 0.9 (1-MIN_RATIO).
+    fn resize_never_takes_a_side_below_the_minimum() {
+        // [1 | 2] in a ~1000 px tree: with a 320 px minimum the first pane
+        // stops at 320 px, not the MIN_RATIO floor (0.1 = ~100 px).
         let mut tree = h(1, 2);
-        assert!(tree.resize_toward(&1, PaneDirection::Right, 1.0));
+        assert!(tree.resize_toward(&2, PaneDirection::Left, 1.0, 320., SIZE, SIZE));
         let PaneTree::Split { ratio, .. } = &tree else {
             panic!("expected a split")
         };
-        assert_eq!(*ratio, 0.9);
+        let expected = 320. / (SIZE - 6.);
+        assert!((*ratio - expected).abs() < 0.001);
+        let first_w = (SIZE - 6.) * ratio;
+        let second_w = (SIZE - 6.) * (1. - ratio);
+        assert!(first_w + 0.001 >= 320.);
+        assert!(second_w + 0.001 >= 320.);
+
+        // The vertical minimum works the same way.
+        let mut tree = v(1, 2);
+        assert!(tree.resize_toward(&2, PaneDirection::Up, 1.0, 200., SIZE, SIZE));
+        let PaneTree::Split { ratio, .. } = &tree else {
+            panic!("expected a split")
+        };
+        let expected = 200. / (SIZE - 6.);
+        assert!((*ratio - expected).abs() < 0.001);
     }
 
     #[test]
-    fn resize_at_edge_does_nothing() {
-        // [1 | 2], grow 1 left: no divider to the left.
+    fn resize_is_a_no_op_without_a_border_on_that_axis() {
+        // [1 | 2] has no vertical divider, so up/down do nothing.
         let mut tree = h(1, 2);
-        assert!(!tree.resize_toward(&1, PaneDirection::Left, 0.05));
+        assert!(!tree.resize_toward(&1, PaneDirection::Up, 0.05, 200., SIZE, SIZE));
+        assert!(!tree.resize_toward(&2, PaneDirection::Down, 0.05, 200., SIZE, SIZE));
+        // A single pane has no dividers at all.
+        let mut tree = leaf(1);
+        for d in [
+            PaneDirection::Left,
+            PaneDirection::Right,
+            PaneDirection::Up,
+            PaneDirection::Down,
+        ] {
+            assert!(!tree.resize_toward(&1, d, 0.05, 320., SIZE, SIZE));
+        }
     }
 
     #[test]

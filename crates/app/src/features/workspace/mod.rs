@@ -829,6 +829,7 @@ impl Workspace {
         self.split(
             SplitAxis::Horizontal,
             Some((PaneKind::File, path)),
+            false,
             window,
             cx,
         );

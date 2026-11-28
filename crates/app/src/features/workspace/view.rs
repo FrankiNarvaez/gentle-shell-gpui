@@ -441,7 +441,7 @@ impl Workspace {
                                 "Same kind, to the right",
                                 "",
                                 |this, window, cx| {
-                                    this.split(SplitAxis::Horizontal, None, window, cx)
+                                    this.split(SplitAxis::Horizontal, None, false, window, cx)
                                 },
                             ))
                             .item(entry(

@@ -663,11 +663,13 @@ impl Workspace {
     }
 
     /// Split the focused pane: with `what`, that kind and target; otherwise
-    /// the focused pane's kind in its folder (or on its file).
+    /// the focused pane's kind in its folder (or on its file). `before`
+    /// places the new pane before the focused one (left or above).
     pub(super) fn split(
         &mut self,
         axis: SplitAxis,
         what: Option<(PaneKind, PathBuf)>,
+        before: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -701,52 +703,7 @@ impl Workspace {
             return;
         }
         if let Some(tree) = self.tab_mut().and_then(|t| t.built_tree_mut()) {
-            tree.split(&focused, pane, axis);
-        }
-        self.focus_pane(pane, window, cx);
-        self.schedule_save(cx);
-    }
-
-    /// Split the focused pane, placing the new pane before it (left or above).
-    /// Falls back to a new tab when there is no focused pane or no room.
-    pub(super) fn split_before(
-        &mut self,
-        axis: SplitAxis,
-        what: Option<(PaneKind, PathBuf)>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(focused) = self.focused_pane() else {
-            let root = self.space().root.clone();
-            self.open_tab(PaneKind::Agent, root, None, None, window, cx);
-            return;
-        };
-        let (kind, target) = match what {
-            Some(what) => what,
-            None => {
-                let pane = &self.panes[&focused];
-                let kind = pane.item.kind;
-                let target = match (kind, &pane.path) {
-                    (PaneKind::File, Some(path)) => path.clone(),
-                    _ => self.pane_cwd(pane, cx),
-                };
-                (kind, target)
-            }
-        };
-        let Some(pane) = self.new_pane(kind, target, None, None, window, cx) else {
-            return;
-        };
-        let room = self
-            .pane_sizes(window)
-            .into_iter()
-            .find(|(id, ..)| *id == focused)
-            .is_none_or(|(_, w, h)| fits_split(axis, w, h));
-        if !room {
-            self.push_pane_tab(pane, window, cx);
-            return;
-        }
-        if let Some(tree) = self.tab_mut().and_then(|t| t.built_tree_mut()) {
-            tree.insert(&focused, pane, axis, true);
+            tree.insert(&focused, pane, axis, before);
         }
         self.focus_pane(pane, window, cx);
         self.schedule_save(cx);
@@ -772,21 +729,28 @@ impl Workspace {
         }
     }
 
-    /// Grow/shrink the focused pane in `direction` by one step.
+    /// Move the focused pane's nearest border in `direction` by one step
+    /// (tmux `resize-pane`), keeping both sides of the changed split at
+    /// least the pane minimum.
     pub(super) fn resize_pane(
         &mut self,
         direction: PaneDirection,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         const STEP: f32 = 0.05;
         let Some(focused) = self.focused_pane() else {
             return;
         };
+        let (w, h) = self.pane_area(window);
+        let min_px = match direction {
+            PaneDirection::Left | PaneDirection::Right => MIN_PANE_WIDTH,
+            PaneDirection::Up | PaneDirection::Down => MIN_PANE_HEIGHT,
+        };
         let Some(tree) = self.tab_mut().and_then(|t| t.built_tree_mut()) else {
             return;
         };
-        if tree.resize_toward(&focused, direction, STEP) {
+        if tree.resize_toward(&focused, direction, STEP, min_px, w, h) {
             self.schedule_save(cx);
             cx.notify();
         }
@@ -809,7 +773,7 @@ impl Workspace {
             .and_then(|(_, w, h)| tile_axis(w, h))
             // No size yet, or no room either way: `split` opens a tab.
             .unwrap_or(SplitAxis::Horizontal);
-        self.split(axis, what, window, cx);
+        self.split(axis, what, false, window, cx);
     }
 
     pub(super) fn split_with_kind(
